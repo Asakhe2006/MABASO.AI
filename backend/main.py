@@ -67,6 +67,7 @@ CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "20"))
 TRANSCRIPTION_AUDIO_BITRATE = os.getenv("TRANSCRIPTION_AUDIO_BITRATE", "48k")
 TRANSCRIPTION_AUDIO_SAMPLE_RATE = os.getenv("TRANSCRIPTION_AUDIO_SAMPLE_RATE", "16000")
 MAX_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_STUDY_GUIDE_INPUT_CHARS", "30000"))
+MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS", "45000"))
 STUDY_GUIDE_REQUEST_TIMEOUT = float(os.getenv("STUDY_GUIDE_REQUEST_TIMEOUT", "90"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
@@ -130,12 +131,13 @@ Rules:
 - Use simple text layouts that students can read easily in plain Markdown.
 - In PRACTICE QUESTIONS AND ANSWERS, create 10 numbered question-and-answer pairs using this exact style:
   1. Question: ...
-  
-     Answer: ...
+
+  Answer: ...
+- Put the Answer on its own line.
 - Leave a blank line between each question and its answer, and a blank line between each numbered question block.
 - In FLASHCARDS, use this exact style for every card:
   Q: ...
-  
+
   A: ...
 - Leave a blank line between Q and A, and a blank line between flashcards so they are easy to read.
 - If lecture notes or lecture slides are provided together with the transcript, use all sources together. Prefer explicit formulas, worked examples, definitions, and likely assessment points from the slides or notes when they improve clarity.
@@ -176,6 +178,7 @@ class StudyChatRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     history: list[ChatTurn] = []
+    reference_images: list[str] = []
 
 
 class PdfSection(BaseModel):
@@ -499,28 +502,36 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         bottomMargin=36,
     )
 
+    def split_pdf_blocks(value: str) -> list[str]:
+        cleaned = (value or "").replace("\r\n", "\n").strip()
+        if not cleaned:
+            return []
+        blocks: list[str] = []
+        for raw_block in re.split(r"\n{2,}", cleaned):
+            lines = raw_block.splitlines() or [raw_block]
+            chunk: list[str] = []
+            chunk_chars = 0
+            for line in lines:
+                addition = len(line) + 1
+                if chunk and (len(chunk) >= 18 or chunk_chars + addition > 1800):
+                    blocks.append("\n".join(chunk).strip())
+                    chunk = []
+                    chunk_chars = 0
+                chunk.append(line)
+                chunk_chars += addition
+            if chunk:
+                blocks.append("\n".join(chunk).strip())
+        return [block for block in blocks if block]
+
     story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
     for section in sections:
         if not section.content.strip():
             continue
         story.append(Paragraph(section.title, heading_style))
-        story.append(
-            Table(
-                [[Preformatted(section.content.strip(), mono_style)]],
-                colWidths=[520],
-                style=TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
-                        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-                        ("TOPPADDING", (0, 0), (-1, -1), 8),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                    ]
-                ),
-            )
-        )
-        story.append(Spacer(1, 10))
+        for block in split_pdf_blocks(section.content):
+            story.append(Preformatted(block, mono_style))
+            story.append(Spacer(1, 8))
+        story.append(Spacer(1, 6))
 
     document.build(story)
     return buffer.getvalue()
@@ -557,7 +568,7 @@ def update_job(job_id: str, **fields):
     job.update(fields)
 
 
-def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, str]]:
+def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     section_limit = max(2000, MAX_CHAT_CONTEXT_CHARS // 4)
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
@@ -579,7 +590,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, str]]:
     if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
         context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
 
-    messages: list[dict[str, str]] = [
+    messages: list[dict[str, object]] = [
         {
             "role": "system",
             "content": (
@@ -600,7 +611,20 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, str]]:
         if content:
             messages.append({"role": role, "content": content[:1200]})
 
-    messages.append({"role": "user", "content": payload.question.strip()})
+    question_text = payload.question.strip()
+    reference_images = [image for image in payload.reference_images[:4] if (image or "").strip()]
+    if reference_images:
+        user_content: list[dict[str, object]] = [
+            {
+                "type": "text",
+                "text": f"{question_text}\n\nUse the attached reference image(s) only if they help answer the question from the lecture context.",
+            }
+        ]
+        for image in reference_images:
+            user_content.append({"type": "image_url", "image_url": {"url": image}})
+        messages.append({"role": "user", "content": user_content})
+    else:
+        messages.append({"role": "user", "content": question_text})
     return messages
 
 
@@ -1447,6 +1471,45 @@ def parse_quiz_questions(section_text: str) -> list[dict[str, str]]:
     return questions
 
 
+def replace_section(markdown: str, heading: str, new_body: str) -> str:
+    pattern = re.compile(
+        rf"(\*\*{re.escape(heading)}\*\*)\s*(.*?)(?=\n\*\*[A-Z][A-Z \-&]+\*\*|\Z)",
+        re.DOTALL,
+    )
+
+    def _replace(match: re.Match[str]) -> str:
+        heading_text = match.group(1)
+        body = new_body.strip()
+        return f"{heading_text}\n\n{body}\n\n"
+
+    return pattern.sub(_replace, markdown, count=1)
+
+
+def tidy_study_guide_layout(summary: str) -> str:
+    cleaned = (summary or "").replace("\r\n", "\n").strip()
+    quiz_section = extract_section(cleaned, "PRACTICE QUESTIONS AND ANSWERS")
+    flashcard_section = extract_section(cleaned, "FLASHCARDS")
+
+    quiz_questions = parse_quiz_questions(quiz_section)
+    if quiz_questions:
+        formatted_quiz = "\n\n".join(
+            f"{item['number']}. Question: {item['question']}\n\nAnswer: {item['answer']}"
+            for item in quiz_questions
+        )
+        cleaned = replace_section(cleaned, "PRACTICE QUESTIONS AND ANSWERS", formatted_quiz)
+
+    flashcards = parse_flashcards(flashcard_section)
+    if flashcards:
+        formatted_flashcards = "\n\n".join(
+            f"Q: {item['question']}\n\nA: {item['answer']}"
+            for item in flashcards
+        )
+        cleaned = replace_section(cleaned, "FLASHCARDS", formatted_flashcards)
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def extract_study_assets(summary: str) -> dict:
     formula_section = extract_section(summary, "IMPORTANT FORMULAS")
     example_section = extract_section(summary, "WORKED EXAMPLES")
@@ -1467,11 +1530,11 @@ async def generate_study_guide(
     lecture_slides: str,
     job_id: str,
 ) -> tuple[str, bool]:
-    trimmed_transcript = transcript[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
+    trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_slides = lecture_slides[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
 
-    if len(transcript) > MAX_STUDY_GUIDE_INPUT_CHARS:
+    if len(transcript) > MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS:
         trimmed_transcript += (
             "\n\nNOTE: The transcript was shortened for faster study-guide generation. "
             "Focus on the most important themes, formulas, definitions, and examples."
@@ -1510,14 +1573,14 @@ async def generate_study_guide(
     try:
         update_job(job_id, status="processing", stage="Generating study guide", progress=55)
         summary = await asyncio.to_thread(_generate)
-        return make_formulas_human_readable(summary), False
+        return tidy_study_guide_layout(make_formulas_human_readable(summary)), False
     except Exception as exc:
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
         fallback_source = "\n\n".join(
             part for part in [lecture_notes.strip(), lecture_slides.strip(), transcript.strip()] if part
         )
-        return make_formulas_human_readable(build_fallback_study_guide(fallback_source)), True
+        return tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source))), True
 
 
 async def run_transcription_job(job_id: str, file_path: Path):
@@ -1750,8 +1813,9 @@ async def ask_study_assistant(
         raise HTTPException(status_code=400, detail="A question is required.")
 
     def _ask() -> str:
-        response = client.with_options(timeout=45).chat.completions.create(
-            model=STUDY_CHAT_MODEL,
+        use_vision = bool(payload.reference_images)
+        response = client.with_options(timeout=VISION_REQUEST_TIMEOUT if use_vision else 45).chat.completions.create(
+            model=VISION_MODEL if use_vision else STUDY_CHAT_MODEL,
             max_completion_tokens=1200,
             messages=build_chat_messages(payload),
         )
