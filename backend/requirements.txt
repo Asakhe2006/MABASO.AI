@@ -5,3 +5,4 @@ python-multipart>=0.0.9
 pypdf>=5.4.0
 reportlab>=4.2.5
 google-auth>=2.39.0
+requests>=2.32.0

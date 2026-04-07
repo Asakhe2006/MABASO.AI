@@ -271,7 +271,7 @@ def verify_google_auth_is_configured():
     if google_id_token is None or GoogleRequest is None:
         raise HTTPException(
             status_code=500,
-            detail="Google login support is not installed on the server yet. Install backend requirements and redeploy.",
+            detail="Google login support is not installed on the server yet. Install backend requirements, including google-auth and requests, then redeploy.",
         )
 
 
