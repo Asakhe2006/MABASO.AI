@@ -195,6 +195,8 @@ export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [currentPage, setCurrentPage] = useState("capture");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
   const [isRequestingCode, setIsRequestingCode] = useState(false);
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [file, setFile] = useState(null);
@@ -264,25 +266,7 @@ export default function App() {
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || "No lecture selected";
-  const extractedGuideCards = [
-    { label: "Advantages and disadvantages", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "ADVANTAGES AND DISADVANTAGES")).slice(0, 4) },
-    { label: "Common mistakes", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "COMMON MISTAKES TO AVOID")).slice(0, 4) },
-    { label: "Quick revision plan", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "QUICK REVISION PLAN")).slice(0, 4) },
-  ].filter((card) => card.items.length);
-
-  const guideSupportCards = [
-    ...extractedGuideCards,
-    {
-      label: "AI study recommendations",
-      items: [
-        "Review lecture summaries and add your own example sentences.",
-        "Write down advantages, disadvantages, and common mistakes for each topic.",
-        "Use the quiz tool with handwritten answer photos to practice exam-style writing.",
-        "Invite classmates by email and choose whether your answers are shared or private.",
-      ],
-    },
-  ];
-  const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
+  const guideSupportCards = []  const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = activeTab === "collaboration" ? Boolean(activeRoom) : hasResults || activeTab === "chat";
 
@@ -1343,7 +1327,7 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="space-y-4">{guideSupportCards.length ? <div className="grid gap-3 lg:grid-cols-3">{guideSupportCards.map((card) => <div key={card.label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{card.label}</p><div className="mt-3 space-y-2 text-sm leading-6 text-slate-200">{card.items.map((item, index) => <p key={`${card.label}-${index}`}>{item}</p>)}</div></div>)}</div> : null}<div className="notes-markdown rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? <div className="space-y-4"><div className="notes-markdown rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{transcript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
