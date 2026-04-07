@@ -5,6 +5,7 @@ from email.message import EmailMessage
 import hashlib
 import hmac
 from io import BytesIO
+import json
 import logging
 import mimetypes
 import os
@@ -99,6 +100,9 @@ Return clean Markdown with these sections:
 - IMPORTANT FORMULAS
 - WORKED EXAMPLES
 - STEP-BY-STEP EXPLANATIONS
+- ADVANTAGES AND DISADVANTAGES
+- COMMON MISTAKES TO AVOID
+- QUICK REVISION PLAN
 - VISUAL AIDS
 - REAL-WORLD EXAMPLES
 - PRACTICE QUESTIONS AND ANSWERS
@@ -127,6 +131,9 @@ Rules:
   u(t - a) = 0 for t < a, and 1 for t >= a
 - Put a blank line before and after each formula block so it is easy to read.
 - In WORKED EXAMPLES, include at least one step-by-step solved example when the lecture contains a problem, calculation, derivation, or sum.
+- In ADVANTAGES AND DISADVANTAGES, give practical study-focused pros, limits, or caution points that help a student know when the idea is useful and where it becomes confusing.
+- In COMMON MISTAKES TO AVOID, list short warnings about misunderstandings, skipped steps, wrong formula use, or revision traps.
+- In QUICK REVISION PLAN, give a short sequence a student can follow before a class test or exam.
 - In VISUAL AIDS, include simple ASCII diagrams, neat comparison tables, flow layouts, or graph sketches when they help explain the topic.
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
 - Use simple text layouts that students can read easily in plain Markdown.
@@ -194,6 +201,43 @@ class PdfExportRequest(BaseModel):
     sections: list[PdfSection]
 
 
+class CollaborationRoomCreateRequest(BaseModel):
+    title: str
+    transcript: str = ""
+    summary: str = ""
+    formula: str = ""
+    example: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    shared_notes: str = ""
+    flashcards: list[dict[str, str]] = []
+    quiz_questions: list[dict[str, str]] = []
+    invited_emails: list[str] = []
+    active_tab: str = "guide"
+    test_visibility: str = "private"
+
+
+class CollaborationMessageRequest(BaseModel):
+    content: str
+
+
+class CollaborationSharedNotesRequest(BaseModel):
+    shared_notes: str = ""
+
+
+class CollaborationActiveTabRequest(BaseModel):
+    active_tab: str
+
+
+class CollaborationTestVisibilityRequest(BaseModel):
+    test_visibility: str
+
+
+class CollaborationQuizAnswerRequest(BaseModel):
+    question_number: str
+    answer_text: str = ""
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -235,6 +279,62 @@ def init_db():
                 code_hash TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_rooms (
+                id TEXT PRIMARY KEY,
+                owner_email TEXT NOT NULL,
+                title TEXT NOT NULL,
+                transcript TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                formula TEXT NOT NULL,
+                example TEXT NOT NULL,
+                lecture_notes TEXT NOT NULL,
+                lecture_slides TEXT NOT NULL,
+                shared_notes TEXT NOT NULL,
+                flashcards_json TEXT NOT NULL,
+                quiz_questions_json TEXT NOT NULL,
+                active_tab TEXT NOT NULL,
+                test_visibility TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_room_members (
+                room_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (room_id, email)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_room_messages (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                author_email TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_room_answers (
+                room_id TEXT NOT NULL,
+                question_number TEXT NOT NULL,
+                author_email TEXT NOT NULL,
+                answer_text TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (room_id, question_number, author_email)
             )
             """
         )
@@ -664,6 +764,188 @@ def sanitize_download_filename(value: str) -> str:
     return cleaned[:80] or "mabaso-study-pack"
 
 
+def dump_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def load_json_list(value: str) -> list:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def normalize_test_visibility(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized not in {"shared", "private"}:
+        raise HTTPException(status_code=400, detail="Test visibility must be either 'shared' or 'private'.")
+    return normalized
+
+
+def sanitize_collaboration_tab(value: str) -> str:
+    normalized = (value or "guide").strip().lower()
+    allowed_tabs = {"guide", "transcript", "formulas", "examples", "flashcards", "quiz", "chat", "collaboration"}
+    return normalized if normalized in allowed_tabs else "guide"
+
+
+def normalize_invited_emails(emails: list[str], owner_email: str) -> list[str]:
+    cleaned: list[str] = []
+    seen = {owner_email}
+    for email in emails or []:
+        raw_value = (email or "").strip()
+        if not raw_value:
+            continue
+        normalized = validate_email_address(raw_value)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned
+
+
+def touch_collaboration_room(room_id: str):
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (utc_now().isoformat(), room_id),
+        )
+
+
+def get_collaboration_room_members(room_id: str) -> list[dict[str, str]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT email, role, created_at
+            FROM collaboration_room_members
+            WHERE room_id = ?
+            ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, email ASC
+            """,
+            (room_id,),
+        ).fetchall()
+
+    return [
+        {"email": row["email"], "role": row["role"], "created_at": row["created_at"]}
+        for row in rows
+    ]
+
+
+def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[str, str]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, author_email, content, created_at
+            FROM collaboration_room_messages
+            WHERE room_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (room_id, limit),
+        ).fetchall()
+
+    ordered_rows = list(reversed(rows))
+    return [
+        {
+            "id": row["id"],
+            "author_email": row["author_email"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
+        for row in ordered_rows
+    ]
+
+
+def get_collaboration_room_answers(room_id: str, current_user: str, test_visibility: str) -> list[dict[str, str]]:
+    query = """
+        SELECT question_number, author_email, answer_text, updated_at
+        FROM collaboration_room_answers
+        WHERE room_id = ?
+    """
+    params: list[str] = [room_id]
+    if test_visibility != "shared":
+        query += " AND author_email = ?"
+        params.append(current_user)
+    query += " ORDER BY question_number ASC, author_email ASC"
+
+    with get_db_connection() as connection:
+        rows = connection.execute(query, params).fetchall()
+
+    return [
+        {
+            "question_number": row["question_number"],
+            "author_email": row["author_email"],
+            "answer_text": row["answer_text"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def get_accessible_collaboration_room(room_id: str, current_user: str) -> sqlite3.Row:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT DISTINCT r.*
+            FROM collaboration_rooms r
+            LEFT JOIN collaboration_room_members m
+                ON m.room_id = r.id
+            WHERE r.id = ?
+              AND (r.owner_email = ? OR m.email = ?)
+            """,
+            (room_id, current_user, current_user),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Collaboration room not found.")
+    return row
+
+
+def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> dict:
+    room_id = room_row["id"]
+    test_visibility = normalize_test_visibility(room_row["test_visibility"])
+    members = get_collaboration_room_members(room_id)
+
+    return {
+        "id": room_id,
+        "title": room_row["title"],
+        "owner_email": room_row["owner_email"],
+        "transcript": room_row["transcript"],
+        "summary": room_row["summary"],
+        "formula": room_row["formula"],
+        "example": room_row["example"],
+        "lecture_notes": room_row["lecture_notes"],
+        "lecture_slides": room_row["lecture_slides"],
+        "shared_notes": room_row["shared_notes"],
+        "flashcards": load_json_list(room_row["flashcards_json"]),
+        "quiz_questions": load_json_list(room_row["quiz_questions_json"]),
+        "active_tab": sanitize_collaboration_tab(room_row["active_tab"]),
+        "test_visibility": test_visibility,
+        "created_at": room_row["created_at"],
+        "updated_at": room_row["updated_at"],
+        "members": members,
+        "messages": get_collaboration_room_messages(room_id),
+        "quiz_answers": get_collaboration_room_answers(room_id, current_user, test_visibility),
+        "is_owner": room_row["owner_email"] == current_user,
+    }
+
+
+def serialize_collaboration_room_card(room_row: sqlite3.Row) -> dict:
+    members = get_collaboration_room_members(room_row["id"])
+    return {
+        "id": room_row["id"],
+        "title": room_row["title"],
+        "owner_email": room_row["owner_email"],
+        "created_at": room_row["created_at"],
+        "updated_at": room_row["updated_at"],
+        "active_tab": sanitize_collaboration_tab(room_row["active_tab"]),
+        "test_visibility": normalize_test_visibility(room_row["test_visibility"]),
+        "member_count": len(members),
+        "members": members,
+    }
+
+
 def ensure_openai_key():
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
@@ -823,11 +1105,11 @@ def mark_quiz_answer_with_ai(
             {
                 "role": "system",
                 "content": (
-                    "You mark student quiz answers carefully. "
-                    "You may read typed answers, handwritten work, or both. "
-                    "Only award SCORE: 1 when the answer is substantially correct."
-                ),
-            },
+                "You mark student quiz answers carefully. "
+                "You may read typed answers, neat handwriting, messy handwriting, or both. "
+                "Only award SCORE: 1 when the answer is substantially correct."
+            ),
+        },
             {"role": "user", "content": user_parts},
         ],
     )
@@ -1278,6 +1560,26 @@ def build_fallback_study_guide(transcript: str) -> str:
             "- Highlight repeated ideas and convert them into short revision bullets.",
             "- Rewrite any lecturer demonstrations into your own words for exam preparation.",
             "",
+            "**ADVANTAGES AND DISADVANTAGES**",
+            "Advantages:",
+            "- Compact notes make the core idea faster to revise before a quiz or exam.",
+            "- Key concepts, flashcards, and questions help students move from reading to active recall.",
+            "",
+            "Disadvantages / cautions:",
+            "- A short summary can hide missing detail if you never return to the transcript or class notes.",
+            "- Students may remember words without understanding how to apply them if they skip worked examples.",
+            "",
+            "**COMMON MISTAKES TO AVOID**",
+            "- Do not revise only the headings without checking the lecturer's examples.",
+            "- Do not leave formulas or definitions in a half-understood state before test day.",
+            "- Do not assume recognition means mastery; answer a question from memory to check yourself.",
+            "",
+            "**QUICK REVISION PLAN**",
+            "- First 5 minutes: scan the summary and list the main ideas from memory.",
+            "- Next 10 minutes: review definitions, formulas, and one worked example.",
+            "- Next 10 minutes: answer two or three practice questions without notes.",
+            "- Final 5 minutes: turn weak points into flashcards for the next study block.",
+            "",
             "**VISUAL AIDS**",
             "| Study Tool | Simple Layout |",
             "| --- | --- |",
@@ -1529,6 +1831,78 @@ def replace_section(markdown: str, heading: str, new_body: str) -> str:
     return pattern.sub(_replace, markdown, count=1)
 
 
+def append_section_if_missing(markdown: str, heading: str, body: str) -> str:
+    if extract_section(markdown, heading):
+        return markdown.strip()
+    cleaned = markdown.strip()
+    separator = "\n\n" if cleaned else ""
+    return f"{cleaned}{separator}**{heading}**\n\n{body.strip()}".strip()
+
+
+def extract_bullet_points(section_text: str) -> list[str]:
+    items: list[str] = []
+    for line in (section_text or "").splitlines():
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+        if cleaned.startswith("- "):
+            items.append(cleaned[2:].strip())
+        elif re.match(r"^\d+\.\s+", cleaned):
+            items.append(re.sub(r"^\d+\.\s+", "", cleaned).strip())
+    return items
+
+
+def add_student_support_sections(summary: str) -> str:
+    cleaned = (summary or "").strip()
+    title_lines = [line.strip() for line in extract_section(cleaned, "LECTURE TITLE").splitlines() if line.strip()]
+    topic_label = title_lines[0] if title_lines else "this lecture topic"
+    concept_points = extract_bullet_points(extract_section(cleaned, "KEY CONCEPTS"))[:4]
+    focus_one = concept_points[0] if concept_points else "the main concept"
+    focus_two = concept_points[1] if len(concept_points) > 1 else "the worked examples"
+
+    cleaned = append_section_if_missing(
+        cleaned,
+        "ADVANTAGES AND DISADVANTAGES",
+        "\n".join(
+            [
+                "Advantages:",
+                f"- Revising {topic_label} in short blocks makes it faster to spot the main method, definition, or formula.",
+                f"- Linking {focus_one} to practice questions helps students remember how the idea is used in a real test.",
+                "",
+                "Disadvantages / cautions:",
+                f"- {topic_label} can feel harder than it is when students memorize steps without understanding when to use {focus_one}.",
+                f"- Skipping {focus_two} or example questions can make the topic look familiar without making it exam-ready.",
+            ]
+        ),
+    )
+    cleaned = append_section_if_missing(
+        cleaned,
+        "COMMON MISTAKES TO AVOID",
+        "\n".join(
+            [
+                f"- Do not jump straight to the final answer before checking the meaning of {focus_one}.",
+                "- Do not revise only the summary and ignore the worked example or practice question format.",
+                "- Do not mix up a definition, a rule, and an application step as if they are the same thing.",
+                "- Do a quick self-test after every revision block so weak areas show up early.",
+            ]
+        ),
+    )
+    cleaned = append_section_if_missing(
+        cleaned,
+        "QUICK REVISION PLAN",
+        "\n".join(
+            [
+                f"- First 5 minutes: read the short summary and highlight the words that define {topic_label}.",
+                f"- Next 10 minutes: rewrite {focus_one} and {focus_two} in your own words from memory.",
+                "- Next 10 minutes: answer two practice questions without looking at the notes.",
+                "- Final 5 minutes: check mistakes, correct them, and make one flashcard for anything still confusing.",
+            ]
+        ),
+    )
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def tidy_study_guide_layout(summary: str) -> str:
     cleaned = (summary or "").replace("\r\n", "\n").strip()
     quiz_section = extract_section(cleaned, "PRACTICE QUESTIONS AND ANSWERS")
@@ -1617,14 +1991,16 @@ async def generate_study_guide(
     try:
         update_job(job_id, status="processing", stage="Generating study guide", progress=55)
         summary = await asyncio.to_thread(_generate)
-        return tidy_study_guide_layout(make_formulas_human_readable(summary)), False
+        cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(summary))
+        return add_student_support_sections(cleaned_summary), False
     except Exception as exc:
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
         fallback_source = "\n\n".join(
             part for part in [lecture_notes.strip(), lecture_slides.strip(), transcript.strip()] if part
         )
-        return tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source))), True
+        cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source)))
+        return add_student_support_sections(cleaned_summary), True
 
 
 async def run_transcription_job(job_id: str, file_path: Path):
@@ -1867,6 +2243,240 @@ async def ask_study_assistant(
 
     answer = await asyncio.to_thread(_ask)
     return {"answer": make_formulas_human_readable(answer)}
+
+
+@app.get("/collaboration/rooms")
+async def list_collaboration_rooms(current_user: str = Depends(require_authenticated_user)):
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT r.*
+            FROM collaboration_rooms r
+            LEFT JOIN collaboration_room_members m
+                ON m.room_id = r.id
+            WHERE r.owner_email = ? OR m.email = ?
+            ORDER BY r.updated_at DESC
+            """,
+            (current_user, current_user),
+        ).fetchall()
+
+    return {"rooms": [serialize_collaboration_room_card(row) for row in rows]}
+
+
+@app.post("/collaboration/rooms")
+async def create_collaboration_room(
+    payload: CollaborationRoomCreateRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Room title is required.")
+
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    if not any([transcript, summary, lecture_notes, lecture_slides]):
+        raise HTTPException(status_code=400, detail="Create the collaboration room from a lecture that already has content.")
+
+    room_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    invited_emails = normalize_invited_emails(payload.invited_emails, current_user)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_rooms (
+                id, owner_email, title, transcript, summary, formula, example,
+                lecture_notes, lecture_slides, shared_notes, flashcards_json,
+                quiz_questions_json, active_tab, test_visibility, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                room_id,
+                current_user,
+                title,
+                transcript,
+                summary,
+                payload.formula.strip(),
+                payload.example.strip(),
+                lecture_notes,
+                lecture_slides,
+                payload.shared_notes.strip(),
+                dump_json(payload.flashcards or []),
+                dump_json(payload.quiz_questions or []),
+                sanitize_collaboration_tab(payload.active_tab),
+                normalize_test_visibility(payload.test_visibility),
+                now_iso,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_members (room_id, email, role, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (room_id, current_user, "owner", now_iso),
+        )
+        for email in invited_emails:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO collaboration_room_members (room_id, email, role, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (room_id, email, "member", now_iso),
+            )
+
+    room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(room, current_user)}
+
+
+@app.get("/collaboration/rooms/{room_id}")
+async def get_collaboration_room(room_id: str, current_user: str = Depends(require_authenticated_user)):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/messages")
+async def send_collaboration_message(
+    room_id: str,
+    payload: CollaborationMessageRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Type a collaboration message first.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_messages (id, room_id, author_email, content, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (uuid4().hex, room["id"], current_user, content, now_iso),
+        )
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/notes")
+async def save_collaboration_notes(
+    room_id: str,
+    payload: CollaborationSharedNotesRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET shared_notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (payload.shared_notes.strip(), now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/active-tab")
+async def update_collaboration_active_tab(
+    room_id: str,
+    payload: CollaborationActiveTabRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET active_tab = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (sanitize_collaboration_tab(payload.active_tab), now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/test-visibility")
+async def update_collaboration_test_visibility(
+    room_id: str,
+    payload: CollaborationTestVisibilityRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if room["owner_email"] != current_user:
+        raise HTTPException(status_code=403, detail="Only the room owner can change the test visibility.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET test_visibility = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (normalize_test_visibility(payload.test_visibility), now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/quiz-answers")
+async def save_collaboration_quiz_answer(
+    room_id: str,
+    payload: CollaborationQuizAnswerRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    question_number = payload.question_number.strip()
+    if not question_number:
+        raise HTTPException(status_code=400, detail="Question number is required.")
+
+    now_iso = utc_now().isoformat()
+    answer_text = payload.answer_text.strip()
+
+    with get_db_connection() as connection:
+        if answer_text:
+            connection.execute(
+                """
+                INSERT INTO collaboration_room_answers (room_id, question_number, author_email, answer_text, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(room_id, question_number, author_email) DO UPDATE SET
+                    answer_text = excluded.answer_text,
+                    updated_at = excluded.updated_at
+                """,
+                (room["id"], question_number, current_user, answer_text, now_iso),
+            )
+        else:
+            connection.execute(
+                """
+                DELETE FROM collaboration_room_answers
+                WHERE room_id = ? AND question_number = ? AND author_email = ?
+                """,
+                (room["id"], question_number, current_user),
+            )
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
 
 
 @app.post("/export-study-pack-pdf/")
