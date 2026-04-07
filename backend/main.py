@@ -1,11 +1,18 @@
 import asyncio
 import base64
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+import hashlib
+import hmac
 from io import BytesIO
 import logging
 import mimetypes
 import os
 import re
 import shutil
+import smtplib
+import sqlite3
+import secrets
 import subprocess
 import tempfile
 import zipfile
@@ -13,15 +20,31 @@ from pathlib import Path
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
+except ImportError:
+    A4 = None
 
 try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
+
+try:
+    from google.auth.transport.requests import Request as GoogleRequest
+    from google.oauth2 import id_token as google_id_token
+except ImportError:
+    GoogleRequest = None
+    google_id_token = None
 
 
 logging.basicConfig(level=logging.INFO)
@@ -34,8 +57,10 @@ TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
 STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
+STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
-MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(250 * 1024 * 1024)))
+MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024)))
 OPENAI_AUDIO_LIMIT_BYTES = int(os.getenv("OPENAI_AUDIO_LIMIT_BYTES", str(25 * 1024 * 1024)))
 CHUNK_DURATION_SECONDS = int(os.getenv("CHUNK_DURATION_SECONDS", "300"))
 CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "20"))
@@ -48,8 +73,13 @@ TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT",
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
+LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
+SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "90"))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = Path(__file__).with_name("mabaso_ai.db")
+APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 
 jobs: dict[str, dict] = {}
 
@@ -121,6 +151,43 @@ class StudyGuideRequest(BaseModel):
     lecture_slides: str = ""
 
 
+class RequestCodeRequest(BaseModel):
+    email: str
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class StudyChatRequest(BaseModel):
+    question: str
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    history: list[ChatTurn] = []
+
+
+class PdfSection(BaseModel):
+    title: str
+    content: str = ""
+
+
+class PdfExportRequest(BaseModel):
+    title: str
+    sections: list[PdfSection]
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -130,11 +197,344 @@ app.add_middleware(
 )
 
 
-def create_job(job_type: str) -> str:
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_in_future(*, minutes: int = 0, days: int = 0) -> str:
+    return (utc_now() + timedelta(minutes=minutes, days=days)).isoformat()
+
+
+def get_db_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def init_db():
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                verified_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS login_codes (
+                email TEXT PRIMARY KEY,
+                code_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+
+def hash_value(value: str) -> str:
+    payload = f"{APP_SECRET}:{value}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def validate_email_address(email: str) -> str:
+    normalized = normalize_email(email)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Email address is required.")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    return normalized
+
+
+def verify_google_auth_is_configured():
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=500,
+            detail="Google login is not configured on the server yet. Missing GOOGLE_CLIENT_ID.",
+        )
+    if google_id_token is None or GoogleRequest is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Google login support is not installed on the server yet. Install backend requirements and redeploy.",
+        )
+
+
+def verify_smtp_is_configured():
+    required = ["SMTP_HOST", "SMTP_FROM_EMAIL"]
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Email login is not configured on the server yet. "
+                f"Missing environment variables: {', '.join(missing)}."
+            ),
+        )
+
+
+def send_verification_email(email: str, code: str):
+    verify_smtp_is_configured()
+
+    smtp_host = os.getenv("SMTP_HOST", "")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "")
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    smtp_from = os.getenv("SMTP_FROM_EMAIL", "")
+    smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
+
+    message = EmailMessage()
+    message["Subject"] = "Your MABASO.AI verification code"
+    message["From"] = smtp_from
+    message["To"] = email
+    message.set_content(
+        (
+            "Your MABASO.AI verification code is:\n\n"
+            f"{code}\n\n"
+            f"This code expires in {LOGIN_CODE_TTL_MINUTES} minutes."
+        )
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+        if smtp_use_tls:
+            server.starttls()
+        if smtp_username:
+            server.login(smtp_username, smtp_password)
+        server.send_message(message)
+
+
+def create_login_code(email: str) -> str:
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    now_iso = utc_now().isoformat()
+    expiry_iso = iso_in_future(minutes=LOGIN_CODE_TTL_MINUTES)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            (email, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO login_codes (email, code_hash, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                code_hash = excluded.code_hash,
+                expires_at = excluded.expires_at,
+                created_at = excluded.created_at
+            """,
+            (email, hash_value(code), expiry_iso, now_iso),
+        )
+
+    return code
+
+
+def create_session(email: str) -> str:
+    raw_token = secrets.token_urlsafe(32)
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM sessions WHERE email = ?",
+            (email,),
+        )
+        connection.execute(
+            """
+            INSERT INTO sessions (token_hash, email, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (hash_value(raw_token), email, iso_in_future(days=SESSION_TTL_DAYS), utc_now().isoformat()),
+        )
+        connection.execute(
+            "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
+            (utc_now().isoformat(), email),
+        )
+    return raw_token
+
+
+def revoke_session(token: str):
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
+
+
+def get_session_email(token: str) -> str | None:
+    if not token:
+        return None
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT email, expires_at FROM sessions WHERE token_hash = ?",
+            (hash_value(token),),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    if datetime.fromisoformat(row["expires_at"]) <= utc_now():
+        with get_db_connection() as connection:
+            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
+        return None
+
+    return row["email"]
+
+
+def get_authorization_token(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication is required.")
+    return authorization.split(" ", 1)[1].strip()
+
+
+def require_authenticated_user(authorization: str | None = Header(None)) -> str:
+    token = get_authorization_token(authorization)
+    email = get_session_email(token)
+    if not email:
+        raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+    return email
+
+
+def verify_login_code(email: str, code: str) -> str:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT code_hash, expires_at FROM login_codes WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="No verification code was requested for this email yet.")
+
+    if datetime.fromisoformat(row["expires_at"]) <= utc_now():
+        raise HTTPException(status_code=400, detail="That verification code has expired. Request a new code.")
+
+    if not hmac.compare_digest(row["code_hash"], hash_value(code)):
+        raise HTTPException(status_code=400, detail="The verification code is incorrect.")
+
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM login_codes WHERE email = ?", (email,))
+
+    return create_session(email)
+
+
+def create_session_from_google_credential(credential: str) -> tuple[str, str]:
+    verify_google_auth_is_configured()
+
+    try:
+        token_info = google_id_token.verify_oauth2_token(
+            credential,
+            GoogleRequest(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.") from exc
+
+    email = validate_email_address(token_info.get("email", ""))
+    if not token_info.get("email_verified"):
+        raise HTTPException(status_code=401, detail="Google account email is not verified.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            (email, now_iso),
+        )
+        connection.execute(
+            "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
+            (now_iso, email),
+        )
+
+    return create_session(email), email
+
+
+def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
+    if A4 is None:
+        raise HTTPException(
+            status_code=500,
+            detail="PDF export is not configured on the server yet. Install reportlab and redeploy.",
+        )
+
+    styles = getSampleStyleSheet()
+    title_style = styles["Heading1"]
+    title_style.textColor = colors.HexColor("#0f172a")
+    title_style.spaceAfter = 12
+    heading_style = styles["Heading2"]
+    heading_style.textColor = colors.HexColor("#0f172a")
+    heading_style.spaceBefore = 12
+    heading_style.spaceAfter = 8
+    body_style = ParagraphStyle(
+        "MabasoBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=10,
+        leading=15,
+        textColor=colors.HexColor("#1f2937"),
+        alignment=TA_LEFT,
+        spaceAfter=8,
+    )
+    mono_style = ParagraphStyle(
+        "MabasoMono",
+        parent=body_style,
+        fontName="Courier",
+        fontSize=9,
+        leading=13,
+    )
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+
+    story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
+    for section in sections:
+        if not section.content.strip():
+            continue
+        story.append(Paragraph(section.title, heading_style))
+        story.append(
+            Table(
+                [[Preformatted(section.content.strip(), mono_style)]],
+                colWidths=[520],
+                style=TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+                        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 8),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ]
+                ),
+            )
+        )
+        story.append(Spacer(1, 10))
+
+    document.build(story)
+    return buffer.getvalue()
+
+
+init_db()
+
+
+def create_job(job_type: str, owner_email: str = "") -> str:
     job_id = uuid4().hex
     jobs[job_id] = {
         "job_id": job_id,
         "job_type": job_type,
+        "owner_email": owner_email,
         "status": "queued",
         "stage": "Waiting",
         "progress": 0,
@@ -155,6 +555,58 @@ def update_job(job_id: str, **fields):
     if not job:
         return
     job.update(fields)
+
+
+def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, str]]:
+    section_limit = max(2000, MAX_CHAT_CONTEXT_CHARS // 4)
+
+    def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return ""
+        if len(cleaned) > limit:
+            shortened = cleaned[:limit].rsplit(" ", 1)[0].strip() or cleaned[:limit].strip()
+            cleaned = f"{shortened}\n\n[Trimmed for chat context]"
+        return f"{label}\n{cleaned}"
+
+    context_parts = [
+        trimmed_block("STUDY GUIDE", payload.summary, section_limit),
+        trimmed_block("LECTURE NOTES", payload.lecture_notes, section_limit),
+        trimmed_block("LECTURE SLIDES", payload.lecture_slides, section_limit),
+        trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(4000, MAX_CHAT_CONTEXT_CHARS // 2)),
+    ]
+    context_text = "\n\n".join(part for part in context_parts if part).strip()
+    if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
+        context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are MABASO.AI, a lecture study assistant. "
+                "Answer only from the provided lecture context. "
+                "If the material does not support an answer, say that it was not clearly covered. "
+                "Be helpful, concise, and use bullets when they make the answer easier to study."
+            ),
+        }
+    ]
+
+    if context_text:
+        messages.append({"role": "system", "content": f"Lecture context:\n\n{context_text}"})
+
+    for turn in payload.history[-6:]:
+        role = "assistant" if turn.role == "assistant" else "user"
+        content = (turn.content or "").strip()
+        if content:
+            messages.append({"role": role, "content": content[:1200]})
+
+    messages.append({"role": "user", "content": payload.question.strip()})
+    return messages
+
+
+def sanitize_download_filename(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (value or "mabaso-study-pack").strip()).strip("-._")
+    return cleaned[:80] or "mabaso-study-pack"
 
 
 def ensure_openai_key():
@@ -333,10 +785,51 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.post("/auth/request-code")
+async def request_login_code(payload: RequestCodeRequest):
+    email = validate_email_address(payload.email)
+    code = create_login_code(email)
+    await asyncio.to_thread(send_verification_email, email, code)
+    return {"message": "Verification code sent.", "email": email}
+
+
+@app.post("/auth/verify-code")
+async def verify_login(payload: VerifyCodeRequest):
+    email = validate_email_address(payload.email)
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Verification code is required.")
+    session_token = verify_login_code(email, code)
+    return {"token": session_token, "email": email}
+
+
+@app.post("/auth/google")
+async def google_login(payload: GoogleAuthRequest):
+    credential = payload.credential.strip()
+    if not credential:
+        raise HTTPException(status_code=400, detail="Google credential is required.")
+    session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    return {"token": session_token, "email": email}
+
+
+@app.get("/auth/me")
+async def auth_me(current_user: str = Depends(require_authenticated_user)):
+    return {"email": current_user}
+
+
+@app.post("/auth/logout")
+async def logout(authorization: str | None = Header(None)):
+    token = get_authorization_token(authorization)
+    revoke_session(token)
+    return {"message": "Logged out."}
+
+
 @app.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
     job = jobs.get(job_id)
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("owner_email") and job["owner_email"] != current_user:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
 
@@ -473,73 +966,109 @@ def build_audio_chunks(file_path: Path, job_id: str) -> list[Path]:
         update_job(job_id, status="processing", stage="Audio prepared successfully", progress=20)
         return [extracted_audio]
 
-    update_job(job_id, status="processing", stage="Compressing lecture audio", progress=15)
-    compressed_audio = chunk_dir / "compressed.mp3"
-    compress_command = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        str(file_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        TRANSCRIPTION_AUDIO_SAMPLE_RATE,
-        "-b:a",
-        TRANSCRIPTION_AUDIO_BITRATE,
-        str(compressed_audio),
-    ]
+    source_for_encoding = extracted_audio or file_path
+    profile_candidates: list[tuple[str, str, int]] = []
+    for bitrate, sample_rate, duration in [
+        (TRANSCRIPTION_AUDIO_BITRATE, TRANSCRIPTION_AUDIO_SAMPLE_RATE, CHUNK_DURATION_SECONDS),
+        ("40k", "16000", max(180, CHUNK_DURATION_SECONDS - 60)),
+        ("32k", "16000", max(120, CHUNK_DURATION_SECONDS - 120)),
+        ("24k", "12000", max(90, CHUNK_DURATION_SECONDS - 180)),
+    ]:
+        candidate = (bitrate, sample_rate, duration)
+        if candidate not in profile_candidates:
+            profile_candidates.append(candidate)
 
-    compress_result = subprocess.run(
-        compress_command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if compress_result.returncode != 0:
-        raise RuntimeError(f"ffmpeg could not extract audio from this file: {compress_result.stderr.strip()}")
+    last_error = ""
 
-    if compressed_audio.exists() and get_file_size(compressed_audio) <= OPENAI_AUDIO_LIMIT_BYTES:
-        update_job(job_id, status="processing", stage="Audio prepared successfully", progress=20)
-        return [compressed_audio]
-
-    update_job(job_id, status="processing", stage="Splitting lecture into parts", progress=18)
-    segment_pattern = chunk_dir / "chunk_%03d.mp3"
-    split_command = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        str(compressed_audio),
-        "-f",
-        "segment",
-        "-segment_time",
-        str(CHUNK_DURATION_SECONDS),
-        "-c",
-        "copy",
-        str(segment_pattern),
-    ]
-
-    split_result = subprocess.run(
-        split_command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if split_result.returncode != 0:
-        raise RuntimeError(f"ffmpeg could not split this file into chunks: {split_result.stderr.strip()}")
-
-    chunk_files = sorted(chunk_dir.glob("chunk_*.mp3"))
-    if not chunk_files:
-        raise RuntimeError("Audio splitting completed, but no chunks were produced.")
-
-    oversized_chunks = [chunk.name for chunk in chunk_files if get_file_size(chunk) > OPENAI_AUDIO_LIMIT_BYTES]
-    if oversized_chunks:
-        raise RuntimeError(
-            "Some generated audio chunks are still too large for OpenAI transcription. Try lowering CHUNK_DURATION_SECONDS."
+    for index, (bitrate, sample_rate, chunk_duration) in enumerate(profile_candidates, start=1):
+        profile_dir = chunk_dir / f"profile_{index}"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        compressed_audio = profile_dir / f"compressed_{index}.mp3"
+        update_job(
+            job_id,
+            status="processing",
+            stage=f"Compressing lecture audio (pass {index})",
+            progress=min(20, 13 + index * 2),
         )
+        compress_command = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(source_for_encoding),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            sample_rate,
+            "-b:a",
+            bitrate,
+            str(compressed_audio),
+        ]
 
-    update_job(job_id, status="processing", stage=f"Prepared {len(chunk_files)} lecture parts", progress=22)
-    return chunk_files
+        compress_result = subprocess.run(
+            compress_command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if compress_result.returncode != 0:
+            last_error = compress_result.stderr.strip()
+            continue
+
+        if compressed_audio.exists() and get_file_size(compressed_audio) <= OPENAI_AUDIO_LIMIT_BYTES:
+            update_job(job_id, status="processing", stage="Audio prepared successfully", progress=20)
+            return [compressed_audio]
+
+        update_job(
+            job_id,
+            status="processing",
+            stage=f"Splitting lecture into parts (pass {index})",
+            progress=min(22, 16 + index * 2),
+        )
+        segment_pattern = profile_dir / "chunk_%03d.mp3"
+        split_command = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(compressed_audio),
+            "-f",
+            "segment",
+            "-segment_time",
+            str(chunk_duration),
+            "-reset_timestamps",
+            "1",
+            "-c",
+            "copy",
+            str(segment_pattern),
+        ]
+
+        split_result = subprocess.run(
+            split_command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if split_result.returncode != 0:
+            last_error = split_result.stderr.strip()
+            continue
+
+        chunk_files = sorted(profile_dir.glob("chunk_*.mp3"))
+        if not chunk_files:
+            last_error = "Audio splitting completed, but no chunks were produced."
+            continue
+
+        oversized_chunks = [chunk for chunk in chunk_files if get_file_size(chunk) > OPENAI_AUDIO_LIMIT_BYTES]
+        if oversized_chunks:
+            last_error = (
+                "Generated chunks are still above the OpenAI upload limit after adaptive compression. "
+                "Try a shorter lecture segment or a stronger server."
+            )
+            continue
+
+        update_job(job_id, status="processing", stage=f"Prepared {len(chunk_files)} lecture parts", progress=22)
+        return chunk_files
+
+    raise RuntimeError(last_error or "Audio preparation failed for this file.")
 
 
 async def transcribe_audio(file_path: Path, job_id: str) -> str:
@@ -1051,11 +1580,11 @@ async def run_summary_job(job_id: str, transcript: str, lecture_notes: str, lect
 
 
 @app.post("/upload-audio/")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
 
-    job_id = create_job("transcription")
+    job_id = create_job("transcription", owner_email=current_user)
     update_job(job_id, status="processing", stage="Starting upload", progress=1)
 
     try:
@@ -1081,7 +1610,7 @@ async def upload_audio(file: UploadFile = File(...)):
 
 
 @app.post("/extract-slide-text/")
-async def extract_slide_text(file: UploadFile = File(...)):
+async def extract_slide_text(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No slide file selected.")
 
@@ -1141,13 +1670,13 @@ async def extract_slide_text(file: UploadFile = File(...)):
 
 
 @app.post("/generate-study-guide/")
-async def create_study_guide(payload: StudyGuideRequest):
+async def create_study_guide(payload: StudyGuideRequest, current_user: str = Depends(require_authenticated_user)):
     transcript = payload.transcript.strip()
     if not transcript:
         raise HTTPException(status_code=400, detail="Transcript is required to generate a study guide.")
 
     ensure_openai_key()
-    job_id = create_job("study_guide")
+    job_id = create_job("study_guide", owner_email=current_user)
     asyncio.create_task(
         run_summary_job(
             job_id,
@@ -1165,6 +1694,7 @@ async def mark_quiz_answer(
     expected_answer: str = Form(...),
     student_answer: str = Form(""),
     answer_image: UploadFile | None = File(None),
+    current_user: str = Depends(require_authenticated_user),
 ):
     ensure_openai_key()
 
@@ -1208,3 +1738,39 @@ async def mark_quiz_answer(
     finally:
         if answer_image is not None:
             await answer_image.close()
+
+
+@app.post("/ask-study-assistant/")
+async def ask_study_assistant(
+    payload: StudyChatRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_openai_key()
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="A question is required.")
+
+    def _ask() -> str:
+        response = client.with_options(timeout=45).chat.completions.create(
+            model=STUDY_CHAT_MODEL,
+            max_completion_tokens=1200,
+            messages=build_chat_messages(payload),
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    answer = await asyncio.to_thread(_ask)
+    return {"answer": make_formulas_human_readable(answer)}
+
+
+@app.post("/export-study-pack-pdf/")
+async def export_study_pack_pdf(
+    payload: PdfExportRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    title = payload.title.strip() or "MABASO Study Pack"
+    pdf_bytes = await asyncio.to_thread(build_pdf_document, title, payload.sections)
+    safe_name = sanitize_download_filename(title)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+    )
