@@ -16,7 +16,7 @@ const tabs = [
   { id: "formulas", label: "Formulas" },
   { id: "examples", label: "Worked Examples" },
   { id: "flashcards", label: "Flashcards" },
-  { id: "quiz", label: "Quiz" },
+  { id: "quiz", label: "Test" },
   { id: "chat", label: "Study Chat" },
 ];
 
@@ -167,7 +167,7 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
-  const [quizCount, setQuizCount] = useState(5);
+  const [quizCount, setQuizCount] = useState(10);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizAnswerImages, setQuizAnswerImages] = useState({});
   const [quizResults, setQuizResults] = useState({});
@@ -190,7 +190,7 @@ export default function App() {
   const loading = isTranscribing || isGeneratingSummary || isExtractingSlides;
   const hasTranscript = Boolean(transcript);
   const hasResults = Boolean(transcript || summary || formula || example);
-  const selectedQuizQuestions = quizQuestions.slice(0, quizCount);
+  const selectedQuizQuestions = quizQuestions.slice(0, 10);
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
   const formattedFormula = normalizeRenderedMathText(prettifyMathText(formula));
   const formattedExample = normalizeRenderedMathText(prettifyMathText(example));
@@ -350,7 +350,7 @@ export default function App() {
     if (activeTab === "formulas") return formattedFormula || "No formulas generated yet.";
     if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
     if (activeTab === "flashcards") return flashcardsToText(flashcards) || "No flashcards generated yet.";
-    if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No quiz generated yet.";
+    if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
     return chatToText(chatMessages) || "No study chat yet.";
   };
 
@@ -360,7 +360,7 @@ export default function App() {
     { title: "Formulas", content: formattedFormula || formula },
     { title: "Worked Examples", content: formattedExample || example },
     { title: "Flashcards", content: flashcardsToText(flashcards) },
-    { title: "Quiz", content: quizToText(quizQuestions) },
+    { title: "Test", content: quizToText(quizQuestions) },
     { title: "Study Chat", content: chatToText(chatMessages) },
   ];
 
@@ -757,7 +757,8 @@ export default function App() {
 
   const downloadActiveContent = async () => {
     try {
-      await exportPdf(currentTabLabel, [{ title: currentTabLabel, content: getActiveContent() }]);
+      const baseTitle = extractHistoryTitle(summary, file?.name || workspaceFileLabel || currentTabLabel);
+      await exportPdf(`${baseTitle} - ${currentTabLabel}`, [{ title: currentTabLabel, content: getActiveContent() }]);
       setStatus(`${currentTabLabel} PDF downloaded.`);
     } catch (err) {
       setError(err.message || "PDF download failed.");
@@ -775,13 +776,13 @@ export default function App() {
   };
 
   const downloadQuizPdf = async () => {
-    if (!selectedQuizQuestions.length) return setError("Generate quiz questions first.");
+    if (!selectedQuizQuestions.length) return setError("Generate test questions first.");
     try {
-      const title = `${extractHistoryTitle(summary, file?.name || "MABASO Quiz")} quiz`;
-      await exportPdf(title, [{ title: "Quiz", content: buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) }]);
-      setStatus("Quiz PDF downloaded.");
+      const title = `${extractHistoryTitle(summary, file?.name || "MABASO Test")} test`;
+      await exportPdf(title, [{ title: "Test", content: buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) }]);
+      setStatus("Test PDF downloaded.");
     } catch (err) {
-      setError(err.message || "Could not create the quiz PDF.");
+      setError(err.message || "Could not create the test PDF.");
     }
   };
 
@@ -793,7 +794,7 @@ export default function App() {
         { title: "Formulas", content: item.formula || "" },
         { title: "Worked Examples", content: item.example || "" },
         { title: "Flashcards", content: flashcardsToText(item.flashcards || []) },
-        { title: "Quiz", content: quizToText(item.quizQuestions || []) },
+        { title: "Test", content: quizToText(item.quizQuestions || []) },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
     } catch (err) {
@@ -803,12 +804,12 @@ export default function App() {
 
   const downloadHistoryQuizPdf = async (item) => {
     try {
-      await exportPdf(`${item.title || item.fileName || "Saved lecture"} quiz`, [
-        { title: "Quiz", content: buildQuizExportText(item.quizQuestions || []) },
+      await exportPdf(`${item.title || item.fileName || "Saved lecture"} test`, [
+        { title: "Test", content: buildQuizExportText(item.quizQuestions || []) },
       ]);
-      setStatus(`${item.title} quiz PDF downloaded.`);
+      setStatus(`${item.title} test PDF downloaded.`);
     } catch (err) {
-      setError(err.message || "Could not create the quiz PDF.");
+      setError(err.message || "Could not create the test PDF.");
     }
   };
 
@@ -824,7 +825,7 @@ export default function App() {
 
   const handleQuizImageChange = (questionNumber, selectedFile) => {
     if (!selectedFile) return;
-    if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for quiz answer marking.");
+    if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for test answer marking.");
     setQuizAnswerImages((current) => ({ ...current, [questionNumber]: selectedFile }));
     setQuizSubmitted(false);
     setQuizResults((current) => {
@@ -839,7 +840,7 @@ export default function App() {
     if (!selectedQuizQuestions.length) return;
     setIsMarkingQuiz(true);
     setError("");
-    setStatus("Marking quiz answers...");
+    setStatus("Marking test answers...");
     try {
       const nextResults = {};
       for (const item of selectedQuizQuestions) {
@@ -861,10 +862,10 @@ export default function App() {
       }
       setQuizResults(nextResults);
       setQuizSubmitted(true);
-      setStatus("Quiz marked. Review the colored answers below.");
+      setStatus("Test marked. Review the colored answers below.");
     } catch (err) {
-      setError(err.message || "Quiz marking failed.");
-      setStatus("Quiz marking failed.");
+      setError(err.message || "Test marking failed.");
+      setStatus("Test marking failed.");
     } finally {
       setIsMarkingQuiz(false);
     }
@@ -896,21 +897,12 @@ export default function App() {
         <main className="relative mx-auto flex min-h-screen max-w-6xl items-center px-4 py-10 sm:px-6 lg:px-8">
           <div className="grid w-full gap-8 xl:grid-cols-[1fr_0.95fr]">
             <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-6 shadow-[0_30px_90px_rgba(2,8,23,0.45)] backdrop-blur xl:p-8">
-              <div className="flex flex-wrap gap-2">
-                {["Transcript", "Slides + Notes", "Email Login", "Study Chat", "AI Quiz Marking"].map((pill) => (
-                  <span key={pill} className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-xs uppercase tracking-[0.26em] text-emerald-100">{pill}</span>
-                ))}
-              </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO.AI</p>
-              <h1 className="mt-4 text-5xl font-semibold leading-[0.96] tracking-[-0.04em] text-white sm:text-6xl">Secure lecture intelligence for students who want better notes, faster.</h1>
-              <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-300">Sign in with your email, upload a lecture, mix in notes or slides, then revise with study guides, formulas, quizzes, and follow-up AI chat in one workspace.</p>
+              <h1 className="mt-4 text-5xl font-semibold leading-[0.96] tracking-[-0.04em] text-white sm:text-6xl">Open your study workspace.</h1>
             </section>
-            <section className="rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(13,22,44,0.94),rgba(5,10,20,0.98))] p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
+            <section className="rounded-[32px] border border-white/10 bg-[linear-gradient(180deg,rgba(5,18,11,0.96),rgba(2,7,4,0.98))] p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Google Access</p>
               <h2 className="mt-3 text-3xl font-semibold text-white">Sign in with Google</h2>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
-                Use your Google account to open your study workspace quickly without email codes or passwords inside this app.
-              </p>
               <div className="mt-8 space-y-5">
                 {authEmailInput ? (
                   <div className="rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">
@@ -947,20 +939,14 @@ export default function App() {
           <div className="grid gap-8 xl:grid-cols-[1fr_0.95fr]">
             <div className="space-y-6">
               <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">MABASO.AI Workspace</div>
-              <h1 className="text-5xl font-semibold leading-[0.96] tracking-[-0.04em] text-white sm:text-6xl">Choose the study help you need next.</h1>
-              <p className="max-w-2xl text-lg leading-8 text-slate-300">Transcribe your lecture, bring in notes or slides when you want them, then revise, test yourself, or ask MABASO with a reference image.</p>
-              <div className="grid gap-3 sm:grid-cols-3">{[
-                { title: "Study Guide", text: "Keep revision notes, formulas, and worked examples together." },
-                { title: "Quiz Zone", text: "Mark typed or photo answers with tolerant AI checking." },
-                { title: "Study Chat", text: "Ask follow-up questions with text or image references." },
-              ].map((item) => <div key={item.title} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-100/70">{item.title}</p><p className="mt-3 text-sm leading-7 text-slate-200">{item.text}</p></div>)}</div>
+              <h1 className="text-5xl font-semibold leading-[0.96] tracking-[-0.04em] text-white sm:text-6xl">Choose the study task you need.</h1>
             </div>
 
-            <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(14,28,65,0.92),rgba(8,14,30,0.96))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
+            <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleFileChange(event.dataTransfer.files?.[0]); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
                 <div className="space-y-4">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
-                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-6 text-slate-300">Add the lecture first, attach extra material only when you need it, and start transcription below.</p></div>
+                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2></div>
                   <div className="flex flex-wrap gap-3">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-60">Choose Lecture File</button>
                     <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`rounded-full px-5 py-3 text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "bg-emerald-400/15 text-emerald-100"} disabled:opacity-60`}>{recording ? "Stop Recording" : "Record Live Lecture"}</button>
@@ -970,7 +956,7 @@ export default function App() {
                     <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Slides</button>
                   </div>
                   <div className="flex flex-wrap gap-3">
-                    <button type="button" onClick={upload} disabled={loading || !file} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#7c3aed)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribing ? "Transcribing..." : isGeneratingSummary ? "Generating..." : "Transcribe Lecture"}</button>
+                    <button type="button" onClick={upload} disabled={loading || !file} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribing ? "Transcribing..." : isGeneratingSummary ? "Generating..." : "Transcribe Lecture"}</button>
                     <button type="button" onClick={() => generateStudyGuide(transcript)} disabled={loading || !hasTranscript} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">{isGeneratingSummary ? "Generating Guide..." : "Generate Study Guide"}</button>
                   </div>
                   <input ref={fileInputRef} type="file" accept="audio/*,video/*" className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />
@@ -980,14 +966,14 @@ export default function App() {
               </div>
 
               <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNotesFileName || (lectureNotes.trim() ? "Notes added" : "No notes added yet")}</p><p className="mt-3 text-sm leading-7 text-slate-300">Use the Upload Notes button when you want lecturer material blended into the study guide.</p></div>
-                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/20 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add PDF / PPTX</span></button></div>{lectureSlideFileNames.length ? <div className="mt-4 flex flex-wrap gap-2">{lectureSlideFileNames.slice(0, 4).map((name) => <span key={name} className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{name}</span>)}{lectureSlideFileNames.length > 4 ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">+{lectureSlideFileNames.length - 4} more</span> : null}</div> : <p className="mt-3 text-sm leading-7 text-slate-300">Upload slide images, PDF slides, or PowerPoint files only when you want them included.</p>}</div>
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNotesFileName || (lectureNotes.trim() ? "Notes added" : "No notes added yet")}</p></div>
+                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-black/20 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add PDF / PPTX</span></button></div>{lectureSlideFileNames.length ? <div className="mt-4 flex flex-wrap gap-2">{lectureSlideFileNames.slice(0, 4).map((name) => <span key={name} className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{name}</span>)}{lectureSlideFileNames.length > 4 ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">+{lectureSlideFileNames.length - 4} more</span> : null}</div> : null}</div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking quiz" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 min-h-[150px] rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p><p className="mt-2 text-sm leading-7 text-slate-300">{currentJobType === "study_guide" ? "MABASO is building your notes from the lecture context." : currentJobType === "slides" ? "MABASO is reading slide material." : loading ? "MABASO is preparing and transcribing your lecture in stages for better accuracy." : "Upload a lecture, then revise it from one stable workspace."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
+                <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
                 <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/10"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#22c55e,#10b981,#4ade80)] transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>
                 {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
                 {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p><p className="mt-2 text-rose-100/80">{getErrorHint(error)}</p></div> : null}
@@ -998,7 +984,7 @@ export default function App() {
 
         <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
           <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
-            <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose what you want to work on next.</h2><p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Open your guide, revisit formulas, test yourself, or ask MABASO with a photo reference.</p></div>
+            <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose what you want to work on next.</h2></div>
             <div className="flex flex-wrap gap-2">{tabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}</div>
           </div>
 
@@ -1010,7 +996,7 @@ export default function App() {
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Lecture file: {workspaceFileLabel}</div>
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Lecture notes: {lectureNotes.trim() ? lectureNotesFileName || "Added" : "Not added"}</div>
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Slide sources: {lectureSlideFileNames.length || 0}</div>
-                  <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Quiz questions: {quizQuestions.length || 0}</div>
+                  <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">Saved workspaces: {historyItems.length}</div>
                 </div>
               </div>
@@ -1025,7 +1011,7 @@ export default function App() {
                 <button type="button" onClick={copyActiveContent} disabled={!hasResults && activeTab !== "chat"} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
                 <button type="button" onClick={downloadActiveContent} disabled={!hasResults && activeTab !== "chat"} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">Download Section PDF</button>
                 <button type="button" onClick={downloadFullStudyPackPdf} disabled={!hasResults} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Download Full PDF</button>
-                {activeTab === "quiz" ? <button type="button" onClick={downloadQuizPdf} disabled={!selectedQuizQuestions.length} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">Download Quiz PDF</button> : null}
+                {activeTab === "quiz" ? <button type="button" onClick={downloadQuizPdf} disabled={!selectedQuizQuestions.length} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">Download Test PDF</button> : null}
               </div>
 
               <div className={`content-panel min-h-[520px] rounded-[24px] border border-white/10 p-5 ${activeTab === "guide" ? "bg-black" : "bg-slate-950/70"}`}>
@@ -1034,8 +1020,8 @@ export default function App() {
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-hidden rounded-2xl border border-white/10"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div> : <div className="whitespace-pre-wrap text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="mt-3 font-semibold text-white">{card.question}</p><p className="mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
-                {activeTab === "quiz" ? <div><div className="mb-5 flex flex-wrap items-center gap-3"><label className="text-sm text-slate-300" htmlFor="quiz-count">Number of questions</label><select id="quiz-count" value={quizCount} onChange={(event) => { setQuizCount(Number(event.target.value)); setQuizAnswers({}); setQuizAnswerImages({}); setQuizResults({}); setQuizSubmitted(false); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{[3, 5, 10].map((count) => <option key={count} value={count}>{count}</option>)}</select><button type="button" onClick={markQuiz} disabled={!selectedQuizQuestions.length || isMarkingQuiz} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#7c3aed)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarkingQuiz ? "Marking..." : "Mark Quiz"}</button>{quizSubmitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {score} / {selectedQuizQuestions.length}</div> : null}</div><div className="space-y-4">{selectedQuizQuestions.length ? selectedQuizQuestions.map((item) => { const result = quizResults[item.number]; const isCorrect = Number(result?.score || 0) > 0; const answerTone = !quizSubmitted ? "border-white/10 bg-slate-900" : isCorrect ? "border-emerald-400/35 bg-emerald-500/10" : "border-rose-400/35 bg-rose-500/10"; return <div key={item.number} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="font-semibold text-white">{item.number}. {item.question}</p><textarea value={quizAnswers[item.number] || ""} onChange={(event) => handleQuizAnswerChange(item.number, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Upload answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => handleQuizImageChange(item.number, event.target.files?.[0])} /></label>{quizAnswerImages[item.number] ? <span className="text-xs text-emerald-100/80">{quizAnswerImages[item.number].name}</span> : null}</div>{quizSubmitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-black/20 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Suggested Answer</p><p className="mt-2 text-sm leading-7 text-slate-300">{item.answer}</p></div><div className={`rounded-2xl border p-3 ${isCorrect ? "border-emerald-300/25 bg-emerald-300/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${isCorrect ? "bg-emerald-950 text-emerald-100" : "bg-rose-950 text-rose-100"}`}>{isCorrect ? "Correct" : "Needs correction"}</span></div>{result.extracted_answer ? <p className="mt-3 text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p></div></div> : null}</div>; }) : <div className="text-sm text-slate-300">Quiz questions will appear here after study guide generation.</div>}</div></div> : null}
-                {activeTab === "chat" ? <div className="flex h-full min-h-[440px] flex-col"><div className="mb-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-sm leading-7 text-slate-300">Ask MABASO about the lecture and attach a photo of a slide, handwritten working, or question when you want visual reference.</div><div className="flex-1 space-y-4 overflow-y-auto rounded-2xl border border-white/10 bg-black/20 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "bg-emerald-300/10 text-slate-100" : "ml-auto bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "Student"}</p><div className="whitespace-pre-wrap">{message.content}</div></div>) : <div className="flex h-full min-h-[280px] items-center justify-center text-center text-sm text-slate-400">Ask your first question after generating a transcript or study guide.</div>}</div><div className="mt-4 space-y-3"><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} rows={3} className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none" placeholder="Ask something like: Explain the main formula again in a simpler way." /><div className="flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Add reference image</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label>{chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>)}</div><div className="flex flex-wrap justify-end gap-3"><button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm text-white disabled:opacity-50">Clear images</button><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="rounded-2xl bg-[linear-gradient(135deg,#2563eb,#7c3aed)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isAskingChat ? "Answering..." : "Ask MABASO"}</button></div></div></div> : null}
+                {activeTab === "quiz" ? <div><div className="mb-5 flex flex-wrap items-center gap-3"><div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">10 test questions ready</div><button type="button" onClick={markQuiz} disabled={!selectedQuizQuestions.length || isMarkingQuiz} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarkingQuiz ? "Marking..." : "Mark Test"}</button>{quizSubmitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {score} / {selectedQuizQuestions.length}</div> : null}</div><div className="space-y-4">{selectedQuizQuestions.length ? selectedQuizQuestions.map((item) => { const result = quizResults[item.number]; const isCorrect = Number(result?.score || 0) > 0; const answerTone = !quizSubmitted ? "border-white/10 bg-slate-900" : isCorrect ? "border-emerald-400/35 bg-emerald-500/10" : "border-rose-400/35 bg-rose-500/10"; return <div key={item.number} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="font-semibold text-white">{item.number}. {item.question}</p><textarea value={quizAnswers[item.number] || ""} onChange={(event) => handleQuizAnswerChange(item.number, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Upload answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => handleQuizImageChange(item.number, event.target.files?.[0])} /></label>{quizAnswerImages[item.number] ? <span className="text-xs text-emerald-100/80">{quizAnswerImages[item.number].name}</span> : null}</div>{quizSubmitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-black/20 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Suggested Answer</p><p className="mt-2 text-sm leading-7 text-slate-300">{item.answer}</p></div><div className={`rounded-2xl border p-3 ${isCorrect ? "border-emerald-300/25 bg-emerald-300/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${isCorrect ? "bg-emerald-950 text-emerald-100" : "bg-rose-950 text-rose-100"}`}>{isCorrect ? "Correct" : "Needs correction"}</span></div>{result.extracted_answer ? <p className="mt-3 text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p></div></div> : null}</div>; }) : <div className="text-sm text-slate-300">Test questions will appear here after study guide generation.</div>}</div></div> : null}
+                {activeTab === "chat" ? <div className="flex h-full min-h-[440px] flex-col"><div className="flex-1 space-y-4 overflow-y-auto rounded-2xl border border-white/10 bg-black/20 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "bg-emerald-300/10 text-slate-100" : "ml-auto bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "Student"}</p><div className="whitespace-pre-wrap">{message.content}</div></div>) : null}</div><div className="mt-4 space-y-3"><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} rows={3} className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100 outline-none" placeholder="Ask something like: Explain the main formula again in a simpler way." /><div className="flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Add reference image</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label>{chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>)}</div><div className="flex flex-wrap justify-end gap-3"><button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm text-white disabled:opacity-50">Clear images</button><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="rounded-2xl bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isAskingChat ? "Answering..." : "Ask MABASO"}</button></div></div></div> : null}
               </div>
             </div>
           </div>
@@ -1046,7 +1032,7 @@ export default function App() {
             <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">History</p><h2 className="mt-2 text-3xl font-semibold text-white">Saved workspaces on this device.</h2></div>
             <div className="flex flex-wrap gap-3"><div className="rounded-full border border-white/10 bg-black/20 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div><button type="button" onClick={() => { setHistoryItems([]); setActiveHistoryId(""); setStatus("History cleared."); }} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button></div>
           </div>
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} quiz question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Quiz PDF</button><button type="button" onClick={() => { setHistoryItems((current) => current.filter((entry) => entry.id !== item.id)); if (activeHistoryId === item.id) setActiveHistoryId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
+          <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => { setHistoryItems((current) => current.filter((entry) => entry.id !== item.id)); if (activeHistoryId === item.id) setActiveHistoryId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
         </section>
       </main>
     </div>

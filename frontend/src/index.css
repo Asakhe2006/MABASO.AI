@@ -18,12 +18,14 @@
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 28%),
     radial-gradient(circle at top right, rgba(74, 222, 128, 0.14), transparent 30%),
@@ -42,6 +44,7 @@ input,
 textarea,
 select {
   font: inherit;
+  font-size: 16px;
 }
 
 ::selection {
@@ -51,6 +54,7 @@ select {
 
 #root {
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 .brand-mark {

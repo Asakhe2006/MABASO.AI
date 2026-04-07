@@ -15,6 +15,7 @@ import sqlite3
 import secrets
 import subprocess
 import tempfile
+import textwrap
 import zipfile
 from pathlib import Path
 from uuid import uuid4
@@ -135,6 +136,8 @@ Rules:
   Answer: ...
 - Put the Answer on its own line.
 - Leave a blank line between each question and its answer, and a blank line between each numbered question block.
+- Make question 1 the most straightforward and let the difficulty rise steadily until question 10 is the most demanding.
+- Do not label questions with difficulty names, levels, or tags.
 - In FLASHCARDS, use this exact style for every card:
   Q: ...
 
@@ -506,6 +509,34 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         cleaned = (value or "").replace("\r\n", "\n").strip()
         if not cleaned:
             return []
+        wrapped_lines: list[str] = []
+        for raw_line in cleaned.splitlines():
+            line = raw_line.rstrip()
+            if not line.strip():
+                wrapped_lines.append("")
+                continue
+            numbered_match = re.match(r"^(\d+\.\s+)(.*)$", line)
+            bullet_match = re.match(r"^([-*]\s+)(.*)$", line)
+            if numbered_match:
+                prefix, remainder = numbered_match.groups()
+                wrapped = textwrap.fill(
+                    remainder,
+                    width=88,
+                    initial_indent=prefix,
+                    subsequent_indent=" " * len(prefix),
+                )
+            elif bullet_match:
+                prefix, remainder = bullet_match.groups()
+                wrapped = textwrap.fill(
+                    remainder,
+                    width=88,
+                    initial_indent=prefix,
+                    subsequent_indent=" " * len(prefix),
+                )
+            else:
+                wrapped = textwrap.fill(line, width=92)
+            wrapped_lines.extend(wrapped.splitlines())
+        cleaned = "\n".join(wrapped_lines).strip()
         blocks: list[str] = []
         for raw_block in re.split(r"\n{2,}", cleaned):
             lines = raw_block.splitlines() or [raw_block]
@@ -1202,6 +1233,19 @@ def build_fallback_study_guide(transcript: str) -> str:
     key_terms = [term.replace("-", " ") for term, _ in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:6]]
     summary_sentences = sentences[:3] or ["The lecture transcript was available, but the AI summary step failed."]
     concept_bullets = key_terms[:5] or ["Main concepts were not clearly detected from the transcript."]
+    question_topics = concept_bullets or ["the main lecture idea"]
+    question_prompts = [
+        "Define",
+        "Describe",
+        "Summarize",
+        "Explain how to use",
+        "Compare and contrast",
+        "Apply",
+        "Analyse",
+        "Evaluate",
+        "Connect",
+        "Design an approach for",
+    ]
     title_seed = key_terms[:3]
     title = " / ".join(term.title() for term in title_seed) if title_seed else "Lecture Notes"
 
@@ -1249,10 +1293,10 @@ def build_fallback_study_guide(transcript: str) -> str:
             "**PRACTICE QUESTIONS AND ANSWERS**",
             *[
                 (
-                    f"{index}. Question: Explain {item}.\n\n"
-                    f"   Answer: Define it, describe why it matters, and connect it to the lecture context."
+                    f"{index}. Question: {question_prompts[index - 1]} {question_topics[(index - 1) % len(question_topics)]}.\n\n"
+                    f"Answer: Build from the lecture context, explain the method clearly, and show why it matters."
                 )
-                for index, item in enumerate(concept_bullets[:3], start=1)
+                for index in range(1, 11)
             ],
             "",
             "**FLASHCARDS**",
