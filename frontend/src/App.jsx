@@ -266,7 +266,12 @@ export default function App() {
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || "No lecture selected";
-  const guideSupportCards = []  const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
+  const guideSupportCards = [
+    { label: "Advantages and disadvantages", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "ADVANTAGES AND DISADVANTAGES")).slice(0, 4) },
+    { label: "Common mistakes", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "COMMON MISTAKES TO AVOID")).slice(0, 4) },
+    { label: "Quick revision plan", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "QUICK REVISION PLAN")).slice(0, 4) },
+  ].filter((card) => card.items.length);
+  const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = activeTab === "collaboration" ? Boolean(activeRoom) : hasResults || activeTab === "chat";
 
