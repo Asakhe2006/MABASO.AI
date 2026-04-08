@@ -56,6 +56,10 @@ input {
   min-width: 0;
 }
 
+iframe {
+  max-width: 100%;
+}
+
 ::selection {
   background: rgba(34, 197, 94, 0.32);
   color: white;
@@ -190,6 +194,12 @@ input {
   .hero-glow-right,
   .hero-grid {
     display: none;
+  }
+
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
   }
 }
 

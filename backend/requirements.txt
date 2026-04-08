@@ -7,3 +7,4 @@ reportlab>=4.2.5
 google-auth>=2.39.0
 requests>=2.32.0
 yt-dlp>=2024.1.0
+youtube-transcript-api>=1.2.4

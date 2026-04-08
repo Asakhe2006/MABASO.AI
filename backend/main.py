@@ -20,7 +20,7 @@ import textwrap
 import zipfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -33,6 +33,11 @@ try:
     import yt_dlp
 except ImportError:
     yt_dlp = None
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
 
 try:
     from reportlab.lib import colors
@@ -1363,6 +1368,97 @@ def normalize_video_url(value: str) -> str:
     return cleaned
 
 
+def extract_youtube_video_id(video_url: str) -> str | None:
+    parsed = urlparse(video_url)
+    host = (parsed.netloc or "").lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if host == "youtu.be":
+        return path_parts[0] if path_parts else None
+
+    if host not in {"youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com"}:
+        return None
+
+    if parsed.path == "/watch":
+        video_id = parse_qs(parsed.query).get("v", [""])[0].strip()
+        return video_id or None
+
+    if path_parts and path_parts[0] in {"embed", "shorts", "live", "v"} and len(path_parts) > 1:
+        return path_parts[1]
+
+    return None
+
+
+def captions_to_transcript_text(items: Any) -> str:
+    lines: list[str] = []
+    for item in items or []:
+        text = item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+        cleaned = re.sub(r"\s+", " ", str(text or "").replace("\xa0", " ")).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines).strip()
+
+
+def fetch_youtube_transcript(video_url: str, job_id: str) -> str | None:
+    if YouTubeTranscriptApi is None:
+        return None
+
+    video_id = extract_youtube_video_id(video_url)
+    if not video_id:
+        return None
+
+    update_job(job_id, status="processing", stage="Checking YouTube captions", progress=3)
+
+    try:
+        transcript_api = YouTubeTranscriptApi()
+        transcript_list = transcript_api.list(video_id)
+    except Exception as exc:
+        logger.info("Could not read YouTube transcript list for %s: %s", video_url, exc)
+        return None
+
+    candidates = []
+    preferred_languages = ["en", "en-US", "en-GB"]
+    for finder_name in ("find_transcript", "find_manually_created_transcript", "find_generated_transcript"):
+        finder = getattr(transcript_list, finder_name, None)
+        if not callable(finder):
+            continue
+        try:
+            candidates.append(finder(preferred_languages))
+        except Exception:
+            continue
+
+    try:
+        candidates.extend(list(transcript_list))
+    except Exception as exc:
+        logger.info("Could not iterate YouTube transcripts for %s: %s", video_url, exc)
+
+    seen_candidates: set[tuple[str, bool]] = set()
+    for transcript_candidate in candidates:
+        candidate_key = (
+            str(getattr(transcript_candidate, "language_code", "")),
+            bool(getattr(transcript_candidate, "is_generated", False)),
+        )
+        if candidate_key in seen_candidates:
+            continue
+        seen_candidates.add(candidate_key)
+        try:
+            transcript_text = captions_to_transcript_text(transcript_candidate.fetch())
+        except Exception as exc:
+            logger.info("Could not fetch YouTube transcript candidate for %s: %s", video_url, exc)
+            continue
+        if transcript_text:
+            update_job(job_id, status="processing", stage="YouTube captions found. Preparing transcript", progress=14)
+            return transcript_text
+
+    return None
+
+
+def can_process_video_url(video_url: str) -> bool:
+    return yt_dlp is not None or (YouTubeTranscriptApi is not None and extract_youtube_video_id(video_url) is not None)
+
+
 def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
     if yt_dlp is None:
         raise RuntimeError("Video-link transcription needs yt-dlp on the backend server.")
@@ -1463,6 +1559,12 @@ def format_job_error(exc: Exception) -> str:
     if isinstance(exc, TimeoutError):
         return "Processing timed out. Try again, compress the file, or use a shorter lecture segment."
     message = str(exc).strip()
+    lowered = message.lower()
+    if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
+        return (
+            "This YouTube video blocked direct server-side download. "
+            "Try a video with public captions, or upload the lecture file directly."
+        )
     return message or "An unexpected processing error occurred."
 
 
@@ -2574,6 +2676,22 @@ async def run_video_transcription_job(job_id: str, video_url: str):
     file_path: Path | None = None
     try:
         update_job(job_id, status="processing", stage="Video link received", progress=1)
+        transcript = await asyncio.to_thread(fetch_youtube_transcript, video_url, job_id)
+        if transcript:
+            update_job(
+                job_id,
+                status="completed",
+                stage="Video transcription completed",
+                progress=100,
+                transcript=transcript,
+            )
+            return
+
+        if yt_dlp is None:
+            raise RuntimeError(
+                "This YouTube video does not expose captions, and direct video downloading is not installed on the backend yet."
+            )
+
         file_path = await asyncio.wait_for(
             asyncio.to_thread(download_audio_from_video_url, video_url, job_id),
             timeout=VIDEO_DOWNLOAD_TIMEOUT,
@@ -2675,7 +2793,7 @@ async def transcribe_video_url(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     ensure_openai_key()
-    if yt_dlp is None:
+    if not can_process_video_url(video_url):
         raise HTTPException(status_code=500, detail="Video-link transcription is not configured on the backend yet.")
 
     job_id = create_job("video_transcription", owner_email=current_user)
