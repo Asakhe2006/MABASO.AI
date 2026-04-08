@@ -380,7 +380,7 @@ export default function App() {
     </section>
   ) : null;
 
-  const collaborationPage = (
+  const renderCollaborationPage = () => (
     <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div>
@@ -1707,7 +1707,7 @@ export default function App() {
           </div>
         </section> : null}
 
-        {currentPage === "collaboration" ? collaborationPage : null}
+        {currentPage === "collaboration" ? renderCollaborationPage() : null}
 
         {historyPanel}
       </main>
