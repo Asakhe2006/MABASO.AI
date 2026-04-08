@@ -2,6 +2,7 @@ import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+import html
 import hashlib
 import hmac
 from io import BytesIO
@@ -97,6 +98,8 @@ UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
+YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
+YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
 
 jobs: dict[str, dict] = {}
 
@@ -1368,6 +1371,28 @@ def normalize_video_url(value: str) -> str:
     return cleaned
 
 
+def build_ytdlp_options(*, output_template: str | None = None, progress_hook: Any = None, skip_download: bool = False) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": list(YTDLP_YOUTUBE_PLAYER_CLIENTS),
+                "skip": ["translated_subs"],
+            }
+        },
+    }
+    if output_template:
+        options["outtmpl"] = output_template
+    if progress_hook:
+        options["progress_hooks"] = [progress_hook]
+    if skip_download:
+        options["skip_download"] = True
+    return options
+
+
 def extract_youtube_video_id(video_url: str) -> str | None:
     parsed = urlparse(video_url)
     host = (parsed.netloc or "").lower().split(":")[0]
@@ -1419,7 +1444,7 @@ def fetch_youtube_transcript(video_url: str, job_id: str) -> str | None:
         return None
 
     candidates = []
-    preferred_languages = ["en", "en-US", "en-GB"]
+    preferred_languages = list(YOUTUBE_LANGUAGE_PREFERENCES)
     for finder_name in ("find_transcript", "find_manually_created_transcript", "find_generated_transcript"):
         finder = getattr(transcript_list, finder_name, None)
         if not callable(finder):
@@ -1459,6 +1484,104 @@ def can_process_video_url(video_url: str) -> bool:
     return yt_dlp is not None or (YouTubeTranscriptApi is not None and extract_youtube_video_id(video_url) is not None)
 
 
+def subtitle_body_to_text(raw_text: str) -> str:
+    lines: list[str] = []
+    for raw_line in (raw_text or "").splitlines():
+        line = raw_line.strip()
+        if (
+            not line
+            or line.upper() == "WEBVTT"
+            or line.startswith("NOTE")
+            or line.startswith("Kind:")
+            or line.startswith("Language:")
+            or "-->" in line
+            or line.isdigit()
+        ):
+            continue
+        line = html.unescape(re.sub(r"<[^>]+>", " ", line))
+        line = re.sub(r"\s+", " ", line).strip()
+        if line and (not lines or line != lines[-1]):
+            lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def read_subtitle_file(file_path: Path) -> str:
+    try:
+        raw_text = file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raw_text = file_path.read_text(encoding="utf-8-sig", errors="ignore")
+    return subtitle_body_to_text(raw_text)
+
+
+def subtitle_file_priority(file_path: Path) -> tuple[int, int, str]:
+    name = file_path.name.lower()
+    language_score = 3
+    if ".en." in name or ".en-" in name or name.endswith(".en.vtt") or name.endswith(".en.srt"):
+        language_score = 0
+    elif ".en-us." in name or ".en-gb." in name or ".en-orig." in name or ".orig." in name:
+        language_score = 1
+    elif ".a." in name:
+        language_score = 2
+
+    extension_score = 0 if file_path.suffix.lower() == ".vtt" else 1
+    return (language_score, extension_score, name)
+
+
+def cleanup_caption_files(prefix: str):
+    for path in UPLOAD_DIR.glob(f"{prefix}*"):
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                logger.warning("Could not delete subtitle artifact: %s", path)
+
+
+def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None:
+    if yt_dlp is None:
+        return None
+
+    normalized_url = normalize_video_url(video_url)
+    subtitle_prefix = f"captions_{uuid4().hex}"
+    output_template = str(UPLOAD_DIR / f"{subtitle_prefix}.%(ext)s")
+    options = build_ytdlp_options(output_template=output_template, skip_download=True)
+    options.update({
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["all"],
+        "subtitlesformat": "vtt/best",
+    })
+
+    update_job(job_id, status="processing", stage="Checking downloadable captions", progress=9)
+    try:
+        with yt_dlp.YoutubeDL(options) as downloader:
+            downloader.extract_info(normalized_url, download=True)
+    except Exception as exc:
+        logger.info("Could not download subtitles with yt-dlp for %s: %s", video_url, exc)
+        cleanup_caption_files(subtitle_prefix)
+        return None
+
+    subtitle_files = sorted(
+        [
+            path
+            for path in UPLOAD_DIR.glob(f"{subtitle_prefix}*")
+            if path.is_file() and path.suffix.lower() in {".vtt", ".srt"}
+        ],
+        key=subtitle_file_priority,
+    )
+
+    transcript_text = ""
+    for subtitle_file in subtitle_files:
+        transcript_text = read_subtitle_file(subtitle_file)
+        if transcript_text:
+            break
+
+    cleanup_caption_files(subtitle_prefix)
+    if transcript_text:
+        update_job(job_id, status="processing", stage="Downloadable captions found. Preparing transcript", progress=16)
+        return transcript_text
+    return None
+
+
 def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
     if yt_dlp is None:
         raise RuntimeError("Video-link transcription needs yt-dlp on the backend server.")
@@ -1480,15 +1603,8 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         elif status == "finished":
             update_job(job_id, status="processing", stage="Video downloaded. Preparing audio", progress=18)
 
-    options = {
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "outtmpl": output_template,
-        "restrictfilenames": True,
-        "progress_hooks": [progress_hook],
-    }
+    options = build_ytdlp_options(output_template=output_template, progress_hook=progress_hook)
+    options["format"] = "bestaudio/best"
 
     update_job(job_id, status="processing", stage="Connecting to the video link", progress=3)
     with yt_dlp.YoutubeDL(options) as downloader:
@@ -2687,9 +2803,20 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             )
             return
 
+        transcript = await asyncio.to_thread(download_subtitles_from_video_url, video_url, job_id)
+        if transcript:
+            update_job(
+                job_id,
+                status="completed",
+                stage="Video transcription completed",
+                progress=100,
+                transcript=transcript,
+            )
+            return
+
         if yt_dlp is None:
             raise RuntimeError(
-                "This YouTube video does not expose captions, and direct video downloading is not installed on the backend yet."
+                "This video does not expose downloadable captions, and direct video downloading is not installed on the backend yet."
             )
 
         file_path = await asyncio.wait_for(
