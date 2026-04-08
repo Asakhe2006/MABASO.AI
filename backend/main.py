@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
+import requests
 try:
     import yt_dlp
 except ImportError:
@@ -1536,6 +1537,127 @@ def cleanup_caption_files(prefix: str):
                 logger.warning("Could not delete subtitle artifact: %s", path)
 
 
+def extract_json_object_from_text(source: str, marker: str) -> dict[str, Any] | None:
+    marker_index = source.find(marker)
+    if marker_index == -1:
+        return None
+
+    start_index = source.find("{", marker_index)
+    if start_index == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start_index, len(source)):
+        char = source[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(source[start_index:index + 1])
+                except json.JSONDecodeError:
+                    return None
+
+    return None
+
+
+def choose_youtube_caption_track(caption_tracks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not caption_tracks:
+        return None
+
+    def track_priority(track: dict[str, Any]) -> tuple[int, int, str]:
+        language_code = str(track.get("languageCode", "")).lower()
+        kind = str(track.get("kind", "")).lower()
+        language_score = 3
+        if language_code in {language.lower() for language in YOUTUBE_LANGUAGE_PREFERENCES}:
+            language_score = 0
+        elif language_code.startswith("en"):
+            language_score = 1
+        elif language_code.endswith("-orig") or language_code == "orig":
+            language_score = 2
+
+        kind_score = 0 if kind != "asr" else 1
+        return (language_score, kind_score, language_code)
+
+    return sorted(caption_tracks, key=track_priority)[0]
+
+
+def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None:
+    video_id = extract_youtube_video_id(video_url)
+    if not video_id:
+        return None
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    watch_url = f"https://www.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1"
+    update_job(job_id, status="processing", stage="Checking YouTube watch-page captions", progress=7)
+
+    try:
+        response = requests.get(watch_url, headers=headers, timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.info("Could not fetch YouTube watch page for %s: %s", video_url, exc)
+        return None
+
+    player_response = None
+    for marker in (
+        "var ytInitialPlayerResponse = ",
+        "ytInitialPlayerResponse = ",
+        'window["ytInitialPlayerResponse"] = ',
+        "window['ytInitialPlayerResponse'] = ",
+    ):
+        player_response = extract_json_object_from_text(response.text, marker)
+        if player_response:
+            break
+
+    caption_tracks = (
+        player_response.get("captions", {})
+        .get("playerCaptionsTracklistRenderer", {})
+        .get("captionTracks", [])
+        if isinstance(player_response, dict)
+        else []
+    )
+    caption_track = choose_youtube_caption_track(caption_tracks)
+    base_url = caption_track.get("baseUrl", "") if isinstance(caption_track, dict) else ""
+    if not base_url:
+        return None
+
+    caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
+    try:
+        caption_response = requests.get(caption_url, headers=headers, timeout=20)
+        caption_response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.info("Could not fetch YouTube caption track for %s: %s", video_url, exc)
+        return None
+
+    transcript_text = subtitle_body_to_text(caption_response.text)
+    if transcript_text:
+        update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
+        return transcript_text
+    return None
+
+
 def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None:
     if yt_dlp is None:
         return None
@@ -2793,6 +2915,17 @@ async def run_video_transcription_job(job_id: str, video_url: str):
     try:
         update_job(job_id, status="processing", stage="Video link received", progress=1)
         transcript = await asyncio.to_thread(fetch_youtube_transcript, video_url, job_id)
+        if transcript:
+            update_job(
+                job_id,
+                status="completed",
+                stage="Video transcription completed",
+                progress=100,
+                transcript=transcript,
+            )
+            return
+
+        transcript = await asyncio.to_thread(fetch_youtube_watch_page_captions, video_url, job_id)
         if transcript:
             update_job(
                 job_id,
