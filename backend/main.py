@@ -5,6 +5,7 @@ from email.message import EmailMessage
 import html
 import hashlib
 import hmac
+from http.cookiejar import MozillaCookieJar
 from io import BytesIO
 import json
 import logging
@@ -108,6 +109,14 @@ DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
 YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
+YOUTUBE_USER_AGENT = os.getenv(
+    "YOUTUBE_USER_AGENT",
+    (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+).strip()
 YOUTUBE_PROXY_HTTP_URL = os.getenv("YOUTUBE_PROXY_HTTP_URL", "").strip()
 YOUTUBE_PROXY_HTTPS_URL = os.getenv("YOUTUBE_PROXY_HTTPS_URL", "").strip()
 YOUTUBE_WEBSHARE_PROXY_USERNAME = os.getenv("YOUTUBE_WEBSHARE_PROXY_USERNAME", "").strip()
@@ -117,6 +126,8 @@ YOUTUBE_WEBSHARE_PROXY_LOCATIONS = tuple(
     for location in os.getenv("YOUTUBE_WEBSHARE_PROXY_LOCATIONS", "").split(",")
     if location.strip()
 )
+YOUTUBE_COOKIES_FILE = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
+YOUTUBE_COOKIES_TXT = os.getenv("YOUTUBE_COOKIES_TXT", "").strip()
 
 jobs: dict[str, dict] = {}
 
@@ -883,7 +894,7 @@ def normalize_test_visibility(value: str) -> str:
 
 def sanitize_collaboration_tab(value: str) -> str:
     normalized = (value or "guide").strip().lower()
-    allowed_tabs = {"guide", "transcript", "formulas", "examples", "flashcards", "quiz", "chat", "collaboration"}
+    allowed_tabs = {"guide", "transcript", "formulas", "examples", "flashcards", "quiz", "chat"}
     return normalized if normalized in allowed_tabs else "guide"
 
 
@@ -1388,12 +1399,66 @@ def normalize_video_url(value: str) -> str:
     return cleaned
 
 
+def resolve_youtube_cookiefile() -> Path | None:
+    if YOUTUBE_COOKIES_FILE:
+        cookie_path = Path(YOUTUBE_COOKIES_FILE)
+        if cookie_path.exists() and cookie_path.is_file():
+            return cookie_path
+        logger.warning("Configured YOUTUBE_COOKIES_FILE does not exist: %s", cookie_path)
+
+    if not YOUTUBE_COOKIES_TXT:
+        return None
+
+    cookie_text = YOUTUBE_COOKIES_TXT.replace("\\n", "\n").strip()
+    if not cookie_text:
+        return None
+
+    cookie_path = UPLOAD_DIR / "youtube_cookies.txt"
+    try:
+        cookie_path.write_text(f"{cookie_text}\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not write YouTube cookies file: %s", exc)
+        return None
+    return cookie_path
+
+
+def load_youtube_request_cookies() -> dict[str, str]:
+    cookies = {
+        "CONSENT": "YES+cb.20210328-17-p0.en+FX+700",
+        "PREF": "hl=en&gl=US",
+    }
+    cookie_path = resolve_youtube_cookiefile()
+    if not cookie_path:
+        return cookies
+
+    try:
+        cookie_jar = MozillaCookieJar()
+        cookie_jar.load(str(cookie_path), ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        logger.warning("Could not load YouTube cookies from %s: %s", cookie_path, exc)
+        return cookies
+
+    for cookie in cookie_jar:
+        if "youtube.com" in (cookie.domain or "").lower() or "google.com" in (cookie.domain or "").lower():
+            cookies[cookie.name] = cookie.value
+    return cookies
+
+
+def build_youtube_request_headers() -> dict[str, str]:
+    return {
+        "User-Agent": YOUTUBE_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
 def build_ytdlp_options(*, output_template: str | None = None, progress_hook: Any = None, skip_download: bool = False) -> dict[str, Any]:
     options: dict[str, Any] = {
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
+        "geo_bypass": True,
+        "http_headers": build_youtube_request_headers(),
         "extractor_args": {
             "youtube": {
                 "player_client": list(YTDLP_YOUTUBE_PLAYER_CLIENTS),
@@ -1407,6 +1472,9 @@ def build_ytdlp_options(*, output_template: str | None = None, progress_hook: An
         options["progress_hooks"] = [progress_hook]
     if skip_download:
         options["skip_download"] = True
+    cookie_path = resolve_youtube_cookiefile()
+    if cookie_path:
+        options["cookiefile"] = str(cookie_path)
     return options
 
 
@@ -1661,19 +1729,13 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
     if not video_id:
         return None
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    headers = build_youtube_request_headers()
+    cookies = load_youtube_request_cookies()
     watch_url = f"https://www.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1"
     update_job(job_id, status="processing", stage="Checking YouTube watch-page captions", progress=7)
 
     try:
-        response = requests.get(watch_url, headers=headers, timeout=20)
+        response = requests.get(watch_url, headers=headers, cookies=cookies, timeout=20)
         response.raise_for_status()
     except requests.RequestException as exc:
         logger.info("Could not fetch YouTube watch page for %s: %s", video_url, exc)
@@ -1704,7 +1766,7 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
 
     caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
     try:
-        caption_response = requests.get(caption_url, headers=headers, timeout=20)
+        caption_response = requests.get(caption_url, headers=headers, cookies=cookies, timeout=20)
         caption_response.raise_for_status()
     except requests.RequestException as exc:
         logger.info("Could not fetch YouTube caption track for %s: %s", video_url, exc)
@@ -1860,7 +1922,7 @@ def format_job_error(exc: Exception) -> str:
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
         return (
             "This YouTube video blocked direct server-side download from the hosted backend. "
-            "Public captions are still checked first, but this video may need a YouTube proxy on Render or a direct file upload."
+            "Public captions are still checked first, but this video may need YOUTUBE_COOKIES_TXT or a YouTube proxy on Render."
         )
     return message or "An unexpected processing error occurred."
 

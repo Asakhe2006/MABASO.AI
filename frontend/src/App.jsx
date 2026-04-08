@@ -79,6 +79,19 @@ function serializeQuizAnswerForRoom(question, answerValue) {
   return typeof answerValue === "string" ? answerValue.trim() : "";
 }
 
+function parseStoredRoomQuizAnswer(question, answerText) {
+  const rawValue = (answerText || "").trim();
+  if (!rawValue) return isOptionBasedQuestion(question) ? {} : "";
+  if (!isOptionBasedQuestion(question)) return rawValue;
+
+  return (question.subparts || []).reduce((collected, subpart) => {
+    const pattern = new RegExp(`(?:^|\\n)${subpart.label}\\)\\s*([^\\n]+)`);
+    const match = pattern.exec(rawValue);
+    if (match?.[1]) collected[subpart.label] = match[1].trim();
+    return collected;
+  }, {});
+}
+
 function formatVideoSourceLabel(urlValue) {
   if (!urlValue) return "";
   try {
@@ -312,6 +325,11 @@ export default function App() {
   const [quizResults, setQuizResults] = useState({});
   const [isMarkingQuiz, setIsMarkingQuiz] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
+  const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
+  const [roomQuizResults, setRoomQuizResults] = useState({});
+  const [isMarkingRoomQuiz, setIsMarkingRoomQuiz] = useState(false);
+  const [roomQuizSubmitted, setRoomQuizSubmitted] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
@@ -348,11 +366,16 @@ export default function App() {
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
   const formattedFormula = normalizeRenderedMathText(prettifyMathText(formula));
   const formattedExample = normalizeRenderedMathText(prettifyMathText(example));
+  const activeRoomFormattedGuide = normalizeRenderedMathText(prettifyMathText(activeRoom?.summary || ""));
+  const activeRoomFormattedFormula = normalizeRenderedMathText(prettifyMathText(activeRoom?.formula || ""));
+  const activeRoomFormattedExample = normalizeRenderedMathText(prettifyMathText(activeRoom?.example || ""));
   const formulaRows = parseFormulaRows(formattedFormula);
+  const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeStepIndex = currentPage === "capture" ? 1 : currentPage === "workspace" ? 2 : 3;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || formatVideoSourceLabel(videoUrl) || "No lecture selected";
+  const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = hasResults || activeTab === "chat";
@@ -377,6 +400,98 @@ export default function App() {
         <div className="force-mobile-stack flex flex-wrap gap-3"><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div><button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button></div>
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
+    </section>
+  ) : null;
+
+  const renderQuizSection = ({
+    questions,
+    answers,
+    results,
+    quizImages,
+    submitted,
+    isMarking,
+    onMark,
+    onAnswerChange,
+    onOptionChange,
+    onImageChange,
+    sharedAnswerGroups = {},
+    visibilityMode = "",
+    scoreValue = 0,
+    scopeId = "workspace",
+    ownerControls = null,
+    ownerNotice = "",
+    emptyMessage = "Test questions will appear here after study guide generation.",
+  }) => {
+    const totalMarks = getTotalQuizMarks(questions);
+    const hasRoomVisibility = Boolean(visibilityMode);
+    const visibilityLabel = visibilityMode === "shared" ? "Shared answers" : "Private answers";
+    const visibilityDescription = visibilityMode === "shared"
+      ? "Shared test mode lets members compare synced written answers while they work through the same room test."
+      : "Private test mode keeps each learner's answers hidden from the rest of the room until the owner changes it.";
+
+    return (
+      <div>
+        <div className="force-mobile-stack mb-5 flex flex-wrap items-center gap-3">
+          <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{questions.length} test question{questions.length === 1 ? "" : "s"} ready</div>
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalMarks} total marks</div>
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten photos stay only on written questions.</div>
+          {hasRoomVisibility ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Room test mode: {visibilityLabel}</div> : null}
+          <button type="button" onClick={onMark} disabled={!questions.length || isMarking} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarking ? "Marking..." : "Mark Test"}</button>
+          {submitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {scoreValue} / {totalMarks}</div> : null}
+        </div>
+
+        {hasRoomVisibility ? <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50"><p className="font-semibold">{visibilityLabel}</p><p className="mt-2 text-emerald-100/80">{visibilityDescription}</p>{ownerControls ? <div className="mt-4">{ownerControls}</div> : ownerNotice ? <p className="mt-3 text-emerald-100/80">{ownerNotice}</p> : null}</div> : null}
+
+        <div className="space-y-4">
+          {questions.length ? questions.map((item) => {
+            const result = results[item.number];
+            const maxMarks = getQuestionMarks(item);
+            const questionScore = Number(result?.score || 0);
+            const scoreRatio = maxMarks ? questionScore / maxMarks : 0;
+            const answerTone = !submitted ? "border-white/10 bg-slate-900" : scoreRatio >= 1 ? "border-emerald-400/35 bg-emerald-500/10" : scoreRatio > 0 ? "border-amber-300/30 bg-amber-500/10" : "border-rose-400/35 bg-rose-500/10";
+            const resultBadge = !submitted ? "" : scoreRatio >= 1 ? "Full marks" : scoreRatio > 0 ? "Partial credit" : "Needs correction";
+            const resultBadgeTone = scoreRatio >= 1 ? "bg-emerald-950 text-emerald-100" : scoreRatio > 0 ? "bg-amber-950 text-amber-100" : "bg-rose-950 text-rose-100";
+            const visibleRoomAnswers = (sharedAnswerGroups[item.number] || []).filter((answer) => answer.author_email !== authEmail);
+            const typedAnswer = typeof answers[item.number] === "string" ? answers[item.number] : "";
+            const selectedOptions = answers[item.number] && typeof answers[item.number] === "object" ? answers[item.number] : {};
+
+            return (
+              <div key={`${scopeId}-${item.number}`} className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <p className="phone-safe-copy font-semibold text-white">{item.number}. {item.question}</p>
+                  <span className="rounded-full border border-white/10 bg-slate-950/80 px-3 py-1 text-xs font-semibold text-slate-200">{maxMarks} mark{maxMarks === 1 ? "" : "s"}</span>
+                </div>
+                {isOptionBasedQuestion(item) ? <div className="mt-4 space-y-4">{(item.subparts || []).map((subpart) => {
+                  const subpartResult = result?.subpart_results?.find((entry) => entry.label === subpart.label);
+                  return <div key={`${scopeId}-${item.number}-${subpart.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="phone-safe-copy text-sm font-semibold text-white">{subpart.label}) {subpart.question}</p><span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">{subpart.marks} mark</span></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{(subpart.options || []).map((option) => {
+                    const checked = selectedOptions[subpart.label] === option;
+                    return <label key={`${scopeId}-${subpart.label}-${option}`} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${scopeId}-${item.number}-${subpart.label}`} checked={checked} onChange={() => onOptionChange(item, subpart.label, option)} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>;
+                  })}</div>{submitted && subpartResult ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${subpartResult.is_correct ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-rose-300/25 bg-rose-500/10 text-slate-100"}`}><p>{subpartResult.marks_awarded} / {subpartResult.marks}</p><p className="mt-2 leading-7">{subpartResult.feedback}</p></div> : null}</div>;
+                })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span className="phone-safe-copy">Upload handwritten answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => onImageChange(item.number, event.target.files?.[0])} /></label>{quizImages[item.number] ? <span className="phone-safe-copy text-xs text-emerald-100/80">{quizImages[item.number].name}</span> : null}</div></>}
+                {visibilityMode === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${scopeId}-${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="phone-safe-copy font-semibold text-white">{answer.author_email}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}
+                {submitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="phone-safe-copy mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="phone-safe-copy mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}
+              </div>
+            );
+          }) : <div className="text-sm text-slate-300">{emptyMessage}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  const showCollaborationHistoryPanel = currentPage === "capture" || currentPage === "collaboration";
+  const collaborationHistoryPanel = showCollaborationHistoryPanel ? (
+    <section className="mt-8 rounded-[32px] border border-white/10 bg-slate-950/60 p-5 shadow-[0_20px_70px_rgba(2,8,23,0.28)] backdrop-blur xl:p-6">
+      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration History</p>
+          <h2 className="mt-2 text-3xl font-semibold text-white">Your recent study rooms.</h2>
+        </div>
+        <div className="force-mobile-stack flex flex-wrap gap-3">
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{collaborationRooms.length} room{collaborationRooms.length === 1 ? "" : "s"}</div>
+          <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh Rooms</button>
+        </div>
+      </div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">{collaborationRooms.length ? collaborationRooms.map((room) => <article key={room.id} className={`rounded-[24px] border p-5 transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(room.updated_at).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{room.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">Owner: {room.owner_email}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{room.member_count} member{room.member_count === 1 ? "" : "s"}</span><span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-50">Test mode: {room.test_visibility}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Shared tool: {tabs.find((tab) => tab.id === room.active_tab)?.label || "Study Guide"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={async () => { setCurrentPage("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open Room</button></div></div></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Collaboration rooms will appear here after the first room is created.</div>}</div>
     </section>
   ) : null;
 
@@ -411,15 +526,16 @@ export default function App() {
                 <textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" />
               </div>
               <div>
-                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label>
+                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Test answer visibility</label>
+                <p className="mt-2 text-xs leading-6 text-slate-400">This setting affects the room test only. The room owner can change it later.</p>
                 <div className="mt-2 grid gap-3 sm:grid-cols-2">
                   <button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
                     <p className="font-semibold">Private answers</p>
-                    <p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p>
+                    <p className="mt-2 text-xs leading-6 text-slate-300">Members can mark their own test answers, but they cannot see what others submitted.</p>
                   </button>
                   <button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
                     <p className="font-semibold">Shared answers</p>
-                    <p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p>
+                    <p className="mt-2 text-xs leading-6 text-slate-300">Members can compare synced written answers while working on the same room test.</p>
                   </button>
                 </div>
               </div>
@@ -466,6 +582,7 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p>
                     <h3 className="phone-safe-copy mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3>
                     <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p>
+                    <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
                   </div>
                   <div className="force-mobile-stack flex flex-wrap gap-3">
                     <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button>
@@ -490,14 +607,34 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                  <div className="phone-safe-copy mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div>
-                </div>
-                {activeRoom.is_owner ? (
-                  <div className="force-mobile-stack mt-5 flex flex-wrap gap-3">
-                    <button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button>
-                    <button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button>
+                  <div className="mt-4">
+                    {activeRoom.active_tab === "guide" ? <div className="notes-markdown phone-safe-copy rounded-2xl border border-white/10 bg-black/30 p-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{activeRoomFormattedGuide || "No shared study guide selected yet."}</ReactMarkdown></div> : null}
+                    {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
+                    {activeRoom.active_tab === "formulas" ? (activeRoomFormulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{activeRoomFormulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedFormula || "No shared formulas selected yet."}</div>) : null}
+                    {activeRoom.active_tab === "examples" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedExample || "No shared worked examples selected yet."}</div> : null}
+                    {activeRoom.active_tab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{(activeRoom.flashcards || []).length ? activeRoom.flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-300 md:col-span-2">No shared flashcards selected yet.</div>}</div> : null}
+                    {activeRoom.active_tab === "quiz" ? renderQuizSection({
+                      questions: activeRoomQuizQuestions,
+                      answers: roomQuizAnswers,
+                      results: roomQuizResults,
+                      quizImages: roomQuizAnswerImages,
+                      submitted: roomQuizSubmitted,
+                      isMarking: isMarkingRoomQuiz,
+                      onMark: markRoomQuiz,
+                      onAnswerChange: handleRoomQuizAnswerChange,
+                      onOptionChange: handleRoomQuizOptionChange,
+                      onImageChange: handleRoomQuizImageChange,
+                      sharedAnswerGroups: roomAnswerGroups,
+                      visibilityMode: activeRoom.test_visibility,
+                      scoreValue: activeRoomQuizQuestions.reduce((total, item) => total + Number(roomQuizResults[item.number]?.score || 0), 0),
+                      scopeId: `room-${activeRoom.id}`,
+                      ownerControls: activeRoom.is_owner ? <div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null,
+                      ownerNotice: activeRoom.is_owner ? "" : "Only the room owner can switch between private answers and shared answers for the room test.",
+                      emptyMessage: "No room test has been added to this collaboration yet.",
+                    }) : null}
+                    {!["guide", "transcript", "formulas", "examples", "flashcards", "quiz"].includes(activeRoom.active_tab) ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div> : null}
                   </div>
-                ) : null}
+                </div>
               </div>
 
               <div className="grid gap-5 xl:grid-cols-2">
@@ -763,6 +900,30 @@ export default function App() {
     if (!followRoomView || !activeRoom?.active_tab) return;
     setActiveTab(activeRoom.active_tab);
   }, [activeRoom?.active_tab, activeTab, followRoomView]);
+
+  useEffect(() => {
+    if (!activeRoom?.id) {
+      setRoomQuizAnswers({});
+      setRoomQuizAnswerImages({});
+      setRoomQuizResults({});
+      setRoomQuizSubmitted(false);
+      return;
+    }
+
+    const nextAnswers = {};
+    (activeRoom.quiz_questions || []).forEach((question) => {
+      const matchingAnswer = (activeRoom.quiz_answers || []).find(
+        (answer) => String(answer.question_number || "") === String(question.number || "") && answer.author_email === authEmail,
+      );
+      if (!matchingAnswer) return;
+      nextAnswers[question.number] = parseStoredRoomQuizAnswer(question, matchingAnswer.answer_text);
+    });
+
+    setRoomQuizAnswers(nextAnswers);
+    setRoomQuizAnswerImages({});
+    setRoomQuizResults({});
+    setRoomQuizSubmitted(false);
+  }, [activeRoom?.id, authEmail]);
 
   useEffect(() => () => {
     Object.values(answerSyncTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
@@ -1525,6 +1686,92 @@ export default function App() {
     }
   };
 
+  const clearRoomQuestionResult = (questionNumber) => {
+    setRoomQuizSubmitted(false);
+    setRoomQuizResults((current) => {
+      const next = { ...current };
+      delete next[questionNumber];
+      return next;
+    });
+  };
+
+  const handleRoomQuizAnswerChange = (question, value) => {
+    setRoomQuizAnswers((current) => ({ ...current, [question.number]: value }));
+    clearRoomQuestionResult(question.number);
+    queueRoomAnswerSync(question, value);
+  };
+
+  const handleRoomQuizOptionChange = (question, label, option) => {
+    const nextAnswer = {
+      ...(roomQuizAnswers[question.number] && typeof roomQuizAnswers[question.number] === "object" ? roomQuizAnswers[question.number] : {}),
+      [label]: option,
+    };
+    setRoomQuizAnswers((current) => ({ ...current, [question.number]: nextAnswer }));
+    setRoomQuizAnswerImages((current) => {
+      const next = { ...current };
+      delete next[question.number];
+      return next;
+    });
+    clearRoomQuestionResult(question.number);
+    queueRoomAnswerSync(question, nextAnswer);
+  };
+
+  const handleRoomQuizImageChange = (questionNumber, selectedFile) => {
+    if (!selectedFile) return;
+    if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for test answer marking.");
+    setRoomQuizAnswerImages((current) => ({ ...current, [questionNumber]: selectedFile }));
+    clearRoomQuestionResult(questionNumber);
+    setStatus(`Handwritten answer photo added for room question ${questionNumber}.`);
+  };
+
+  const markRoomQuiz = async () => {
+    if (!activeRoomQuizQuestions.length) return;
+    setIsMarkingRoomQuiz(true);
+    setError("");
+    setStatus("Marking collaboration test answers...");
+    try {
+      const nextResults = {};
+      for (const item of activeRoomQuizQuestions) {
+        const typedAnswer = typeof roomQuizAnswers[item.number] === "string" ? roomQuizAnswers[item.number] : "";
+        const selectedOptions = roomQuizAnswers[item.number] && typeof roomQuizAnswers[item.number] === "object" ? roomQuizAnswers[item.number] : {};
+        const imageFile = roomQuizAnswerImages[item.number];
+        const hasOptionAnswer = isOptionBasedQuestion(item) && Object.values(selectedOptions).some(Boolean);
+        if (!typedAnswer.trim() && !imageFile && !hasOptionAnswer) {
+          nextResults[item.number] = {
+            score: 0,
+            max_score: getQuestionMarks(item),
+            extracted_answer: "",
+            feedback: "No answer was submitted yet.",
+            mistakes: [],
+          };
+          continue;
+        }
+        const formData = new FormData();
+        formData.append("question", item.question);
+        formData.append("expected_answer", buildExpectedAnswerText(item));
+        formData.append("question_type", item.type || "short_answer");
+        formData.append("max_score", String(getQuestionMarks(item)));
+        formData.append("answer_points_json", JSON.stringify(item.answer_points || []));
+        formData.append("subparts_json", JSON.stringify(item.subparts || []));
+        formData.append("student_selection_json", JSON.stringify(selectedOptions));
+        formData.append("student_answer", typedAnswer);
+        if (!isOptionBasedQuestion(item) && imageFile) formData.append("answer_image", imageFile);
+        const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
+        nextResults[item.number] = data;
+      }
+      setRoomQuizResults(nextResults);
+      setRoomQuizSubmitted(true);
+      setStatus("Collaboration test marked. Review the room answers below.");
+    } catch (err) {
+      setError(err.message || "Collaboration test marking failed.");
+      setStatus("Collaboration test marking failed.");
+    } finally {
+      setIsMarkingRoomQuiz(false);
+    }
+  };
+
   const score = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
   const totalQuizMarks = getTotalQuizMarks(selectedQuizQuestions);
 
@@ -1699,7 +1946,22 @@ export default function App() {
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
-                {activeTab === "quiz" ? <div><div className="force-mobile-stack mb-5 flex flex-wrap items-center gap-3"><div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{selectedQuizQuestions.length} test question{selectedQuizQuestions.length === 1 ? "" : "s"} ready</div><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalQuizMarks} total marks</div><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten photos stay only on written questions.</div>{activeRoom ? <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Room visibility: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</div> : null}<button type="button" onClick={markQuiz} disabled={!selectedQuizQuestions.length || isMarkingQuiz} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarkingQuiz ? "Marking..." : "Mark Test"}</button>{quizSubmitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {score} / {totalQuizMarks}</div> : null}</div><div className="space-y-4">{selectedQuizQuestions.length ? selectedQuizQuestions.map((item) => { const result = quizResults[item.number]; const maxMarks = getQuestionMarks(item); const questionScore = Number(result?.score || 0); const scoreRatio = maxMarks ? questionScore / maxMarks : 0; const answerTone = !quizSubmitted ? "border-white/10 bg-slate-900" : scoreRatio >= 1 ? "border-emerald-400/35 bg-emerald-500/10" : scoreRatio > 0 ? "border-amber-300/30 bg-amber-500/10" : "border-rose-400/35 bg-rose-500/10"; const resultBadge = !quizSubmitted ? "" : scoreRatio >= 1 ? "Full marks" : scoreRatio > 0 ? "Partial credit" : "Needs correction"; const resultBadgeTone = scoreRatio >= 1 ? "bg-emerald-950 text-emerald-100" : scoreRatio > 0 ? "bg-amber-950 text-amber-100" : "bg-rose-950 text-rose-100"; const visibleRoomAnswers = (roomAnswerGroups[item.number] || []).filter((answer) => answer.author_email !== authEmail); const typedAnswer = typeof quizAnswers[item.number] === "string" ? quizAnswers[item.number] : ""; const selectedOptions = quizAnswers[item.number] && typeof quizAnswers[item.number] === "object" ? quizAnswers[item.number] : {}; return <div key={item.number} className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="phone-safe-copy font-semibold text-white">{item.number}. {item.question}</p><span className="rounded-full border border-white/10 bg-slate-950/80 px-3 py-1 text-xs font-semibold text-slate-200">{maxMarks} mark{maxMarks === 1 ? "" : "s"}</span></div>{isOptionBasedQuestion(item) ? <div className="mt-4 space-y-4">{(item.subparts || []).map((subpart) => { const subpartResult = result?.subpart_results?.find((entry) => entry.label === subpart.label); return <div key={`${item.number}-${subpart.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="phone-safe-copy text-sm font-semibold text-white">{subpart.label}) {subpart.question}</p><span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">{subpart.marks} mark</span></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{(subpart.options || []).map((option) => { const checked = selectedOptions[subpart.label] === option; return <label key={`${subpart.label}-${option}`} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${item.number}-${subpart.label}`} checked={checked} onChange={() => handleQuizOptionChange(item, subpart.label, option)} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>; })}</div>{quizSubmitted && subpartResult ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${subpartResult.is_correct ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-rose-300/25 bg-rose-500/10 text-slate-100"}`}><p>{subpartResult.marks_awarded} / {subpartResult.marks}</p><p className="mt-2 leading-7">{subpartResult.feedback}</p></div> : null}</div>; })}</div> : <><textarea value={typedAnswer} onChange={(event) => handleQuizAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span className="phone-safe-copy">Upload handwritten answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => handleQuizImageChange(item.number, event.target.files?.[0])} /></label>{quizAnswerImages[item.number] ? <span className="phone-safe-copy text-xs text-emerald-100/80">{quizAnswerImages[item.number].name}</span> : null}</div></>}{activeRoom?.test_visibility === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="phone-safe-copy font-semibold text-white">{answer.author_email}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}{quizSubmitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="phone-safe-copy mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="phone-safe-copy mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}</div>; }) : <div className="text-sm text-slate-300">Test questions will appear here after study guide generation.</div>}</div></div> : null}
+                {activeTab === "quiz" ? renderQuizSection({
+                  questions: selectedQuizQuestions,
+                  answers: quizAnswers,
+                  results: quizResults,
+                  quizImages: quizAnswerImages,
+                  submitted: quizSubmitted,
+                  isMarking: isMarkingQuiz,
+                  onMark: markQuiz,
+                  onAnswerChange: handleQuizAnswerChange,
+                  onOptionChange: handleQuizOptionChange,
+                  onImageChange: handleQuizImageChange,
+                  sharedAnswerGroups: roomAnswerGroups,
+                  visibilityMode: activeRoom ? activeRoom.test_visibility : "",
+                  scoreValue: score,
+                  scopeId: "workspace",
+                }) : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
@@ -1710,6 +1972,7 @@ export default function App() {
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
 
         {historyPanel}
+        {collaborationHistoryPanel}
       </main>
     </div>
   );
