@@ -126,11 +126,17 @@ iframe {
 
 .content-panel {
   min-width: 0;
-  overflow-x: auto;
+  max-width: 100%;
+  overflow-x: hidden;
   overflow-y: visible;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
     0 24px 60px rgba(0, 0, 0, 0.24);
+}
+
+.content-panel > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .force-mobile-stack {
@@ -140,10 +146,18 @@ iframe {
 .phone-safe-copy {
   min-width: 0;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .notes-markdown {
   min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.notes-markdown * {
+  max-width: 100%;
 }
 
 .notes-markdown h1,

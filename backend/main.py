@@ -38,8 +38,15 @@ except ImportError:
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
+    try:
+        from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
+    except ImportError:
+        GenericProxyConfig = None
+        WebshareProxyConfig = None
 except ImportError:
     YouTubeTranscriptApi = None
+    GenericProxyConfig = None
+    WebshareProxyConfig = None
 
 try:
     from reportlab.lib import colors
@@ -101,6 +108,15 @@ DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
 YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
+YOUTUBE_PROXY_HTTP_URL = os.getenv("YOUTUBE_PROXY_HTTP_URL", "").strip()
+YOUTUBE_PROXY_HTTPS_URL = os.getenv("YOUTUBE_PROXY_HTTPS_URL", "").strip()
+YOUTUBE_WEBSHARE_PROXY_USERNAME = os.getenv("YOUTUBE_WEBSHARE_PROXY_USERNAME", "").strip()
+YOUTUBE_WEBSHARE_PROXY_PASSWORD = os.getenv("YOUTUBE_WEBSHARE_PROXY_PASSWORD", "").strip()
+YOUTUBE_WEBSHARE_PROXY_LOCATIONS = tuple(
+    location.strip()
+    for location in os.getenv("YOUTUBE_WEBSHARE_PROXY_LOCATIONS", "").split(",")
+    if location.strip()
+)
 
 jobs: dict[str, dict] = {}
 
@@ -1427,6 +1443,36 @@ def captions_to_transcript_text(items: Any) -> str:
     return "\n".join(lines).strip()
 
 
+def build_youtube_transcript_api() -> Any | None:
+    if YouTubeTranscriptApi is None:
+        return None
+
+    if (
+        WebshareProxyConfig is not None
+        and YOUTUBE_WEBSHARE_PROXY_USERNAME
+        and YOUTUBE_WEBSHARE_PROXY_PASSWORD
+    ):
+        proxy_kwargs: dict[str, Any] = {
+            "proxy_username": YOUTUBE_WEBSHARE_PROXY_USERNAME,
+            "proxy_password": YOUTUBE_WEBSHARE_PROXY_PASSWORD,
+        }
+        if YOUTUBE_WEBSHARE_PROXY_LOCATIONS:
+            proxy_kwargs["filter_ip_locations"] = list(YOUTUBE_WEBSHARE_PROXY_LOCATIONS)
+        logger.info("Using Webshare proxy configuration for YouTube transcript requests")
+        return YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(**proxy_kwargs))
+
+    if GenericProxyConfig is not None and (YOUTUBE_PROXY_HTTP_URL or YOUTUBE_PROXY_HTTPS_URL):
+        proxy_kwargs = {}
+        if YOUTUBE_PROXY_HTTP_URL:
+            proxy_kwargs["http_url"] = YOUTUBE_PROXY_HTTP_URL
+        if YOUTUBE_PROXY_HTTPS_URL:
+            proxy_kwargs["https_url"] = YOUTUBE_PROXY_HTTPS_URL
+        logger.info("Using generic proxy configuration for YouTube transcript requests")
+        return YouTubeTranscriptApi(proxy_config=GenericProxyConfig(**proxy_kwargs))
+
+    return YouTubeTranscriptApi()
+
+
 def fetch_youtube_transcript(video_url: str, job_id: str) -> str | None:
     if YouTubeTranscriptApi is None:
         return None
@@ -1437,15 +1483,28 @@ def fetch_youtube_transcript(video_url: str, job_id: str) -> str | None:
 
     update_job(job_id, status="processing", stage="Checking YouTube captions", progress=3)
 
+    transcript_api = build_youtube_transcript_api()
+    if transcript_api is None:
+        return None
+
+    preferred_languages = list(dict.fromkeys(["en", *YOUTUBE_LANGUAGE_PREFERENCES]))
     try:
-        transcript_api = YouTubeTranscriptApi()
+        transcript_text = captions_to_transcript_text(
+            transcript_api.fetch(video_id, languages=preferred_languages)
+        )
+        if transcript_text:
+            update_job(job_id, status="processing", stage="YouTube captions found. Preparing transcript", progress=14)
+            return transcript_text
+    except Exception as exc:
+        logger.info("Could not fetch YouTube transcript directly for %s: %s", video_url, exc)
+
+    try:
         transcript_list = transcript_api.list(video_id)
     except Exception as exc:
         logger.info("Could not read YouTube transcript list for %s: %s", video_url, exc)
         return None
 
     candidates = []
-    preferred_languages = list(YOUTUBE_LANGUAGE_PREFERENCES)
     for finder_name in ("find_transcript", "find_manually_created_transcript", "find_generated_transcript"):
         finder = getattr(transcript_list, finder_name, None)
         if not callable(finder):
@@ -1800,8 +1859,8 @@ def format_job_error(exc: Exception) -> str:
     lowered = message.lower()
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
         return (
-            "This YouTube video blocked direct server-side download. "
-            "Try a video with public captions, or upload the lecture file directly."
+            "This YouTube video blocked direct server-side download from the hosted backend. "
+            "Public captions are still checked first, but this video may need a YouTube proxy on Render or a direct file upload."
         )
     return message or "An unexpected processing error occurred."
 
