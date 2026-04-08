@@ -19,6 +19,8 @@ import tempfile
 import textwrap
 import zipfile
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -27,6 +29,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
+
 try:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
@@ -60,6 +67,7 @@ FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whispe
 STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
 STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
+ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024)))
@@ -73,6 +81,7 @@ MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_TRANSCRIPT_STUDY_GUI
 STUDY_GUIDE_REQUEST_TIMEOUT = float(os.getenv("STUDY_GUIDE_REQUEST_TIMEOUT", "90"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
+VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "1200"))
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
@@ -163,6 +172,10 @@ class StudyGuideRequest(BaseModel):
     lecture_slides: str = ""
 
 
+class VideoUrlTranscriptionRequest(BaseModel):
+    video_url: str
+
+
 class RequestCodeRequest(BaseModel):
     email: str
 
@@ -211,7 +224,7 @@ class CollaborationRoomCreateRequest(BaseModel):
     lecture_slides: str = ""
     shared_notes: str = ""
     flashcards: list[dict[str, str]] = []
-    quiz_questions: list[dict[str, str]] = []
+    quiz_questions: list[dict[str, Any]] = []
     invited_emails: list[str] = []
     active_tab: str = "guide"
     test_visibility: str = "private"
@@ -778,6 +791,64 @@ def load_json_list(value: str) -> list:
     return parsed if isinstance(parsed, list) else []
 
 
+def parse_json_object(value: str) -> dict[str, Any]:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return {}
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def parse_json_list(value: str) -> list[Any]:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return []
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start < 0 or end <= start:
+            return []
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError:
+            return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def compact_text(value: Any, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    text = str(value).replace("\r\n", "\n").strip()
+    return text or fallback
+
+
+def trimmed_context_block(label: str, value: str, limit: int) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > limit:
+        cleaned = f"{cleaned[:limit].rstrip()}\n\nNOTE: This source was shortened for the structured asset step."
+    return f"{label}\n{cleaned}"
+
+
 def normalize_test_visibility(value: str) -> str:
     normalized = (value or "").strip().lower()
     if normalized not in {"shared", "private"}:
@@ -1049,27 +1120,26 @@ def extract_slide_text_from_image(image_data_url: str, file_name: str = "") -> s
     return (response.choices[0].message.content or "").strip()
 
 
-def parse_quiz_marking_response(content: str) -> dict[str, str | int]:
-    parsed = {
-        "score": 0,
-        "extracted_answer": "",
-        "feedback": "The answer image was reviewed.",
+def clamp_score(value: Any, max_score: int) -> int:
+    try:
+        numeric = int(round(float(str(value).strip())))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(max_score, numeric))
+
+
+def parse_quiz_marking_response(content: str, max_score: int) -> dict[str, Any]:
+    parsed_object = parse_json_object(content)
+    mistakes = parsed_object.get("mistakes")
+    if not isinstance(mistakes, list):
+        mistakes = []
+    return {
+        "score": clamp_score(parsed_object.get("score"), max_score),
+        "max_score": max_score,
+        "extracted_answer": compact_text(parsed_object.get("extracted_answer")),
+        "feedback": compact_text(parsed_object.get("feedback"), "The answer was reviewed."),
+        "mistakes": [compact_text(item) for item in mistakes if compact_text(item)],
     }
-
-    for line in content.splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        normalized_key = key.strip().upper()
-        cleaned_value = value.strip()
-        if normalized_key == "SCORE":
-            parsed["score"] = 1 if cleaned_value.startswith("1") else 0
-        elif normalized_key == "EXTRACTED_ANSWER":
-            parsed["extracted_answer"] = cleaned_value
-        elif normalized_key == "FEEDBACK":
-            parsed["feedback"] = cleaned_value or parsed["feedback"]
-
-    return parsed
 
 
 def mark_quiz_answer_with_ai(
@@ -1077,20 +1147,24 @@ def mark_quiz_answer_with_ai(
     expected_answer: str,
     student_answer: str = "",
     answer_image_data_url: str = "",
-) -> dict[str, str | int]:
+    answer_points: list[str] | None = None,
+    max_score: int = 1,
+) -> dict[str, Any]:
+    point_lines = "\n".join(f"- {point}" for point in (answer_points or []) if compact_text(point))
     user_parts: list[dict] = [
         {
             "type": "text",
             "text": (
                 "Grade this student answer against the expected answer.\n\n"
                 f"Question: {question}\n"
+                f"Maximum marks: {max_score}\n"
                 f"Expected answer: {expected_answer}\n"
+                f"Key marking points:\n{point_lines or '- Use the expected answer directly.'}\n"
                 f"Typed student answer: {student_answer or 'No typed answer provided.'}\n\n"
                 "Be fair if the meaning is correct even when wording differs. "
-                "Return exactly three lines:\n"
-                "SCORE: 0 or 1\n"
-                "EXTRACTED_ANSWER: short plain-text version of what the student answered\n"
-                "FEEDBACK: one short helpful sentence"
+                "Award partial credit when some key points are correct. "
+                "Return JSON only with these keys:\n"
+                f'{{"score": 0 to {max_score}, "extracted_answer": "...", "feedback": "...", "mistakes": ["..."]}}'
             ),
         }
     ]
@@ -1105,16 +1179,87 @@ def mark_quiz_answer_with_ai(
             {
                 "role": "system",
                 "content": (
-                "You mark student quiz answers carefully. "
-                "You may read typed answers, neat handwriting, messy handwriting, or both. "
-                "Only award SCORE: 1 when the answer is substantially correct."
-            ),
-        },
+                    "You mark student quiz answers carefully. "
+                    "You may read typed answers, neat handwriting, messy handwriting, or both. "
+                    "Return strict JSON only. "
+                    "Never award more than the maximum marks provided."
+                ),
+            },
             {"role": "user", "content": user_parts},
         ],
     )
     content = (response.choices[0].message.content or "").strip()
-    return parse_quiz_marking_response(content)
+    return parse_quiz_marking_response(content, max_score)
+
+
+def grade_option_based_question(
+    question_type: str,
+    subparts: list[dict[str, Any]],
+    student_selection: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_selection = {
+        compact_text(key).lower(): compact_text(value)
+        for key, value in (student_selection or {}).items()
+        if compact_text(key)
+    }
+    subpart_results: list[dict[str, Any]] = []
+    incorrect_items: list[str] = []
+    extracted_lines: list[str] = []
+    total_score = 0
+    max_score = 0
+
+    for subpart in subparts or []:
+        label = compact_text(subpart.get("label")).lower()
+        marks = clamp_score(subpart.get("marks"), 100) or 1
+        max_score += marks
+        expected_answer = compact_text(subpart.get("answer"))
+        selected_answer = normalized_selection.get(label, "")
+        extracted_lines.append(f"{label}) {selected_answer or 'No answer'}")
+        is_correct = bool(selected_answer) and selected_answer.lower() == expected_answer.lower()
+        marks_awarded = marks if is_correct else 0
+        total_score += marks_awarded
+        if not is_correct:
+            incorrect_items.append(label)
+        explanation = compact_text(subpart.get("explanation"))
+        subpart_results.append(
+            {
+                "label": label,
+                "marks": marks,
+                "marks_awarded": marks_awarded,
+                "student_answer": selected_answer,
+                "expected_answer": expected_answer,
+                "is_correct": is_correct,
+                "feedback": (
+                    "Correct."
+                    if is_correct
+                    else compact_text(
+                        f"{expected_answer} was correct. {explanation}".strip(),
+                        f"{expected_answer} was correct.",
+                    )
+                ),
+            }
+        )
+
+    if max_score <= 0:
+        max_score = sum(int(subpart.get("marks") or 1) for subpart in subparts or []) or 1
+
+    if incorrect_items:
+        feedback = (
+            f"You scored {total_score}/{max_score}. Review {', '.join(incorrect_items)} "
+            f"and check the correct answers shown below."
+        )
+    else:
+        feedback = f"Excellent. You scored {total_score}/{max_score} on this {question_type.replace('_', ' ')} question."
+
+    return {
+        "score": total_score,
+        "max_score": max_score,
+        "extracted_answer": "\n".join(extracted_lines),
+        "feedback": feedback,
+        "mistakes": [f"{label}) needs correction." for label in incorrect_items],
+        "incorrect_items": incorrect_items,
+        "subpart_results": subpart_results,
+    }
 
 
 @app.get("/health")
@@ -1208,6 +1353,87 @@ async def save_upload_to_disk(file: UploadFile, job_id: str | None = None) -> Pa
 
 def get_file_size(file_path: Path) -> int:
     return file_path.stat().st_size
+
+
+def normalize_video_url(value: str) -> str:
+    cleaned = (value or "").strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Paste a full video link that starts with http:// or https://.")
+    return cleaned
+
+
+def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
+    if yt_dlp is None:
+        raise RuntimeError("Video-link transcription needs yt-dlp on the backend server.")
+
+    normalized_url = normalize_video_url(video_url)
+    download_prefix = f"video_{uuid4().hex}"
+    output_template = str(UPLOAD_DIR / f"{download_prefix}.%(ext)s")
+
+    def progress_hook(data: dict[str, Any]):
+        status = data.get("status")
+        if status == "downloading":
+            total_bytes = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
+            downloaded = data.get("downloaded_bytes") or 0
+            if total_bytes:
+                progress = min(18, 4 + int((downloaded / total_bytes) * 14))
+            else:
+                progress = 8
+            update_job(job_id, status="processing", stage="Downloading audio from the video link", progress=progress)
+        elif status == "finished":
+            update_job(job_id, status="processing", stage="Video downloaded. Preparing audio", progress=18)
+
+    options = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "outtmpl": output_template,
+        "restrictfilenames": True,
+        "progress_hooks": [progress_hook],
+    }
+
+    update_job(job_id, status="processing", stage="Connecting to the video link", progress=3)
+    with yt_dlp.YoutubeDL(options) as downloader:
+        info = downloader.extract_info(normalized_url, download=True)
+        requested_downloads = info.get("requested_downloads") or []
+        candidate_paths = [
+            Path(item["filepath"])
+            for item in requested_downloads
+            if isinstance(item, dict) and item.get("filepath")
+        ]
+        prepared_path = Path(downloader.prepare_filename(info))
+        if prepared_path not in candidate_paths:
+            candidate_paths.append(prepared_path)
+
+    candidates = [
+        path
+        for path in candidate_paths
+        if path.exists() and path.is_file() and path.suffix.lower() != ".part"
+    ]
+    if not candidates:
+        candidates = sorted(
+            [path for path in UPLOAD_DIR.glob(f"{download_prefix}*") if path.is_file() and path.suffix.lower() != ".part"],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+    if not candidates:
+        raise RuntimeError("The video link was reachable, but no downloadable audio file was produced.")
+
+    file_path = candidates[0]
+    file_size = get_file_size(file_path)
+    if file_size > MAX_FILE_SIZE_BYTES:
+        try:
+            file_path.unlink()
+        except OSError:
+            logger.warning("Could not delete oversized video download: %s", file_path)
+        raise RuntimeError(
+            f"The downloaded video audio is too large ({file_size / (1024 * 1024):.1f} MB). "
+            f"Please use a shorter video or a link with a smaller audio track."
+        )
+    return file_path
 
 
 def require_ffmpeg() -> str:
@@ -1942,6 +2168,316 @@ def extract_study_assets(summary: str) -> dict:
     }
 
 
+def determine_quiz_total_marks(summary: str, transcript: str, lecture_notes: str, lecture_slides: str) -> int:
+    combined_size = sum(len((value or "").strip()) for value in [summary, transcript, lecture_notes, lecture_slides])
+    return 50 if combined_size >= 24000 else 40
+
+
+def build_group_subparts(labels: list[str]) -> list[dict[str, Any]]:
+    return [{"label": label, "marks": 1} for label in labels]
+
+
+def build_quiz_blueprint(total_marks: int) -> list[dict[str, Any]]:
+    if total_marks >= 50:
+        return [
+            {"number": "1", "type": "short_answer", "marks": 2},
+            {"number": "2", "type": "multiple_choice_group", "marks": 4, "subparts": build_group_subparts(["a", "b", "c", "d"])},
+            {"number": "3", "type": "true_false_group", "marks": 5, "subparts": build_group_subparts(["a", "b", "c", "d", "e"])},
+            {"number": "4", "type": "short_answer", "marks": 4},
+            {"number": "5", "type": "short_answer", "marks": 5},
+            {"number": "6", "type": "multiple_choice_group", "marks": 4, "subparts": build_group_subparts(["a", "b", "c", "d"])},
+            {"number": "7", "type": "true_false_group", "marks": 5, "subparts": build_group_subparts(["a", "b", "c", "d", "e"])},
+            {"number": "8", "type": "short_answer", "marks": 6},
+            {"number": "9", "type": "short_answer", "marks": 7},
+            {"number": "10", "type": "short_answer", "marks": 8},
+        ]
+    return [
+        {"number": "1", "type": "short_answer", "marks": 2},
+        {"number": "2", "type": "multiple_choice_group", "marks": 4, "subparts": build_group_subparts(["a", "b", "c", "d"])},
+        {"number": "3", "type": "true_false_group", "marks": 5, "subparts": build_group_subparts(["a", "b", "c", "d", "e"])},
+        {"number": "4", "type": "short_answer", "marks": 3},
+        {"number": "5", "type": "short_answer", "marks": 4},
+        {"number": "6", "type": "multiple_choice_group", "marks": 4, "subparts": build_group_subparts(["a", "b", "c", "d"])},
+        {"number": "7", "type": "true_false_group", "marks": 5, "subparts": build_group_subparts(["a", "b", "c", "d", "e"])},
+        {"number": "8", "type": "short_answer", "marks": 4},
+        {"number": "9", "type": "short_answer", "marks": 4},
+        {"number": "10", "type": "short_answer", "marks": 5},
+    ]
+
+
+def normalize_answer_points(value: Any, fallback_answer: str, marks: int) -> list[str]:
+    items: list[str] = []
+    if isinstance(value, list):
+        for entry in value:
+            cleaned = compact_text(entry)
+            if cleaned:
+                items.append(cleaned)
+    elif isinstance(value, str):
+        lines = [re.sub(r"^[-*\d.\s]+", "", part).strip() for part in value.splitlines()]
+        items.extend(line for line in lines if line)
+
+    if not items and fallback_answer:
+        items = [segment.strip() for segment in re.split(r"\n+|;\s*", fallback_answer) if segment.strip()]
+
+    minimum_points = min(max(marks, 2), 6)
+    return items[: max(minimum_points, 1)]
+
+
+def normalize_flashcards(raw_cards: Any, fallback_cards: list[dict[str, str]]) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    if isinstance(raw_cards, list):
+        for entry in raw_cards:
+            if not isinstance(entry, dict):
+                continue
+            question = compact_text(entry.get("question"))
+            answer = compact_text(entry.get("answer"))
+            if question and answer:
+                cards.append({"question": question, "answer": answer})
+    if cards:
+        return cards[:12]
+    return fallback_cards[:12]
+
+
+def make_short_answer_question(
+    number: str,
+    marks: int,
+    question_text: str,
+    answer_text: str,
+    answer_points: list[str],
+) -> dict[str, Any]:
+    safe_answer = answer_text or "\n".join(answer_points) or "No answer supplied."
+    return {
+        "number": number,
+        "type": "short_answer",
+        "marks": marks,
+        "question": question_text,
+        "answer": safe_answer,
+        "answer_points": answer_points or [safe_answer],
+    }
+
+
+def normalize_options(raw_options: Any) -> list[str]:
+    if not isinstance(raw_options, list):
+        return []
+    options = [compact_text(option) for option in raw_options if compact_text(option)]
+    seen: set[str] = set()
+    unique_options: list[str] = []
+    for option in options:
+        if option in seen:
+            continue
+        seen.add(option)
+        unique_options.append(option)
+    return unique_options
+
+
+def build_structured_quiz_fallback(simple_questions: list[dict[str, str]], blueprint: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    fallback_questions: list[dict[str, Any]] = []
+    for index, blueprint_item in enumerate(blueprint):
+        source = simple_questions[index] if index < len(simple_questions) else {}
+        question_text = compact_text(source.get("question"), f"Explain the key idea in part {blueprint_item['number']}.")
+        answer_text = compact_text(source.get("answer"), "No answer supplied.")
+        answer_points = normalize_answer_points([], answer_text, int(blueprint_item["marks"]))
+        fallback_questions.append(
+            make_short_answer_question(
+                str(blueprint_item["number"]),
+                int(blueprint_item["marks"]),
+                question_text,
+                answer_text,
+                answer_points,
+            )
+        )
+    return fallback_questions
+
+
+def normalize_generated_quiz_questions(
+    raw_questions: Any,
+    blueprint: list[dict[str, Any]],
+    fallback_questions: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    source_questions = raw_questions if isinstance(raw_questions, list) else []
+    normalized_questions: list[dict[str, Any]] = []
+
+    for index, blueprint_item in enumerate(blueprint):
+        raw_question = source_questions[index] if index < len(source_questions) and isinstance(source_questions[index], dict) else {}
+        fallback_source = fallback_questions[index] if index < len(fallback_questions) else {}
+        number = str(blueprint_item["number"])
+        marks = int(blueprint_item["marks"])
+        question_text = compact_text(raw_question.get("question"), compact_text(fallback_source.get("question"), f"Question {number}"))
+        answer_text = compact_text(raw_question.get("answer"), compact_text(fallback_source.get("answer"), "No answer supplied."))
+        question_type = compact_text(raw_question.get("type"), str(blueprint_item["type"])).lower()
+
+        if question_type == "short_answer":
+            normalized_questions.append(
+                make_short_answer_question(
+                    number,
+                    marks,
+                    question_text,
+                    answer_text,
+                    normalize_answer_points(raw_question.get("answer_points"), answer_text, marks),
+                )
+            )
+            continue
+
+        if question_type not in {"multiple_choice_group", "true_false_group"}:
+            normalized_questions.append(
+                make_short_answer_question(
+                    number,
+                    marks,
+                    question_text,
+                    answer_text,
+                    normalize_answer_points(raw_question.get("answer_points"), answer_text, marks),
+                )
+            )
+            continue
+
+        raw_subparts = raw_question.get("subparts") if isinstance(raw_question.get("subparts"), list) else []
+        subpart_lookup = {
+            compact_text(item.get("label")).lower(): item
+            for item in raw_subparts
+            if isinstance(item, dict) and compact_text(item.get("label"))
+        }
+        subparts: list[dict[str, Any]] = []
+        valid_group = True
+
+        for sub_blueprint in blueprint_item.get("subparts", []):
+            label = str(sub_blueprint["label"]).lower()
+            raw_subpart = subpart_lookup.get(label)
+            if not raw_subpart:
+                valid_group = False
+                break
+
+            subpart_question = compact_text(raw_subpart.get("question"))
+            if not subpart_question:
+                valid_group = False
+                break
+
+            if question_type == "true_false_group":
+                options = ["True", "False"]
+            else:
+                options = normalize_options(raw_subpart.get("options"))
+                if len(options) < 4:
+                    valid_group = False
+                    break
+                options = options[:4]
+
+            answer = compact_text(raw_subpart.get("answer"))
+            resolved_answer = next((option for option in options if option.lower() == answer.lower()), "")
+            if not resolved_answer:
+                valid_group = False
+                break
+
+            subparts.append(
+                {
+                    "label": label,
+                    "marks": int(sub_blueprint["marks"]),
+                    "question": subpart_question,
+                    "options": options,
+                    "answer": resolved_answer,
+                    "explanation": compact_text(raw_subpart.get("explanation"), "Review the matching concept in the notes."),
+                }
+            )
+
+        if not valid_group:
+            normalized_questions.append(
+                make_short_answer_question(
+                    number,
+                    marks,
+                    question_text,
+                    answer_text,
+                    normalize_answer_points(raw_question.get("answer_points"), answer_text, marks),
+                )
+            )
+            continue
+
+        normalized_questions.append(
+            {
+                "number": number,
+                "type": question_type,
+                "marks": marks,
+                "question": question_text or ("Choose the correct answer for each subpart." if question_type == "multiple_choice_group" else "State whether each statement is true or false."),
+                "answer": "\n".join(f"{item['label']}) {item['answer']}" for item in subparts),
+                "subparts": subparts,
+            }
+        )
+
+    return normalized_questions
+
+
+async def generate_structured_study_assets(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    job_id: str,
+) -> dict[str, Any]:
+    fallback_assets = extract_study_assets(summary)
+    total_marks = determine_quiz_total_marks(summary, transcript, lecture_notes, lecture_slides)
+    blueprint = build_quiz_blueprint(total_marks)
+
+    source_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+        f"QUIZ BLUEPRINT\n{json.dumps(blueprint, ensure_ascii=False, indent=2)}",
+    ]
+    combined_source = "\n\n".join(block for block in source_blocks if block)
+
+    def _generate_assets() -> dict[str, Any]:
+        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5000),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You build structured study assets for a university revision app. "
+                        "Return only valid JSON with the keys formula, worked_example, flashcards, and quiz_questions.\n\n"
+                        "Rules:\n"
+                        "- Keep the test rising in difficulty from the first question to the last question, but do not label difficulty levels.\n"
+                        "- Do not mention how a student should feel.\n"
+                        "- Use plain readable formulas, never LaTeX.\n"
+                        "- `formula` should be a compact markdown study sheet or a short note when no formula is relevant.\n"
+                        "- `worked_example` should be a clear step-by-step example in markdown.\n"
+                        "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
+                        "- `quiz_questions` must follow the blueprint exactly for question number, question type, and marks.\n"
+                        "- Short-answer questions need `question`, `answer`, and `answer_points` for partial-credit marking.\n"
+                        "- Multiple-choice group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
+                        "- True/false group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
+                        "- For true/false questions, the options must be exactly [\"True\", \"False\"].\n"
+                        "- Keep each option-based subpart worth 1 mark.\n"
+                        f"- The total test must add up to {total_marks} marks.\n"
+                        "- Return JSON only, with no markdown code fence."
+                    ),
+                },
+                {"role": "user", "content": combined_source},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    try:
+        update_job(job_id, status="processing", stage="Building flashcards and test", progress=82)
+        generated_assets = await asyncio.to_thread(_generate_assets)
+    except Exception as exc:
+        logger.warning("Structured asset generation failed, using extracted fallback assets: %s", exc)
+        generated_assets = {}
+
+    quiz_questions = normalize_generated_quiz_questions(
+        generated_assets.get("quiz_questions"),
+        blueprint,
+        fallback_assets["quiz_questions"],
+    )
+    if not quiz_questions:
+        quiz_questions = build_structured_quiz_fallback(fallback_assets["quiz_questions"], blueprint)
+
+    return {
+        "formula": compact_text(generated_assets.get("formula"), fallback_assets["formula"]),
+        "worked_example": compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
+        "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
+        "quiz_questions": quiz_questions,
+    }
+
+
 async def generate_study_guide(
     transcript: str,
     lecture_notes: str,
@@ -2034,11 +2570,47 @@ async def run_transcription_job(job_id: str, file_path: Path):
                 logger.warning("Could not delete temp file: %s", file_path)
 
 
+async def run_video_transcription_job(job_id: str, video_url: str):
+    file_path: Path | None = None
+    try:
+        update_job(job_id, status="processing", stage="Video link received", progress=1)
+        file_path = await asyncio.wait_for(
+            asyncio.to_thread(download_audio_from_video_url, video_url, job_id),
+            timeout=VIDEO_DOWNLOAD_TIMEOUT,
+        )
+        transcript = await transcribe_audio(file_path, job_id)
+        if not transcript:
+            raise RuntimeError("The video link was processed, but no transcript text was returned.")
+
+        update_job(
+            job_id,
+            status="completed",
+            stage="Video transcription completed",
+            progress=100,
+            transcript=transcript,
+        )
+    except Exception as exc:
+        logger.exception("Video transcription job failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Video transcription failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+    finally:
+        if file_path and file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                logger.warning("Could not delete downloaded video audio: %s", file_path)
+
+
 async def run_summary_job(job_id: str, transcript: str, lecture_notes: str, lecture_slides: str):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
         summary, used_fallback = await generate_study_guide(transcript, lecture_notes, lecture_slides, job_id)
-        assets = extract_study_assets(summary)
+        assets = await generate_structured_study_assets(summary, transcript, lecture_notes, lecture_slides, job_id)
         update_job(
             job_id,
             status="completed",
@@ -2090,6 +2662,26 @@ async def upload_audio(file: UploadFile = File(...), current_user: str = Depends
         return {"job_id": job_id}
     finally:
         await file.close()
+
+
+@app.post("/transcribe-video-url/")
+async def transcribe_video_url(
+    payload: VideoUrlTranscriptionRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    try:
+        video_url = normalize_video_url(payload.video_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    ensure_openai_key()
+    if yt_dlp is None:
+        raise HTTPException(status_code=500, detail="Video-link transcription is not configured on the backend yet.")
+
+    job_id = create_job("video_transcription", owner_email=current_user)
+    update_job(job_id, status="processing", stage="Preparing video link", progress=1)
+    asyncio.create_task(run_video_transcription_job(job_id, video_url))
+    return {"job_id": job_id}
 
 
 @app.post("/extract-slide-text/")
@@ -2176,16 +2768,32 @@ async def mark_quiz_answer(
     question: str = Form(...),
     expected_answer: str = Form(...),
     student_answer: str = Form(""),
+    question_type: str = Form("short_answer"),
+    max_score: int = Form(1),
+    answer_points_json: str = Form("[]"),
+    subparts_json: str = Form("[]"),
+    student_selection_json: str = Form("{}"),
     answer_image: UploadFile | None = File(None),
     current_user: str = Depends(require_authenticated_user),
 ):
+    resolved_question_type = compact_text(question_type, "short_answer").lower()
+    resolved_max_score = max(1, clamp_score(max_score, 100))
+
+    if resolved_question_type in {"multiple_choice_group", "true_false_group"}:
+        subparts = [item for item in parse_json_list(subparts_json) if isinstance(item, dict)]
+        student_selection = parse_json_object(student_selection_json)
+        return grade_option_based_question(resolved_question_type, subparts, student_selection)
+
     ensure_openai_key()
+    answer_points = [compact_text(item) for item in parse_json_list(answer_points_json) if compact_text(item)]
 
     if not student_answer.strip() and answer_image is None:
         return {
             "score": 0,
+            "max_score": resolved_max_score,
             "feedback": "No answer was submitted yet.",
             "extracted_answer": "",
+            "mistakes": [],
         }
 
     image_data_url = ""
@@ -2216,6 +2824,8 @@ async def mark_quiz_answer(
             expected_answer.strip(),
             student_answer.strip(),
             image_data_url,
+            answer_points,
+            resolved_max_score,
         )
         return result
     finally:

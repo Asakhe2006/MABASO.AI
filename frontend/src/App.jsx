@@ -48,8 +48,63 @@ function flashcardsToText(flashcards) {
   return (flashcards || []).map((card, index) => `Flashcard ${index + 1}\nQ: ${card.question}\n\nA: ${card.answer}`).join("\n\n");
 }
 
+function isOptionBasedQuestion(question) {
+  return ["multiple_choice_group", "true_false_group"].includes(question?.type);
+}
+
+function getQuestionMarks(question) {
+  const directMarks = Number(question?.marks || 0);
+  if (directMarks) return directMarks;
+  return (question?.subparts || []).reduce((total, item) => total + Number(item?.marks || 0), 0) || 1;
+}
+
+function getTotalQuizMarks(questions) {
+  return (questions || []).reduce((total, item) => total + getQuestionMarks(item), 0);
+}
+
+function buildExpectedAnswerText(question) {
+  if (Array.isArray(question?.subparts) && question.subparts.length) {
+    return question.subparts.map((item) => `${item.label}) ${item.answer}`).join("\n");
+  }
+  return question?.answer || "No answer available.";
+}
+
+function serializeQuizAnswerForRoom(question, answerValue) {
+  if (isOptionBasedQuestion(question)) {
+    if (!answerValue || typeof answerValue !== "object") return "";
+    return (question.subparts || []).map((item) => `${item.label}) ${answerValue[item.label] || "No answer"}`).join("\n");
+  }
+  return typeof answerValue === "string" ? answerValue.trim() : "";
+}
+
+function formatVideoSourceLabel(urlValue) {
+  if (!urlValue) return "";
+  try {
+    const url = new URL(urlValue);
+    const path = url.pathname && url.pathname !== "/" ? url.pathname : "";
+    return `${url.hostname.replace(/^www\./, "")}${path}`.slice(0, 80);
+  } catch {
+    return urlValue.slice(0, 80);
+  }
+}
+
 function quizToText(questions) {
-  return (questions || []).map((item) => `${item.number}. ${item.question}\nAnswer: ${item.answer}`).join("\n\n");
+  return (questions || []).map((item) => {
+    const lines = [`${item.number}. ${item.question} (${getQuestionMarks(item)} marks)`];
+    if (isOptionBasedQuestion(item)) {
+      (item.subparts || []).forEach((subpart) => {
+        lines.push("");
+        lines.push(`${subpart.label}) ${subpart.question}`);
+        (subpart.options || []).forEach((option) => {
+          lines.push(`- ${option}`);
+        });
+      });
+      lines.push("", `Suggested Answer:\n${buildExpectedAnswerText(item)}`);
+      return lines.join("\n");
+    }
+    lines.push("", `Suggested Answer: ${item.answer}`);
+    return lines.join("\n");
+  }).join("\n\n");
 }
 
 function chatToText(messages) {
@@ -68,19 +123,29 @@ function readFileAsDataUrl(file) {
 function buildQuizExportText(questions, answers = {}, results = {}) {
   return (questions || []).map((item) => {
     const result = results[item.number];
-    const studentAnswer = (answers[item.number] || "").trim();
+    const studentAnswer = serializeQuizAnswerForRoom(item, answers[item.number]);
     const lines = [
-      `${item.number}. ${item.question}`,
+      `${item.number}. ${item.question} (${getQuestionMarks(item)} marks)`,
       "",
-      `Suggested Answer: ${item.answer || "No answer available."}`,
+      `Suggested Answer: ${buildExpectedAnswerText(item)}`,
     ];
+    if (isOptionBasedQuestion(item)) {
+      (item.subparts || []).forEach((subpart) => {
+        lines.push("");
+        lines.push(`${subpart.label}) ${subpart.question}`);
+        (subpart.options || []).forEach((option) => lines.push(`- ${option}`));
+      });
+    }
     if (studentAnswer) {
       lines.push("", `Student Answer: ${studentAnswer}`);
     }
     if (result) {
-      lines.push("", `Marked Result: ${Number(result.score || 0) > 0 ? "Correct" : "Needs correction"}`);
+      lines.push("", `Marked Result: ${Number(result.score || 0)} / ${Number(result.max_score || getQuestionMarks(item) || 0)}`);
       if (result.extracted_answer) lines.push(`Detected Answer: ${result.extracted_answer}`);
       if (result.feedback) lines.push(`Feedback: ${result.feedback}`);
+      if (Array.isArray(result.mistakes) && result.mistakes.length) {
+        lines.push(`Needs Attention: ${result.mistakes.join("; ")}`);
+      }
     }
     return lines.join("\n");
   }).join("\n\n");
@@ -122,6 +187,7 @@ function getErrorHint(message) {
   const text = (message || "").toLowerCase();
   if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
   if (text.includes("ffmpeg")) return "Install ffmpeg on the backend server for larger files.";
+  if (text.includes("yt-dlp") || text.includes("video-link transcription")) return "Install yt-dlp on the backend so video links can be downloaded and transcribed.";
   if (text.includes("smtp")) return "Configure SMTP variables so verification codes can be sent.";
   if (text.includes("timed out")) return "Try again or split a very long lecture into smaller sections.";
   return "Check the backend logs for the exact failing stage.";
@@ -184,6 +250,23 @@ function collaborationRoomToText(room) {
   ].join("\n");
 }
 
+function truncatePreviewText(value, limit = 1200) {
+  const text = (value || "").trim();
+  if (!text) return "";
+  return text.length > limit ? `${text.slice(0, limit).trimEnd()}...` : text;
+}
+
+function buildCollaborationPreview(room) {
+  if (!room) return "Open a collaboration room to preview the shared study content.";
+  if (room.active_tab === "guide") return truncatePreviewText((room.summary || "").replace(/\*\*/g, ""));
+  if (room.active_tab === "formulas") return truncatePreviewText(room.formula || "");
+  if (room.active_tab === "examples") return truncatePreviewText(room.example || "");
+  if (room.active_tab === "flashcards") return truncatePreviewText(flashcardsToText(room.flashcards || []));
+  if (room.active_tab === "quiz") return truncatePreviewText(quizToText(room.quiz_questions || []));
+  if (room.active_tab === "transcript") return truncatePreviewText(room.transcript || "");
+  return truncatePreviewText(room.shared_notes || "No shared content has been selected yet.");
+}
+
 export default function App() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
@@ -221,7 +304,6 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
-  const [quizCount, setQuizCount] = useState(10);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizAnswerImages, setQuizAnswerImages] = useState({});
   const [quizResults, setQuizResults] = useState({});
@@ -250,27 +332,23 @@ export default function App() {
   const lectureNotesFileInputRef = useRef(null);
   const lectureSlidesFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
+  const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
 
-  const loading = isTranscribing || isGeneratingSummary || isExtractingSlides;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isExtractingSlides;
   const hasTranscript = Boolean(transcript);
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length);
-  const selectedQuizQuestions = quizQuestions.slice(0, 10);
+  const selectedQuizQuestions = quizQuestions;
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
   const formattedFormula = normalizeRenderedMathText(prettifyMathText(formula));
   const formattedExample = normalizeRenderedMathText(prettifyMathText(example));
   const formulaRows = parseFormulaRows(formattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
-  const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || "No lecture selected";
-  const guideSupportCards = [
-    { label: "Advantages and disadvantages", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "ADVANTAGES AND DISADVANTAGES")).slice(0, 4) },
-    { label: "Common mistakes", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "COMMON MISTAKES TO AVOID")).slice(0, 4) },
-    { label: "Quick revision plan", items: toSimpleBullets(extractMarkdownSection(formattedGuide, "QUICK REVISION PLAN")).slice(0, 4) },
-  ].filter((card) => card.items.length);
+  const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || formatVideoSourceLabel(videoUrl) || "No lecture selected";
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = activeTab === "collaboration" ? Boolean(activeRoom) : hasResults || activeTab === "chat";
@@ -606,6 +684,7 @@ export default function App() {
   const handleFileChange = (selectedFile) => {
     if (!selectedFile) return;
     setFile(selectedFile);
+    setVideoUrl("");
     setError("");
     setStatus(`${selectedFile.name} selected.`);
   };
@@ -780,11 +859,12 @@ export default function App() {
       setCurrentPage("workspace");
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
+      const sourceLabel = file?.name || formatVideoSourceLabel(videoUrl) || "Saved lecture";
       addHistoryItem({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt: new Date().toISOString(),
-        title: extractHistoryTitle(job.summary || "", file?.name || "Saved lecture"),
-        fileName: file?.name || "Saved lecture",
+        title: extractHistoryTitle(job.summary || "", sourceLabel),
+        fileName: sourceLabel,
         summary: job.summary || "",
         transcript: job.transcript || transcriptText,
         formula: job.formula || "",
@@ -830,6 +910,38 @@ export default function App() {
       setStatus("Transcription failed.");
     } finally {
       setIsTranscribing(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const transcribeVideoLink = async () => {
+    if (!videoUrl.trim()) return setError("Paste a video link first.");
+    setIsTranscribingVideo(true);
+    setError("");
+    setStatus("Submitting video link for transcription...");
+    setProgress(0);
+    setFile(null);
+    resetGeneratedOutputs();
+    setActiveTab("transcript");
+    setCurrentJobType("video");
+    try {
+      const response = await authFetch("/transcribe-video-url/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_url: videoUrl.trim() }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Video-link transcription failed.");
+      const job = await pollJob(data.job_id, "video");
+      setTranscript(job.transcript || "");
+      setStatus("Video transcript ready. Generating study guide...");
+      setProgress(100);
+      await generateStudyGuide(job.transcript || "");
+    } catch (err) {
+      setError(err.message || "Video-link transcription failed.");
+      setStatus("Video-link transcription failed.");
+    } finally {
+      setIsTranscribingVideo(false);
       setCurrentJobType("");
     }
   };
@@ -958,22 +1070,27 @@ export default function App() {
     }
   };
 
-  const syncCurrentTabToRoom = async () => {
+  const shareTabToRoom = async (tabId = activeTab) => {
     if (!activeRoomId) return;
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/active-tab`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active_tab: activeTab }),
+        body: JSON.stringify({ active_tab: tabId }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not sync the current tool.");
       setActiveRoom(data.room || null);
       refreshCollaborationRooms(true);
-      setStatus("Current tool shared with the room.");
+      const sharedLabel = tabs.find((tab) => tab.id === tabId)?.label || "Current tool";
+      setStatus(`${sharedLabel} shared with the room.`);
     } catch (err) {
       setError(err.message || "Could not sync the current tool.");
     }
+  };
+
+  const syncCurrentTabToRoom = async () => {
+    await shareTabToRoom(activeTab);
   };
 
   const changeRoomTestVisibility = async (value) => {
@@ -994,16 +1111,27 @@ export default function App() {
     }
   };
 
-  const queueRoomAnswerSync = (questionNumber, value) => {
+  const clearQuestionResult = (questionNumber) => {
+    setQuizSubmitted(false);
+    setQuizResults((current) => {
+      const next = { ...current };
+      delete next[questionNumber];
+      return next;
+    });
+  };
+
+  const queueRoomAnswerSync = (question, value) => {
     if (!activeRoomId) return;
-    const key = String(questionNumber);
+    const questionNumber = String(question?.number || "");
+    const key = questionNumber;
+    const serializedValue = serializeQuizAnswerForRoom(question, value);
     if (answerSyncTimersRef.current[key]) window.clearTimeout(answerSyncTimersRef.current[key]);
     answerSyncTimersRef.current[key] = window.setTimeout(async () => {
       try {
         const response = await authFetch(`/collaboration/rooms/${activeRoomId}/quiz-answers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question_number: String(questionNumber), answer_text: value }),
+          body: JSON.stringify({ question_number: questionNumber, answer_text: serializedValue }),
         });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || "Could not sync the collaboration answer.");
@@ -1081,7 +1209,7 @@ export default function App() {
   const downloadQuizPdf = async () => {
     if (!selectedQuizQuestions.length) return setError("Generate test questions first.");
     try {
-      const title = `${extractHistoryTitle(summary, file?.name || "MABASO Test")} test`;
+      const title = `${extractHistoryTitle(summary, file?.name || formatVideoSourceLabel(videoUrl) || "MABASO Test")} test`;
       await exportPdf(title, [{ title: "Test", content: buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) }]);
       setStatus("Test PDF downloaded.");
     } catch (err) {
@@ -1116,27 +1244,32 @@ export default function App() {
     }
   };
 
-  const handleQuizAnswerChange = (questionNumber, value) => {
-    setQuizAnswers((current) => ({ ...current, [questionNumber]: value }));
-    setQuizSubmitted(false);
-    setQuizResults((current) => {
+  const handleQuizAnswerChange = (question, value) => {
+    setQuizAnswers((current) => ({ ...current, [question.number]: value }));
+    clearQuestionResult(question.number);
+    queueRoomAnswerSync(question, value);
+  };
+
+  const handleQuizOptionChange = (question, label, option) => {
+    const nextAnswer = {
+      ...(quizAnswers[question.number] && typeof quizAnswers[question.number] === "object" ? quizAnswers[question.number] : {}),
+      [label]: option,
+    };
+    setQuizAnswers((current) => ({ ...current, [question.number]: nextAnswer }));
+    setQuizAnswerImages((current) => {
       const next = { ...current };
-      delete next[questionNumber];
+      delete next[question.number];
       return next;
     });
-    queueRoomAnswerSync(questionNumber, value);
+    clearQuestionResult(question.number);
+    queueRoomAnswerSync(question, nextAnswer);
   };
 
   const handleQuizImageChange = (questionNumber, selectedFile) => {
     if (!selectedFile) return;
     if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for test answer marking.");
     setQuizAnswerImages((current) => ({ ...current, [questionNumber]: selectedFile }));
-    setQuizSubmitted(false);
-    setQuizResults((current) => {
-      const next = { ...current };
-      delete next[questionNumber];
-      return next;
-    });
+    clearQuestionResult(questionNumber);
     setStatus(`Handwritten answer photo added for question ${questionNumber}.`);
   };
 
@@ -1148,17 +1281,30 @@ export default function App() {
     try {
       const nextResults = {};
       for (const item of selectedQuizQuestions) {
-        const typedAnswer = quizAnswers[item.number] || "";
+        const typedAnswer = typeof quizAnswers[item.number] === "string" ? quizAnswers[item.number] : "";
+        const selectedOptions = quizAnswers[item.number] && typeof quizAnswers[item.number] === "object" ? quizAnswers[item.number] : {};
         const imageFile = quizAnswerImages[item.number];
-        if (!typedAnswer.trim() && !imageFile) {
-          nextResults[item.number] = { score: 0, extracted_answer: "", feedback: "No answer was submitted yet." };
+        const hasOptionAnswer = isOptionBasedQuestion(item) && Object.values(selectedOptions).some(Boolean);
+        if (!typedAnswer.trim() && !imageFile && !hasOptionAnswer) {
+          nextResults[item.number] = {
+            score: 0,
+            max_score: getQuestionMarks(item),
+            extracted_answer: "",
+            feedback: "No answer was submitted yet.",
+            mistakes: [],
+          };
           continue;
         }
         const formData = new FormData();
         formData.append("question", item.question);
-        formData.append("expected_answer", item.answer);
+        formData.append("expected_answer", buildExpectedAnswerText(item));
+        formData.append("question_type", item.type || "short_answer");
+        formData.append("max_score", String(getQuestionMarks(item)));
+        formData.append("answer_points_json", JSON.stringify(item.answer_points || []));
+        formData.append("subparts_json", JSON.stringify(item.subparts || []));
+        formData.append("student_selection_json", JSON.stringify(selectedOptions));
         formData.append("student_answer", typedAnswer);
-        if (imageFile) formData.append("answer_image", imageFile);
+        if (!isOptionBasedQuestion(item) && imageFile) formData.append("answer_image", imageFile);
         const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
@@ -1176,6 +1322,7 @@ export default function App() {
   };
 
   const score = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
+  const totalQuizMarks = getTotalQuizMarks(selectedQuizQuestions);
 
   if (!authChecked) {
     return (
@@ -1265,6 +1412,15 @@ export default function App() {
                   <div className="flex flex-wrap gap-3">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-60">Choose Lecture File</button>
                     <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`rounded-full px-5 py-3 text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "bg-emerald-400/15 text-emerald-100"} disabled:opacity-60`}>{recording ? "Stop Recording" : "Record Live Lecture"}</button>
+                    <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Use Video Link</button>
+                  </div>
+                  <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Video Link</p>
+                    <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+                      <input ref={videoUrlInputRef} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none" placeholder="Paste a YouTube or video URL here" />
+                      <button type="button" onClick={transcribeVideoLink} disabled={loading || !videoUrl.trim()} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribingVideo ? "Reading Link..." : "Transcribe Video Link"}</button>
+                    </div>
+                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video.</p>
                   </div>
                   <div className="flex flex-wrap gap-3">
                     <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Upload Notes</button>
@@ -1286,7 +1442,7 @@ export default function App() {
                 <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add PDF / PPTX</span></button></div>{lectureSlideFileNames.length ? <div className="mt-4 flex flex-wrap gap-2">{lectureSlideFileNames.slice(0, 4).map((name) => <span key={name} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{name}</span>)}{lectureSlideFileNames.length > 4 ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">+{lectureSlideFileNames.length - 4} more</span> : null}</div> : null}</div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 min-h-[150px] rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
@@ -1337,9 +1493,9 @@ export default function App() {
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="mt-3 font-semibold text-white">{card.question}</p><p className="mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
-                {activeTab === "quiz" ? <div><div className="mb-5 flex flex-wrap items-center gap-3"><div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{selectedQuizQuestions.length} test question{selectedQuizQuestions.length === 1 ? "" : "s"} ready</div><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten answer photos are supported.</div>{activeRoom ? <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Room visibility: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</div> : null}<button type="button" onClick={markQuiz} disabled={!selectedQuizQuestions.length || isMarkingQuiz} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarkingQuiz ? "Marking..." : "Mark Test"}</button>{quizSubmitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {score} / {selectedQuizQuestions.length}</div> : null}</div><div className="space-y-4">{selectedQuizQuestions.length ? selectedQuizQuestions.map((item) => { const result = quizResults[item.number]; const isCorrect = Number(result?.score || 0) > 0; const answerTone = !quizSubmitted ? "border-white/10 bg-slate-900" : isCorrect ? "border-emerald-400/35 bg-emerald-500/10" : "border-rose-400/35 bg-rose-500/10"; const visibleRoomAnswers = (roomAnswerGroups[item.number] || []).filter((answer) => answer.author_email !== authEmail); return <div key={item.number} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="font-semibold text-white">{item.number}. {item.question}</p><textarea value={quizAnswers[item.number] || ""} onChange={(event) => handleQuizAnswerChange(item.number, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Upload handwritten answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => handleQuizImageChange(item.number, event.target.files?.[0])} /></label>{quizAnswerImages[item.number] ? <span className="text-xs text-emerald-100/80">{quizAnswerImages[item.number].name}</span> : null}</div>{activeRoom?.test_visibility === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="font-semibold text-white">{answer.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}{quizSubmitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Suggested Answer</p><p className="mt-2 text-sm leading-7 text-slate-300">{item.answer}</p></div><div className={`rounded-2xl border p-3 ${isCorrect ? "border-emerald-300/25 bg-emerald-300/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${isCorrect ? "bg-emerald-950 text-emerald-100" : "bg-rose-950 text-rose-100"}`}>{isCorrect ? "Correct" : "Needs correction"}</span></div>{result.extracted_answer ? <p className="mt-3 text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p></div></div> : null}</div>; }) : <div className="text-sm text-slate-300">Test questions will appear here after study guide generation.</div>}</div></div> : null}
+                {activeTab === "quiz" ? <div><div className="mb-5 flex flex-wrap items-center gap-3"><div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{selectedQuizQuestions.length} test question{selectedQuizQuestions.length === 1 ? "" : "s"} ready</div><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalQuizMarks} total marks</div><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten photos stay only on written questions.</div>{activeRoom ? <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Room visibility: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</div> : null}<button type="button" onClick={markQuiz} disabled={!selectedQuizQuestions.length || isMarkingQuiz} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarkingQuiz ? "Marking..." : "Mark Test"}</button>{quizSubmitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {score} / {totalQuizMarks}</div> : null}</div><div className="space-y-4">{selectedQuizQuestions.length ? selectedQuizQuestions.map((item) => { const result = quizResults[item.number]; const maxMarks = getQuestionMarks(item); const questionScore = Number(result?.score || 0); const scoreRatio = maxMarks ? questionScore / maxMarks : 0; const answerTone = !quizSubmitted ? "border-white/10 bg-slate-900" : scoreRatio >= 1 ? "border-emerald-400/35 bg-emerald-500/10" : scoreRatio > 0 ? "border-amber-300/30 bg-amber-500/10" : "border-rose-400/35 bg-rose-500/10"; const resultBadge = !quizSubmitted ? "" : scoreRatio >= 1 ? "Full marks" : scoreRatio > 0 ? "Partial credit" : "Needs correction"; const resultBadgeTone = scoreRatio >= 1 ? "bg-emerald-950 text-emerald-100" : scoreRatio > 0 ? "bg-amber-950 text-amber-100" : "bg-rose-950 text-rose-100"; const visibleRoomAnswers = (roomAnswerGroups[item.number] || []).filter((answer) => answer.author_email !== authEmail); const typedAnswer = typeof quizAnswers[item.number] === "string" ? quizAnswers[item.number] : ""; const selectedOptions = quizAnswers[item.number] && typeof quizAnswers[item.number] === "object" ? quizAnswers[item.number] : {}; return <div key={item.number} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="font-semibold text-white">{item.number}. {item.question}</p><span className="rounded-full border border-white/10 bg-slate-950/80 px-3 py-1 text-xs font-semibold text-slate-200">{maxMarks} mark{maxMarks === 1 ? "" : "s"}</span></div>{isOptionBasedQuestion(item) ? <div className="mt-4 space-y-4">{(item.subparts || []).map((subpart) => { const subpartResult = result?.subpart_results?.find((entry) => entry.label === subpart.label); return <div key={`${item.number}-${subpart.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="text-sm font-semibold text-white">{subpart.label}) {subpart.question}</p><span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">{subpart.marks} mark</span></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{(subpart.options || []).map((option) => { const checked = selectedOptions[subpart.label] === option; return <label key={`${subpart.label}-${option}`} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${item.number}-${subpart.label}`} checked={checked} onChange={() => handleQuizOptionChange(item, subpart.label, option)} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>; })}</div>{quizSubmitted && subpartResult ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${subpartResult.is_correct ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-rose-300/25 bg-rose-500/10 text-slate-100"}`}><p>{subpartResult.marks_awarded} / {subpartResult.marks}</p><p className="mt-2 leading-7">{subpartResult.feedback}</p></div> : null}</div>; })}</div> : <><textarea value={typedAnswer} onChange={(event) => handleQuizAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span>Upload handwritten answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => handleQuizImageChange(item.number, event.target.files?.[0])} /></label>{quizAnswerImages[item.number] ? <span className="text-xs text-emerald-100/80">{quizAnswerImages[item.number].name}</span> : null}</div></>}{activeRoom?.test_visibility === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="font-semibold text-white">{answer.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}{quizSubmitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}</div>; }) : <div className="text-sm text-slate-300">Test questions will appear here after study guide generation.</div>}</div></div> : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div>{activeRoom.is_owner ? <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
           </div>
