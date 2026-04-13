@@ -83,6 +83,8 @@ STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
 STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
 ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
+PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
+PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024)))
@@ -101,10 +103,15 @@ TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
+MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "90"))
+PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
+PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
+PODCAST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
@@ -209,6 +216,16 @@ class StudyGuideRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
+
+
+class PodcastGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    speaker_count: int = 2
+    target_minutes: int = 10
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -528,14 +545,23 @@ def revoke_session(token: str):
         connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
 
 
+def refresh_session_expiry(token_hash: str):
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+            (iso_in_future(days=SESSION_TTL_DAYS), token_hash),
+        )
+
+
 def get_session_email(token: str) -> str | None:
     if not token:
         return None
 
+    token_hash = hash_value(token)
     with get_db_connection() as connection:
         row = connection.execute(
             "SELECT email, expires_at FROM sessions WHERE token_hash = ?",
-            (hash_value(token),),
+            (token_hash,),
         ).fetchone()
 
     if not row:
@@ -543,9 +569,10 @@ def get_session_email(token: str) -> str | None:
 
     if datetime.fromisoformat(row["expires_at"]) <= utc_now():
         with get_db_connection() as connection:
-            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
+            connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
         return None
 
+    refresh_session_expiry(token_hash)
     return row["email"]
 
 
@@ -741,6 +768,12 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "flashcards": [],
         "quiz_questions": [],
         "used_fallback": False,
+        "podcast_title": "",
+        "podcast_overview": "",
+        "podcast_script": "",
+        "podcast_segments": [],
+        "_podcast_audio_files": [],
+        "_podcast_download_file": "",
     }
     return job_id
 
@@ -750,6 +783,14 @@ def update_job(job_id: str, **fields):
     if not job:
         return
     job.update(fields)
+
+
+def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in job.items()
+        if not str(key).startswith("_")
+    }
 
 
 def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
@@ -1354,7 +1395,55 @@ async def get_job(job_id: str, current_user: str = Depends(require_authenticated
         raise HTTPException(status_code=404, detail="Job not found.")
     if job.get("owner_email") and job["owner_email"] != current_user:
         raise HTTPException(status_code=404, detail="Job not found.")
-    return job
+    return serialize_job(job)
+
+
+@app.get("/jobs/{job_id}/podcast-audio/{segment_index}")
+async def get_podcast_audio_segment(
+    job_id: str,
+    segment_index: int,
+    current_user: str = Depends(require_authenticated_user),
+):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("owner_email") and job["owner_email"] != current_user:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    audio_files = job.get("_podcast_audio_files") or []
+    if segment_index < 0 or segment_index >= len(audio_files):
+        raise HTTPException(status_code=404, detail="Podcast audio segment not found.")
+
+    file_path = Path(audio_files[segment_index])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Podcast audio segment is no longer available.")
+
+    return Response(content=file_path.read_bytes(), media_type="audio/mpeg")
+
+
+@app.get("/jobs/{job_id}/podcast-download")
+async def download_podcast_audio(
+    job_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("owner_email") and job["owner_email"] != current_user:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    file_name = job.get("_podcast_download_file") or ""
+    file_path = Path(file_name)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="The downloadable podcast audio is no longer available.")
+
+    return Response(
+        content=file_path.read_bytes(),
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_download_filename(job.get("podcast_title") or "lecture-podcast")}.mp3"',
+        },
+    )
 
 
 async def save_upload_to_disk(file: UploadFile, job_id: str | None = None) -> Path:
@@ -2702,6 +2791,363 @@ def extract_study_assets(summary: str) -> dict:
     }
 
 
+def clamp_podcast_speaker_count(value: int) -> int:
+    return 3 if int(value or 2) >= 3 else 2
+
+
+def clamp_podcast_target_minutes(value: int) -> int:
+    return max(6, min(18, int(value or 10)))
+
+
+def build_podcast_speaker_profiles(speaker_count: int) -> list[dict[str, str]]:
+    profiles = [
+        {
+            "key": "speaker_1",
+            "name": "Naledi",
+            "role": "the calm explainer who keeps the lesson academically solid",
+            "voice": "alloy",
+            "voice_style": "Sound warm, clear, and confident, like a lecturer-friendly host.",
+        },
+        {
+            "key": "speaker_2",
+            "name": "Musa",
+            "role": "the curious challenger who adds light jokes, asks obvious student questions, and pushes for simpler wording",
+            "voice": "coral",
+            "voice_style": "Sound lively, sharp, and conversational with light humor.",
+        },
+        {
+            "key": "speaker_3",
+            "name": "Tumi",
+            "role": "the exam coach who keeps connecting the topic to worked examples, likely test traps, and revision advice",
+            "voice": "sage",
+            "voice_style": "Sound focused, practical, and slightly firmer than the others.",
+        },
+    ]
+    return profiles[: clamp_podcast_speaker_count(speaker_count)]
+
+
+def estimate_spoken_minutes(text: str) -> float:
+    words = len(re.findall(r"\b\w+\b", text or ""))
+    if not words:
+        return 0.0
+    return round(words / 140, 1)
+
+
+def split_podcast_text(text: str, *, max_chars: int = 700, max_words: int = 110) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", compact_text(text)).strip()
+    if not cleaned:
+        return []
+
+    sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", cleaned) if item.strip()]
+    if not sentences:
+        return [cleaned[:max_chars].strip()]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_chars = 0
+    current_words = 0
+
+    for sentence in sentences:
+        sentence_words = len(re.findall(r"\b\w+\b", sentence))
+        sentence_chars = len(sentence) + (1 if current else 0)
+        if current and (current_chars + sentence_chars > max_chars or current_words + sentence_words > max_words):
+            chunks.append(" ".join(current).strip())
+            current = [sentence]
+            current_chars = len(sentence)
+            current_words = sentence_words
+            continue
+        current.append(sentence)
+        current_chars += sentence_chars
+        current_words += sentence_words
+
+    if current:
+        chunks.append(" ".join(current).strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def build_podcast_fallback(
+    summary: str,
+    transcript: str,
+    speaker_profiles: list[dict[str, str]],
+) -> dict[str, Any]:
+    title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
+    topic = title_lines[0] if title_lines else "This Lecture Topic"
+    short_summary = compact_text(extract_section(summary, "SHORT SUMMARY"))
+    concept_points = extract_bullet_points(extract_section(summary, "KEY CONCEPTS"))[:6]
+    example_points = [line for line in extract_section(summary, "WORKED EXAMPLES").splitlines() if compact_text(line)][:4]
+    mistake_points = extract_bullet_points(extract_section(summary, "COMMON MISTAKES TO AVOID"))[:3]
+    revision_points = extract_bullet_points(extract_section(summary, "QUICK REVISION PLAN"))[:3]
+
+    if not short_summary:
+        short_summary = compact_text(transcript[:700], f"A revision debate about {topic}.")
+
+    speaking_points = [short_summary]
+    speaking_points.extend(concept_points)
+    speaking_points.extend(example_points)
+    speaking_points.extend(mistake_points)
+    speaking_points.extend(revision_points)
+    speaking_points = [compact_text(item) for item in speaking_points if compact_text(item)]
+
+    normalized_segments: list[dict[str, Any]] = []
+    for index, point in enumerate(speaking_points[:12], start=1):
+        profile = speaker_profiles[(index - 1) % len(speaker_profiles)]
+        text = point
+        if index == 1:
+            text = f"Today we're breaking down {topic}. {point}"
+        elif index == 2:
+            text = f"Let us slow that down for a student who is hearing it for the first time. {point}"
+        elif "example" in point.lower():
+            text = f"Here is the kind of example that makes the topic stick. {point}"
+        elif "mistake" in point.lower() or "avoid" in point.lower():
+            text = f"This is where students usually lose marks. {point}"
+        elif "minute" in point.lower() or "plan" in point.lower():
+            text = f"If exam week is close, this is the revision move to make. {point}"
+
+        for chunk in split_podcast_text(text):
+            normalized_segments.append(
+                {
+                    "index": len(normalized_segments) + 1,
+                    "speaker_key": profile["key"],
+                    "speaker_name": profile["name"],
+                    "speaker_role": profile["role"],
+                    "voice": profile["voice"],
+                    "voice_style": profile["voice_style"],
+                    "text": chunk,
+                    "estimated_minutes": estimate_spoken_minutes(chunk),
+                }
+            )
+
+    overview = (
+        f"A fallback revision debate about {topic}, mixing clear explanations, example-driven discussion, "
+        "and exam-focused reminders."
+    )
+    return {
+        "title": f"{topic} Debate Podcast",
+        "overview": overview,
+        "segments": normalized_segments,
+    }
+
+
+def normalize_podcast_segments(
+    raw_segments: Any,
+    speaker_profiles: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_segments, list):
+        return []
+
+    profile_by_key = {profile["key"]: profile for profile in speaker_profiles}
+    profile_keys = list(profile_by_key)
+    normalized_segments: list[dict[str, Any]] = []
+    last_key = ""
+
+    for raw_segment in raw_segments:
+        if not isinstance(raw_segment, dict):
+            continue
+
+        speaker_key = compact_text(raw_segment.get("speaker_key")).lower()
+        if speaker_key not in profile_by_key:
+            speaker_label = compact_text(raw_segment.get("speaker")).lower()
+            matching_profile = next(
+                (
+                    profile
+                    for profile in speaker_profiles
+                    if speaker_label in {profile["key"].lower(), profile["name"].lower()}
+                ),
+                None,
+            )
+            if matching_profile:
+                speaker_key = matching_profile["key"]
+
+        if speaker_key not in profile_by_key:
+            speaker_key = last_key or profile_keys[len(normalized_segments) % len(profile_keys)]
+
+        text = compact_text(raw_segment.get("text"))
+        if not text:
+            continue
+
+        profile = profile_by_key[speaker_key]
+        for chunk in split_podcast_text(text):
+            normalized_segments.append(
+                {
+                    "index": len(normalized_segments) + 1,
+                    "speaker_key": profile["key"],
+                    "speaker_name": profile["name"],
+                    "speaker_role": profile["role"],
+                    "voice": profile["voice"],
+                    "voice_style": profile["voice_style"],
+                    "text": chunk,
+                    "estimated_minutes": estimate_spoken_minutes(chunk),
+                }
+            )
+        last_key = speaker_key
+
+    return normalized_segments[:24]
+
+
+def build_podcast_script_markdown(
+    title: str,
+    overview: str,
+    segments: list[dict[str, Any]],
+) -> str:
+    blocks = [
+        "**PODCAST TITLE**",
+        "",
+        compact_text(title, "Lecture Debate Podcast"),
+        "",
+        "**PODCAST OVERVIEW**",
+        "",
+        compact_text(overview, "A multi-speaker revision debate."),
+        "",
+        "**DEBATE SCRIPT**",
+        "",
+    ]
+
+    for segment in segments:
+        blocks.append(f"{segment['index']}. {segment['speaker_name']}: {segment['text']}")
+        blocks.append("")
+
+    return "\n".join(blocks).strip()
+
+
+def build_downloadable_podcast_file(output_dir: Path, audio_files: list[str]) -> str:
+    combined_path = output_dir / "full-podcast.mp3"
+    with combined_path.open("wb") as combined_file:
+        for file_name in audio_files:
+            combined_file.write(Path(file_name).read_bytes())
+    return str(combined_path)
+
+
+def synthesize_podcast_audio_segments(job_id: str, segments: list[dict[str, Any]]) -> tuple[list[str], str]:
+    output_dir = PODCAST_OUTPUT_DIR / job_id
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    total_segments = max(1, len(segments))
+    audio_files: list[str] = []
+    for index, segment in enumerate(segments, start=1):
+        update_job(
+            job_id,
+            status="processing",
+            stage=f"Recording podcast voice {index} of {total_segments}",
+            progress=min(98, 42 + int((index / total_segments) * 54)),
+        )
+        response = client.with_options(timeout=PODCAST_TTS_TIMEOUT).audio.speech.create(
+            model=PODCAST_TTS_MODEL,
+            voice=segment["voice"],
+            input=segment["text"],
+            instructions=(
+                f"You are {segment['speaker_name']}. {segment['speaker_role']}. "
+                f"{segment.get('voice_style', 'Sound natural, clear, and human.')} "
+                "Keep the delivery natural, human, and podcast-like."
+            ),
+            response_format="mp3",
+        )
+        audio_bytes = response.content if response.content else response.read()
+        file_path = output_dir / f"{index:03d}-{segment['speaker_key']}.mp3"
+        file_path.write_bytes(audio_bytes)
+        audio_files.append(str(file_path))
+
+    download_file = build_downloadable_podcast_file(output_dir, audio_files)
+    return audio_files, download_file
+
+
+async def generate_podcast_package(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    speaker_count: int,
+    target_minutes: int,
+    job_id: str,
+) -> dict[str, Any]:
+    normalized_speaker_count = clamp_podcast_speaker_count(speaker_count)
+    normalized_target_minutes = clamp_podcast_target_minutes(target_minutes)
+    speaker_profiles = build_podcast_speaker_profiles(normalized_speaker_count)
+    target_turns = 12 if normalized_speaker_count == 2 else 15
+    target_words = normalized_target_minutes * 130
+
+    source_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_PODCAST_CONTEXT_CHARS // 2),
+        trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_PODCAST_CONTEXT_CHARS // 4),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_PODCAST_CONTEXT_CHARS // 4),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_PODCAST_CONTEXT_CHARS // 4),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_PODCAST_CONTEXT_CHARS // 2),
+        "SPEAKER PROFILES\n" + json.dumps(speaker_profiles, ensure_ascii=False, indent=2),
+    ]
+    combined_source = "\n\n".join(block for block in source_blocks if block)
+
+    def _generate_podcast_script() -> dict[str, Any]:
+        response = client.with_options(timeout=PODCAST_REQUEST_TIMEOUT).chat.completions.create(
+            model=PODCAST_SCRIPT_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5000),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create educational podcast debates for students. "
+                        "Return strict JSON only with these keys: title, overview, estimated_minutes, segments.\n\n"
+                        "Rules:\n"
+                        "- `segments` must be an array of objects with `speaker_key` and `text` only.\n"
+                        "- Use exactly the provided speaker keys.\n"
+                        f"- Write a lively debate for {normalized_speaker_count} speakers.\n"
+                        f"- Target about {normalized_target_minutes} minutes and roughly {target_words} spoken words in total.\n"
+                        f"- Aim for about {target_turns} turns before any automatic text splitting.\n"
+                        "- Make it feel like a real spoken discussion, not lecture notes being read aloud.\n"
+                        "- Mix humor with seriousness, but keep the academic content accurate.\n"
+                        "- Use simple jokes or playful challenges, never nonsense or disrespectful humor.\n"
+                        "- Keep each turn focused on understanding, application, or exam reasoning.\n"
+                        "- Mention worked examples from the lecture when they are present in the source material.\n"
+                        "- If an example is inferred rather than clearly from the lecture, frame it as a fresh example instead of claiming the lecturer said it.\n"
+                        "- Include clarifying analogies, common mistakes, and exam-useful examples.\n"
+                        "- Do not use stage directions, bullet points, markdown, or narration tags like [music].\n"
+                        "- Do not use emojis.\n"
+                        "- Keep every spoken turn between about 35 and 95 words."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Build the podcast debate from this lecture material.\n\n"
+                        f"{combined_source}"
+                    ),
+                },
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    update_job(job_id, status="processing", stage="Writing podcast debate", progress=18)
+    fallback_package = build_podcast_fallback(summary, transcript, speaker_profiles)
+
+    try:
+        generated_package = await asyncio.to_thread(_generate_podcast_script)
+    except Exception as exc:
+        logger.warning("Podcast script generation failed, using fallback podcast script: %s", exc)
+        generated_package = {}
+
+    normalized_segments = normalize_podcast_segments(generated_package.get("segments"), speaker_profiles)
+    if not normalized_segments:
+        normalized_segments = fallback_package["segments"]
+
+    title = compact_text(generated_package.get("title"), fallback_package["title"])
+    overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
+    script_markdown = build_podcast_script_markdown(title, overview, normalized_segments)
+
+    update_job(job_id, status="processing", stage="Preparing speaker voices", progress=40)
+    audio_files, download_file = await asyncio.to_thread(synthesize_podcast_audio_segments, job_id, normalized_segments)
+
+    return {
+        "podcast_title": title,
+        "podcast_overview": overview,
+        "podcast_script": script_markdown,
+        "podcast_segments": normalized_segments,
+        "_podcast_audio_files": audio_files,
+        "_podcast_download_file": download_file,
+    }
+
+
 def determine_quiz_total_marks(
     summary: str,
     transcript: str,
@@ -3256,6 +3702,46 @@ async def run_summary_job(
         )
 
 
+async def run_podcast_job(
+    job_id: str,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    speaker_count: int,
+    target_minutes: int,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting podcast generation", progress=8)
+        podcast_package = await generate_podcast_package(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            speaker_count,
+            target_minutes,
+            job_id,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="Podcast ready",
+            progress=100,
+            **podcast_package,
+        )
+    except Exception as exc:
+        logger.exception("Podcast generation failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Podcast generation failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+
+
 @app.post("/upload-audio/")
 async def upload_audio(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
     if not file.filename:
@@ -3387,6 +3873,39 @@ async def create_study_guide(payload: StudyGuideRequest, current_user: str = Dep
             lecture_notes,
             lecture_slides,
             past_question_papers,
+        )
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-podcast/")
+async def create_podcast(payload: PodcastGenerationRequest, current_user: str = Depends(require_authenticated_user)):
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate a study guide or add lecture material before creating the podcast debate.",
+        )
+
+    ensure_openai_key()
+    speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
+    target_minutes = clamp_podcast_target_minutes(payload.target_minutes)
+    job_id = create_job("podcast", owner_email=current_user)
+    asyncio.create_task(
+        run_podcast_job(
+            job_id,
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            speaker_count,
+            target_minutes,
         )
     )
     return {"job_id": job_id}

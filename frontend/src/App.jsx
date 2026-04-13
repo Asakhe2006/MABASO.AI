@@ -29,6 +29,7 @@ const tabs = [
   { id: "examples", label: "Worked Examples" },
   { id: "flashcards", label: "Flashcards" },
   { id: "quiz", label: "Test" },
+  { id: "podcast", label: "Podcast Generator" },
   { id: "chat", label: "Study Chat" },
   { id: "collaboration", label: "Collaboration" },
 ];
@@ -267,10 +268,10 @@ function parseFormulaRows(text) {
 
 function normalizeRenderedMathText(value) {
   return (value || "")
-    .replace(/â‰¥/g, "\u2265")
-    .replace(/â‰¤/g, "\u2264")
-    .replace(/â‰ /g, "\u2260")
-    .replace(/â†’/g, "\u2192");
+    .replace(/\u2265/g, "\u2265")
+    .replace(/\u2264/g, "\u2264")
+    .replace(/\u2260/g, "\u2260")
+    .replace(/\u2192/g, "\u2192");
 }
 
 function prettifyMathText(value) {
@@ -353,6 +354,55 @@ function collaborationRoomToText(room) {
   ].join("\n");
 }
 
+function createEmptyPodcastData() {
+  return {
+    jobId: "",
+    title: "",
+    overview: "",
+    script: "",
+    segments: [],
+    speakerCount: 2,
+    targetMinutes: 10,
+  };
+}
+
+function normalizePodcastData(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    jobId: raw.jobId || raw.job_id || "",
+    title: raw.title || "",
+    overview: raw.overview || "",
+    script: raw.script || "",
+    segments: Array.isArray(raw.segments) ? raw.segments : [],
+    speakerCount: Number(raw.speakerCount || raw.speaker_count || 2) >= 3 ? 3 : 2,
+    targetMinutes: Number(raw.targetMinutes || raw.target_minutes || 10) || 10,
+  };
+}
+
+function sanitizePodcastForHistory(value) {
+  const podcast = normalizePodcastData(value);
+  return {
+    ...podcast,
+    jobId: "",
+    segments: (podcast.segments || []).map((segment, index) => ({
+      index: Number(segment?.index || index + 1),
+      speaker_key: segment?.speaker_key || "",
+      speaker_name: segment?.speaker_name || "",
+      speaker_role: segment?.speaker_role || "",
+      voice: segment?.voice || "",
+      text: segment?.text || "",
+      estimated_minutes: Number(segment?.estimated_minutes || 0),
+    })),
+  };
+}
+
+function getPodcastEstimatedMinutes(podcast) {
+  const total = (podcast?.segments || []).reduce((sum, segment) => sum + Number(segment?.estimated_minutes || 0), 0);
+  if (total > 0) return total.toFixed(total >= 10 ? 0 : 1);
+  if (podcast?.targetMinutes) return String(podcast.targetMinutes);
+  return "0";
+}
+
 function truncatePreviewText(value, limit = 1200) {
   const text = (value || "").trim();
   if (!text) return "";
@@ -396,6 +446,10 @@ export default function App() {
   const [lectureNotesFileName, setLectureNotesFileName] = useState("");
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
   const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
+  const [pastQuestionMemo, setPastQuestionMemo] = useState("");
+  const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
+  const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
+  const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
@@ -406,6 +460,8 @@ export default function App() {
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
+  const [isLoadingPodcastAudio, setIsLoadingPodcastAudio] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
   const [isExtractingPastPapers, setIsExtractingPastPapers] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState({});
@@ -442,19 +498,24 @@ export default function App() {
   const lectureSlidesFileInputRef = useRef(null);
   const pastQuestionPaperFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
+  const podcastAudioRef = useRef(null);
+  const podcastAudioSegmentsRef = useRef([]);
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
+  const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
+  const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
+  const [isPodcastAutoPlaying, setIsPodcastAutoPlaying] = useState(false);
 
   const lectureSlides = studySourceEntriesToText(lectureSlideSources, "SLIDE SOURCE");
   const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
-  const pastQuestionPapers = studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER");
+  const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isExtractingSlides || isExtractingPastPapers;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingSlides || isExtractingPastPapers;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
-  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length);
+  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || podcastData.script);
   const selectedQuizQuestions = quizQuestions;
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
   const formattedFormula = normalizeRenderedMathText(prettifyMathText(formula));
@@ -479,8 +540,11 @@ export default function App() {
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = hasResults || activeTab === "chat";
+  const canShareCurrentTool = Boolean(activeRoom && activeTab !== "podcast");
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
+  const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || null;
+  const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
 
   const clearHistory = () => {
     setHistoryItems([]);
@@ -502,6 +566,18 @@ export default function App() {
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
     </section>
   ) : null;
+
+  const revokePodcastAudioUrls = (segments = []) => {
+    (segments || []).forEach((segment) => {
+      if (segment?.objectUrl) window.URL.revokeObjectURL(segment.objectUrl);
+    });
+  };
+
+  const replacePodcastAudioSegments = (segments = []) => {
+    revokePodcastAudioUrls(podcastAudioSegmentsRef.current);
+    podcastAudioSegmentsRef.current = segments;
+    setPodcastAudioSegments(segments);
+  };
 
   const renderQuizSection = ({
     questions,
@@ -541,7 +617,37 @@ export default function App() {
           {submitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {scoreValue} / {totalMarks}</div> : null}
         </div>
 
-        {scopeId === "workspace" ? <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p><p className="mt-2 text-sm leading-7 text-slate-200">Add a past paper here if you want the next study-guide generation to shape both the notes and the test around older question style and likely topics.</p></div>{pastQuestionPaperSources.length ? <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Notes + Test"}</button> : null}</div>{pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3 sm:grid-cols-2">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : <p className="mt-4 text-sm text-slate-300">No past question paper added yet.</p>}</div> : null}
+        {scopeId === "workspace" ? (
+          <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
+            <div className="force-mobile-stack flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p>
+                <p className="mt-2 text-sm leading-7 text-slate-200">Add past papers and paste the memo or marking guide here if you want the next study-guide generation and test generation to follow the older paper style more closely.</p>
+              </div>
+              {pastQuestionPaperSources.length || pastQuestionMemo.trim() ? (
+                <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Notes + Test"}</button>
+              ) : null}
+            </div>
+            {pastQuestionPaperSources.length ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {pastQuestionPaperSources.map((source) => (
+                  <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200">
+                    <button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button>
+                    <p className="phone-safe-copy font-semibold text-white">{source.name}</p>
+                    <p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "PAST QUESTION PAPER"}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-300">No past question paper added yet.</p>
+            )}
+            <div className="mt-4">
+              <label className="block text-xs uppercase tracking-[0.22em] text-emerald-200/70">Memo / Marking Guide Reference</label>
+              <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, marking guide, or model answers here. MABASO will use it as a reference when refreshing the study guide and the test." />
+              <p className="mt-3 text-xs leading-6 text-slate-300">This memo stays linked to the current workspace and is included together with uploaded past papers.</p>
+            </div>
+          </div>
+        ) : null}
 
         {hasRoomVisibility ? <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50"><p className="font-semibold">{visibilityLabel}</p><p className="mt-2 text-emerald-100/80">{visibilityDescription}</p>{ownerControls ? <div className="mt-4">{ownerControls}</div> : ownerNotice ? <p className="mt-3 text-emerald-100/80">{ownerNotice}</p> : null}</div> : null}
 
@@ -796,6 +902,105 @@ export default function App() {
     </section>
   );
 
+  const renderPodcastPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-[24px] border border-amber-300/15 bg-[linear-gradient(180deg,rgba(120,53,15,0.28),rgba(12,10,9,0.92))] p-5">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-amber-100/80">Podcast Generator</p>
+            <h4 className="mt-2 text-3xl font-semibold text-white">Turn the topic into a spoken debate.</h4>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">MABASO creates a multi-speaker podcast debate with different voices, jokes, worked examples, and serious explanation so the topic feels easier to remember.</p>
+          </div>
+          <div className="force-mobile-stack flex flex-wrap gap-3">
+            <button type="button" onClick={generatePodcast} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : "Generate Podcast"}</button>
+            <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-50 disabled:opacity-50">Download Audio</button>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Speakers</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {[2, 3].map((count) => (
+                <button key={count} type="button" onClick={() => setPodcastSpeakerCount(count)} className={`rounded-2xl border px-4 py-3 text-left text-sm ${podcastSpeakerCount === count ? "border-amber-300/35 bg-amber-300/10 text-amber-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
+                  <p className="font-semibold">{count} voices</p>
+                  <p className="mt-2 text-xs leading-6 text-slate-300">{count === 2 ? "Cleaner debate with one explainer and one challenger." : "Adds a third exam coach voice for more back-and-forth."}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs uppercase tracking-[0.22em] text-slate-400">Target Length</label>
+            <select value={podcastTargetMinutes} onChange={(event) => setPodcastTargetMinutes(Number(event.target.value) || 10)} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+              {[8, 10, 12, 14, 16].map((minutes) => <option key={minutes} value={minutes}>{minutes} minute podcast</option>)}
+            </select>
+            <p className="mt-3 text-xs leading-6 text-slate-300">Longer topics can run past 10 minutes, and the download will use the podcast topic as the filename.</p>
+          </div>
+        </div>
+      </div>
+
+      {podcastData.script ? (
+        <>
+          <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-xs uppercase tracking-[0.24em] text-amber-100/80">Current Podcast</p>
+                  <h4 className="phone-safe-copy mt-2 text-2xl font-semibold text-white">{podcastData.title || "Lecture Debate Podcast"}</h4>
+                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{podcastData.overview || "The debate overview will appear here once the podcast is ready."}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">About {podcastEstimatedMinutes} min</div>
+                  <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastSpeakerCount} voices</div>
+                  <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.segments.length} debate turns</div>
+                </div>
+              </div>
+              {activePodcastSegment?.objectUrl ? (
+                <div className="mt-5 rounded-[24px] border border-amber-300/15 bg-amber-300/10 p-4">
+                  <div className="force-mobile-stack flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.22em] text-amber-100/80">Now Playing</p>
+                      <h5 className="mt-2 text-xl font-semibold text-white">{activePodcastSegment.speaker_name}</h5>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">{activePodcastSegment.speaker_role}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); setActivePodcastSegmentIndex((current) => Math.max(0, current - 1)); }} disabled={activePodcastSegmentIndex === 0} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Previous</button>
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(true); podcastAudioRef.current?.play().catch(() => setIsPodcastAutoPlaying(false)); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isPodcastAutoPlaying ? "Playing Debate" : "Play Full Debate"}</button>
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); podcastAudioRef.current?.pause(); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); setActivePodcastSegmentIndex((current) => Math.min(podcastAudioSegments.length - 1, current + 1)); }} disabled={activePodcastSegmentIndex >= podcastAudioSegments.length - 1} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Next</button>
+                    </div>
+                  </div>
+                  <audio ref={podcastAudioRef} controls className="mt-4 w-full" src={activePodcastSegment.objectUrl} onEnded={() => {
+                    if (isPodcastAutoPlaying && activePodcastSegmentIndex < podcastAudioSegments.length - 1) {
+                      setActivePodcastSegmentIndex((current) => current + 1);
+                      return;
+                    }
+                    setIsPodcastAutoPlaying(false);
+                  }} />
+                  <p className="mt-3 text-xs text-slate-300">Segment {activePodcastSegmentIndex + 1} of {podcastAudioSegments.length}. The full audio download uses the current podcast topic as the filename.</p>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">The script is here, but the live audio is not attached right now. Generate the podcast again to rebuild the downloadable voice track.</div>
+              )}
+            </div>
+
+            <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Turn List</p>
+              <div className="mt-4 space-y-3">
+                {podcastData.segments.length ? podcastData.segments.map((segment, index) => <button key={`${segment.speaker_key}-${index}`} type="button" onClick={() => { setIsPodcastAutoPlaying(false); if (podcastAudioSegments[index]?.objectUrl) setActivePodcastSegmentIndex(index); }} className={`w-full rounded-2xl border px-4 py-4 text-left transition ${activePodcastSegmentIndex === index ? "border-amber-300/35 bg-amber-300/10" : "border-white/10 bg-white/[0.04] hover:bg-white/10"}`}><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-semibold text-white">{segment.speaker_name}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{segment.speaker_role}</p></div><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Turn {index + 1}</span></div><p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{segment.text}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Podcast turns will appear here after generation.</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className="notes-markdown phone-safe-copy rounded-[24px] border border-white/10 bg-black/60 p-5 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-amber-100 prose-li:text-slate-200">
+            <ReactMarkdown>{podcastData.script}</ReactMarkdown>
+          </div>
+        </>
+      ) : (
+        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Generate the podcast after loading your lecture material. The result will include an actual multi-voice debate, in-app playback, and a downloadable audio file named from the podcast topic.</div>
+      )}
+    </div>
+  );
+
   const clearSession = (message = "Please sign in again.") => {
     setAuthToken("");
     setAuthEmail("");
@@ -805,6 +1010,9 @@ export default function App() {
     setActiveRoomId("");
     setActiveRoom(null);
     setCollaborationRooms([]);
+    replacePodcastAudioSegments([]);
+    setActivePodcastSegmentIndex(0);
+    setIsPodcastAutoPlaying(false);
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
     setAuthMessage(message);
@@ -819,15 +1027,24 @@ export default function App() {
     }
     fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Session check failed.");
       if (cancelled) return;
+      if (response.status === 401) {
+        clearSession("Sign in to continue.");
+        setAuthChecked(true);
+        return;
+      }
+      if (!response.ok) {
+        setAuthChecked(true);
+        setAuthMessage(data.detail || "Using the saved session while the server reconnects.");
+        return;
+      }
       setAuthToken(token);
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
       setAuthChecked(true);
     }).catch(() => {
       if (cancelled) return;
-      clearSession("Sign in to continue.");
+      setAuthMessage("Using the saved session while the server finishes reconnecting.");
       setAuthChecked(true);
     });
     return () => {
@@ -853,6 +1070,22 @@ export default function App() {
     if (!authEmailInput.trim()) return;
     window.localStorage.setItem(REMEMBERED_EMAIL_KEY, authEmailInput.trim());
   }, [authEmailInput]);
+
+  useEffect(() => {
+    if (!authToken) return undefined;
+    const interval = window.setInterval(() => {
+      fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }).catch(() => {
+        // Keep the saved session locally if the server is temporarily unavailable.
+      });
+    }, 10 * 60 * 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [authToken]);
+
+  useEffect(() => () => {
+    revokePodcastAudioUrls(podcastAudioSegmentsRef.current);
+  }, []);
 
   const finishGoogleLogin = async (credential) => {
     setAuthMessage("");
@@ -1032,6 +1265,18 @@ export default function App() {
     Object.values(answerSyncTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
   }, []);
 
+  useEffect(() => {
+    if (!isPodcastAutoPlaying || !activePodcastSegment?.objectUrl || !podcastAudioRef.current) return;
+    const timerId = window.setTimeout(() => {
+      podcastAudioRef.current?.play().catch(() => {
+        setIsPodcastAutoPlaying(false);
+      });
+    }, 120);
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [activePodcastSegment?.objectUrl, activePodcastSegmentIndex, isPodcastAutoPlaying]);
+
   const getActiveContent = () => {
     if (activeTab === "guide") return formattedGuide || "No study guide generated yet.";
     if (activeTab === "transcript") return transcript || "No transcript generated yet.";
@@ -1039,6 +1284,7 @@ export default function App() {
     if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
     if (activeTab === "flashcards") return flashcardsToText(flashcards) || "No flashcards generated yet.";
     if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
+    if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
     if (activeTab === "chat") return chatToText(chatMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
   };
@@ -1051,6 +1297,7 @@ export default function App() {
     { title: "Worked Examples", content: formattedExample || example },
     { title: "Flashcards", content: flashcardsToText(flashcards) },
     { title: "Test", content: quizToText(quizQuestions) },
+    { title: "Podcast Debate Script", content: podcastData.script || "" },
     { title: "Study Chat", content: chatToText(chatMessages) },
   ].filter((section) => (section.content || "").trim());
 
@@ -1068,6 +1315,7 @@ export default function App() {
     setQuizQuestions(item.quizQuestions || []);
     setLectureNotes(item.lectureNotes || "");
     setLectureNotesFileName(item.lectureNotesFileName || "");
+    setPastQuestionMemo(item.pastQuestionMemo || "");
     setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
     setPastQuestionPaperSources(
       normalizeStudySourceEntries(
@@ -1077,6 +1325,12 @@ export default function App() {
         "PAST QUESTION PAPER",
       ),
     );
+    setPodcastData(normalizePodcastData(item.podcastData));
+    setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
+    setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
+    replacePodcastAudioSegments([]);
+    setActivePodcastSegmentIndex(0);
+    setIsPodcastAutoPlaying(false);
     setQuizAnswers({});
     setQuizAnswerImages({});
     setQuizResults({});
@@ -1096,6 +1350,12 @@ export default function App() {
     setExample("");
     setFlashcards([]);
     setQuizQuestions([]);
+    setPodcastData(createEmptyPodcastData());
+    setPodcastSpeakerCount(2);
+    setPodcastTargetMinutes(10);
+    replacePodcastAudioSegments([]);
+    setActivePodcastSegmentIndex(0);
+    setIsPodcastAutoPlaying(false);
     setQuizAnswers({});
     setQuizAnswerImages({});
     setQuizResults({});
@@ -1390,6 +1650,12 @@ export default function App() {
       setQuizAnswerImages({});
       setQuizResults({});
       setQuizSubmitted(false);
+      setPodcastData(createEmptyPodcastData());
+      setPodcastSpeakerCount(2);
+      setPodcastTargetMinutes(10);
+      replacePodcastAudioSegments([]);
+      setActivePodcastSegmentIndex(0);
+      setIsPodcastAutoPlaying(false);
       setUsedFallbackSummary(Boolean(job.used_fallback));
       setActiveTab("guide");
       setCurrentPage("workspace");
@@ -1418,15 +1684,137 @@ export default function App() {
         lectureSlides,
         lectureSlideFileNames,
         lectureSlideSources,
+        pastQuestionMemo,
         pastQuestionPapers,
         pastQuestionPaperFileNames,
         pastQuestionPaperSources,
+        podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
       });
     } catch (err) {
       setError(err.message || "Study guide generation failed.");
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
       setIsGeneratingSummary(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const loadPodcastAudioSegments = async (jobId, segments) => {
+    if (!jobId || !segments?.length) {
+      replacePodcastAudioSegments([]);
+      setActivePodcastSegmentIndex(0);
+      return;
+    }
+
+    setIsLoadingPodcastAudio(true);
+    setCurrentJobType("podcast");
+    try {
+      const nextSegments = [];
+      for (const [index, segment] of segments.entries()) {
+        setStatus(`Loading podcast audio ${index + 1} of ${segments.length}...`);
+        const response = await authFetch(`/jobs/${jobId}/podcast-audio/${index}`);
+        if (!response.ok) {
+          const data = await parseJsonSafe(response);
+          throw new Error(data.detail || "Could not load the podcast audio.");
+        }
+        const blob = await response.blob();
+        nextSegments.push({
+          ...segment,
+          objectUrl: window.URL.createObjectURL(blob),
+        });
+      }
+      replacePodcastAudioSegments(nextSegments);
+      setActivePodcastSegmentIndex(0);
+      setStatus("Podcast voices are ready to play.");
+    } catch (err) {
+      replacePodcastAudioSegments([]);
+      setActivePodcastSegmentIndex(0);
+      throw err;
+    } finally {
+      setIsLoadingPodcastAudio(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const generatePodcast = async () => {
+    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Generate a study guide or add lecture material before creating the podcast debate.");
+    }
+
+    setIsGeneratingPodcast(true);
+    setError("");
+    setStatus("Writing the podcast debate...");
+    setProgress(0);
+    setCurrentJobType("podcast");
+    setIsPodcastAutoPlaying(false);
+    replacePodcastAudioSegments([]);
+    setActivePodcastSegmentIndex(0);
+
+    try {
+      const response = await authFetch("/generate-podcast/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          speaker_count: podcastSpeakerCount,
+          target_minutes: podcastTargetMinutes,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Podcast generation failed.");
+      const job = await pollJob(data.job_id, "podcast");
+      const nextPodcastData = normalizePodcastData({
+        jobId: data.job_id,
+        title: job.podcast_title,
+        overview: job.podcast_overview,
+        script: job.podcast_script,
+        segments: job.podcast_segments,
+        speakerCount: podcastSpeakerCount,
+        targetMinutes: podcastTargetMinutes,
+      });
+      setPodcastData(nextPodcastData);
+      await loadPodcastAudioSegments(data.job_id, job.podcast_segments || []);
+      setActiveTab("podcast");
+      setCurrentPage("workspace");
+      setProgress(100);
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
+      addHistoryItem({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+        title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
+        fileName: sourceLabel,
+        summary,
+        transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources,
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources,
+        podcastData: sanitizePodcastForHistory(nextPodcastData),
+      });
+    } catch (err) {
+      setError(err.message || "Podcast generation failed.");
+      setStatus("Podcast generation failed.");
+    } finally {
+      setIsGeneratingPodcast(false);
       setCurrentJobType("");
     }
   };
@@ -1550,7 +1938,7 @@ export default function App() {
           flashcards,
           quiz_questions: selectedQuizQuestions,
           invited_emails: parseInviteEmails(roomInviteInput),
-          active_tab: activeTab,
+          active_tab: activeTab === "podcast" ? "guide" : activeTab,
           test_visibility: newRoomVisibility,
         }),
       });
@@ -1619,6 +2007,10 @@ export default function App() {
 
   const shareTabToRoom = async (tabId = activeTab) => {
     if (!activeRoomId) return;
+    if (tabId === "podcast") {
+      setError("Podcast Generator is personal for now, so it cannot be synced into the collaboration room yet.");
+      return;
+    }
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/active-tab`, {
         method: "POST",
@@ -1764,6 +2156,29 @@ export default function App() {
     }
   };
 
+  const downloadPodcastAudio = async () => {
+    if (!podcastData.jobId) return setError("Generate the podcast again to download the audio.");
+    try {
+      const response = await authFetch(`/jobs/${podcastData.jobId}/podcast-download`);
+      if (!response.ok) {
+        const data = await parseJsonSafe(response);
+        throw new Error(data.detail || "Could not download the podcast audio.");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${sanitizeFileName(podcastData.title || extractHistoryTitle(summary, workspaceFileLabel) || "lecture-podcast")}.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setStatus("Podcast audio downloaded.");
+    } catch (err) {
+      setError(err.message || "Could not download the podcast audio.");
+    }
+  };
+
   const downloadHistoryItemPdf = async (item) => {
     try {
       await exportPdf(item.title || item.fileName || "Saved lecture", [
@@ -1774,6 +2189,7 @@ export default function App() {
         { title: "Worked Examples", content: item.example || "" },
         { title: "Flashcards", content: flashcardsToText(item.flashcards || []) },
         { title: "Test", content: quizToText(item.quizQuestions || []) },
+        { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
     } catch (err) {
@@ -1985,11 +2401,11 @@ export default function App() {
               </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO.AI</p>
               <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI is an AI lecture transcription and study tool for students.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record lectures, add notes, slides, and past question papers, and turn class material into transcripts, study guides, flashcards, worked examples, quizzes, and collaboration-ready revision rooms.</p>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record lectures, add notes, slides, and past question papers, and turn class material into transcripts, study guides, flashcards, worked examples, quizzes, podcast debates, and collaboration-ready revision rooms.</p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">AI lecture transcription</div>
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Study guides and summaries</div>
-                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Flashcards, tests, past papers, and collaboration</div>
+                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Flashcards, tests, podcasts, past papers, and collaboration</div>
               </div>
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
@@ -2048,7 +2464,7 @@ export default function App() {
             <div className="space-y-6">
               <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
               <h1 className="text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Capture the lecture first, then move into the study workspace.</h1>
-              <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes, slides, and past question papers, then generate the full study pack. The phone layout keeps the source uploads above the larger action buttons so it is easier to tap through each step.</p>
+              <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes, slides, and past question papers, then generate the full study pack. The phone layout keeps the source uploads above the larger action buttons so it is easier to tap through each step, including podcast generation later in the workspace.</p>
             </div>
 
             <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
@@ -2086,10 +2502,24 @@ export default function App() {
               <div className="mt-5 grid gap-4 xl:grid-cols-3">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNotesFileName || (lectureNotes.trim() ? "Notes added" : "No notes added yet")}</p></div>
                 <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add More</span></button></div>{lectureSlideSources.length ? <div className="mt-4 grid gap-3">{lectureSlideSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removeLectureSlideSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "SLIDE SOURCE"}</p></div>)}</div> : null}</div>
-                <div className="rounded-2xl border border-amber-300/15 bg-amber-400/10 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-amber-100/80">Past Question Papers</p><p className="mt-3 text-sm font-semibold text-white">{pastQuestionPaperFileNames.length ? `${pastQuestionPaperFileNames.length} paper${pastQuestionPaperFileNames.length === 1 ? "" : "s"} added` : "No past papers added yet"}</p></div><button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-amber-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-amber-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-400/20 text-base font-bold text-amber-100">+</span><span>Add Paper</span></button></div>{pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-amber-100/80">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : null}</div>
+                <div className="rounded-2xl border border-amber-300/15 bg-amber-400/10 p-4">
+                  <div className="force-mobile-stack flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.24em] text-amber-100/80">Past Question Papers</p>
+                      <p className="mt-3 text-sm font-semibold text-white">{pastQuestionPaperFileNames.length ? `${pastQuestionPaperFileNames.length} paper${pastQuestionPaperFileNames.length === 1 ? "" : "s"} added` : "No past papers added yet"}</p>
+                    </div>
+                    <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-amber-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-amber-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-400/20 text-base font-bold text-amber-100">+</span><span>Add Paper</span></button>
+                  </div>
+                  {pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-amber-100/80">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : null}
+                  <div className="mt-4">
+                    <label className="block text-xs uppercase tracking-[0.22em] text-amber-100/80">Memo / Marking Guide</label>
+                    <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, model answers, or marking guide here. It will be used as an extra reference for study-guide and test generation." />
+                    <p className="mt-3 text-xs leading-6 text-slate-300">Useful when you want the generated notes and test to match the same style, answers, and mark logic.</p>
+                  </div>
+                </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 min-h-[150px] rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
@@ -2116,8 +2546,40 @@ export default function App() {
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Lecture notes: {lectureNotes.trim() ? lectureNotesFileName || "Added" : "Not added"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Slide sources: {lectureSlideFileNames.length || 0}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Past papers: {pastQuestionPaperFileNames.length || 0}</div>
+                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Memo reference: {pastQuestionMemo.trim() ? "Added" : "Not added"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
+                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Podcast ready: {podcastData.script ? "Yes" : "Not yet"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces: {historyItems.length}</div>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-emerald-300/15 bg-emerald-300/8 p-5">
+                <p className="text-xs uppercase tracking-[0.3em] text-emerald-100/80">Study Packs</p>
+                <h4 className="mt-2 text-2xl font-semibold text-white">Access the pack from here too.</h4>
+                <p className="mt-3 text-sm leading-7 text-slate-200">The main toolbar still works, and this sidebar gives you the same study-pack shortcuts without removing the old ones.</p>
+                <div className="mt-5 space-y-3">
+                  <button type="button" onClick={downloadFullStudyPackPdf} disabled={!hasResults} className="w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-left text-sm font-semibold text-white disabled:opacity-50">Download full study pack PDF</button>
+                  <button type="button" onClick={downloadActiveContent} disabled={!canExportCurrent} className="w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-left text-sm font-semibold text-white disabled:opacity-50">Download current section PDF</button>
+                  <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="w-full rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-left text-sm font-semibold text-amber-50 disabled:opacity-50">Download podcast audio</button>
+                  <button type="button" onClick={() => setCurrentPage("capture")} className="w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-left text-sm font-semibold text-white">Go back to sources</button>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Help & About</p>
+                <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4">
+                    <p className="font-semibold text-white">About MABASO</p>
+                    <p className="mt-2">MABASO turns lecture material into notes, tests, flashcards, podcasts, and collaboration-ready study packs.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4">
+                    <p className="font-semibold text-white">Quick help</p>
+                    <p className="mt-2">Best results usually come from combining transcript, lecture notes, slide extracts, past papers, and the memo or marking guide.</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4">
+                    <p className="font-semibold text-white">Recommended workflow</p>
+                    <p className="mt-2">Generate the study guide first, review the worked examples, then use the podcast and the test for active revision.</p>
+                  </div>
                 </div>
               </div>
             </aside>
@@ -2132,7 +2594,8 @@ export default function App() {
                 <button type="button" onClick={downloadActiveContent} disabled={!canExportCurrent} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">Download Section PDF</button>
                 <button type="button" onClick={downloadFullStudyPackPdf} disabled={!hasResults} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Download Full PDF</button>
                 {activeTab === "quiz" ? <button type="button" onClick={downloadQuizPdf} disabled={!selectedQuizQuestions.length} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">Download Test PDF</button> : null}
-                {activeRoom ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
+                {activeTab === "podcast" ? <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-4 py-2 text-sm text-amber-50 disabled:opacity-50">Download Podcast Audio</button> : null}
+                {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
                 <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
               </div>
 
@@ -2158,6 +2621,7 @@ export default function App() {
                   scoreValue: score,
                   scopeId: "workspace",
                 }) : null}
+                {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
