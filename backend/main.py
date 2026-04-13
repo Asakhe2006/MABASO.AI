@@ -134,7 +134,7 @@ jobs: dict[str, dict] = {}
 STUDY_GUIDE_PROMPT = """
 You are an expert academic assistant for university students.
 
-Convert the transcript into concise, high-value study notes.
+Convert the available lecture material into concise, high-value study notes.
 Keep the response practical and faster to generate than a long textbook rewrite.
 
 Return clean Markdown with these sections:
@@ -196,6 +196,8 @@ Rules:
   A: ...
 - Leave a blank line between Q and A, and a blank line between flashcards so they are easy to read.
 - If lecture notes or lecture slides are provided together with the transcript, use all sources together. Prefer explicit formulas, worked examples, definitions, and likely assessment points from the slides or notes when they improve clarity.
+- If past question papers are provided, use them as an assessment reference. Infer recurring topics, phrasing style, and mark patterns from them, but do not copy their questions verbatim.
+- If the transcript is missing but lecture notes, lecture slides, or past question papers are provided, still generate the study guide from those sources and mention when the source material is limited.
 - If the lecture skips steps, fill in only the most important missing steps.
 - If a topic is unclear, say "Not clearly covered in transcript".
 - Do not include YouTube links or long export suggestions.
@@ -206,6 +208,7 @@ class StudyGuideRequest(BaseModel):
     transcript: str
     lecture_notes: str = ""
     lecture_slides: str = ""
+    past_question_papers: str = ""
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -236,6 +239,7 @@ class StudyChatRequest(BaseModel):
     summary: str = ""
     lecture_notes: str = ""
     lecture_slides: str = ""
+    past_question_papers: str = ""
     history: list[ChatTurn] = []
     reference_images: list[str] = []
 
@@ -764,6 +768,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         trimmed_block("STUDY GUIDE", payload.summary, section_limit),
         trimmed_block("LECTURE NOTES", payload.lecture_notes, section_limit),
         trimmed_block("LECTURE SLIDES", payload.lecture_slides, section_limit),
+        trimmed_block("PAST QUESTION PAPERS", payload.past_question_papers, section_limit),
         trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(4000, MAX_CHAT_CONTEXT_CHARS // 2)),
     ]
     context_text = "\n\n".join(part for part in context_parts if part).strip()
@@ -1664,6 +1669,15 @@ def cleanup_caption_files(prefix: str):
                 logger.warning("Could not delete subtitle artifact: %s", path)
 
 
+def cleanup_download_artifacts(prefix: str):
+    for path in UPLOAD_DIR.glob(f"{prefix}*"):
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                logger.warning("Could not delete download artifact: %s", path)
+
+
 def extract_json_object_from_text(source: str, marker: str) -> dict[str, Any] | None:
     marker_index = source.find(marker)
     if marker_index == -1:
@@ -1846,21 +1860,62 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         elif status == "finished":
             update_job(job_id, status="processing", stage="Video downloaded. Preparing audio", progress=18)
 
-    options = build_ytdlp_options(output_template=output_template, progress_hook=progress_hook)
-    options["format"] = "bestaudio/best"
-
     update_job(job_id, status="processing", stage="Connecting to the video link", progress=3)
-    with yt_dlp.YoutubeDL(options) as downloader:
-        info = downloader.extract_info(normalized_url, download=True)
-        requested_downloads = info.get("requested_downloads") or []
-        candidate_paths = [
-            Path(item["filepath"])
-            for item in requested_downloads
-            if isinstance(item, dict) and item.get("filepath")
-        ]
-        prepared_path = Path(downloader.prepare_filename(info))
-        if prepared_path not in candidate_paths:
-            candidate_paths.append(prepared_path)
+    candidate_paths: list[Path] = []
+    last_error = ""
+    download_attempts = [
+        {
+            "format": "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best",
+            "drop_extractor_args": False,
+        },
+        {
+            "format": "best[acodec!=none]/best",
+            "drop_extractor_args": True,
+        },
+    ]
+
+    for attempt_index, attempt in enumerate(download_attempts, start=1):
+        cleanup_download_artifacts(download_prefix)
+        options = build_ytdlp_options(output_template=output_template, progress_hook=progress_hook)
+        options["format"] = attempt["format"]
+        if attempt["drop_extractor_args"]:
+            options.pop("extractor_args", None)
+            update_job(
+                job_id,
+                status="processing",
+                stage="Retrying video download with a fallback format",
+                progress=4,
+            )
+
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                info = downloader.extract_info(normalized_url, download=True)
+                requested_downloads = info.get("requested_downloads") or []
+                candidate_paths = [
+                    Path(item["filepath"])
+                    for item in requested_downloads
+                    if isinstance(item, dict) and item.get("filepath")
+                ]
+                prepared_path = Path(downloader.prepare_filename(info))
+                if prepared_path not in candidate_paths:
+                    candidate_paths.append(prepared_path)
+            last_error = ""
+            break
+        except Exception as exc:
+            last_error = str(exc).strip()
+            logger.info(
+                "Video download attempt %s failed for %s with format %s: %s",
+                attempt_index,
+                video_url,
+                attempt["format"],
+                exc,
+            )
+            candidate_paths = []
+            continue
+
+    if last_error:
+        cleanup_download_artifacts(download_prefix)
+        raise RuntimeError(last_error)
 
     candidates = [
         path
@@ -1909,7 +1964,7 @@ def require_ffprobe() -> str:
     return ffprobe_path
 
 
-def format_job_error(exc: Exception) -> str:
+def format_job_error(exc: Exception, source_url: str = "") -> str:
     if isinstance(exc, APIStatusError):
         return (
             f"OpenAI request failed with status {exc.status_code}. "
@@ -1919,11 +1974,29 @@ def format_job_error(exc: Exception) -> str:
         return "Processing timed out. Try again, compress the file, or use a shorter lecture segment."
     message = str(exc).strip()
     lowered = message.lower()
+    is_youtube_source = bool(source_url and extract_youtube_video_id(source_url))
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
+        if is_youtube_source:
+            return (
+                "This YouTube video blocked direct server-side download from the hosted backend. "
+                "Public captions are still checked first, but this video may need YOUTUBE_COOKIES_TXT or a YouTube proxy on Render."
+            )
         return (
-            "This YouTube video blocked direct server-side download from the hosted backend. "
-            "Public captions are still checked first, but this video may need YOUTUBE_COOKIES_TXT or a YouTube proxy on Render."
+            "This video host blocked direct server-side download from the hosted backend. "
+            "Try another public link, or upload the media file directly."
         )
+    if "requested format is not available" in lowered or "no video formats found" in lowered:
+        if is_youtube_source:
+            return (
+                "This YouTube link was reachable, but the hosted backend could not open a downloadable audio format for it. "
+                "Try another public YouTube URL, or upload the lecture file directly."
+            )
+        return (
+            "This video link was reachable, but the hosted backend could not open a downloadable audio format from that site. "
+            "Try another public link, or upload the media file directly."
+        )
+    if "unsupported url" in lowered:
+        return "That video site is not supported by the backend downloader yet. Try another public link or upload the file directly."
     return message or "An unexpected processing error occurred."
 
 
@@ -2629,8 +2702,17 @@ def extract_study_assets(summary: str) -> dict:
     }
 
 
-def determine_quiz_total_marks(summary: str, transcript: str, lecture_notes: str, lecture_slides: str) -> int:
-    combined_size = sum(len((value or "").strip()) for value in [summary, transcript, lecture_notes, lecture_slides])
+def determine_quiz_total_marks(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+) -> int:
+    combined_size = sum(
+        len((value or "").strip())
+        for value in [summary, transcript, lecture_notes, lecture_slides, past_question_papers]
+    )
     return 50 if combined_size >= 24000 else 40
 
 
@@ -2869,16 +2951,24 @@ async def generate_structured_study_assets(
     transcript: str,
     lecture_notes: str,
     lecture_slides: str,
+    past_question_papers: str,
     job_id: str,
 ) -> dict[str, Any]:
     fallback_assets = extract_study_assets(summary)
-    total_marks = determine_quiz_total_marks(summary, transcript, lecture_notes, lecture_slides)
+    total_marks = determine_quiz_total_marks(
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+    )
     blueprint = build_quiz_blueprint(total_marks)
 
     source_blocks = [
         trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
         trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
         f"QUIZ BLUEPRINT\n{json.dumps(blueprint, ensure_ascii=False, indent=2)}",
     ]
@@ -2902,6 +2992,7 @@ async def generate_structured_study_assets(
                         "- `worked_example` should be a clear step-by-step example in markdown.\n"
                         "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
                         "- `quiz_questions` must follow the blueprint exactly for question number, question type, and marks.\n"
+                        "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
                         "- Short-answer questions need `question`, `answer`, and `answer_points` for partial-credit marking.\n"
                         "- Multiple-choice group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
                         "- True/false group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
@@ -2943,11 +3034,13 @@ async def generate_study_guide(
     transcript: str,
     lecture_notes: str,
     lecture_slides: str,
+    past_question_papers: str,
     job_id: str,
 ) -> tuple[str, bool]:
     trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_slides = lecture_slides[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
+    trimmed_past_papers = past_question_papers[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
 
     if len(transcript) > MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS:
         trimmed_transcript += (
@@ -2965,16 +3058,24 @@ async def generate_study_guide(
             "\n\nNOTE: The lecture slides were shortened. Prioritize slide headings, formulas, worked examples, and assessment clues."
         )
 
+    if len(past_question_papers) > MAX_STUDY_GUIDE_INPUT_CHARS:
+        trimmed_past_papers += (
+            "\n\nNOTE: The past question papers were shortened. Prioritize recurring topics, command words, and mark allocations."
+        )
+
     user_content_parts = []
     if trimmed_notes:
         user_content_parts.append(f"LECTURER NOTES\n{trimmed_notes}")
     if trimmed_slides:
         user_content_parts.append(f"LECTURE SLIDES\n{trimmed_slides}")
-    user_content_parts.append(f"LECTURE TRANSCRIPT\n{trimmed_transcript}")
+    if trimmed_past_papers:
+        user_content_parts.append(f"PAST QUESTION PAPERS\n{trimmed_past_papers}")
+    if trimmed_transcript:
+        user_content_parts.append(f"LECTURE TRANSCRIPT\n{trimmed_transcript}")
     combined_user_content = "\n\n".join(user_content_parts)
 
     def _generate() -> str:
-        update_job(job_id, status="processing", stage="Preparing transcript for notes", progress=20)
+        update_job(job_id, status="processing", stage="Preparing study material for notes", progress=20)
         response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
             model=STUDY_GUIDE_MODEL,
             max_completion_tokens=MAX_COMPLETION_TOKENS,
@@ -2994,7 +3095,9 @@ async def generate_study_guide(
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
         fallback_source = "\n\n".join(
-            part for part in [lecture_notes.strip(), lecture_slides.strip(), transcript.strip()] if part
+            part
+            for part in [lecture_notes.strip(), lecture_slides.strip(), past_question_papers.strip(), transcript.strip()]
+            if part
         )
         cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source)))
         return add_student_support_sections(cleaned_summary), True
@@ -3035,27 +3138,28 @@ async def run_video_transcription_job(job_id: str, video_url: str):
     file_path: Path | None = None
     try:
         update_job(job_id, status="processing", stage="Video link received", progress=1)
-        transcript = await asyncio.to_thread(fetch_youtube_transcript, video_url, job_id)
-        if transcript:
-            update_job(
-                job_id,
-                status="completed",
-                stage="Video transcription completed",
-                progress=100,
-                transcript=transcript,
-            )
-            return
+        if extract_youtube_video_id(video_url):
+            transcript = await asyncio.to_thread(fetch_youtube_transcript, video_url, job_id)
+            if transcript:
+                update_job(
+                    job_id,
+                    status="completed",
+                    stage="Video transcription completed",
+                    progress=100,
+                    transcript=transcript,
+                )
+                return
 
-        transcript = await asyncio.to_thread(fetch_youtube_watch_page_captions, video_url, job_id)
-        if transcript:
-            update_job(
-                job_id,
-                status="completed",
-                stage="Video transcription completed",
-                progress=100,
-                transcript=transcript,
-            )
-            return
+            transcript = await asyncio.to_thread(fetch_youtube_watch_page_captions, video_url, job_id)
+            if transcript:
+                update_job(
+                    job_id,
+                    status="completed",
+                    stage="Video transcription completed",
+                    progress=100,
+                    transcript=transcript,
+                )
+                return
 
         transcript = await asyncio.to_thread(download_subtitles_from_video_url, video_url, job_id)
         if transcript:
@@ -3095,7 +3199,7 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             status="failed",
             stage="Video transcription failed",
             progress=100,
-            error=format_job_error(exc),
+            error=format_job_error(exc, video_url),
         )
     finally:
         if file_path and file_path.exists():
@@ -3105,11 +3209,30 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                 logger.warning("Could not delete downloaded video audio: %s", file_path)
 
 
-async def run_summary_job(job_id: str, transcript: str, lecture_notes: str, lecture_slides: str):
+async def run_summary_job(
+    job_id: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
-        summary, used_fallback = await generate_study_guide(transcript, lecture_notes, lecture_slides, job_id)
-        assets = await generate_structured_study_assets(summary, transcript, lecture_notes, lecture_slides, job_id)
+        summary, used_fallback = await generate_study_guide(
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            job_id,
+        )
+        assets = await generate_structured_study_assets(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            job_id,
+        )
         update_job(
             job_id,
             status="completed",
@@ -3246,8 +3369,14 @@ async def extract_slide_text(file: UploadFile = File(...), current_user: str = D
 @app.post("/generate-study-guide/")
 async def create_study_guide(payload: StudyGuideRequest, current_user: str = Depends(require_authenticated_user)):
     transcript = payload.transcript.strip()
-    if not transcript:
-        raise HTTPException(status_code=400, detail="Transcript is required to generate a study guide.")
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a transcript, notes, slides, or past question paper before generating a study guide.",
+        )
 
     ensure_openai_key()
     job_id = create_job("study_guide", owner_email=current_user)
@@ -3255,8 +3384,9 @@ async def create_study_guide(payload: StudyGuideRequest, current_user: str = Dep
         run_summary_job(
             job_id,
             transcript,
-            payload.lecture_notes.strip(),
-            payload.lecture_slides.strip(),
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
         )
     )
     return {"job_id": job_id}

@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+function resolveApiBaseUrl() {
+  const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
+  if (configuredUrl) return configuredUrl.replace(/\/+$/, "");
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname || "";
+    if (host === "localhost" || host === "127.0.0.1") return "http://127.0.0.1:8000";
+    if (host.endsWith(".onrender.com")) return "https://mabaso-ai-api.onrender.com";
+  }
+  return "http://127.0.0.1:8000";
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 const JOB_POLL_INTERVAL_MS = 2000;
 const ROOM_REFRESH_INTERVAL_MS = 5000;
@@ -101,6 +112,80 @@ function formatVideoSourceLabel(urlValue) {
   } catch {
     return urlValue.slice(0, 80);
   }
+}
+
+function getPrimarySourceLabel({
+  fileName = "",
+  historyFileName = "",
+  videoUrl = "",
+  lectureNotesFileName = "",
+  lectureSlideFileNames = [],
+  pastQuestionPaperFileNames = [],
+} = {}) {
+  return fileName
+    || historyFileName
+    || formatVideoSourceLabel(videoUrl)
+    || lectureNotesFileName
+    || lectureSlideFileNames[0]
+    || pastQuestionPaperFileNames[0]
+    || "Saved lecture";
+}
+
+function createStudySourceEntry(name, text, prefix) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: (name || prefix || "Study source").trim() || "Study source",
+    text: (text || "").trim(),
+    prefix: prefix || "STUDY SOURCE",
+  };
+}
+
+function normalizeStudySourceEntries(entries, fallbackText = "", fallbackNames = [], defaultPrefix = "STUDY SOURCE") {
+  const normalizedEntries = Array.isArray(entries)
+    ? entries
+      .map((entry) => ({
+        id: entry?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: (entry?.name || defaultPrefix).trim() || defaultPrefix,
+        text: (entry?.text || "").trim(),
+        prefix: entry?.prefix || defaultPrefix,
+      }))
+      .filter((entry) => entry.text)
+    : [];
+
+  if (normalizedEntries.length) return normalizedEntries;
+
+  const cleanedFallbackText = (fallbackText || "").trim();
+  if (!cleanedFallbackText) return [];
+
+  return [
+    createStudySourceEntry(
+      (fallbackNames || []).find(Boolean) || `${defaultPrefix.toLowerCase().replace(/\s+/g, "-")}.txt`,
+      cleanedFallbackText,
+      defaultPrefix,
+    ),
+  ];
+}
+
+function mergeStudySourceEntries(currentEntries, incomingEntries) {
+  const nextEntries = [...(currentEntries || [])];
+  for (const entry of incomingEntries || []) {
+    const existingIndex = nextEntries.findIndex((item) => item.name === entry.name);
+    if (existingIndex >= 0) nextEntries[existingIndex] = entry;
+    else nextEntries.push(entry);
+  }
+  return nextEntries;
+}
+
+function studySourceEntriesToText(entries, defaultPrefix = "STUDY SOURCE") {
+  return (entries || [])
+    .map((entry) => {
+      const name = (entry?.name || "").trim();
+      const text = (entry?.text || "").trim();
+      if (!text) return "";
+      return `${entry?.prefix || defaultPrefix}: ${name || defaultPrefix}\n${text}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function quizToText(questions) {
@@ -203,7 +288,9 @@ function getErrorHint(message) {
   if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
   if (text.includes("ffmpeg")) return "Install ffmpeg on the backend server for larger files.";
   if (text.includes("blocked direct server-side download")) return "Try a video with public captions, or upload the lecture file directly.";
-  if (text.includes("yt-dlp") || text.includes("video-link transcription")) return "Install yt-dlp on the backend, or use a YouTube link with public captions.";
+  if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
+    return "Try another public video link, or upload the lecture file directly. YouTube links may also need public captions or working backend cookies.";
+  }
   if (text.includes("smtp")) return "Configure SMTP variables so verification codes can be sent.";
   if (text.includes("timed out")) return "Try again or split a very long lecture into smaller sections.";
   return "Check the backend logs for the exact failing stage.";
@@ -307,8 +394,8 @@ export default function App() {
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [lectureNotes, setLectureNotes] = useState("");
   const [lectureNotesFileName, setLectureNotesFileName] = useState("");
-  const [lectureSlides, setLectureSlides] = useState("");
-  const [lectureSlideFileNames, setLectureSlideFileNames] = useState([]);
+  const [lectureSlideSources, setLectureSlideSources] = useState([]);
+  const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
@@ -320,6 +407,7 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
+  const [isExtractingPastPapers, setIsExtractingPastPapers] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizAnswerImages, setQuizAnswerImages] = useState({});
   const [quizResults, setQuizResults] = useState({});
@@ -352,6 +440,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const lectureNotesFileInputRef = useRef(null);
   const lectureSlidesFileInputRef = useRef(null);
+  const pastQuestionPaperFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -359,8 +448,12 @@ export default function App() {
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
 
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isExtractingSlides;
-  const hasTranscript = Boolean(transcript);
+  const lectureSlides = studySourceEntriesToText(lectureSlideSources, "SLIDE SOURCE");
+  const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
+  const pastQuestionPapers = studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER");
+  const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isExtractingSlides || isExtractingPastPapers;
+  const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length);
   const selectedQuizQuestions = quizQuestions;
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
@@ -374,7 +467,14 @@ export default function App() {
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeStepIndex = currentPage === "capture" ? 1 : currentPage === "workspace" ? 2 : 3;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
-  const workspaceFileLabel = file?.name || activeHistoryItem?.fileName || formatVideoSourceLabel(videoUrl) || "No lecture selected";
+  const workspaceFileLabel = getPrimarySourceLabel({
+    fileName: file?.name || "",
+    historyFileName: activeHistoryItem?.fileName || "",
+    videoUrl,
+    lectureNotesFileName,
+    lectureSlideFileNames,
+    pastQuestionPaperFileNames,
+  });
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
@@ -399,7 +499,7 @@ export default function App() {
         <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">History</p><h2 className="mt-2 text-3xl font-semibold text-white">Saved workspaces on this device.</h2></div>
         <div className="force-mobile-stack flex flex-wrap gap-3"><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div><button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button></div>
       </div>
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
     </section>
   ) : null;
 
@@ -436,9 +536,12 @@ export default function App() {
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalMarks} total marks</div>
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten photos stay only on written questions.</div>
           {hasRoomVisibility ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Room test mode: {visibilityLabel}</div> : null}
+          {scopeId === "workspace" ? <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Past Paper</button> : null}
           <button type="button" onClick={onMark} disabled={!questions.length || isMarking} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarking ? "Marking..." : "Mark Test"}</button>
           {submitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {scoreValue} / {totalMarks}</div> : null}
         </div>
+
+        {scopeId === "workspace" ? <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p><p className="mt-2 text-sm leading-7 text-slate-200">Add a past paper here if you want the next study-guide generation to shape both the notes and the test around older question style and likely topics.</p></div>{pastQuestionPaperSources.length ? <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Notes + Test"}</button> : null}</div>{pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3 sm:grid-cols-2">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : <p className="mt-4 text-sm text-slate-300">No past question paper added yet.</p>}</div> : null}
 
         {hasRoomVisibility ? <div className="mb-5 rounded-2xl border border-emerald-300/15 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50"><p className="font-semibold">{visibilityLabel}</p><p className="mt-2 text-emerald-100/80">{visibilityDescription}</p>{ownerControls ? <div className="mt-4">{ownerControls}</div> : ownerNotice ? <p className="mt-3 text-emerald-100/80">{ownerNotice}</p> : null}</div> : null}
 
@@ -943,12 +1046,13 @@ export default function App() {
   const buildCurrentStudyPackSections = () => [
     { title: "Study Guide", content: formattedGuide || summary },
     { title: "Transcript", content: transcript },
+    { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
     { title: "Worked Examples", content: formattedExample || example },
     { title: "Flashcards", content: flashcardsToText(flashcards) },
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "Study Chat", content: chatToText(chatMessages) },
-  ];
+  ].filter((section) => (section.content || "").trim());
 
   const addHistoryItem = (item) => {
     setHistoryItems((current) => [item, ...current].slice(0, MAX_HISTORY_ITEMS));
@@ -964,8 +1068,15 @@ export default function App() {
     setQuizQuestions(item.quizQuestions || []);
     setLectureNotes(item.lectureNotes || "");
     setLectureNotesFileName(item.lectureNotesFileName || "");
-    setLectureSlides(item.lectureSlides || "");
-    setLectureSlideFileNames(item.lectureSlideFileNames || []);
+    setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
+    setPastQuestionPaperSources(
+      normalizeStudySourceEntries(
+        item.pastQuestionPaperSources,
+        item.pastQuestionPapers,
+        item.pastQuestionPaperFileNames,
+        "PAST QUESTION PAPER",
+      ),
+    );
     setQuizAnswers({});
     setQuizAnswerImages({});
     setQuizResults({});
@@ -1066,6 +1177,42 @@ export default function App() {
     }
   };
 
+  const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix }) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return { extractedEntries: [], addedNames: [] };
+
+    const extractedEntries = [];
+    const addedNames = [];
+    for (const [index, selectedFile] of files.entries()) {
+      const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
+      setProgress(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
+      setStatus(`Reading ${sourceName} ${index + 1} of ${files.length}: ${selectedFile.name}`);
+      if (isTextFile) {
+        const text = await selectedFile.text();
+        if (text.trim()) {
+          extractedEntries.push(createStudySourceEntry(selectedFile.name, text.trim(), sourcePrefix));
+          addedNames.push(selectedFile.name);
+        }
+        continue;
+      }
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const response = await authFetch("/extract-slide-text/", { method: "POST", body: formData });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
+      if (data.text?.trim()) {
+        extractedEntries.push(createStudySourceEntry(selectedFile.name, data.text.trim(), sourcePrefix));
+        addedNames.push(selectedFile.name);
+      }
+    }
+
+    if (!extractedEntries.length) {
+      throw new Error(`No readable ${sourceName} content could be extracted.`);
+    }
+
+    return { extractedEntries, addedNames };
+  };
+
   const handleLectureSlidesFilesChange = async (selectedFiles) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return;
@@ -1075,33 +1222,11 @@ export default function App() {
     setStatus("Reading slide sources...");
     setProgress(10);
     try {
-      const extractedParts = [];
-      const addedNames = [];
-      for (const [index, selectedFile] of files.entries()) {
-        const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
-        setProgress(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
-        setStatus(`Reading slide source ${index + 1} of ${files.length}: ${selectedFile.name}`);
-        if (isTextFile) {
-          const text = await selectedFile.text();
-          if (text.trim()) {
-            extractedParts.push(`SLIDE SOURCE: ${selectedFile.name}\n${text.trim()}`);
-            addedNames.push(selectedFile.name);
-          }
-          continue;
-        }
-        const formData = new FormData();
-        formData.append("file", selectedFile);
-        const response = await authFetch("/extract-slide-text/", { method: "POST", body: formData });
-        const data = await parseJsonSafe(response);
-        if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
-        if (data.text?.trim()) {
-          extractedParts.push(`SLIDE SOURCE: ${selectedFile.name}\n${data.text.trim()}`);
-          addedNames.push(selectedFile.name);
-        }
-      }
-      if (!extractedParts.length) throw new Error("No readable slide content could be extracted.");
-      setLectureSlides((current) => [current.trim(), extractedParts.join("\n\n")].filter(Boolean).join("\n\n"));
-      setLectureSlideFileNames((current) => Array.from(new Set([...current, ...addedNames])));
+      const { extractedEntries, addedNames } = await extractStudySourceFiles(files, {
+        sourceName: "slide source",
+        sourcePrefix: "SLIDE SOURCE",
+      });
+      setLectureSlideSources((current) => mergeStudySourceEntries(current, extractedEntries));
       setStatus(`${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.`);
       setProgress(100);
     } catch (err) {
@@ -1112,6 +1237,44 @@ export default function App() {
       setCurrentJobType("");
       setProgress(0);
     }
+  };
+
+  const handlePastQuestionPapersFilesChange = async (selectedFiles) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return;
+    setIsExtractingPastPapers(true);
+    setCurrentJobType("past_papers");
+    setError("");
+    setStatus("Reading past question papers...");
+    setProgress(10);
+    try {
+      const { extractedEntries, addedNames } = await extractStudySourceFiles(files, {
+        sourceName: "past question paper",
+        sourcePrefix: "PAST QUESTION PAPER",
+      });
+      setPastQuestionPaperSources((current) => mergeStudySourceEntries(current, extractedEntries));
+      setStatus(
+        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added. Generate the study guide again to refresh notes and test questions with this reference.`,
+      );
+      setProgress(100);
+    } catch (err) {
+      setError(err.message || "Past question paper reading failed.");
+      setStatus("Past question paper reading failed.");
+    } finally {
+      setIsExtractingPastPapers(false);
+      setCurrentJobType("");
+      setProgress(0);
+    }
+  };
+
+  const removeLectureSlideSource = (sourceId) => {
+    setLectureSlideSources((current) => current.filter((item) => item.id !== sourceId));
+    setStatus("Slide source removed.");
+  };
+
+  const removePastQuestionPaperSource = (sourceId) => {
+    setPastQuestionPaperSources((current) => current.filter((item) => item.id !== sourceId));
+    setStatus("Past question paper removed.");
   };
 
   const handleChatReferenceFilesChange = async (selectedFiles) => {
@@ -1192,8 +1355,11 @@ export default function App() {
     }
   };
 
-  const generateStudyGuide = async (transcriptText) => {
-    if (!transcriptText.trim()) return setError("Transcript is empty, so a study guide cannot be generated yet.");
+  const generateStudyGuide = async (transcriptText = transcript) => {
+    const resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
+    if (!(resolvedTranscript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
+    }
     setIsGeneratingSummary(true);
     setError("");
     setUsedFallbackSummary(false);
@@ -1205,7 +1371,12 @@ export default function App() {
       const response = await authFetch("/generate-study-guide/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: transcriptText, lecture_notes: lectureNotes, lecture_slides: lectureSlides }),
+        body: JSON.stringify({
+          transcript: resolvedTranscript,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+        }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Study guide generation failed.");
@@ -1224,14 +1395,20 @@ export default function App() {
       setCurrentPage("workspace");
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
-      const sourceLabel = file?.name || formatVideoSourceLabel(videoUrl) || "Saved lecture";
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
       addHistoryItem({
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt: new Date().toISOString(),
         title: extractHistoryTitle(job.summary || "", sourceLabel),
         fileName: sourceLabel,
         summary: job.summary || "",
-        transcript: job.transcript || transcriptText,
+        transcript: job.transcript || resolvedTranscript,
         formula: job.formula || "",
         example: job.worked_example || "",
         flashcards: job.flashcards || [],
@@ -1240,10 +1417,14 @@ export default function App() {
         lectureNotesFileName,
         lectureSlides,
         lectureSlideFileNames,
+        lectureSlideSources,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources,
       });
     } catch (err) {
       setError(err.message || "Study guide generation failed.");
-      setStatus("Transcript ready. Study guide generation failed.");
+      setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
       setIsGeneratingSummary(false);
       setCurrentJobType("");
@@ -1327,6 +1508,7 @@ export default function App() {
           summary,
           lecture_notes: lectureNotes,
           lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
           history: chatMessages.slice(-6),
           reference_images: chatReferenceImages.map((item) => item.dataUrl),
         }),
@@ -1587,6 +1769,7 @@ export default function App() {
       await exportPdf(item.title || item.fileName || "Saved lecture", [
         { title: "Study Guide", content: item.summary || "" },
         { title: "Transcript", content: item.transcript || "" },
+        { title: "Past Question Paper References", content: item.pastQuestionPapers || "" },
         { title: "Formulas", content: item.formula || "" },
         { title: "Worked Examples", content: item.example || "" },
         { title: "Flashcards", content: flashcardsToText(item.flashcards || []) },
@@ -1773,8 +1956,6 @@ export default function App() {
   };
 
   const score = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
-  const totalQuizMarks = getTotalQuizMarks(selectedQuizQuestions);
-
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -1803,8 +1984,13 @@ export default function App() {
                 {progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === 0 ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}
               </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO.AI</p>
-              <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Sign in, capture the lecture, then open the study workspace.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">The workspace is now split into clear steps so students do not land in crowded screens on phones before the lecture is ready.</p>
+              <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI is an AI lecture transcription and study tool for students.</h1>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record lectures, add notes, slides, and past question papers, and turn class material into transcripts, study guides, flashcards, worked examples, quizzes, and collaboration-ready revision rooms.</p>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">AI lecture transcription</div>
+                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Study guides and summaries</div>
+                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Flashcards, tests, past papers, and collaboration</div>
+              </div>
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Google Access</p>
@@ -1838,50 +2024,58 @@ export default function App() {
       <main className="relative mx-auto max-w-7xl overflow-x-clip px-3 py-6 sm:px-6 lg:px-8">
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO.AI</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
-          <div className="force-mobile-stack flex flex-wrap items-center gap-3">
-            <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-full px-4 py-2 text-sm ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
-            <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
-            <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
-            <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
-            <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
+            <div className="hidden flex-wrap items-center gap-3 sm:flex">
+              <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-full px-4 py-2 text-sm ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
+              <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
+              <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap items-center gap-3">
+              <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
+              <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
+            </div>
           </div>
         </header>
-        <div className="mb-6 flex flex-wrap gap-3">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
+        <div className="mb-6 grid grid-cols-3 gap-3 sm:hidden">
+          <button type="button" onClick={() => setCurrentPage("capture")} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Capture</button>
+          <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
+          <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
+        </div>
+        <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
 
         {currentPage === "capture" ? <section className="mb-8 rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="grid gap-8 xl:grid-cols-[1fr_0.95fr]">
             <div className="space-y-6">
               <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
               <h1 className="text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Capture the lecture first, then move into the study workspace.</h1>
-              <p className="max-w-2xl text-sm leading-7 text-slate-300">This step is focused on uploading, recording, notes, slides, and processing so the phone layout stays lighter and nothing important gets cropped.</p>
+              <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes, slides, and past question papers, then generate the full study pack. The phone layout keeps the source uploads above the larger action buttons so it is easier to tap through each step.</p>
             </div>
 
             <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleFileChange(event.dataTransfer.files?.[0]); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
-                <div className="space-y-4">
+                <div className="space-y-5">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
-                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2></div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-60">Choose Lecture File</button>
-                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`rounded-full px-5 py-3 text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "bg-emerald-400/15 text-emerald-100"} disabled:opacity-60`}>{recording ? "Stop Recording" : "Record Live Lecture"}</button>
-                    <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Use Video Link</button>
+                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-7 text-slate-300">Upload sources first, then use the larger action buttons below to transcribe or generate the study pack.</p></div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-[48px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">Choose Lecture File</button>
+                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[48px] rounded-2xl px-4 py-3 text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}>{recording ? "Stop Recording" : "Record Live Lecture"}</button>
+                    <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="min-h-[48px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">Upload Notes</button>
+                    <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="min-h-[48px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Slides</button>
+                    <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="min-h-[48px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Past Paper</button>
+                    <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="min-h-[48px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Use Video Link</button>
                   </div>
                   <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
                     <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Video Link</p>
                     <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-                      <input ref={videoUrlInputRef} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none" placeholder="Paste a YouTube or video URL here" />
+                      <input ref={videoUrlInputRef} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none" placeholder="Paste a YouTube or public video URL here" />
                       <button type="button" onClick={transcribeVideoLink} disabled={loading || !videoUrl.trim()} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribingVideo ? "Reading Link..." : "Transcribe Video Link"}</button>
                     </div>
-                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video.</p>
+                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Non-YouTube public links are also supported when the backend can read them.</p>
                   </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Upload Notes</button>
-                    <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Slides</button>
-                  </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <button type="button" onClick={upload} disabled={loading || !file} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribing ? "Transcribing..." : isGeneratingSummary ? "Generating..." : "Transcribe Lecture"}</button>
-                    <button type="button" onClick={() => generateStudyGuide(transcript)} disabled={loading || !hasTranscript} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">{isGeneratingSummary ? "Generating Guide..." : "Generate Study Guide"}</button>
-                    <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Open Study Workspace</button>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[56px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-sm font-semibold text-white disabled:opacity-50">{isTranscribing ? "Transcribing..." : isGeneratingSummary ? "Generating..." : "Transcribe Lecture"}</button>
+                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[56px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingSummary ? "Generating Guide..." : "Generate Study Guide"}</button>
+                    <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className="min-h-[56px] rounded-[22px] border border-sky-300/25 bg-sky-400/15 px-5 py-4 text-sm font-semibold text-sky-50 disabled:opacity-50">Open Study Workspace</button>
                   </div>
                   <input ref={fileInputRef} type="file" accept="audio/*,video/*" className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />
                   <input ref={lectureNotesFileInputRef} type="file" accept=".txt,.md,.text" className="hidden" onChange={(event) => handleLectureNotesFileChange(event.target.files?.[0])} />
@@ -1889,12 +2083,13 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-4 xl:grid-cols-2">
+              <div className="mt-5 grid gap-4 xl:grid-cols-3">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNotesFileName || (lectureNotes.trim() ? "Notes added" : "No notes added yet")}</p></div>
-                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add PDF / PPTX</span></button></div>{lectureSlideFileNames.length ? <div className="mt-4 flex flex-wrap gap-2">{lectureSlideFileNames.slice(0, 4).map((name) => <span key={name} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{name}</span>)}{lectureSlideFileNames.length > 4 ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">+{lectureSlideFileNames.length - 4} more</span> : null}</div> : null}</div>
+                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add More</span></button></div>{lectureSlideSources.length ? <div className="mt-4 grid gap-3">{lectureSlideSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removeLectureSlideSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "SLIDE SOURCE"}</p></div>)}</div> : null}</div>
+                <div className="rounded-2xl border border-amber-300/15 bg-amber-400/10 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-amber-100/80">Past Question Papers</p><p className="mt-3 text-sm font-semibold text-white">{pastQuestionPaperFileNames.length ? `${pastQuestionPaperFileNames.length} paper${pastQuestionPaperFileNames.length === 1 ? "" : "s"} added` : "No past papers added yet"}</p></div><button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-amber-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-amber-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-400/20 text-base font-bold text-amber-100">+</span><span>Add Paper</span></button></div>{pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-amber-100/80">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : null}</div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 min-h-[150px] rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
@@ -1920,6 +2115,7 @@ export default function App() {
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Lecture file: {workspaceFileLabel}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Lecture notes: {lectureNotes.trim() ? lectureNotesFileName || "Added" : "Not added"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Slide sources: {lectureSlideFileNames.length || 0}</div>
+                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Past papers: {pastQuestionPaperFileNames.length || 0}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces: {historyItems.length}</div>
                 </div>
@@ -1970,6 +2166,18 @@ export default function App() {
         </section> : null}
 
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
+
+        <input
+          ref={pastQuestionPaperFileInputRef}
+          type="file"
+          accept="image/*,.txt,.md,.text,.pdf,.pptx"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            handlePastQuestionPapersFilesChange(event.target.files);
+            event.target.value = "";
+          }}
+        />
 
         {historyPanel}
         {collaborationHistoryPanel}
