@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import html
@@ -20,7 +21,7 @@ import subprocess
 import tempfile
 import textwrap
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -108,12 +109,17 @@ LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "90"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
+STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
+STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
+MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "4"))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
 PODCAST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
+SESSION_TOKEN_PREFIX = "mabaso.v1"
+WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
 YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
 YOUTUBE_USER_AGENT = os.getenv(
@@ -418,11 +424,86 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS revoked_sessions (
+                token_hash TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 def hash_value(value: str) -> str:
     payload = f"{APP_SECRET}:{value}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def encode_token_component(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_token_component(value: str) -> str:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(f"{value}{padding}".encode("ascii")).decode("utf-8")
+
+
+def is_signed_session_token(token: str) -> bool:
+    return bool(token and token.startswith(f"{SESSION_TOKEN_PREFIX}."))
+
+
+def build_signed_session_token(email: str, expires_at: datetime | None = None) -> str:
+    expiry = expires_at or (utc_now() + timedelta(days=SESSION_TTL_DAYS))
+    payload = json.dumps(
+        {
+            "email": email,
+            "exp": int(expiry.timestamp()),
+            "iat": int(utc_now().timestamp()),
+            "nonce": uuid4().hex,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    encoded_payload = encode_token_component(payload)
+    signature = hmac.new(
+        APP_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{SESSION_TOKEN_PREFIX}.{encoded_payload}.{signature}"
+
+
+def decode_signed_session_token(token: str) -> dict[str, Any] | None:
+    if not is_signed_session_token(token):
+        return None
+
+    parts = token.split(".")
+    if len(parts) != 4:
+        return None
+
+    _, version, encoded_payload, signature = parts
+    if version != "v1":
+        return None
+
+    expected_signature = hmac.new(
+        APP_SECRET.encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, signature):
+        return None
+
+    try:
+        payload = json.loads(decode_token_component(encoded_payload))
+    except (json.JSONDecodeError, UnicodeDecodeError, binascii.Error, ValueError):
+        return None
+
+    email = normalize_email(payload.get("email", ""))
+    expires_at = int(payload.get("exp", 0) or 0)
+    if not email or not expires_at:
+        return None
+    return {"email": email, "exp": expires_at}
 
 
 def normalize_email(email: str) -> str:
@@ -520,8 +601,25 @@ def create_login_code(email: str) -> str:
 
 
 def create_session(email: str) -> str:
-    raw_token = secrets.token_urlsafe(32)
+    raw_token = build_signed_session_token(email)
+    token_payload = decode_signed_session_token(raw_token) or {}
+    expires_at = datetime.fromtimestamp(
+        int(token_payload.get("exp", int((utc_now() + timedelta(days=SESSION_TTL_DAYS)).timestamp()))),
+        tz=timezone.utc,
+    ).isoformat()
     with get_db_connection() as connection:
+        existing_sessions = connection.execute(
+            "SELECT token_hash, expires_at FROM sessions WHERE email = ?",
+            (email,),
+        ).fetchall()
+        for session_row in existing_sessions:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO revoked_sessions (token_hash, expires_at, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (session_row["token_hash"], session_row["expires_at"], utc_now().isoformat()),
+            )
         connection.execute(
             "DELETE FROM sessions WHERE email = ?",
             (email,),
@@ -531,7 +629,7 @@ def create_session(email: str) -> str:
             INSERT INTO sessions (token_hash, email, expires_at, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (hash_value(raw_token), email, iso_in_future(days=SESSION_TTL_DAYS), utc_now().isoformat()),
+            (hash_value(raw_token), email, expires_at, utc_now().isoformat()),
         )
         connection.execute(
             "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
@@ -543,6 +641,16 @@ def create_session(email: str) -> str:
 def revoke_session(token: str):
     with get_db_connection() as connection:
         connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
+        payload = decode_signed_session_token(token)
+        if payload:
+            expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc).isoformat()
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO revoked_sessions (token_hash, expires_at, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (hash_value(token), expires_at, utc_now().isoformat()),
+            )
 
 
 def refresh_session_expiry(token_hash: str):
@@ -553,10 +661,20 @@ def refresh_session_expiry(token_hash: str):
         )
 
 
-def get_session_email(token: str) -> str | None:
-    if not token:
-        return None
+def is_session_revoked(token_hash: str) -> bool:
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM revoked_sessions WHERE expires_at <= ?",
+            (utc_now().isoformat(),),
+        )
+        row = connection.execute(
+            "SELECT 1 FROM revoked_sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    return bool(row)
 
+
+def get_legacy_session_email(token: str) -> str | None:
     token_hash = hash_value(token)
     with get_db_connection() as connection:
         row = connection.execute(
@@ -573,7 +691,48 @@ def get_session_email(token: str) -> str | None:
         return None
 
     refresh_session_expiry(token_hash)
-    return row["email"]
+    return normalize_email(row["email"])
+
+
+def get_session_email(token: str) -> str | None:
+    if not token:
+        return None
+
+    token_hash = hash_value(token)
+    if is_signed_session_token(token):
+        payload = decode_signed_session_token(token)
+        if not payload or is_session_revoked(token_hash):
+            return None
+
+        expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc)
+        if expires_at <= utc_now():
+            return None
+
+        email = normalize_email(payload["email"])
+        with get_db_connection() as connection:
+            connection.execute(
+                "DELETE FROM sessions WHERE expires_at <= ?",
+                (utc_now().isoformat(),),
+            )
+            matching_row = connection.execute(
+                "SELECT email, expires_at FROM sessions WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
+            if matching_row:
+                if normalize_email(matching_row["email"]) != email:
+                    return None
+                return email
+
+            superseded_row = connection.execute(
+                "SELECT token_hash FROM sessions WHERE email = ? AND expires_at > ? LIMIT 1",
+                (email, utc_now().isoformat()),
+            ).fetchone()
+
+        if superseded_row:
+            return None
+        return email
+
+    return get_legacy_session_email(token)
 
 
 def get_authorization_token(authorization: str | None) -> str:
@@ -772,6 +931,7 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "podcast_overview": "",
         "podcast_script": "",
         "podcast_segments": [],
+        "study_images": [],
         "_podcast_audio_files": [],
         "_podcast_download_file": "",
     }
@@ -1131,6 +1291,66 @@ def build_data_url(file_bytes: bytes, content_type: str | None, filename: str = 
     return f"data:{mime_type};base64,{encoded}"
 
 
+def normalize_zip_member_path(base_member: str, target: str) -> str:
+    combined_parts = list(PurePosixPath(base_member).parent.joinpath(target).parts)
+    normalized_parts: list[str] = []
+    for part in combined_parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if normalized_parts:
+                normalized_parts.pop()
+            continue
+        normalized_parts.append(part)
+    return "/".join(normalized_parts)
+
+
+def merge_text_blocks(blocks: list[str]) -> str:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for block in blocks:
+        cleaned = compact_text(block)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        merged.append(cleaned)
+    return "\n\n".join(merged).strip()
+
+
+def extract_text_from_embedded_image(image_bytes: bytes, filename: str) -> str:
+    content_type = mimetypes.guess_type(filename)[0] or "image/png"
+    image_data_url = build_data_url(image_bytes, content_type, filename)
+    return extract_slide_text_from_image(image_data_url, filename)
+
+
+def iter_pdf_page_images(page: Any) -> list[tuple[str, bytes]]:
+    images = getattr(page, "images", None) or []
+    extracted: list[tuple[str, bytes]] = []
+    for index, image in enumerate(images, start=1):
+        image_bytes = getattr(image, "data", None)
+        image_name = getattr(image, "name", "") or f"page-image-{index}.png"
+        if image_bytes:
+            extracted.append((image_name, image_bytes))
+    return extracted
+
+
+def extract_slide_image_text_blocks(image_items: list[tuple[str, bytes]], *, limit: int = 2) -> list[str]:
+    text_blocks: list[str] = []
+    for file_name, image_bytes in sorted(image_items, key=lambda item: len(item[1]), reverse=True):
+        if len(text_blocks) >= limit:
+            break
+        if len(image_bytes) < 2048:
+            continue
+        try:
+            text = extract_text_from_embedded_image(image_bytes, file_name)
+        except Exception as exc:
+            logger.warning("Slide OCR fallback failed for %s: %s", file_name, exc)
+            continue
+        if text:
+            text_blocks.append(text)
+    return text_blocks
+
+
 def extract_slide_text_from_pdf(file_bytes: bytes) -> str:
     if PdfReader is None:
         raise HTTPException(
@@ -1142,14 +1362,20 @@ def extract_slide_text_from_pdf(file_bytes: bytes) -> str:
     pages: list[str] = []
     for index, page in enumerate(reader.pages, start=1):
         page_text = (page.extract_text() or "").strip()
-        if page_text:
-            pages.append(f"SLIDE PAGE {index}\n{page_text}")
+        text_blocks = [page_text] if page_text else []
+        if len(page_text) < 80:
+            text_blocks.extend(extract_slide_image_text_blocks(iter_pdf_page_images(page), limit=2))
+        merged_text = merge_text_blocks(text_blocks)
+        if merged_text:
+            pages.append(f"SLIDE PAGE {index}\n{merged_text}")
     return "\n\n".join(pages).strip()
 
 
 def extract_slide_text_from_pptx(file_bytes: bytes) -> str:
     namespaces = {
         "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        "rels": "http://schemas.openxmlformats.org/package/2006/relationships",
     }
 
     with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
@@ -1163,8 +1389,30 @@ def extract_slide_text_from_pptx(file_bytes: bytes) -> str:
             xml_bytes = archive.read(slide_name)
             root = ET.fromstring(xml_bytes)
             text_runs = [node.text.strip() for node in root.findall(".//a:t", namespaces) if node.text and node.text.strip()]
-            if text_runs:
-                slide_text_parts.append(f"SLIDE {slide_index}\n" + "\n".join(text_runs))
+            slide_blocks = ["\n".join(text_runs)] if text_runs else []
+
+            if len("\n".join(text_runs).strip()) < 80:
+                rels_name = normalize_zip_member_path(slide_name, f"_rels/{PurePosixPath(slide_name).name}.rels")
+                image_items: list[tuple[str, bytes]] = []
+                if rels_name in archive.namelist():
+                    rels_root = ET.fromstring(archive.read(rels_name))
+                    relationship_targets = {
+                        relation.attrib.get("Id", ""): normalize_zip_member_path(rels_name, relation.attrib.get("Target", ""))
+                        for relation in rels_root.findall("rels:Relationship", namespaces)
+                        if relation.attrib.get("Type", "").endswith("/image")
+                    }
+                    slide_image_targets: list[str] = []
+                    for blip in root.findall(".//a:blip", namespaces):
+                        target = relationship_targets.get(blip.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed", ""))
+                        if target and target in archive.namelist() and target not in slide_image_targets:
+                            slide_image_targets.append(target)
+                    image_items = [(target, archive.read(target)) for target in slide_image_targets]
+
+                slide_blocks.extend(extract_slide_image_text_blocks(image_items, limit=2))
+
+            merged_text = merge_text_blocks(slide_blocks)
+            if merged_text:
+                slide_text_parts.append(f"SLIDE {slide_index}\n{merged_text}")
 
     return "\n\n".join(slide_text_parts).strip()
 
@@ -1228,7 +1476,7 @@ def mark_quiz_answer_with_ai(
     question: str,
     expected_answer: str,
     student_answer: str = "",
-    answer_image_data_url: str = "",
+    answer_image_data_urls: list[str] | None = None,
     answer_points: list[str] | None = None,
     max_score: int = 1,
 ) -> dict[str, Any]:
@@ -1251,8 +1499,9 @@ def mark_quiz_answer_with_ai(
         }
     ]
 
-    if answer_image_data_url:
-        user_parts.append({"type": "image_url", "image_url": {"url": answer_image_data_url}})
+    for answer_image_data_url in answer_image_data_urls or []:
+        if answer_image_data_url:
+            user_parts.append({"type": "image_url", "image_url": {"url": answer_image_data_url}})
 
     response = client.with_options(timeout=VISION_REQUEST_TIMEOUT).chat.completions.create(
         model=VISION_MODEL,
@@ -1262,7 +1511,7 @@ def mark_quiz_answer_with_ai(
                 "role": "system",
                 "content": (
                     "You mark student quiz answers carefully. "
-                    "You may read typed answers, neat handwriting, messy handwriting, or both. "
+                    "You may read typed answers, one answer photo, several answer photos, neat handwriting, messy handwriting, or any combination of them. "
                     "Return strict JSON only. "
                     "Never award more than the maximum marks provided."
                 ),
@@ -1377,8 +1626,16 @@ async def google_login(payload: GoogleAuthRequest):
 
 
 @app.get("/auth/me")
-async def auth_me(current_user: str = Depends(require_authenticated_user)):
-    return {"email": current_user}
+async def auth_me(authorization: str | None = Header(None)):
+    token = get_authorization_token(authorization)
+    current_user = get_session_email(token)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+
+    refreshed_token = ""
+    if not is_signed_session_token(token):
+        refreshed_token = create_session(current_user)
+    return {"email": current_user, "token": refreshed_token}
 
 
 @app.post("/auth/logout")
@@ -2752,6 +3009,161 @@ def add_student_support_sections(summary: str) -> str:
     return cleaned.strip()
 
 
+def build_study_image_queries(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+) -> list[str]:
+    context_parts = [
+        trimmed_context_block("STUDY GUIDE", summary, 5000),
+        trimmed_context_block("LECTURE NOTES", lecture_notes, 2500),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, 2500),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, 2500),
+    ]
+    combined_context = "\n\n".join(part for part in context_parts if part).strip()
+    if not combined_context:
+        return []
+
+    try:
+        response = client.with_options(timeout=STUDY_IMAGE_QUERY_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=350,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You pick real-photo search queries for a university study app. "
+                        "Return strict JSON only in this shape: {\"queries\": [\"...\"]}.\n\n"
+                        "Rules:\n"
+                        "- Return 0 to 4 short search queries.\n"
+                        "- Only return queries for concrete things that students should literally see, such as organs, machines, lab tools, landmarks, species, hardware, or physical processes.\n"
+                        "- If the topic is mostly abstract, symbolic, theoretical, or mathematical, return an empty array.\n"
+                        "- Prefer specific nouns over vague phrases.\n"
+                        "- Do not return diagram, illustration, formula, or stock-photo style phrases."
+                    ),
+                },
+                {"role": "user", "content": combined_context},
+            ],
+        )
+        parsed = parse_json_object(response.choices[0].message.content or "")
+        return [compact_text(item) for item in parse_json_list(parsed.get("queries")) if compact_text(item)][:MAX_STUDY_IMAGES]
+    except Exception as exc:
+        logger.warning("Study image query generation failed: %s", exc)
+        return []
+
+
+def is_real_photo_candidate_title(title: str) -> bool:
+    normalized = compact_text(title).lower()
+    blocked_markers = (
+        "diagram",
+        "logo",
+        "icon",
+        "equation",
+        "formula",
+        "graph",
+        "chart",
+        "scheme",
+        "vector",
+        "flag",
+        "map",
+        "coat of arms",
+    )
+    return normalized and not any(marker in normalized for marker in blocked_markers)
+
+
+def humanize_commons_title(title: str) -> str:
+    cleaned = re.sub(r"^File:", "", compact_text(title))
+    cleaned = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", cleaned)
+    cleaned = cleaned.replace("_", " ")
+    return cleaned.strip() or "Reference photo"
+
+
+def search_wikimedia_photos(query: str, limit: int = 1) -> list[dict[str, str]]:
+    response = requests.get(
+        WIKIMEDIA_API_URL,
+        params={
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrnamespace": 6,
+            "gsrsearch": query,
+            "gsrlimit": max(4, limit * 5),
+            "prop": "imageinfo",
+            "iiprop": "url|mime",
+            "iiurlwidth": 1400,
+        },
+        timeout=STUDY_IMAGE_SEARCH_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    pages = list((payload.get("query", {}) or {}).get("pages", {}).values())
+    pages.sort(key=lambda item: int(item.get("index", 999999)))
+
+    results: list[dict[str, str]] = []
+    for page in pages:
+        title = compact_text(page.get("title"))
+        if not is_real_photo_candidate_title(title):
+            continue
+        image_info = ((page.get("imageinfo") or [{}])[0]) if isinstance(page.get("imageinfo"), list) else {}
+        mime_type = compact_text(image_info.get("mime")).lower()
+        image_url = compact_text(image_info.get("thumburl") or image_info.get("url"))
+        if mime_type not in {"image/jpeg", "image/png", "image/webp"} or not image_url:
+            continue
+        results.append(
+            {
+                "query": compact_text(query),
+                "title": humanize_commons_title(title),
+                "image_url": image_url,
+                "source_url": compact_text(f"https://commons.wikimedia.org/wiki/{title.replace(' ', '_')}"),
+            }
+        )
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def generate_study_images(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    job_id: str,
+) -> list[dict[str, str]]:
+    queries = await asyncio.to_thread(
+        build_study_image_queries,
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+    )
+    if not queries:
+        return []
+
+    update_job(job_id, status="processing", stage="Finding real study photos", progress=92)
+    seen_urls: set[str] = set()
+    images: list[dict[str, str]] = []
+
+    for query in queries:
+        try:
+            results = await asyncio.to_thread(search_wikimedia_photos, query, 1)
+        except Exception as exc:
+            logger.warning("Study photo search failed for query '%s': %s", query, exc)
+            continue
+
+        for result in results:
+            image_url = compact_text(result.get("image_url"))
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            images.append(result)
+            if len(images) >= MAX_STUDY_IMAGES:
+                return images
+
+    return images
+
+
 def tidy_study_guide_layout(summary: str) -> str:
     cleaned = (summary or "").replace("\r\n", "\n").strip()
     quiz_section = extract_section(cleaned, "PRACTICE QUESTIONS AND ANSWERS")
@@ -2803,24 +3215,24 @@ def build_podcast_speaker_profiles(speaker_count: int) -> list[dict[str, str]]:
     profiles = [
         {
             "key": "speaker_1",
-            "name": "Naledi",
+            "name": "Njabulo",
             "role": "the calm explainer who keeps the lesson academically solid",
-            "voice": "alloy",
-            "voice_style": "Sound warm, clear, and confident, like a lecturer-friendly host.",
+            "voice": "ash",
+            "voice_style": "Sound warm, clear, confident, and distinctly like a young man hosting a serious revision podcast.",
         },
         {
             "key": "speaker_2",
-            "name": "Musa",
+            "name": "Olwethu",
             "role": "the curious challenger who adds light jokes, asks obvious student questions, and pushes for simpler wording",
             "voice": "coral",
-            "voice_style": "Sound lively, sharp, and conversational with light humor.",
+            "voice_style": "Sound lively, sharp, conversational, and distinctly like a young woman with light humor.",
         },
         {
             "key": "speaker_3",
-            "name": "Tumi",
+            "name": "Melusi",
             "role": "the exam coach who keeps connecting the topic to worked examples, likely test traps, and revision advice",
-            "voice": "sage",
-            "voice_style": "Sound focused, practical, and slightly firmer than the others.",
+            "voice": "echo",
+            "voice_style": "Sound focused, practical, grounded, and distinctly like a young man guiding exam revision.",
         },
     ]
     return profiles[: clamp_podcast_speaker_count(speaker_count)]
@@ -2831,6 +3243,10 @@ def estimate_spoken_minutes(text: str) -> float:
     if not words:
         return 0.0
     return round(words / 140, 1)
+
+
+def estimate_podcast_total_minutes(segments: list[dict[str, Any]]) -> float:
+    return round(sum(float(segment.get("estimated_minutes", 0) or 0) for segment in segments), 1)
 
 
 def split_podcast_text(text: str, *, max_chars: int = 700, max_words: int = 110) -> list[str]:
@@ -2870,6 +3286,7 @@ def build_podcast_fallback(
     summary: str,
     transcript: str,
     speaker_profiles: list[dict[str, str]],
+    target_minutes: int,
 ) -> dict[str, Any]:
     title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
     topic = title_lines[0] if title_lines else "This Lecture Topic"
@@ -2882,15 +3299,18 @@ def build_podcast_fallback(
     if not short_summary:
         short_summary = compact_text(transcript[:700], f"A revision debate about {topic}.")
 
+    transcript_chunks = split_podcast_text(transcript, max_chars=520, max_words=85)
     speaking_points = [short_summary]
     speaking_points.extend(concept_points)
     speaking_points.extend(example_points)
     speaking_points.extend(mistake_points)
     speaking_points.extend(revision_points)
+    speaking_points.extend(transcript_chunks[:18])
     speaking_points = [compact_text(item) for item in speaking_points if compact_text(item)]
+    minimum_minutes = max(5.5, clamp_podcast_target_minutes(target_minutes) * 0.92)
 
     normalized_segments: list[dict[str, Any]] = []
-    for index, point in enumerate(speaking_points[:12], start=1):
+    for index, point in enumerate(speaking_points, start=1):
         profile = speaker_profiles[(index - 1) % len(speaker_profiles)]
         text = point
         if index == 1:
@@ -2917,6 +3337,8 @@ def build_podcast_fallback(
                     "estimated_minutes": estimate_spoken_minutes(chunk),
                 }
             )
+        if estimate_podcast_total_minutes(normalized_segments) >= minimum_minutes and len(normalized_segments) >= 10:
+            break
 
     overview = (
         f"A fallback revision debate about {topic}, mixing clear explanations, example-driven discussion, "
@@ -2927,6 +3349,33 @@ def build_podcast_fallback(
         "overview": overview,
         "segments": normalized_segments,
     }
+
+
+def extend_podcast_segments_to_target(
+    segments: list[dict[str, Any]],
+    fallback_segments: list[dict[str, Any]],
+    target_minutes: int,
+) -> list[dict[str, Any]]:
+    minimum_minutes = max(5.5, clamp_podcast_target_minutes(target_minutes) * 0.92)
+    if estimate_podcast_total_minutes(segments) >= minimum_minutes:
+        return segments
+
+    seen_texts = {compact_text(segment.get("text")) for segment in segments if compact_text(segment.get("text"))}
+    extended_segments = list(segments)
+    for fallback_segment in fallback_segments:
+        cleaned_text = compact_text(fallback_segment.get("text"))
+        if not cleaned_text or cleaned_text in seen_texts:
+            continue
+        seen_texts.add(cleaned_text)
+        extended_segments.append(
+            {
+                **fallback_segment,
+                "index": len(extended_segments) + 1,
+            }
+        )
+        if estimate_podcast_total_minutes(extended_segments) >= minimum_minutes:
+            break
+    return extended_segments
 
 
 def normalize_podcast_segments(
@@ -3067,7 +3516,7 @@ async def generate_podcast_package(
     normalized_target_minutes = clamp_podcast_target_minutes(target_minutes)
     speaker_profiles = build_podcast_speaker_profiles(normalized_speaker_count)
     target_turns = 12 if normalized_speaker_count == 2 else 15
-    target_words = normalized_target_minutes * 130
+    target_words = normalized_target_minutes * 140
 
     source_blocks = [
         trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_PODCAST_CONTEXT_CHARS // 2),
@@ -3079,7 +3528,7 @@ async def generate_podcast_package(
     ]
     combined_source = "\n\n".join(block for block in source_blocks if block)
 
-    def _generate_podcast_script() -> dict[str, Any]:
+    def _generate_podcast_script(revision_note: str = "") -> dict[str, Any]:
         response = client.with_options(timeout=PODCAST_REQUEST_TIMEOUT).chat.completions.create(
             model=PODCAST_SCRIPT_MODEL,
             max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5000),
@@ -3094,6 +3543,7 @@ async def generate_podcast_package(
                         "- Use exactly the provided speaker keys.\n"
                         f"- Write a lively debate for {normalized_speaker_count} speakers.\n"
                         f"- Target about {normalized_target_minutes} minutes and roughly {target_words} spoken words in total.\n"
+                        f"- Do not return a script shorter than about {max(6, normalized_target_minutes - 1)} minutes.\n"
                         f"- Aim for about {target_turns} turns before any automatic text splitting.\n"
                         "- Make it feel like a real spoken discussion, not lecture notes being read aloud.\n"
                         "- Mix humor with seriousness, but keep the academic content accurate.\n"
@@ -3111,7 +3561,8 @@ async def generate_podcast_package(
                     "role": "user",
                     "content": (
                         "Build the podcast debate from this lecture material.\n\n"
-                        f"{combined_source}"
+                        + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
+                        + combined_source
                     ),
                 },
             ],
@@ -3119,7 +3570,7 @@ async def generate_podcast_package(
         return parse_json_object(response.choices[0].message.content or "")
 
     update_job(job_id, status="processing", stage="Writing podcast debate", progress=18)
-    fallback_package = build_podcast_fallback(summary, transcript, speaker_profiles)
+    fallback_package = build_podcast_fallback(summary, transcript, speaker_profiles, normalized_target_minutes)
 
     try:
         generated_package = await asyncio.to_thread(_generate_podcast_script)
@@ -3128,8 +3579,29 @@ async def generate_podcast_package(
         generated_package = {}
 
     normalized_segments = normalize_podcast_segments(generated_package.get("segments"), speaker_profiles)
+    estimated_minutes = estimate_podcast_total_minutes(normalized_segments)
+    if normalized_segments and estimated_minutes < max(5.5, normalized_target_minutes * 0.9):
+        update_job(job_id, status="processing", stage="Extending podcast to the requested length", progress=28)
+        try:
+            generated_package = await asyncio.to_thread(
+                _generate_podcast_script,
+                (
+                    f"The first draft landed at about {estimated_minutes:.1f} minutes, which is too short. "
+                    f"Rewrite the whole podcast so it lands near {normalized_target_minutes} minutes, "
+                    "with more explanation, worked examples, exam traps, and recap moments."
+                ),
+            )
+            normalized_segments = normalize_podcast_segments(generated_package.get("segments"), speaker_profiles)
+        except Exception as exc:
+            logger.warning("Podcast rewrite for target length failed: %s", exc)
+
     if not normalized_segments:
         normalized_segments = fallback_package["segments"]
+    normalized_segments = extend_podcast_segments_to_target(
+        normalized_segments,
+        fallback_package["segments"],
+        normalized_target_minutes,
+    )
 
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
@@ -3679,6 +4151,17 @@ async def run_summary_job(
             past_question_papers,
             job_id,
         )
+        try:
+            study_images = await generate_study_images(
+                summary,
+                transcript,
+                lecture_notes,
+                lecture_slides,
+                job_id,
+            )
+        except Exception as exc:
+            logger.warning("Study image generation failed: %s", exc)
+            study_images = []
         update_job(
             job_id,
             status="completed",
@@ -3689,6 +4172,7 @@ async def run_summary_job(
             worked_example=assets["worked_example"],
             flashcards=assets["flashcards"],
             quiz_questions=assets["quiz_questions"],
+            study_images=study_images,
             used_fallback=used_fallback,
         )
     except Exception as exc:
@@ -3922,6 +4406,7 @@ async def mark_quiz_answer(
     subparts_json: str = Form("[]"),
     student_selection_json: str = Form("{}"),
     answer_image: UploadFile | None = File(None),
+    answer_images: list[UploadFile] | None = File(None),
     current_user: str = Depends(require_authenticated_user),
 ):
     resolved_question_type = compact_text(question_type, "short_answer").lower()
@@ -3934,8 +4419,11 @@ async def mark_quiz_answer(
 
     ensure_openai_key()
     answer_points = [compact_text(item) for item in parse_json_list(answer_points_json) if compact_text(item)]
+    uploaded_images = [file for file in (answer_images or []) if file is not None]
+    if answer_image is not None:
+        uploaded_images.insert(0, answer_image)
 
-    if not student_answer.strip() and answer_image is None:
+    if not student_answer.strip() and not uploaded_images:
         return {
             "score": 0,
             "max_score": resolved_max_score,
@@ -3944,15 +4432,15 @@ async def mark_quiz_answer(
             "mistakes": [],
         }
 
-    image_data_url = ""
+    image_data_urls: list[str] = []
 
     try:
-        if answer_image is not None:
-            content_type = answer_image.content_type or mimetypes.guess_type(answer_image.filename or "")[0] or ""
+        for index, uploaded_image in enumerate(uploaded_images, start=1):
+            content_type = uploaded_image.content_type or mimetypes.guess_type(uploaded_image.filename or "")[0] or ""
             if not content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="Please upload an image for answer-photo marking.")
 
-            image_bytes = await answer_image.read()
+            image_bytes = await uploaded_image.read()
             if not image_bytes:
                 raise HTTPException(status_code=400, detail="The uploaded answer image is empty.")
             if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
@@ -3964,21 +4452,27 @@ async def mark_quiz_answer(
                     ),
                 )
 
-            image_data_url = build_data_url(image_bytes, content_type, answer_image.filename or "answer-image")
+            image_data_urls.append(
+                build_data_url(
+                    image_bytes,
+                    content_type,
+                    uploaded_image.filename or f"answer-image-{index}",
+                )
+            )
 
         result = await asyncio.to_thread(
             mark_quiz_answer_with_ai,
             question.strip(),
             expected_answer.strip(),
             student_answer.strip(),
-            image_data_url,
+            image_data_urls,
             answer_points,
             resolved_max_score,
         )
         return result
     finally:
-        if answer_image is not None:
-            await answer_image.close()
+        for uploaded_image in uploaded_images:
+            await uploaded_image.close()
 
 
 @app.post("/ask-study-assistant/")

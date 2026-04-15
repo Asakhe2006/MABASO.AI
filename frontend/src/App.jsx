@@ -22,6 +22,7 @@ const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const MAX_HISTORY_ITEMS = 8;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
+const MAX_QUIZ_ANSWER_IMAGES = 6;
 const tabs = [
   { id: "guide", label: "Study Guide" },
   { id: "transcript", label: "Transcript" },
@@ -212,6 +213,12 @@ function chatToText(messages) {
   return (messages || []).map((item) => `${item.role === "assistant" ? "MABASO" : "Student"}: ${item.content}`).join("\n\n");
 }
 
+function studyImagesToText(images) {
+  return (images || [])
+    .map((image, index) => `${index + 1}. ${image.title || image.query || "Reference photo"}\nSource: ${image.source_url || image.image_url || ""}`)
+    .join("\n\n");
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -250,6 +257,19 @@ function buildQuizExportText(questions, answers = {}, results = {}) {
     }
     return lines.join("\n");
   }).join("\n\n");
+}
+
+function getQuizAnswerImageFiles(imagesByQuestion, questionNumber) {
+  const value = imagesByQuestion?.[questionNumber];
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+function getQuizAnswerImageLabel(files) {
+  const imageFiles = Array.isArray(files) ? files.filter(Boolean) : [];
+  if (!imageFiles.length) return "";
+  if (imageFiles.length === 1) return imageFiles[0].name;
+  return `${imageFiles.length} photos selected`;
 }
 
 function parseFormulaRows(text) {
@@ -305,16 +325,6 @@ async function parseJsonSafe(response) {
   }
 }
 
-function extractMarkdownSection(markdown, heading) {
-  const pattern = new RegExp(`\\*\\*${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*[A-Z][A-Z \\-&]+\\*\\*|$)`);
-  const match = pattern.exec(markdown || "");
-  return match?.[1]?.trim() || "";
-}
-
-function toSimpleBullets(text) {
-  return (text || "").split("\n").map((line) => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
-}
-
 function parseInviteEmails(value) {
   return Array.from(new Set((value || "").split(/[\s,;]+/).map((email) => email.trim().toLowerCase()).filter(Boolean)));
 }
@@ -364,6 +374,16 @@ function createEmptyPodcastData() {
     speakerCount: 2,
     targetMinutes: 10,
   };
+}
+
+function getPodcastTurnStartSeconds(segments, index) {
+  const safeIndex = Math.max(0, Number(index || 0));
+  return Math.max(
+    0,
+    (segments || [])
+      .slice(0, safeIndex)
+      .reduce((sum, segment) => sum + (Number(segment?.estimated_minutes || 0) * 60), 0),
+  );
 }
 
 function normalizePodcastData(value) {
@@ -426,15 +446,11 @@ export default function App() {
   const [authEmailInput, setAuthEmailInput] = useState(
     () => window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || window.localStorage.getItem(AUTH_EMAIL_KEY) || "",
   );
-  const [verificationCode, setVerificationCode] = useState("");
-  const [codeSent, setCodeSent] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
-  const [isRequestingCode, setIsRequestingCode] = useState(false);
-  const [isVerifyingCode, setIsVerifyingCode] = useState(false);
   const [file, setFile] = useState(null);
   const [transcript, setTranscript] = useState("");
   const [summary, setSummary] = useState("");
@@ -442,6 +458,7 @@ export default function App() {
   const [example, setExample] = useState("");
   const [flashcards, setFlashcards] = useState([]);
   const [quizQuestions, setQuizQuestions] = useState([]);
+  const [studyImages, setStudyImages] = useState([]);
   const [lectureNotes, setLectureNotes] = useState("");
   const [lectureNotesFileName, setLectureNotesFileName] = useState("");
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
@@ -500,12 +517,14 @@ export default function App() {
   const chatImageInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
+  const podcastAudioUrlRef = useRef("");
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
+  const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
   const [isPodcastAutoPlaying, setIsPodcastAutoPlaying] = useState(false);
 
@@ -543,7 +562,7 @@ export default function App() {
   const canShareCurrentTool = Boolean(activeRoom && activeTab !== "podcast");
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
-  const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || null;
+  const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
 
   const clearHistory = () => {
@@ -567,16 +586,48 @@ export default function App() {
     </section>
   ) : null;
 
-  const revokePodcastAudioUrls = (segments = []) => {
-    (segments || []).forEach((segment) => {
-      if (segment?.objectUrl) window.URL.revokeObjectURL(segment.objectUrl);
-    });
+  const replacePodcastAudioUrl = (nextUrl = "") => {
+    if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
+    podcastAudioUrlRef.current = nextUrl;
+    setPodcastAudioUrl(nextUrl);
   };
 
   const replacePodcastAudioSegments = (segments = []) => {
-    revokePodcastAudioUrls(podcastAudioSegmentsRef.current);
     podcastAudioSegmentsRef.current = segments;
     setPodcastAudioSegments(segments);
+  };
+
+  const seekPodcastSeconds = (seconds) => {
+    const audio = podcastAudioRef.current;
+    if (!audio) return;
+    const nextTime = Math.min(Math.max(0, audio.currentTime + seconds), audio.duration || Infinity);
+    audio.currentTime = nextTime;
+  };
+
+  const jumpToPodcastTurn = (index) => {
+    const audio = podcastAudioRef.current;
+    setActivePodcastSegmentIndex(index);
+    if (!audio) return;
+    audio.currentTime = getPodcastTurnStartSeconds(podcastData.segments, index);
+    if (isPodcastAutoPlaying) {
+      audio.play().catch(() => setIsPodcastAutoPlaying(false));
+    }
+  };
+
+  const handlePodcastTimeUpdate = () => {
+    const audio = podcastAudioRef.current;
+    if (!audio || !podcastData.segments.length) return;
+    const currentTime = audio.currentTime || 0;
+    let nextIndex = 0;
+    for (let index = 0; index < podcastData.segments.length; index += 1) {
+      const start = getPodcastTurnStartSeconds(podcastData.segments, index);
+      const end = getPodcastTurnStartSeconds(podcastData.segments, index + 1);
+      if (currentTime >= start && (index === podcastData.segments.length - 1 || currentTime < end)) {
+        nextIndex = index;
+        break;
+      }
+    }
+    setActivePodcastSegmentIndex((current) => (current === nextIndex ? current : nextIndex));
   };
 
   const renderQuizSection = ({
@@ -610,7 +661,7 @@ export default function App() {
         <div className="force-mobile-stack mb-5 flex flex-wrap items-center gap-3">
           <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{questions.length} test question{questions.length === 1 ? "" : "s"} ready</div>
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalMarks} total marks</div>
-          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Handwritten photos stay only on written questions.</div>
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Written questions support camera and multiple photos.</div>
           {hasRoomVisibility ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Room test mode: {visibilityLabel}</div> : null}
           {scopeId === "workspace" ? <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Past Paper</button> : null}
           <button type="button" onClick={onMark} disabled={!questions.length || isMarking} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarking ? "Marking..." : "Mark Test"}</button>
@@ -622,7 +673,7 @@ export default function App() {
             <div className="force-mobile-stack flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p>
-                <p className="mt-2 text-sm leading-7 text-slate-200">Add past papers and paste the memo or marking guide here if you want the next study-guide generation and test generation to follow the older paper style more closely.</p>
+                <p className="mt-2 text-sm leading-7 text-slate-200">Add past papers and a memo if you want the next guide and test to follow that style.</p>
               </div>
               {pastQuestionPaperSources.length || pastQuestionMemo.trim() ? (
                 <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Notes + Test"}</button>
@@ -644,7 +695,7 @@ export default function App() {
             <div className="mt-4">
               <label className="block text-xs uppercase tracking-[0.22em] text-emerald-200/70">Memo / Marking Guide Reference</label>
               <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, marking guide, or model answers here. MABASO will use it as a reference when refreshing the study guide and the test." />
-              <p className="mt-3 text-xs leading-6 text-slate-300">This memo stays linked to the current workspace and is included together with uploaded past papers.</p>
+              <p className="mt-3 text-xs leading-6 text-slate-300">This memo stays with the current workspace.</p>
             </div>
           </div>
         ) : null}
@@ -663,6 +714,7 @@ export default function App() {
             const visibleRoomAnswers = (sharedAnswerGroups[item.number] || []).filter((answer) => answer.author_email !== authEmail);
             const typedAnswer = typeof answers[item.number] === "string" ? answers[item.number] : "";
             const selectedOptions = answers[item.number] && typeof answers[item.number] === "object" ? answers[item.number] : {};
+            const answerImageFiles = getQuizAnswerImageFiles(quizImages, item.number);
 
             return (
               <div key={`${scopeId}-${item.number}`} className="min-w-0 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
@@ -676,7 +728,7 @@ export default function App() {
                     const checked = selectedOptions[subpart.label] === option;
                     return <label key={`${scopeId}-${subpart.label}-${option}`} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${scopeId}-${item.number}-${subpart.label}`} checked={checked} onChange={() => onOptionChange(item, subpart.label, option)} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>;
                   })}</div>{submitted && subpartResult ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${subpartResult.is_correct ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-rose-300/25 bg-rose-500/10 text-slate-100"}`}><p>{subpartResult.marks_awarded} / {subpartResult.marks}</p><p className="mt-2 leading-7">{subpartResult.feedback}</p></div> : null}</div>;
-                })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-400/20 text-lg font-semibold text-emerald-100">+</span><span className="phone-safe-copy">Upload handwritten answer photo</span><input type="file" accept="image/*" className="hidden" onChange={(event) => onImageChange(item.number, event.target.files?.[0])} /></label>{quizImages[item.number] ? <span className="phone-safe-copy text-xs text-emerald-100/80">{quizImages[item.number].name}</span> : null}</div></>}
+                })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="phone-safe-copy">Photos</span><input type="file" accept="image/*" multiple className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white"><span className="phone-safe-copy">Camera</span><input type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label>{answerImageFiles.length ? <><span className="phone-safe-copy text-xs text-emerald-100/80">{getQuizAnswerImageLabel(answerImageFiles)}</span><div className="flex flex-wrap gap-2">{answerImageFiles.map((file) => <span key={`${scopeId}-${item.number}-${file.name}-${file.lastModified}`} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{file.name}</span>)}</div></> : null}</div></>}
                 {visibilityMode === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${scopeId}-${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="phone-safe-copy font-semibold text-white">{answer.author_email}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}
                 {submitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="phone-safe-copy mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="phone-safe-copy mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}
               </div>
@@ -909,7 +961,7 @@ export default function App() {
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-amber-100/80">Podcast Generator</p>
             <h4 className="mt-2 text-3xl font-semibold text-white">Turn the topic into a spoken debate.</h4>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">MABASO creates a multi-speaker podcast debate with different voices, jokes, worked examples, and serious explanation so the topic feels easier to remember.</p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Full podcast audio, exam-focused turns, and named voices.</p>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
             <button type="button" onClick={generatePodcast} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : "Generate Podcast"}</button>
@@ -923,7 +975,7 @@ export default function App() {
               {[2, 3].map((count) => (
                 <button key={count} type="button" onClick={() => setPodcastSpeakerCount(count)} className={`rounded-2xl border px-4 py-3 text-left text-sm ${podcastSpeakerCount === count ? "border-amber-300/35 bg-amber-300/10 text-amber-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
                   <p className="font-semibold">{count} voices</p>
-                  <p className="mt-2 text-xs leading-6 text-slate-300">{count === 2 ? "Cleaner debate with one explainer and one challenger." : "Adds a third exam coach voice for more back-and-forth."}</p>
+                  <p className="mt-2 text-xs leading-6 text-slate-300">{count === 2 ? "Njabulo and Olwethu." : "Njabulo, Olwethu, and Melusi."}</p>
                 </button>
               ))}
             </div>
@@ -933,7 +985,7 @@ export default function App() {
             <select value={podcastTargetMinutes} onChange={(event) => setPodcastTargetMinutes(Number(event.target.value) || 10)} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
               {[8, 10, 12, 14, 16].map((minutes) => <option key={minutes} value={minutes}>{minutes} minute podcast</option>)}
             </select>
-            <p className="mt-3 text-xs leading-6 text-slate-300">Longer topics can run past 10 minutes, and the download will use the podcast topic as the filename.</p>
+            <p className="mt-3 text-xs leading-6 text-slate-300">The generator now pushes much closer to the length you choose.</p>
           </div>
         </div>
       </div>
@@ -946,47 +998,41 @@ export default function App() {
                 <div className="min-w-0">
                   <p className="text-xs uppercase tracking-[0.24em] text-amber-100/80">Current Podcast</p>
                   <h4 className="phone-safe-copy mt-2 text-2xl font-semibold text-white">{podcastData.title || "Lecture Debate Podcast"}</h4>
-                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{podcastData.overview || "The debate overview will appear here once the podcast is ready."}</p>
+                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{podcastData.overview || "The overview will appear here once the podcast is ready."}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">About {podcastEstimatedMinutes} min</div>
-                  <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastSpeakerCount} voices</div>
+                  <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.speakerCount || podcastSpeakerCount} voices</div>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.segments.length} debate turns</div>
                 </div>
               </div>
-              {activePodcastSegment?.objectUrl ? (
+              {podcastAudioUrl ? (
                 <div className="mt-5 rounded-[24px] border border-amber-300/15 bg-amber-300/10 p-4">
                   <div className="force-mobile-stack flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-xs uppercase tracking-[0.22em] text-amber-100/80">Now Playing</p>
-                      <h5 className="mt-2 text-xl font-semibold text-white">{activePodcastSegment.speaker_name}</h5>
-                      <p className="mt-2 text-sm leading-7 text-slate-200">{activePodcastSegment.speaker_role}</p>
+                      <h5 className="mt-2 text-xl font-semibold text-white">{activePodcastSegment?.speaker_name || "Full podcast"}</h5>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">{activePodcastSegment?.speaker_role || "Continuous playback"}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); setActivePodcastSegmentIndex((current) => Math.max(0, current - 1)); }} disabled={activePodcastSegmentIndex === 0} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Previous</button>
-                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(true); podcastAudioRef.current?.play().catch(() => setIsPodcastAutoPlaying(false)); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isPodcastAutoPlaying ? "Playing Debate" : "Play Full Debate"}</button>
-                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); podcastAudioRef.current?.pause(); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
-                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); setActivePodcastSegmentIndex((current) => Math.min(podcastAudioSegments.length - 1, current + 1)); }} disabled={activePodcastSegmentIndex >= podcastAudioSegments.length - 1} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Next</button>
+                      <button type="button" onClick={() => seekPodcastSeconds(-15)} disabled={!activePodcastSegment?.objectUrl} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50" aria-label="Rewind 15 seconds">⏮</button>
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(true); podcastAudioRef.current?.play().catch(() => setIsPodcastAutoPlaying(false)); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" aria-label="Play debate">▶️</button>
+                      <button type="button" onClick={() => { setIsPodcastAutoPlaying(false); podcastAudioRef.current?.pause(); }} disabled={!activePodcastSegment?.objectUrl} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50" aria-label="Pause debate">⏸</button>
+                      <button type="button" onClick={() => seekPodcastSeconds(15)} disabled={!activePodcastSegment?.objectUrl} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50" aria-label="Fast forward 15 seconds">⏭</button>
                     </div>
                   </div>
-                  <audio ref={podcastAudioRef} controls className="mt-4 w-full" src={activePodcastSegment.objectUrl} onEnded={() => {
-                    if (isPodcastAutoPlaying && activePodcastSegmentIndex < podcastAudioSegments.length - 1) {
-                      setActivePodcastSegmentIndex((current) => current + 1);
-                      return;
-                    }
-                    setIsPodcastAutoPlaying(false);
-                  }} />
-                  <p className="mt-3 text-xs text-slate-300">Segment {activePodcastSegmentIndex + 1} of {podcastAudioSegments.length}. The full audio download uses the current podcast topic as the filename.</p>
+                  <audio ref={podcastAudioRef} controls className="mt-4 w-full" src={activePodcastSegment?.objectUrl || podcastAudioUrl} onTimeUpdate={handlePodcastTimeUpdate} onPlay={() => setIsPodcastAutoPlaying(true)} onPause={() => setIsPodcastAutoPlaying(false)} onEnded={() => setIsPodcastAutoPlaying(false)} />
+                  <p className="mt-3 text-xs text-slate-300">Full audio playback. Turn {activePodcastSegmentIndex + 1} of {podcastAudioSegments.length} is currently in focus.</p>
                 </div>
               ) : (
-                <div className="mt-5 rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">The script is here, but the live audio is not attached right now. Generate the podcast again to rebuild the downloadable voice track.</div>
+                <div className="mt-5 rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">The script is ready, but the full audio is not attached right now. Generate the podcast again to rebuild it.</div>
               )}
             </div>
 
             <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
               <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Turn List</p>
               <div className="mt-4 space-y-3">
-                {podcastData.segments.length ? podcastData.segments.map((segment, index) => <button key={`${segment.speaker_key}-${index}`} type="button" onClick={() => { setIsPodcastAutoPlaying(false); if (podcastAudioSegments[index]?.objectUrl) setActivePodcastSegmentIndex(index); }} className={`w-full rounded-2xl border px-4 py-4 text-left transition ${activePodcastSegmentIndex === index ? "border-amber-300/35 bg-amber-300/10" : "border-white/10 bg-white/[0.04] hover:bg-white/10"}`}><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-semibold text-white">{segment.speaker_name}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{segment.speaker_role}</p></div><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Turn {index + 1}</span></div><p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{segment.text}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Podcast turns will appear here after generation.</div>}
+                {podcastData.segments.length ? podcastData.segments.map((segment, index) => <button key={`${segment.speaker_key}-${index}`} type="button" onClick={() => jumpToPodcastTurn(index)} className={`w-full rounded-2xl border px-4 py-4 text-left transition ${activePodcastSegmentIndex === index ? "border-amber-300/35 bg-amber-300/10" : "border-white/10 bg-white/[0.04] hover:bg-white/10"}`}><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="text-sm font-semibold text-white">{segment.speaker_name}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{segment.speaker_role}</p></div><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Turn {index + 1}</span></div><p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{segment.text}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Podcast turns will appear here after generation.</div>}
               </div>
             </div>
           </div>
@@ -996,7 +1042,7 @@ export default function App() {
           </div>
         </>
       ) : (
-        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Generate the podcast after loading your lecture material. The result will include an actual multi-voice debate, in-app playback, and a downloadable audio file named from the podcast topic.</div>
+        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Generate the podcast after loading your lecture material. The result includes one full audio track and a downloadable MP3.</div>
       )}
     </div>
   );
@@ -1004,12 +1050,11 @@ export default function App() {
   const clearSession = (message = "Please sign in again.") => {
     setAuthToken("");
     setAuthEmail("");
-    setCodeSent(false);
-    setVerificationCode("");
     setCurrentPage("capture");
     setActiveRoomId("");
     setActiveRoom(null);
     setCollaborationRooms([]);
+    replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
@@ -1038,7 +1083,8 @@ export default function App() {
         setAuthMessage(data.detail || "Using the saved session while the server reconnects.");
         return;
       }
-      setAuthToken(token);
+      const nextToken = data.token || token;
+      setAuthToken(nextToken);
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
       setAuthChecked(true);
@@ -1074,7 +1120,13 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }).catch(() => {
+      fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }).then(async (response) => {
+        if (!response.ok) return;
+        const data = await parseJsonSafe(response);
+        if (data.token) {
+          setAuthToken(data.token);
+        }
+      }).catch(() => {
         // Keep the saved session locally if the server is temporarily unavailable.
       });
     }, 10 * 60 * 1000);
@@ -1084,7 +1136,7 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => () => {
-    revokePodcastAudioUrls(podcastAudioSegmentsRef.current);
+    if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
   }, []);
 
   const finishGoogleLogin = async (credential) => {
@@ -1291,6 +1343,7 @@ export default function App() {
 
   const buildCurrentStudyPackSections = () => [
     { title: "Study Guide", content: formattedGuide || summary },
+    { title: "Study Photos", content: studyImagesToText(studyImages) },
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
@@ -1313,6 +1366,7 @@ export default function App() {
     setExample(item.example || "");
     setFlashcards(item.flashcards || []);
     setQuizQuestions(item.quizQuestions || []);
+    setStudyImages(item.studyImages || []);
     setLectureNotes(item.lectureNotes || "");
     setLectureNotesFileName(item.lectureNotesFileName || "");
     setPastQuestionMemo(item.pastQuestionMemo || "");
@@ -1328,6 +1382,7 @@ export default function App() {
     setPodcastData(normalizePodcastData(item.podcastData));
     setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
     setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
+    replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
@@ -1350,9 +1405,11 @@ export default function App() {
     setExample("");
     setFlashcards([]);
     setQuizQuestions([]);
+    setStudyImages([]);
     setPodcastData(createEmptyPodcastData());
     setPodcastSpeakerCount(2);
     setPodcastTargetMinutes(10);
+    replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
@@ -1364,45 +1421,6 @@ export default function App() {
     setChatReferenceImages([]);
     setUsedFallbackSummary(false);
     setActiveHistoryId("");
-  };
-
-  const requestVerificationCode = async () => {
-    if (!authEmailInput.trim()) return setAuthMessage("Enter your email address first.");
-    setIsRequestingCode(true);
-    setAuthMessage("");
-    try {
-      const response = await fetch(`${API_BASE_URL}/auth/request-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: authEmailInput.trim() }) });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not send verification code.");
-      setCodeSent(true);
-      setAuthMessage(`Verification code sent to ${data.email || authEmailInput.trim()}.`);
-    } catch (err) {
-      setAuthMessage(err.message || "Could not send verification code.");
-    } finally {
-      setIsRequestingCode(false);
-    }
-  };
-
-  const verifyCodeAndLogin = async () => {
-    if (!authEmailInput.trim() || !verificationCode.trim()) return setAuthMessage("Enter both your email and verification code.");
-    setIsVerifyingCode(true);
-    setAuthMessage("");
-    try {
-      const response = await fetch(`${API_BASE_URL}/auth/verify-code`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: authEmailInput.trim(), code: verificationCode.trim() }) });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not verify the code.");
-      setAuthToken(data.token || "");
-      setAuthEmail(data.email || authEmailInput.trim());
-      setAuthEmailInput(data.email || authEmailInput.trim());
-      setVerificationCode("");
-      setCodeSent(false);
-      setStatus("Signed in successfully.");
-      setAuthMessage("You are signed in.");
-    } catch (err) {
-      setAuthMessage(err.message || "Could not verify the code.");
-    } finally {
-      setIsVerifyingCode(false);
-    }
   };
 
   const logout = async () => {
@@ -1646,6 +1664,7 @@ export default function App() {
       setExample(job.worked_example || "");
       setFlashcards(job.flashcards || []);
       setQuizQuestions(job.quiz_questions || []);
+      setStudyImages(job.study_images || []);
       setQuizAnswers({});
       setQuizAnswerImages({});
       setQuizResults({});
@@ -1653,6 +1672,7 @@ export default function App() {
       setPodcastData(createEmptyPodcastData());
       setPodcastSpeakerCount(2);
       setPodcastTargetMinutes(10);
+      replacePodcastAudioUrl("");
       replacePodcastAudioSegments([]);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
@@ -1679,6 +1699,7 @@ export default function App() {
         example: job.worked_example || "",
         flashcards: job.flashcards || [],
         quizQuestions: job.quiz_questions || [],
+        studyImages: job.study_images || [],
         lectureNotes,
         lectureNotesFileName,
         lectureSlides,
@@ -1699,8 +1720,9 @@ export default function App() {
     }
   };
 
-  const loadPodcastAudioSegments = async (jobId, segments) => {
-    if (!jobId || !segments?.length) {
+  const loadPodcastAudioTrack = async (jobId, segments = []) => {
+    if (!jobId) {
+      replacePodcastAudioUrl("");
       replacePodcastAudioSegments([]);
       setActivePodcastSegmentIndex(0);
       return;
@@ -1709,24 +1731,20 @@ export default function App() {
     setIsLoadingPodcastAudio(true);
     setCurrentJobType("podcast");
     try {
-      const nextSegments = [];
-      for (const [index, segment] of segments.entries()) {
-        setStatus(`Loading podcast audio ${index + 1} of ${segments.length}...`);
-        const response = await authFetch(`/jobs/${jobId}/podcast-audio/${index}`);
-        if (!response.ok) {
-          const data = await parseJsonSafe(response);
-          throw new Error(data.detail || "Could not load the podcast audio.");
-        }
-        const blob = await response.blob();
-        nextSegments.push({
-          ...segment,
-          objectUrl: window.URL.createObjectURL(blob),
-        });
+      setStatus("Loading full podcast audio...");
+      const response = await authFetch(`/jobs/${jobId}/podcast-download`);
+      if (!response.ok) {
+        const data = await parseJsonSafe(response);
+        throw new Error(data.detail || "Could not load the podcast audio.");
       }
-      replacePodcastAudioSegments(nextSegments);
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      replacePodcastAudioUrl(objectUrl);
+      replacePodcastAudioSegments((segments || []).map((segment) => ({ ...segment, objectUrl })));
       setActivePodcastSegmentIndex(0);
-      setStatus("Podcast voices are ready to play.");
+      setStatus("Podcast audio is ready.");
     } catch (err) {
+      replacePodcastAudioUrl("");
       replacePodcastAudioSegments([]);
       setActivePodcastSegmentIndex(0);
       throw err;
@@ -1747,6 +1765,7 @@ export default function App() {
     setProgress(0);
     setCurrentJobType("podcast");
     setIsPodcastAutoPlaying(false);
+    replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
 
@@ -1777,7 +1796,7 @@ export default function App() {
         targetMinutes: podcastTargetMinutes,
       });
       setPodcastData(nextPodcastData);
-      await loadPodcastAudioSegments(data.job_id, job.podcast_segments || []);
+      await loadPodcastAudioTrack(data.job_id, job.podcast_segments || []);
       setActiveTab("podcast");
       setCurrentPage("workspace");
       setProgress(100);
@@ -1799,6 +1818,7 @@ export default function App() {
         example,
         flashcards,
         quizQuestions,
+        studyImages,
         lectureNotes,
         lectureNotesFileName,
         lectureSlides,
@@ -2059,26 +2079,50 @@ export default function App() {
     });
   };
 
-  const queueRoomAnswerSync = (question, value) => {
+  const syncRoomAnswer = async (question, value) => {
     if (!activeRoomId) return;
     const questionNumber = String(question?.number || "");
-    const key = questionNumber;
     const serializedValue = serializeQuizAnswerForRoom(question, value);
+    const response = await authFetch(`/collaboration/rooms/${activeRoomId}/quiz-answers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_number: questionNumber, answer_text: serializedValue }),
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Could not sync the collaboration answer.");
+    if (data.room) setActiveRoom(data.room);
+  };
+
+  const queueRoomAnswerSync = (question, value) => {
+    if (!activeRoomId) return;
+    const key = String(question?.number || "");
     if (answerSyncTimersRef.current[key]) window.clearTimeout(answerSyncTimersRef.current[key]);
     answerSyncTimersRef.current[key] = window.setTimeout(async () => {
       try {
-        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/quiz-answers`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question_number: questionNumber, answer_text: serializedValue }),
-        });
-        const data = await parseJsonSafe(response);
-        if (!response.ok) throw new Error(data.detail || "Could not sync the collaboration answer.");
-        if (data.room) setActiveRoom(data.room);
+        await syncRoomAnswer(question, value);
       } catch (err) {
         setError(err.message || "Could not sync the collaboration answer.");
+      } finally {
+        delete answerSyncTimersRef.current[key];
       }
     }, 800);
+  };
+
+  const flushRoomAnswerSyncs = async (questions, answersMap) => {
+    if (!activeRoomId) return;
+    for (const question of questions || []) {
+      const key = String(question?.number || "");
+      if (answerSyncTimersRef.current[key]) {
+        window.clearTimeout(answerSyncTimersRef.current[key]);
+        delete answerSyncTimersRef.current[key];
+      }
+      try {
+        await syncRoomAnswer(question, answersMap?.[question.number]);
+      } catch (err) {
+        setError(err.message || "Could not sync the collaboration answer.");
+        break;
+      }
+    }
   };
 
   const handleStudyChatKeyDown = (event) => {
@@ -2183,6 +2227,7 @@ export default function App() {
     try {
       await exportPdf(item.title || item.fileName || "Saved lecture", [
         { title: "Study Guide", content: item.summary || "" },
+        { title: "Study Photos", content: studyImagesToText(item.studyImages || []) },
         { title: "Transcript", content: item.transcript || "" },
         { title: "Past Question Paper References", content: item.pastQuestionPapers || "" },
         { title: "Formulas", content: item.formula || "" },
@@ -2229,12 +2274,17 @@ export default function App() {
     queueRoomAnswerSync(question, nextAnswer);
   };
 
-  const handleQuizImageChange = (questionNumber, selectedFile) => {
-    if (!selectedFile) return;
-    if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for test answer marking.");
-    setQuizAnswerImages((current) => ({ ...current, [questionNumber]: selectedFile }));
+  const handleQuizImageChange = (questionNumber, selectedFiles) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return;
+    const validFiles = files.filter((file) => file?.type?.startsWith("image/"));
+    if (!validFiles.length) return setError("Please upload image files for test answer marking.");
+    setQuizAnswerImages((current) => ({
+      ...current,
+      [questionNumber]: [...getQuizAnswerImageFiles(current, questionNumber), ...validFiles].slice(0, MAX_QUIZ_ANSWER_IMAGES),
+    }));
     clearQuestionResult(questionNumber);
-    setStatus(`Handwritten answer photo added for question ${questionNumber}.`);
+    setStatus(`${validFiles.length} answer photo${validFiles.length === 1 ? "" : "s"} added for question ${questionNumber}.`);
   };
 
   const markQuiz = async () => {
@@ -2247,9 +2297,9 @@ export default function App() {
       for (const item of selectedQuizQuestions) {
         const typedAnswer = typeof quizAnswers[item.number] === "string" ? quizAnswers[item.number] : "";
         const selectedOptions = quizAnswers[item.number] && typeof quizAnswers[item.number] === "object" ? quizAnswers[item.number] : {};
-        const imageFile = quizAnswerImages[item.number];
+        const imageFiles = getQuizAnswerImageFiles(quizAnswerImages, item.number);
         const hasOptionAnswer = isOptionBasedQuestion(item) && Object.values(selectedOptions).some(Boolean);
-        if (!typedAnswer.trim() && !imageFile && !hasOptionAnswer) {
+        if (!typedAnswer.trim() && !imageFiles.length && !hasOptionAnswer) {
           nextResults[item.number] = {
             score: 0,
             max_score: getQuestionMarks(item),
@@ -2268,11 +2318,12 @@ export default function App() {
         formData.append("subparts_json", JSON.stringify(item.subparts || []));
         formData.append("student_selection_json", JSON.stringify(selectedOptions));
         formData.append("student_answer", typedAnswer);
-        if (!isOptionBasedQuestion(item) && imageFile) formData.append("answer_image", imageFile);
+        if (!isOptionBasedQuestion(item)) imageFiles.forEach((imageFile) => formData.append("answer_images", imageFile));
         const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
         nextResults[item.number] = data;
+        setQuizResults((current) => ({ ...current, [item.number]: data }));
       }
       setQuizResults(nextResults);
       setQuizSubmitted(true);
@@ -2315,12 +2366,17 @@ export default function App() {
     queueRoomAnswerSync(question, nextAnswer);
   };
 
-  const handleRoomQuizImageChange = (questionNumber, selectedFile) => {
-    if (!selectedFile) return;
-    if (!selectedFile.type.startsWith("image/")) return setError("Please upload an image file for test answer marking.");
-    setRoomQuizAnswerImages((current) => ({ ...current, [questionNumber]: selectedFile }));
+  const handleRoomQuizImageChange = (questionNumber, selectedFiles) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return;
+    const validFiles = files.filter((file) => file?.type?.startsWith("image/"));
+    if (!validFiles.length) return setError("Please upload image files for test answer marking.");
+    setRoomQuizAnswerImages((current) => ({
+      ...current,
+      [questionNumber]: [...getQuizAnswerImageFiles(current, questionNumber), ...validFiles].slice(0, MAX_QUIZ_ANSWER_IMAGES),
+    }));
     clearRoomQuestionResult(questionNumber);
-    setStatus(`Handwritten answer photo added for room question ${questionNumber}.`);
+    setStatus(`${validFiles.length} answer photo${validFiles.length === 1 ? "" : "s"} added for room question ${questionNumber}.`);
   };
 
   const markRoomQuiz = async () => {
@@ -2329,13 +2385,14 @@ export default function App() {
     setError("");
     setStatus("Marking collaboration test answers...");
     try {
+      await flushRoomAnswerSyncs(activeRoomQuizQuestions, roomQuizAnswers);
       const nextResults = {};
       for (const item of activeRoomQuizQuestions) {
         const typedAnswer = typeof roomQuizAnswers[item.number] === "string" ? roomQuizAnswers[item.number] : "";
         const selectedOptions = roomQuizAnswers[item.number] && typeof roomQuizAnswers[item.number] === "object" ? roomQuizAnswers[item.number] : {};
-        const imageFile = roomQuizAnswerImages[item.number];
+        const imageFiles = getQuizAnswerImageFiles(roomQuizAnswerImages, item.number);
         const hasOptionAnswer = isOptionBasedQuestion(item) && Object.values(selectedOptions).some(Boolean);
-        if (!typedAnswer.trim() && !imageFile && !hasOptionAnswer) {
+        if (!typedAnswer.trim() && !imageFiles.length && !hasOptionAnswer) {
           nextResults[item.number] = {
             score: 0,
             max_score: getQuestionMarks(item),
@@ -2354,11 +2411,12 @@ export default function App() {
         formData.append("subparts_json", JSON.stringify(item.subparts || []));
         formData.append("student_selection_json", JSON.stringify(selectedOptions));
         formData.append("student_answer", typedAnswer);
-        if (!isOptionBasedQuestion(item) && imageFile) formData.append("answer_image", imageFile);
+        if (!isOptionBasedQuestion(item)) imageFiles.forEach((imageFile) => formData.append("answer_images", imageFile));
         const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
         nextResults[item.number] = data;
+        setRoomQuizResults((current) => ({ ...current, [item.number]: data }));
       }
       setRoomQuizResults(nextResults);
       setRoomQuizSubmitted(true);
@@ -2401,7 +2459,7 @@ export default function App() {
               </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO.AI</p>
               <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI is an AI lecture transcription and study tool for students.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record lectures, add notes, slides, and past question papers, and turn class material into transcripts, study guides, flashcards, worked examples, quizzes, podcast debates, and collaboration-ready revision rooms.</p>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build your study pack.</p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">AI lecture transcription</div>
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Study guides and summaries</div>
@@ -2464,7 +2522,7 @@ export default function App() {
             <div className="space-y-6">
               <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
               <h1 className="text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Capture the lecture first, then move into the study workspace.</h1>
-              <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes, slides, and past question papers, then generate the full study pack. The phone layout keeps the source uploads above the larger action buttons so it is easier to tap through each step, including podcast generation later in the workspace.</p>
+              <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add your sources, then generate the full study pack.</p>
             </div>
 
             <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
@@ -2495,7 +2553,7 @@ export default function App() {
                   </div>
                   <input ref={fileInputRef} type="file" accept="audio/*,video/*" className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />
                   <input ref={lectureNotesFileInputRef} type="file" accept=".txt,.md,.text" className="hidden" onChange={(event) => handleLectureNotesFileChange(event.target.files?.[0])} />
-                  <input ref={lectureSlidesFileInputRef} type="file" accept="image/*,.txt,.md,.text,.pdf,.pptx" multiple className="hidden" onChange={(event) => handleLectureSlidesFilesChange(event.target.files)} />
+                  <input ref={lectureSlidesFileInputRef} type="file" accept="image/*,.txt,.md,.text,.pdf,.pptx" multiple className="hidden" onChange={(event) => { handleLectureSlidesFilesChange(event.target.files); event.target.value = ""; }} />
                 </div>
               </div>
 
@@ -2600,7 +2658,7 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="min-w-0 space-y-4"><div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{studyImages.length ? <div className="grid gap-4 md:grid-cols-2">{studyImages.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.query || "Real photo"}</p><p className="text-xs text-slate-400">Open source photo</p></div></a>)}</div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{transcript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}

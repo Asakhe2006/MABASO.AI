@@ -1,9 +1,11 @@
+/* global process */
+
 import { build } from 'vite';
 
 async function testBuild() {
   try {
     console.log('Starting build test...');
-    const result = await build({
+    await build({
       logLevel: 'info',
     });
     console.log('Build successful!');
