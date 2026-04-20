@@ -11,6 +11,16 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
+      - key: APPLE_CLIENT_ID
+        sync: false
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
+        sync: false
+      - key: APPLE_PRIVATE_KEY
+        sync: false
+      - key: APPLE_REDIRECT_URI
+        sync: false
       - key: APP_SECRET
         sync: false
       - key: SMTP_HOST
@@ -47,6 +57,10 @@ services:
           name: mabaso-ai-api
           envVarKey: RENDER_EXTERNAL_URL
       - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: VITE_APPLE_CLIENT_ID
+        sync: false
+      - key: VITE_APPLE_REDIRECT_URI
         sync: false
     routes:
       - type: rewrite

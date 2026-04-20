@@ -14,6 +14,8 @@ function resolveApiBaseUrl() {
 
 const API_BASE_URL = resolveApiBaseUrl();
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
+const APPLE_REDIRECT_URI = (import.meta.env.VITE_APPLE_REDIRECT_URI || "").trim();
 const JOB_POLL_INTERVAL_MS = 2000;
 const ROOM_REFRESH_INTERVAL_MS = 5000;
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
@@ -114,7 +116,98 @@ const helpAboutSections = [
       "Back arrows appear on pages where students can return, which makes it easier to move between capture, help, study tools, and collaboration without losing direction.",
     ],
   },
+  {
+    kicker: "Progress And Quality",
+    title: "How processing stages, source quality, and revisions should work",
+    description:
+      "Students should know what the app is doing and should also know when a source is weak enough to question before trusting the output.",
+    points: [
+      "The Transcribe Lecture button should carry the live transcription stages when lecture audio, video, or a public video link is being processed.",
+      "The Generate Study Guide button should carry the live reading and guide-building stages when notes, slides, or past papers are being read or turned into revision material.",
+      "If a scan or source file is too messy, too broken, or too unreadable, students should expect weaker notes. Clean PDFs, typed notes, and clearer slide files usually produce stronger study packs.",
+      "If the guide feels mixed up, too transcript-heavy, or too shallow, students should add better notes or slides and regenerate instead of trusting a weak first draft.",
+    ],
+  },
+  {
+    kicker: "Study Guide Photos",
+    title: "When photos appear in the guide and what they are for",
+    description:
+      "The photo strip in the study guide is meant for concrete concepts that students benefit from seeing, not for every subject or every lecture.",
+    points: [
+      "Photo references should appear when the topic includes real objects, structures, instruments, machine parts, organ systems, valve types, or other physical categories students must recognise by sight.",
+      "If the topic is mostly abstract, symbolic, theoretical, or calculation-based, the guide should rely on notes, formulas, and worked examples instead of forcing photos.",
+      "The photos are there to improve recognition and understanding, not to replace the explanation in the guide itself.",
+      "Students should still judge whether the photo matches the lecture topic closely. If it does not, the written guide and lecture sources should be trusted first.",
+    ],
+  },
 ];
+
+let appleAuthScriptPromise = null;
+
+function buildAppleRedirectUri() {
+  if (APPLE_REDIRECT_URI) return APPLE_REDIRECT_URI;
+  if (typeof window === "undefined") return "";
+  return new URL("/", window.location.href).toString();
+}
+
+function isAppleWebSigninSupported() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname || "";
+  const isLocalHost = host === "localhost" || host === "127.0.0.1" || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  return window.location.protocol === "https:" && !isLocalHost;
+}
+
+function createBrowserSafeToken(length = 24) {
+  if (typeof window === "undefined" || !window.crypto?.getRandomValues) {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 2 + length)}`;
+  }
+  const values = new Uint8Array(length);
+  window.crypto.getRandomValues(values);
+  return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("").slice(0, length * 2);
+}
+
+async function ensureAppleAuthScript() {
+  if (typeof window === "undefined") throw new Error("Apple sign-in is only available in the browser.");
+  if (window.AppleID?.auth) return window.AppleID;
+  if (!appleAuthScriptPromise) {
+    appleAuthScriptPromise = new Promise((resolve, reject) => {
+      const existingScript = document.querySelector('script[data-apple-signin="mabaso"]');
+      const script = existingScript || document.createElement("script");
+      const handleLoad = () => {
+        if (window.AppleID?.auth) resolve(window.AppleID);
+        else reject(new Error("Apple sign-in loaded, but the AppleID client is unavailable."));
+      };
+      const handleError = () => {
+        appleAuthScriptPromise = null;
+        reject(new Error("Apple sign-in could not be loaded right now."));
+      };
+
+      if (!existingScript) {
+        script.src = "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
+        script.async = true;
+        script.defer = true;
+        script.dataset.appleSignin = "mabaso";
+        document.body.appendChild(script);
+      }
+
+      script.addEventListener("load", handleLoad, { once: true });
+      script.addEventListener("error", handleError, { once: true });
+
+      if (existingScript && window.AppleID?.auth) {
+        resolve(window.AppleID);
+      }
+    });
+  }
+  return appleAuthScriptPromise;
+}
+
+function normalizeAppleSignInError(error) {
+  const code = error?.error || error?.message || "";
+  if (String(code).includes("popup_closed_by_user") || String(code).includes("user_cancelled_authorize")) {
+    return "Apple sign-in was cancelled.";
+  }
+  return error?.message || "Apple sign-in failed.";
+}
 
 function loadHistoryItems() {
   try {
@@ -254,9 +347,39 @@ function createStudySourceEntry(name, text, prefix) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: (name || prefix || "Study source").trim() || "Study source",
-    text: (text || "").trim(),
+    text: normalizeStudySourceText(text),
     prefix: prefix || "STUDY SOURCE",
   };
+}
+
+function normalizeStudySourceText(text) {
+  return (text || "")
+    .replace(/\u0000/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .replace(/[^\S\r\n]{2,}/g, " ")
+    .trim();
+}
+
+function isLikelyReadableStudySourceText(text) {
+  const cleaned = normalizeStudySourceText(text);
+  if (!cleaned) return false;
+  const compact = cleaned.replace(/\s+/g, "");
+  if (!compact) return false;
+
+  const alphanumericCount = (cleaned.match(/[A-Za-z0-9]/g) || []).length;
+  const weirdCharacterCount = (cleaned.match(/[^A-Za-z0-9\s.,:;!?()[\]{}\-+*/=%<>'"&/@#\\]/g) || []).length;
+  const longWords = cleaned.match(/[A-Za-z]{3,}/g) || [];
+
+  if (compact.length >= 60 && weirdCharacterCount / compact.length > 0.22 && alphanumericCount / compact.length < 0.55) {
+    return false;
+  }
+
+  if (longWords.length < 4 && alphanumericCount < 24) {
+    return false;
+  }
+
+  return true;
 }
 
 function normalizeStudySourceEntries(entries, fallbackText = "", fallbackNames = [], defaultPrefix = "STUDY SOURCE") {
@@ -565,6 +688,7 @@ export default function App() {
   );
   const [authChecked, setAuthChecked] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -723,6 +847,7 @@ export default function App() {
 
   const buildCaptureActionMeta = (target) => {
     const progressLabel = loading && progress > 0 ? `${Math.round(progress)}%` : "";
+    const progressValue = Math.max(6, Math.min(100, Math.round(progress || 0)));
 
     if (target === "transcribe") {
       if (recording) {
@@ -730,6 +855,9 @@ export default function App() {
           eyebrow: "Live recording",
           badge: "REC",
           detail: "Recording is running. Stop it when the lecture is finished so the file can be transcribed.",
+          showProgress: false,
+          progressValue: 0,
+          statusLine: "",
         };
       }
       if (currentJobType === "transcription" || currentJobType === "video") {
@@ -737,6 +865,9 @@ export default function App() {
           eyebrow: currentJobType === "video" ? "Reading video link" : "Transcribing lecture",
           badge: progressLabel || "Working",
           detail: status || "Preparing the lecture transcript.",
+          showProgress: true,
+          progressValue,
+          statusLine: status || "Preparing the lecture transcript.",
         };
       }
       if (file) {
@@ -744,12 +875,18 @@ export default function App() {
           eyebrow: "Lecture file ready",
           badge: "Ready",
           detail: `${file.name} is waiting for transcription.`,
+          showProgress: false,
+          progressValue: 0,
+          statusLine: "",
         };
       }
       return {
         eyebrow: "Step 1",
         badge: "Waiting",
         detail: "Select a video or recording file, record live, or paste a video link first.",
+        showProgress: false,
+        progressValue: 0,
+        statusLine: "",
       };
     }
 
@@ -759,6 +896,9 @@ export default function App() {
           eyebrow: currentJobType === "study_guide" ? "Building study pack" : `Reading ${currentJobType.replace("_", " ")}`,
           badge: progressLabel || "Working",
           detail: status || "Preparing lecture sources for the guide.",
+          showProgress: true,
+          progressValue,
+          statusLine: status || "Preparing lecture sources for the guide.",
         };
       }
       if (hasStudyInputs) {
@@ -766,12 +906,18 @@ export default function App() {
           eyebrow: "Study sources ready",
           badge: "Ready",
           detail: "Generate the guide from the transcript, notes, slides, and past papers already loaded.",
+          showProgress: false,
+          progressValue: 0,
+          statusLine: "",
         };
       }
       return {
         eyebrow: "Step 2",
         badge: "Waiting",
         detail: "Add notes, slides, or past papers when you want a stronger study guide.",
+        showProgress: false,
+        progressValue: 0,
+        statusLine: "",
       };
     }
 
@@ -780,6 +926,9 @@ export default function App() {
         eyebrow: "Workspace ready",
         badge: "Open",
         detail: `${flashcards.length} flashcards and ${quizQuestions.length} test questions are ready in the study workspace.`,
+        showProgress: false,
+        progressValue: 0,
+        statusLine: "",
       };
     }
 
@@ -787,6 +936,9 @@ export default function App() {
       eyebrow: "Step 3",
       badge: loading ? "Locked" : "Waiting",
       detail: "The study workspace opens after the lecture has been transcribed or the guide has been generated.",
+      showProgress: false,
+      progressValue: 0,
+      statusLine: "",
     };
   };
 
@@ -965,7 +1117,7 @@ export default function App() {
   ) : null;
 
   const renderHelpAboutPage = () => (
-    <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-4">
           {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
@@ -1030,7 +1182,7 @@ export default function App() {
   );
 
   const renderCollaborationPage = () => (
-    <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-start gap-4">
           {renderBackButton(() => setCurrentPage("workspace"), "Back to study workspace")}
@@ -1439,10 +1591,91 @@ export default function App() {
     }
   };
 
+  const finishAppleLogin = async ({ authorizationCode = "", idToken = "", nonce = "", state = "", user = null, redirectUri = "" }) => {
+    setAuthMessage("");
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/apple`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authorization_code: authorizationCode,
+          id_token: idToken,
+          nonce,
+          state,
+          user,
+          redirect_uri: redirectUri,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Apple sign-in failed.");
+      setAuthToken(data.token || "");
+      setAuthEmail(data.email || "");
+      setAuthEmailInput(data.email || "");
+      setCurrentPage("capture");
+      setStatus("Signed in successfully.");
+      setAuthMessage("You are signed in.");
+    } catch (err) {
+      setAuthMessage(err.message || "Apple sign-in failed.");
+    }
+  };
+
+  const startAppleLogin = async () => {
+    setAuthMessage("");
+    if (!APPLE_CLIENT_ID) {
+      setAuthMessage("Apple login is not configured on the website yet. Missing VITE_APPLE_CLIENT_ID.");
+      return;
+    }
+    if (!isAppleWebSigninSupported()) {
+      setAuthMessage("Apple login needs an HTTPS website on a real domain. It will not start on localhost or an IP address.");
+      return;
+    }
+
+    setIsAppleSigningIn(true);
+    try {
+      await ensureAppleAuthScript();
+      const redirectUri = buildAppleRedirectUri();
+      const state = createBrowserSafeToken(24);
+      const nonce = createBrowserSafeToken(24);
+
+      window.AppleID.auth.init({
+        clientId: APPLE_CLIENT_ID,
+        scope: "name email",
+        redirectURI: redirectUri,
+        state,
+        nonce,
+        usePopup: true,
+      });
+
+      const result = await window.AppleID.auth.signIn();
+      const authorization = result?.authorization || {};
+      if (!authorization.code && !authorization.id_token) {
+        throw new Error("Apple sign-in did not return a usable credential.");
+      }
+      if (authorization.state && authorization.state !== state) {
+        throw new Error("Apple sign-in state verification failed.");
+      }
+
+      await finishAppleLogin({
+        authorizationCode: authorization.code || "",
+        idToken: authorization.id_token || "",
+        nonce,
+        state,
+        user: result?.user || null,
+        redirectUri,
+      });
+    } catch (error) {
+      setAuthMessage(normalizeAppleSignInError(error));
+    } finally {
+      setIsAppleSigningIn(false);
+    }
+  };
+
   useEffect(() => {
     if (authToken || !authChecked) return;
     if (!GOOGLE_CLIENT_ID) {
-      setAuthMessage("Google login is not configured on the website yet. Missing VITE_GOOGLE_CLIENT_ID.");
+      if (!APPLE_CLIENT_ID) {
+        setAuthMessage("Google and Apple login are not configured on the website yet.");
+      }
       return;
     }
 
@@ -1497,6 +1730,13 @@ export default function App() {
       cancelled = true;
       script.removeEventListener("load", handleLoad);
     };
+  }, [authChecked, authToken]);
+
+  useEffect(() => {
+    if (authToken || !authChecked || !APPLE_CLIENT_ID || !isAppleWebSigninSupported()) return;
+    ensureAppleAuthScript().catch(() => {
+      // The button can still try again on click.
+    });
   }, [authChecked, authToken]);
 
   const authFetch = async (path, options = {}) => {
@@ -1737,12 +1977,14 @@ export default function App() {
     setStatus("Reading lecture notes...");
     setProgress(10);
     try {
-      const { extractedEntries, addedNames } = await extractStudySourceFiles(files, {
+      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
         sourceName: "lecture note",
         sourcePrefix: "LECTURE NOTE",
       });
       setLectureNoteSources((current) => mergeStudySourceEntries(current, extractedEntries));
-      setStatus(`${addedNames.length} lecture note source${addedNames.length === 1 ? "" : "s"} added.`);
+      setStatus(
+        `${addedNames.length} lecture note source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`,
+      );
       setProgress(100);
     } catch (err) {
       setError(err.message || "Lecture note reading failed.");
@@ -1756,19 +1998,22 @@ export default function App() {
 
   const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix }) => {
     const files = Array.from(selectedFiles || []);
-    if (!files.length) return { extractedEntries: [], addedNames: [] };
+    if (!files.length) return { extractedEntries: [], addedNames: [], skippedNames: [] };
 
     const extractedEntries = [];
     const addedNames = [];
+    const skippedNames = [];
     for (const [index, selectedFile] of files.entries()) {
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
       setProgress(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
       setStatus(`Reading ${sourceName} ${index + 1} of ${files.length}: ${selectedFile.name}`);
       if (isTextFile) {
-        const text = await selectedFile.text();
-        if (text.trim()) {
-          extractedEntries.push(createStudySourceEntry(selectedFile.name, text.trim(), sourcePrefix));
+        const text = normalizeStudySourceText(await selectedFile.text());
+        if (isLikelyReadableStudySourceText(text)) {
+          extractedEntries.push(createStudySourceEntry(selectedFile.name, text, sourcePrefix));
           addedNames.push(selectedFile.name);
+        } else if (text) {
+          skippedNames.push(selectedFile.name);
         }
         continue;
       }
@@ -1777,17 +2022,20 @@ export default function App() {
       const response = await authFetch("/extract-slide-text/", { method: "POST", body: formData });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
-      if (data.text?.trim()) {
-        extractedEntries.push(createStudySourceEntry(selectedFile.name, data.text.trim(), sourcePrefix));
+      const cleanedText = normalizeStudySourceText(data.text || "");
+      if (isLikelyReadableStudySourceText(cleanedText)) {
+        extractedEntries.push(createStudySourceEntry(selectedFile.name, cleanedText, sourcePrefix));
         addedNames.push(selectedFile.name);
+      } else if (cleanedText) {
+        skippedNames.push(selectedFile.name);
       }
     }
 
     if (!extractedEntries.length) {
-      throw new Error(`No readable ${sourceName} content could be extracted.`);
+      throw new Error(`No readable ${sourceName} content could be extracted. Try clearer notes, cleaner scans, or a text-based file.`);
     }
 
-    return { extractedEntries, addedNames };
+    return { extractedEntries, addedNames, skippedNames };
   };
 
   const handleLectureSlidesFilesChange = async (selectedFiles) => {
@@ -1799,12 +2047,14 @@ export default function App() {
     setStatus("Reading slide sources...");
     setProgress(10);
     try {
-      const { extractedEntries, addedNames } = await extractStudySourceFiles(files, {
+      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
         sourceName: "slide source",
         sourcePrefix: "SLIDE SOURCE",
       });
       setLectureSlideSources((current) => mergeStudySourceEntries(current, extractedEntries));
-      setStatus(`${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.`);
+      setStatus(
+        `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`,
+      );
       setProgress(100);
     } catch (err) {
       setError(err.message || "Slide reading failed.");
@@ -1825,13 +2075,13 @@ export default function App() {
     setStatus("Reading past question papers...");
     setProgress(10);
     try {
-      const { extractedEntries, addedNames } = await extractStudySourceFiles(files, {
+      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
         sourceName: "past question paper",
         sourcePrefix: "PAST QUESTION PAPER",
       });
       setPastQuestionPaperSources((current) => mergeStudySourceEntries(current, extractedEntries));
       setStatus(
-        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added. Generate the study guide again to refresh notes and test questions with this reference.`,
+        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generate the study guide again to refresh notes and test questions with this reference.`,
       );
       setProgress(100);
     } catch (err) {
@@ -2819,8 +3069,8 @@ export default function App() {
               </div>
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Google Access</p>
-              <h2 className="mt-3 text-3xl font-semibold text-white">Sign in with Google</h2>
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Access</p>
+              <h2 className="mt-3 text-3xl font-semibold text-white">Continue into MABASO</h2>
               <div className="mt-8 space-y-5">
                 {authEmailInput ? (
                   <div className="rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">
@@ -2830,13 +3080,17 @@ export default function App() {
                 <div ref={googleButtonRef} className="min-h-[44px] w-full max-w-[320px] overflow-hidden" />
                 <button
                   type="button"
-                  onClick={() => setAuthMessage("Continue with iPhone is not connected on this deployment yet. Continue with Google for now.")}
-                  className="flex w-full max-w-[320px] items-center justify-center rounded-full border border-white/10 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-900"
+                  onClick={startAppleLogin}
+                  disabled={isAppleSigningIn}
+                  className="flex w-full max-w-[320px] items-center justify-center gap-3 rounded-full border border-white/10 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:opacity-60"
                 >
-                  Continue with iPhone
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                    <path d="M16.37 12.48c.03 3.12 2.73 4.16 2.76 4.17-.02.07-.43 1.49-1.41 2.96-.85 1.27-1.73 2.53-3.12 2.56-1.37.03-1.81-.81-3.38-.81-1.56 0-2.06.79-3.35.84-1.34.05-2.36-1.35-3.22-2.61-1.75-2.53-3.08-7.15-1.29-10.26.89-1.54 2.48-2.51 4.21-2.54 1.31-.03 2.55.88 3.35.88.8 0 2.31-1.08 3.89-.92.66.03 2.52.27 3.71 2.01-.1.06-2.22 1.3-2.2 3.72Zm-2.72-6.31c.71-.86 1.18-2.04 1.05-3.22-1.02.04-2.26.68-2.99 1.54-.66.76-1.24 1.96-1.09 3.1 1.14.09 2.31-.58 3.03-1.42Z" fill="currentColor" />
+                  </svg>
+                  <span>{isAppleSigningIn ? "Connecting iPhone..." : "Continue with iPhone"}</span>
                 </button>
                 <div className="rounded-2xl border border-emerald-300/18 bg-emerald-300/8 px-4 py-4 text-sm leading-7 text-slate-200">
-                  Record your lecture while teaching and get notes automatically. This device remembers the Google email you used and keeps you signed in until you sign out or the session expires.
+                  Sign in with Google or iPhone, then upload a lecture, add notes or slides, and let the app build the study workspace. This device remembers the last email used here until you sign out or the session expires.
                 </div>
                 {authMessage ? <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-slate-200">{authMessage}</div> : null}
               </div>
@@ -2876,18 +3130,13 @@ export default function App() {
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
 
-        {currentPage === "capture" ? <section className="mb-8 rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
-          <div className="grid gap-8 xl:grid-cols-[1fr_0.95fr]">
-            <div className="force-mobile-stack flex items-start justify-between gap-4">
-              <div className="space-y-6">
-                <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
-                <h1 className="text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Capture the lecture first, then move into the study workspace.</h1>
-                <p className="max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add your sources, then generate the full study pack.</p>
-              </div>
-              <button type="button" onClick={() => setCurrentPage("about")} className="shrink-0 rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-xs font-semibold uppercase tracking-[0.22em] text-white transition hover:bg-white/10">Help & About</button>
-            </div>
+        {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
+          <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
+            <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
+            <button type="button" onClick={() => setCurrentPage("about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
+          </div>
 
-            <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)]">
+          <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)] xl:p-6">
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleLectureBundleFilesChange(event.dataTransfer.files); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
                 <div className="space-y-5">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
@@ -2910,9 +3159,9 @@ export default function App() {
                     <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Non-YouTube public links are also supported when the backend can read them.</p>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-3">
-                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[104px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-emerald-50/85"><span>{transcribeActionMeta.eyebrow}</span><span>{transcribeActionMeta.badge}</span></div><span className="mt-3 block text-base font-semibold">Transcribe Lecture</span><span className="mt-2 block text-xs leading-5 text-emerald-50/85">{transcribeActionMeta.detail}</span></button>
-                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[104px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-amber-50/90"><span>{guideActionMeta.eyebrow}</span><span>{guideActionMeta.badge}</span></div><span className="mt-3 block text-base font-semibold">Generate Study Guide</span><span className="mt-2 block text-xs leading-5 text-amber-50/90">{guideActionMeta.detail}</span></button>
-                    <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className="min-h-[104px] rounded-[22px] border border-sky-300/25 bg-sky-400/15 px-5 py-4 text-left text-sky-50 disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-sky-100/90"><span>{workspaceActionMeta.eyebrow}</span><span>{workspaceActionMeta.badge}</span></div><span className="mt-3 block text-base font-semibold">Open Study Workspace</span><span className="mt-2 block text-xs leading-5 text-sky-100/90">{workspaceActionMeta.detail}</span></button>
+                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-emerald-50/85"><span>{transcribeActionMeta.eyebrow}</span><span>{transcribeActionMeta.badge}</span></div>{transcribeActionMeta.showProgress ? <div className="mt-3"><div className="h-1.5 overflow-hidden rounded-full bg-black/20"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#dcfce7,#bbf7d0,#86efac)]" style={{ width: `${transcribeActionMeta.progressValue}%` }} /></div><p className="mt-2 text-[11px] leading-5 text-emerald-50/90">{transcribeActionMeta.statusLine}</p></div> : null}<span className="mt-3 block text-base font-semibold">Transcribe Lecture</span><span className="mt-2 block text-xs leading-5 text-emerald-50/85">{transcribeActionMeta.detail}</span></button>
+                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-amber-50/90"><span>{guideActionMeta.eyebrow}</span><span>{guideActionMeta.badge}</span></div>{guideActionMeta.showProgress ? <div className="mt-3"><div className="h-1.5 overflow-hidden rounded-full bg-black/20"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#fde68a,#fdba74,#fb923c)]" style={{ width: `${guideActionMeta.progressValue}%` }} /></div><p className="mt-2 text-[11px] leading-5 text-amber-50/90">{guideActionMeta.statusLine}</p></div> : null}<span className="mt-3 block text-base font-semibold">Generate Study Guide</span><span className="mt-2 block text-xs leading-5 text-amber-50/90">{guideActionMeta.detail}</span></button>
+                    <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className="min-h-[124px] rounded-[22px] border border-sky-300/25 bg-sky-400/15 px-5 py-4 text-left text-sky-50 disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-sky-100/90"><span>{workspaceActionMeta.eyebrow}</span><span>{workspaceActionMeta.badge}</span></div><span className="mt-3 block text-base font-semibold">Open Study Workspace</span><span className="mt-2 block text-xs leading-5 text-sky-100/90">{workspaceActionMeta.detail}</span></button>
                   </div>
                   <input ref={fileInputRef} type="file" accept={LECTURE_MEDIA_ACCEPT} className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />
                   <input ref={bulkLectureFileInputRef} type="file" accept={BULK_LECTURE_ACCEPT} multiple className="hidden" onChange={(event) => { handleLectureBundleFilesChange(event.target.files); event.target.value = ""; }} />
@@ -2943,17 +3192,16 @@ export default function App() {
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
-              <div className="mt-5 min-h-[150px] rounded-2xl border border-white/10 bg-slate-950/75 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p></div><div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs font-semibold text-emerald-100">{Math.round(progress)}%</div></div>
-                <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/10"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#22c55e,#10b981,#4ade80)] transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>
+              <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
+                <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
                 {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
                 {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}</div> : null}
               </div>
             </aside>
-          </div>
         </section> : null}
 
-        {currentPage === "workspace" ? <section className="rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+        {currentPage === "workspace" ? <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
           <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="flex items-start gap-4">
               {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}

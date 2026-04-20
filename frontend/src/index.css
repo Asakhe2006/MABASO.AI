@@ -189,12 +189,27 @@ iframe {
   overflow-x: auto;
 }
 
+.notes-markdown table {
+  display: block;
+  width: 100%;
+}
+
+.notes-markdown img {
+  display: block;
+  height: auto;
+}
+
 .notes-markdown pre {
   white-space: pre-wrap;
 }
 
 .notes-markdown code {
   white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notes-markdown a {
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 

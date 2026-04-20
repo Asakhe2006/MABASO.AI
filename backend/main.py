@@ -71,6 +71,13 @@ except ImportError:
     GoogleRequest = None
     google_id_token = None
 
+try:
+    import jwt
+    from jwt import PyJWKClient
+except ImportError:
+    jwt = None
+    PyJWKClient = None
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,6 +94,11 @@ ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
+APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "").strip()
+APPLE_KEY_ID = os.getenv("APPLE_KEY_ID", "").strip()
+APPLE_REDIRECT_URI = os.getenv("APPLE_REDIRECT_URI", "").strip()
+APPLE_PRIVATE_KEY = os.getenv("APPLE_PRIVATE_KEY", "").strip()
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024)))
 OPENAI_AUDIO_LIMIT_BYTES = int(os.getenv("OPENAI_AUDIO_LIMIT_BYTES", str(25 * 1024 * 1024)))
@@ -120,6 +132,10 @@ DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 SESSION_TOKEN_PREFIX = "mabaso.v1"
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
+APPLE_IDENTITY_ISSUER = "https://appleid.apple.com"
+APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
+APPLE_TOKEN_VALIDATION_URL = f"{APPLE_IDENTITY_ISSUER}/auth/token"
+APPLE_AUTH_HTTP_TIMEOUT = float(os.getenv("APPLE_AUTH_HTTP_TIMEOUT", "15"))
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
 YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
 YOUTUBE_USER_AGENT = os.getenv(
@@ -143,6 +159,7 @@ YOUTUBE_COOKIES_FILE = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
 YOUTUBE_COOKIES_TXT = os.getenv("YOUTUBE_COOKIES_TXT", "").strip()
 
 jobs: dict[str, dict] = {}
+apple_jwk_client = PyJWKClient(APPLE_JWKS_URL) if PyJWKClient is not None else None
 
 STUDY_GUIDE_PROMPT = """
 You are an expert academic assistant for university students.
@@ -214,10 +231,14 @@ Rules:
   A: ...
 - Leave a blank line between Q and A, and a blank line between flashcards so they are easy to read.
 - If lecture notes or lecture slides are provided together with the transcript, use all sources together. Prefer explicit formulas, worked examples, definitions, and likely assessment points from the slides or notes when they improve clarity.
+- Prefer well-structured notes, slides, and past-paper references over messy transcript wording when they explain the topic more clearly.
+- Ignore clearly corrupted OCR, random fragments, duplicate scraps, broken symbols, or unrelated extraction noise instead of mixing them into the final notes.
+- Do not let a noisy transcript dominate cleaner note or slide material.
 - If past question papers are provided, use them as an assessment reference. Infer recurring topics, phrasing style, and mark patterns from them, but do not copy their questions verbatim.
 - If the transcript is missing but lecture notes, lecture slides, or past question papers are provided, still generate the study guide from those sources and mention when the source material is limited.
 - If the lecture skips steps, fill in only the most important missing steps.
 - If a topic is unclear, say "Not clearly covered in transcript".
+- Do not force photo-oriented commentary unless the topic clearly involves physical things students should recognise by sight.
 - Do not include YouTube links or long export suggestions.
 """
 
@@ -254,6 +275,15 @@ class VerifyCodeRequest(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     credential: str
+
+
+class AppleAuthRequest(BaseModel):
+    authorization_code: str = ""
+    id_token: str = ""
+    nonce: str = ""
+    state: str = ""
+    user: dict[str, Any] | None = None
+    redirect_uri: str = ""
 
 
 class ChatTurn(BaseModel):
@@ -537,6 +567,130 @@ def verify_google_auth_is_configured():
         )
 
 
+def verify_apple_auth_is_configured():
+    if not APPLE_CLIENT_ID:
+        raise HTTPException(
+            status_code=500,
+            detail="Apple login is not configured on the server yet. Missing APPLE_CLIENT_ID.",
+        )
+    if jwt is None or apple_jwk_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Apple login support is not installed on the server yet. Install backend requirements, including PyJWT[crypto], then redeploy.",
+        )
+
+
+def normalize_apple_private_key() -> str:
+    return APPLE_PRIVATE_KEY.replace("\\n", "\n").strip()
+
+
+def can_exchange_apple_authorization_code() -> bool:
+    return all([APPLE_TEAM_ID, APPLE_KEY_ID, normalize_apple_private_key()])
+
+
+def mark_user_verified(email: str):
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            (email, now_iso),
+        )
+        connection.execute(
+            "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
+            (now_iso, email),
+        )
+
+
+def build_apple_client_secret() -> str:
+    if not can_exchange_apple_authorization_code():
+        raise HTTPException(
+            status_code=500,
+            detail="Apple code exchange is not configured on the server yet. Add APPLE_TEAM_ID, APPLE_KEY_ID, and APPLE_PRIVATE_KEY.",
+        )
+
+    now_timestamp = int(utc_now().timestamp())
+    claims = {
+        "iss": APPLE_TEAM_ID,
+        "iat": now_timestamp,
+        "exp": now_timestamp + 60 * 60 * 24 * 180,
+        "aud": APPLE_IDENTITY_ISSUER,
+        "sub": APPLE_CLIENT_ID,
+    }
+    return jwt.encode(
+        claims,
+        normalize_apple_private_key(),
+        algorithm="ES256",
+        headers={"kid": APPLE_KEY_ID},
+    )
+
+
+def exchange_apple_authorization_code(authorization_code: str, redirect_uri: str) -> dict[str, Any]:
+    verify_apple_auth_is_configured()
+    if not authorization_code:
+        raise HTTPException(status_code=400, detail="Apple authorization code is required.")
+    if not can_exchange_apple_authorization_code():
+        return {}
+
+    resolved_redirect_uri = (redirect_uri or APPLE_REDIRECT_URI).strip()
+    payload = {
+        "client_id": APPLE_CLIENT_ID,
+        "client_secret": build_apple_client_secret(),
+        "code": authorization_code,
+        "grant_type": "authorization_code",
+    }
+    if resolved_redirect_uri:
+        payload["redirect_uri"] = resolved_redirect_uri
+
+    try:
+        response = requests.post(
+            APPLE_TOKEN_VALIDATION_URL,
+            data=payload,
+            timeout=APPLE_AUTH_HTTP_TIMEOUT,
+        )
+        data = response.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="Apple sign-in could not be completed right now.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Apple sign-in returned an unreadable response.") from exc
+
+    if not response.ok:
+        detail = compact_text(data.get("error_description") or data.get("error"), "Apple sign-in could not be verified.")
+        raise HTTPException(status_code=401, detail=detail)
+
+    return data
+
+
+def verify_apple_identity_token(identity_token: str, nonce: str = "") -> dict[str, Any]:
+    verify_apple_auth_is_configured()
+    if not identity_token:
+        raise HTTPException(status_code=400, detail="Apple identity token is required.")
+
+    try:
+        signing_key = apple_jwk_client.get_signing_key_from_jwt(identity_token)
+        claims = jwt.decode(
+            identity_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=APPLE_CLIENT_ID,
+            issuer=APPLE_IDENTITY_ISSUER,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Apple sign-in could not be verified.") from exc
+
+    provided_nonce = compact_text(nonce)
+    token_nonce = compact_text(claims.get("nonce"))
+    if provided_nonce and token_nonce and provided_nonce != token_nonce:
+        raise HTTPException(status_code=401, detail="Apple sign-in nonce verification failed.")
+
+    email = validate_email_address(claims.get("email", ""))
+    email_verified = claims.get("email_verified")
+    if str(email_verified).lower() not in {"true", "1"} and email_verified is not True:
+        raise HTTPException(status_code=401, detail="Apple account email is not verified.")
+
+    claims["email"] = email
+    return claims
+
+
 def verify_smtp_is_configured():
     required = ["SMTP_HOST", "SMTP_FROM_EMAIL"]
     missing = [name for name in required if not os.getenv(name)]
@@ -792,17 +946,24 @@ def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     if not token_info.get("email_verified"):
         raise HTTPException(status_code=401, detail="Google account email is not verified.")
 
-    now_iso = utc_now().isoformat()
-    with get_db_connection() as connection:
-        connection.execute(
-            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
-            (email, now_iso),
-        )
-        connection.execute(
-            "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
-            (now_iso, email),
-        )
+    mark_user_verified(email)
+    return create_session(email), email
 
+
+def create_session_from_apple_auth(payload: AppleAuthRequest) -> tuple[str, str]:
+    verify_apple_auth_is_configured()
+
+    authorization_code = compact_text(payload.authorization_code)
+    redirect_uri = compact_text(payload.redirect_uri)
+    identity_token = compact_text(payload.id_token)
+
+    if authorization_code and can_exchange_apple_authorization_code():
+        exchanged = exchange_apple_authorization_code(authorization_code, redirect_uri)
+        identity_token = compact_text(exchanged.get("id_token"), identity_token)
+
+    claims = verify_apple_identity_token(identity_token, nonce=payload.nonce)
+    email = claims["email"]
+    mark_user_verified(email)
     return create_session(email), email
 
 
@@ -1650,6 +1811,14 @@ async def google_login(payload: GoogleAuthRequest):
     if not credential:
         raise HTTPException(status_code=400, detail="Google credential is required.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    return {"token": session_token, "email": email}
+
+
+@app.post("/auth/apple")
+async def apple_login(payload: AppleAuthRequest):
+    if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
+        raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
+    session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
     return {"token": session_token, "email": email}
 
 
@@ -3043,11 +3212,33 @@ def build_study_image_queries(
     lecture_notes: str,
     lecture_slides: str,
 ) -> list[str]:
+    visual_aids = extract_section(summary, "VISUAL AIDS").lower()
+    structured_sources = "\n\n".join(part for part in [lecture_notes.strip(), lecture_slides.strip()] if part).lower()
+    concrete_markers = (
+        "recognise",
+        "recognize",
+        "visible",
+        "photo",
+        "real-world appearance",
+        "subtype",
+        "machine",
+        "instrument",
+        "valve",
+        "organ",
+        "structure",
+        "component",
+        "equipment",
+    )
+    should_fetch_images = any(marker in visual_aids for marker in concrete_markers) or any(
+        marker in structured_sources for marker in concrete_markers
+    )
+    if not should_fetch_images:
+        return []
+
     context_parts = [
         trimmed_context_block("STUDY GUIDE", summary, 5000),
         trimmed_context_block("LECTURE NOTES", lecture_notes, 2500),
         trimmed_context_block("LECTURE SLIDES", lecture_slides, 2500),
-        trimmed_context_block("LECTURE TRANSCRIPT", transcript, 2500),
     ]
     combined_context = "\n\n".join(part for part in context_parts if part).strip()
     if not combined_context:
