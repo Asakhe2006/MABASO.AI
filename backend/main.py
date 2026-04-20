@@ -111,7 +111,7 @@ PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
 STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
-MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "4"))
+MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "6"))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
@@ -171,8 +171,10 @@ Rules:
 - Use clear section headings in uppercase and make each heading bold using Markdown.
 - Leave a blank line between every section.
 - Keep the notes compact and easy to revise.
+- Write like a strong school or university revision handout: high-level first, then detailed support.
 - Use bullet points where useful, especially for summaries, concepts, definitions, exam tips, and revision steps.
 - Prefer short readable bullets over long dense paragraphs.
+- Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
 - If formulas appear, rewrite them in readable human style.
 - Never use LaTeX syntax or math delimiters such as \\, \\, $$, \\frac, \\int, \\mathcal, or \\begin.
 - Do not write exponents with caret notation like s^2, t^n, or e^(-at) in the final answer.
@@ -189,10 +191,13 @@ Rules:
   u(t - a) = 0 for t < a, and 1 for t >= a
 - Put a blank line before and after each formula block so it is easy to read.
 - In WORKED EXAMPLES, include at least one step-by-step solved example when the lecture contains a problem, calculation, derivation, or sum.
+- In STEP-BY-STEP EXPLANATIONS, explain what the student should notice, why it matters, and how to avoid confusing it with similar ideas.
 - In ADVANTAGES AND DISADVANTAGES, give practical study-focused pros, limits, or caution points that help a student know when the idea is useful and where it becomes confusing.
 - In COMMON MISTAKES TO AVOID, list short warnings about misunderstandings, skipped steps, wrong formula use, or revision traps.
 - In QUICK REVISION PLAN, give a short sequence a student can follow before a class test or exam.
 - In VISUAL AIDS, include simple ASCII diagrams, neat comparison tables, flow layouts, or graph sketches when they help explain the topic.
+- If the lecture covers concrete physical things, types, components, specimens, machines, instruments, valves, organs, or structures, name the important visual subtypes clearly and describe the visible features students should recognise.
+- In VISUAL AIDS, explicitly mention concrete objects or subtype names that would benefit from a real photo reference.
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
 - Use simple text layouts that students can read easily in plain Markdown.
 - In PRACTICE QUESTIONS AND ANSWERS, create 10 numbered question-and-answer pairs using this exact style:
@@ -1285,6 +1290,11 @@ def is_pptx_upload(filename: str, content_type: str | None) -> bool:
     return suffix == ".pptx" or content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
+def is_docx_upload(filename: str, content_type: str | None) -> bool:
+    suffix = Path(filename or "").suffix.lower()
+    return suffix == ".docx" or content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
 def build_data_url(file_bytes: bytes, content_type: str | None, filename: str = "") -> str:
     mime_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = base64.b64encode(file_bytes).decode("ascii")
@@ -1415,6 +1425,24 @@ def extract_slide_text_from_pptx(file_bytes: bytes) -> str:
                 slide_text_parts.append(f"SLIDE {slide_index}\n{merged_text}")
 
     return "\n\n".join(slide_text_parts).strip()
+
+
+def extract_text_from_docx(file_bytes: bytes) -> str:
+    namespaces = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs: list[str] = []
+
+    with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+        if "word/document.xml" not in archive.namelist():
+            return ""
+
+        root = ET.fromstring(archive.read("word/document.xml"))
+        for paragraph in root.findall(".//w:p", namespaces):
+            text_runs = [node.text for node in paragraph.findall(".//w:t", namespaces) if node.text]
+            paragraph_text = "".join(text_runs).strip()
+            if paragraph_text:
+                paragraphs.append(paragraph_text)
+
+    return "\n\n".join(paragraphs).strip()
 
 
 def extract_slide_text_from_image(image_data_url: str, file_name: str = "") -> str:
@@ -3036,10 +3064,11 @@ def build_study_image_queries(
                         "You pick real-photo search queries for a university study app. "
                         "Return strict JSON only in this shape: {\"queries\": [\"...\"]}.\n\n"
                         "Rules:\n"
-                        "- Return 0 to 4 short search queries.\n"
+                        "- Return 0 to 6 short search queries.\n"
                         "- Only return queries for concrete things that students should literally see, such as organs, machines, lab tools, landmarks, species, hardware, or physical processes.\n"
                         "- If the topic is mostly abstract, symbolic, theoretical, or mathematical, return an empty array.\n"
                         "- Prefer specific nouns over vague phrases.\n"
+                        "- If the guide compares concrete subtypes, return one query per important subtype instead of one generic umbrella term.\n"
                         "- Do not return diagram, illustration, formula, or stock-photo style phrases."
                     ),
                 },
@@ -4279,7 +4308,7 @@ async def transcribe_video_url(
 @app.post("/extract-slide-text/")
 async def extract_slide_text(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No slide file selected.")
+        raise HTTPException(status_code=400, detail="No study source file selected.")
 
     ensure_openai_key()
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
@@ -4294,7 +4323,7 @@ async def extract_slide_text(file: UploadFile = File(...), current_user: str = D
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    f"Slide file is too large ({len(file_bytes) / (1024 * 1024):.1f} MB). "
+                    f"Study source file is too large ({len(file_bytes) / (1024 * 1024):.1f} MB). "
                     f"Please keep it below {size_limit / (1024 * 1024):.0f} MB."
                 ),
             )
@@ -4321,10 +4350,20 @@ async def extract_slide_text(file: UploadFile = File(...), current_user: str = D
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that PowerPoint file.")
             return {"text": text}
 
+        if is_docx_upload(file.filename, content_type):
+            try:
+                text = await asyncio.to_thread(extract_text_from_docx, file_bytes)
+            except zipfile.BadZipFile as exc:
+                raise HTTPException(status_code=400, detail="That Word document could not be opened. Use a .docx file.") from exc
+
+            if not text:
+                raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that Word document.")
+            return {"text": text}
+
         if not content_type.startswith("image/"):
             raise HTTPException(
                 status_code=400,
-                detail="Upload a slide image, .pdf, .pptx, or a text-based slide file such as .txt or .md.",
+                detail="Upload a slide image, .pdf, .pptx, .docx, or a text-based slide file such as .txt or .md.",
             )
 
         image_data_url = build_data_url(file_bytes, content_type, file.filename)
