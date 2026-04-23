@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Mabaso AI</title>
+  <desc id="desc">A neon microphone standing on books with Mabaso AI branding.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#020805" />
+      <stop offset="55%" stop-color="#04110a" />
+      <stop offset="100%" stop-color="#0a0f16" />
+    </linearGradient>
+    <radialGradient id="greenGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#37ff8b" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#37ff8b" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="purpleGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#cf7dff" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#cf7dff" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="metal" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8fbff" />
+      <stop offset="28%" stop-color="#8f99a8" />
+      <stop offset="52%" stop-color="#ffffff" />
+      <stop offset="75%" stop-color="#49505d" />
+      <stop offset="100%" stop-color="#d8dee7" />
+    </linearGradient>
+    <linearGradient id="body" x1="50%" x2="50%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8fbff" />
+      <stop offset="40%" stop-color="#1d232e" />
+      <stop offset="100%" stop-color="#05070b" />
+    </linearGradient>
+    <linearGradient id="bookGreen" x1="0%" x2="100%" y1="50%" y2="50%">
+      <stop offset="0%" stop-color="#12b85a" />
+      <stop offset="100%" stop-color="#59ff9f" />
+    </linearGradient>
+    <linearGradient id="bookPurple" x1="0%" x2="100%" y1="50%" y2="50%">
+      <stop offset="0%" stop-color="#6a2bff" />
+      <stop offset="100%" stop-color="#cf7dff" />
+    </linearGradient>
+    <linearGradient id="textGreen" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#d8ffe4" />
+      <stop offset="60%" stop-color="#34f17f" />
+      <stop offset="100%" stop-color="#0fa34b" />
+    </linearGradient>
+    <linearGradient id="textPurple" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#f1deff" />
+      <stop offset="60%" stop-color="#c27cff" />
+      <stop offset="100%" stop-color="#7a3bff" />
+    </linearGradient>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" />
+    </filter>
+    <filter id="textGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10" />
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)" />
+  <circle cx="300" cy="250" r="170" fill="url(#greenGlow)" filter="url(#softGlow)" />
+  <circle cx="730" cy="280" r="170" fill="url(#purpleGlow)" filter="url(#softGlow)" />
+  <circle cx="540" cy="610" r="220" fill="#071019" />
+
+  <g stroke-linecap="round" stroke-width="5" fill="none">
+    <path d="M210 345c110-115 270-140 405-95" stroke="#6dffab" />
+    <path d="M180 410c110-85 255-104 365-70" stroke="#de9cff" />
+    <path d="M804 345c-110-115-270-140-405-95" stroke="#6dffab" />
+    <path d="M834 410c-110-85-255-104-365-70" stroke="#de9cff" />
+    <path d="M240 260c-68 70-100 160-92 250" stroke="#6dffab" />
+    <path d="M784 260c68 70 100 160 92 250" stroke="#6dffab" />
+  </g>
+
+  <g>
+    <circle cx="210" cy="345" r="9" fill="#59ff9f" />
+    <circle cx="190" cy="410" r="9" fill="#cf7dff" />
+    <circle cx="265" cy="285" r="9" fill="#59ff9f" />
+    <circle cx="805" cy="345" r="9" fill="#59ff9f" />
+    <circle cx="824" cy="410" r="9" fill="#cf7dff" />
+    <circle cx="755" cy="285" r="9" fill="#59ff9f" />
+    <circle cx="328" cy="320" r="8" fill="#cf7dff" />
+    <circle cx="696" cy="320" r="8" fill="#cf7dff" />
+    <circle cx="282" cy="455" r="8" fill="#59ff9f" />
+    <circle cx="740" cy="455" r="8" fill="#59ff9f" />
+  </g>
+
+  <g>
+    <ellipse cx="512" cy="658" rx="205" ry="22" fill="#0b1017" />
+    <rect x="346" y="642" width="316" height="78" rx="16" fill="#121a25" stroke="#435062" stroke-width="4" />
+    <rect x="360" y="672" width="150" height="12" rx="6" fill="url(#bookGreen)" filter="url(#softGlow)" />
+    <rect x="510" y="690" width="138" height="12" rx="6" fill="url(#bookPurple)" filter="url(#softGlow)" />
+    <rect x="382" y="621" width="258" height="38" rx="12" fill="#0a0f16" stroke="#566173" stroke-width="4" />
+    <path d="M612 623c22 8 34 18 34 36" stroke="#dce4ef" stroke-width="4" fill="none" />
+  </g>
+
+  <g transform="translate(0 10)">
+    <rect x="444" y="212" width="136" height="284" rx="68" fill="url(#body)" stroke="url(#metal)" stroke-width="7" />
+    <rect x="454" y="225" width="116" height="180" rx="58" fill="none" stroke="#edf3fb" stroke-width="3" opacity="0.65" stroke-dasharray="4 10" />
+    <rect x="430" y="478" width="164" height="46" rx="18" fill="url(#body)" stroke="url(#metal)" stroke-width="7" />
+    <path d="M446 505h-42c-22 0-38-16-38-38V355" stroke="url(#metal)" stroke-width="8" fill="none" />
+    <path d="M578 505h42c22 0 38-16 38-38V355" stroke="url(#metal)" stroke-width="8" fill="none" />
+    <path d="M512 524v82" stroke="url(#metal)" stroke-width="10" fill="none" />
+    <path d="M450 608h124" stroke="url(#metal)" stroke-width="10" fill="none" />
+    <path d="M420 642c18-32 45-48 92-48s74 16 92 48" stroke="url(#metal)" stroke-width="8" fill="none" />
+    <ellipse cx="512" cy="350" rx="26" ry="82" fill="#ffffff" opacity="0.9" filter="url(#softGlow)" />
+  </g>
+
+  <g opacity="0.72">
+    <path d="M150 540h140" stroke="#83cfff" stroke-width="3" stroke-linecap="round" />
+    <path d="M734 540h140" stroke="#83cfff" stroke-width="3" stroke-linecap="round" />
+    <path d="M150 540c24-12 48-12 72 0s48 12 68 0" stroke="#83cfff" stroke-width="2" fill="none" />
+    <path d="M734 540c24-12 48-12 72 0s48 12 68 0" stroke="#83cfff" stroke-width="2" fill="none" />
+  </g>
+
+  <g font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">
+    <text x="512" y="840" font-size="122" fill="url(#textGreen)">MABASO</text>
+    <text x="512" y="930" font-size="104" fill="url(#textPurple)">AI</text>
+    <text x="512" y="840" font-size="122" fill="url(#textGreen)" filter="url(#textGlow)" opacity="0.35">MABASO</text>
+    <text x="512" y="930" font-size="104" fill="url(#textPurple)" filter="url(#textGlow)" opacity="0.35">AI</text>
+  </g>
+</svg>

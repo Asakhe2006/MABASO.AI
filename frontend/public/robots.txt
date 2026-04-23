@@ -1,4 +1,2 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://mabaso-ai-web.onrender.com/sitemap.xml

@@ -118,7 +118,10 @@ MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 *
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
-SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "90"))
+SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
+SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
+MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
@@ -284,6 +287,15 @@ class AppleAuthRequest(BaseModel):
     state: str = ""
     user: dict[str, Any] | None = None
     redirect_uri: str = ""
+
+
+class SupportMessageRequest(BaseModel):
+    message: str
+    page: str = ""
+
+
+class HistorySyncRequest(BaseModel):
+    items: list[dict[str, Any]] = []
 
 
 class ChatTurn(BaseModel):
@@ -468,6 +480,24 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS study_history_items (
+                email TEXT NOT NULL,
+                id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (email, id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_study_history_items_email_updated_at
+            ON study_history_items (email, updated_at DESC)
+            """
+        )
 
 
 def hash_value(value: str) -> str:
@@ -489,7 +519,7 @@ def is_signed_session_token(token: str) -> bool:
 
 
 def build_signed_session_token(email: str, expires_at: datetime | None = None) -> str:
-    expiry = expires_at or (utc_now() + timedelta(days=SESSION_TTL_DAYS))
+    expiry = expires_at or (utc_now() + timedelta(minutes=SESSION_TTL_MINUTES))
     payload = json.dumps(
         {
             "email": email,
@@ -704,19 +734,34 @@ def verify_smtp_is_configured():
         )
 
 
-def send_verification_email(email: str, code: str):
+def get_smtp_settings() -> dict[str, Any]:
     verify_smtp_is_configured()
+    return {
+        "host": os.getenv("SMTP_HOST", ""),
+        "port": int(os.getenv("SMTP_PORT", "587")),
+        "username": os.getenv("SMTP_USERNAME", ""),
+        "password": os.getenv("SMTP_PASSWORD", ""),
+        "from_email": os.getenv("SMTP_FROM_EMAIL", ""),
+        "use_tls": os.getenv("SMTP_USE_TLS", "true").lower() != "false",
+    }
 
-    smtp_host = os.getenv("SMTP_HOST", "")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_username = os.getenv("SMTP_USERNAME", "")
-    smtp_password = os.getenv("SMTP_PASSWORD", "")
-    smtp_from = os.getenv("SMTP_FROM_EMAIL", "")
-    smtp_use_tls = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
+
+def send_smtp_message(message: EmailMessage):
+    smtp_settings = get_smtp_settings()
+    with smtplib.SMTP(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
+        if smtp_settings["use_tls"]:
+            server.starttls()
+        if smtp_settings["username"]:
+            server.login(smtp_settings["username"], smtp_settings["password"])
+        server.send_message(message)
+
+
+def send_verification_email(email: str, code: str):
+    smtp_settings = get_smtp_settings()
 
     message = EmailMessage()
     message["Subject"] = "Your MABASO.AI verification code"
-    message["From"] = smtp_from
+    message["From"] = smtp_settings["from_email"]
     message["To"] = email
     message.set_content(
         (
@@ -725,13 +770,32 @@ def send_verification_email(email: str, code: str):
             f"This code expires in {LOGIN_CODE_TTL_MINUTES} minutes."
         )
     )
+    send_smtp_message(message)
 
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
-        if smtp_use_tls:
-            server.starttls()
-        if smtp_username:
-            server.login(smtp_username, smtp_password)
-        server.send_message(message)
+
+def send_support_email(reply_email: str, message_text: str, page: str = ""):
+    smtp_settings = get_smtp_settings()
+    cleaned_message = compact_text(message_text)
+    if not cleaned_message:
+        raise HTTPException(status_code=400, detail="Support message cannot be empty.")
+
+    support_email = SUPPORT_EMAIL or smtp_settings["from_email"]
+    message = EmailMessage()
+    message["Subject"] = f"MABASO support request from {reply_email}"
+    message["From"] = smtp_settings["from_email"]
+    message["To"] = support_email
+    message["Reply-To"] = reply_email
+    message.set_content(
+        (
+            "A new support request was sent from MABASO.\n\n"
+            f"From: {reply_email}\n"
+            f"Page: {page or 'unknown'}\n"
+            f"Sent at (UTC): {utc_now().isoformat()}\n\n"
+            "Message:\n"
+            f"{message_text.strip()}\n"
+        )
+    )
+    send_smtp_message(message)
 
 
 def create_login_code(email: str) -> str:
@@ -763,7 +827,7 @@ def create_session(email: str) -> str:
     raw_token = build_signed_session_token(email)
     token_payload = decode_signed_session_token(raw_token) or {}
     expires_at = datetime.fromtimestamp(
-        int(token_payload.get("exp", int((utc_now() + timedelta(days=SESSION_TTL_DAYS)).timestamp()))),
+        int(token_payload.get("exp", int((utc_now() + timedelta(minutes=SESSION_TTL_MINUTES)).timestamp()))),
         tz=timezone.utc,
     ).isoformat()
     with get_db_connection() as connection:
@@ -816,8 +880,108 @@ def refresh_session_expiry(token_hash: str):
     with get_db_connection() as connection:
         connection.execute(
             "UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
-            (iso_in_future(days=SESSION_TTL_DAYS), token_hash),
+            (iso_in_future(minutes=SESSION_TTL_MINUTES), token_hash),
         )
+
+
+def should_refresh_session_token(token: str) -> bool:
+    if not is_signed_session_token(token):
+        return True
+
+    payload = decode_signed_session_token(token)
+    if not payload:
+        return False
+
+    expires_at = datetime.fromtimestamp(int(payload.get("exp", 0) or 0), tz=timezone.utc)
+    return expires_at <= utc_now() + timedelta(minutes=SESSION_REFRESH_WINDOW_MINUTES)
+
+
+def parse_history_datetime(value: str | None, fallback: datetime | None = None) -> datetime:
+    text = (value or "").strip()
+    if not text:
+        return fallback or utc_now()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return fallback or utc_now()
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def normalize_history_item_payload(raw_item: Any) -> dict[str, Any]:
+    if not isinstance(raw_item, dict):
+        raise HTTPException(status_code=400, detail="Each history item must be an object.")
+
+    try:
+        item = json.loads(json.dumps(raw_item))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="History items must be JSON serializable.") from exc
+
+    now = utc_now()
+    item_id = compact_text(item.get("id"))
+    if not item_id:
+        item_id = uuid4().hex
+
+    created_at = parse_history_datetime(compact_text(item.get("createdAt")), now)
+    updated_at = parse_history_datetime(compact_text(item.get("updatedAt")), created_at)
+
+    item["id"] = item_id
+    item["createdAt"] = created_at.isoformat()
+    item["updatedAt"] = updated_at.isoformat()
+    return item
+
+
+def sort_history_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        items,
+        key=lambda item: (
+            parse_history_datetime(compact_text(item.get("updatedAt")), utc_now()),
+            parse_history_datetime(compact_text(item.get("createdAt")), utc_now()),
+        ),
+        reverse=True,
+    )
+
+
+def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT payload_json
+            FROM study_history_items
+            WHERE email = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (email, MAX_HISTORY_ITEMS),
+        ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            items.append(normalize_history_item_payload(json.loads(row["payload_json"])))
+        except (json.JSONDecodeError, HTTPException):
+            continue
+    return sort_history_items(items)[:MAX_HISTORY_ITEMS]
+
+
+def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_items = sort_history_items([normalize_history_item_payload(item) for item in items])[:MAX_HISTORY_ITEMS]
+
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM study_history_items WHERE email = ?", (email,))
+        for item in normalized_items:
+            created_at = compact_text(item.get("createdAt"), utc_now().isoformat())
+            updated_at = compact_text(item.get("updatedAt"), created_at)
+            connection.execute(
+                """
+                INSERT INTO study_history_items (email, id, payload_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (email, item["id"], json.dumps(item), created_at, updated_at),
+            )
+
+    return normalized_items
 
 
 def is_session_revoked(token_hash: str) -> bool:
@@ -1830,7 +1994,7 @@ async def auth_me(authorization: str | None = Header(None)):
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
     refreshed_token = ""
-    if not is_signed_session_token(token):
+    if should_refresh_session_token(token):
         refreshed_token = create_session(current_user)
     return {"email": current_user, "token": refreshed_token}
 
@@ -1840,6 +2004,32 @@ async def logout(authorization: str | None = Header(None)):
     token = get_authorization_token(authorization)
     revoke_session(token)
     return {"message": "Logged out."}
+
+
+@app.post("/support/contact")
+async def submit_support_request(
+    payload: SupportMessageRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Support message cannot be empty.")
+    await asyncio.to_thread(send_support_email, current_user, message, (payload.page or "").strip())
+    return {"message": "Support request sent."}
+
+
+@app.get("/history")
+async def get_study_history(current_user: str = Depends(require_authenticated_user)):
+    return {"items": get_history_items_for_user(current_user)}
+
+
+@app.put("/history")
+async def sync_study_history(
+    payload: HistorySyncRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    items = payload.items if isinstance(payload.items, list) else []
+    return {"items": replace_history_items_for_user(current_user, items)}
 
 
 @app.get("/jobs/{job_id}")

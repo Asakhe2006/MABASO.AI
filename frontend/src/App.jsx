@@ -18,11 +18,14 @@ const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
 const APPLE_REDIRECT_URI = (import.meta.env.VITE_APPLE_REDIRECT_URI || "").trim();
 const JOB_POLL_INTERVAL_MS = 2000;
 const ROOM_REFRESH_INTERVAL_MS = 5000;
+const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
-const MAX_HISTORY_ITEMS = 8;
+const SUPPORT_DESTINATION_EMAIL = "mabasoasakhe@gmail.com";
+const BRAND_ART_URL = "/mabaso-social.svg";
+const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
@@ -209,9 +212,54 @@ function normalizeAppleSignInError(error) {
   return error?.message || "Apple sign-in failed.";
 }
 
-function loadHistoryItems() {
+function getHistoryStorageKey(email = "") {
+  const normalizedEmail = (email || "").trim().toLowerCase();
+  return normalizedEmail ? `${HISTORY_STORAGE_KEY}:${normalizedEmail}` : HISTORY_STORAGE_KEY;
+}
+
+function parseHistoryTimestamp(value) {
+  const text = (value || "").trim();
+  if (!text) return 0;
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function normalizeHistoryItems(items = []) {
+  if (!Array.isArray(items)) return [];
+
+  const byId = new Map();
+  for (const rawItem of items) {
+    if (!rawItem || typeof rawItem !== "object") continue;
+    const nextItem = { ...rawItem };
+    const itemId = String(nextItem.id || "").trim();
+    if (!itemId) continue;
+    nextItem.id = itemId;
+    nextItem.createdAt = nextItem.createdAt || new Date().toISOString();
+    nextItem.updatedAt = nextItem.updatedAt || nextItem.createdAt;
+
+    const existingItem = byId.get(itemId);
+    if (!existingItem || parseHistoryTimestamp(nextItem.updatedAt) >= parseHistoryTimestamp(existingItem.updatedAt || existingItem.createdAt)) {
+      byId.set(itemId, nextItem);
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((left, right) => parseHistoryTimestamp(right.updatedAt || right.createdAt) - parseHistoryTimestamp(left.updatedAt || left.createdAt))
+    .slice(0, MAX_HISTORY_ITEMS);
+}
+
+function mergeHistoryItems(...collections) {
+  return normalizeHistoryItems(collections.flat());
+}
+
+function loadHistoryItems(email = "") {
   try {
-    return JSON.parse(window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+    const scopedKey = getHistoryStorageKey(email);
+    const scopedValue = window.localStorage.getItem(scopedKey);
+    if (scopedValue) return normalizeHistoryItems(JSON.parse(scopedValue));
+
+    const legacyValue = window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]";
+    return normalizeHistoryItems(JSON.parse(legacyValue));
   } catch {
     return [];
   }
@@ -565,6 +613,39 @@ async function parseJsonSafe(response) {
   }
 }
 
+async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const nextOptions = { ...options, signal: options.signal || controller.signal };
+
+  try {
+    return await fetch(resource, nextOptions);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError";
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const [, payload = ""] = String(token || "").split(".");
+    if (!payload) return {};
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = `${base64}${"=".repeat((4 - (base64.length % 4 || 4)) % 4)}`;
+    return JSON.parse(window.atob(padded));
+  } catch {
+    return {};
+  }
+}
+
+function extractEmailFromJwt(token) {
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.email === "string" ? payload.email.trim() : "";
+}
+
 function parseInviteEmails(value) {
   return Array.from(new Set((value || "").split(/[\s,;]+/).map((email) => email.trim().toLowerCase()).filter(Boolean)));
 }
@@ -688,6 +769,7 @@ export default function App() {
   );
   const [authChecked, setAuthChecked] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
@@ -736,7 +818,7 @@ export default function App() {
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isAskingChat, setIsAskingChat] = useState(false);
-  const [historyItems, setHistoryItems] = useState(loadHistoryItems);
+  const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
   const [activeRoomId, setActiveRoomId] = useState("");
@@ -751,6 +833,9 @@ export default function App() {
   const [isRoomLoading, setIsRoomLoading] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
+  const [supportMessageDraft, setSupportMessageDraft] = useState("");
+  const [supportFeedback, setSupportFeedback] = useState("");
+  const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const fileInputRef = useRef(null);
   const lectureNotesFileInputRef = useRef(null);
@@ -766,6 +851,8 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
+  const historyHydratingRef = useRef(false);
+  const skipNextHistorySyncRef = useRef(false);
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -791,7 +878,10 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
-  const activeStepIndex = currentPage === "capture" ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
+  const isAppleConfigured = Boolean(APPLE_CLIENT_ID);
+  const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
+  const loginMethodLabel = isAppleConfigured ? "Google or Apple" : "Google";
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
     fileName: file?.name || "",
@@ -814,7 +904,7 @@ export default function App() {
   const clearHistory = () => {
     setHistoryItems([]);
     setActiveHistoryId("");
-    setStatus("History cleared.");
+    setStatus("History cleared for this email.");
   };
 
   const removeHistoryItem = (itemId) => {
@@ -825,10 +915,10 @@ export default function App() {
   const historyPanel = showHistoryPanel ? (
     <section className="mt-8 rounded-[32px] border border-white/10 bg-slate-950/60 p-5 shadow-[0_20px_70px_rgba(2,8,23,0.28)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
-        <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">History</p><h2 className="mt-2 text-3xl font-semibold text-white">Saved workspaces on this device.</h2></div>
+        <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">History</p><h2 className="mt-2 text-3xl font-semibold text-white">Saved workspaces for this email.</h2></div>
         <div className="force-mobile-stack flex flex-wrap gap-3"><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div><button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button></div>
       </div>
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide.</div>}</div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
     </section>
   ) : null;
 
@@ -942,9 +1032,31 @@ export default function App() {
     };
   };
 
+  const buildCaptureActionSteps = (target, actionMeta) => {
+    if (!actionMeta.showProgress) return [];
+
+    const steps = target === "transcribe"
+      ? ["Read the lecture source", "Create the transcript", "Prepare the lecture for study"]
+      : ["Read the lecture sources", "Build the study guide", "Open the study workspace"];
+
+    const progressValue = Math.max(0, Math.min(100, Number(actionMeta.progressValue || 0)));
+
+    return steps.map((label, index) => {
+      const threshold = ((index + 1) / steps.length) * 100;
+      const previousThreshold = (index / steps.length) * 100;
+      const isComplete = progressValue >= threshold;
+      const isCurrent = !isComplete && progressValue >= previousThreshold;
+      return {
+        label,
+        tone: isComplete ? "done" : isCurrent ? "current" : "waiting",
+      };
+    });
+  };
+
   const transcribeActionMeta = buildCaptureActionMeta("transcribe");
   const guideActionMeta = buildCaptureActionMeta("guide");
-  const workspaceActionMeta = buildCaptureActionMeta("workspace");
+  const transcribeActionSteps = buildCaptureActionSteps("transcribe", transcribeActionMeta);
+  const guideActionSteps = buildCaptureActionSteps("guide", guideActionMeta);
 
   const replacePodcastAudioUrl = (nextUrl = "") => {
     if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
@@ -1177,6 +1289,61 @@ export default function App() {
             </div>
           </article>
         ))}
+      </div>
+    </section>
+  );
+
+  const renderSupportPage = () => (
+    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex items-start gap-4">
+          {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">Send a complaint or support message.</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Type what went wrong, what device you used, and what you expected to happen. Your message will be sent to {SUPPORT_DESTINATION_EMAIL} and you can return to the capture page with the back arrow.</p>
+          </div>
+        </div>
+        <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50">
+          Signed in as {authEmail || authEmailInput || "Unknown user"}
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-5">
+          <label className="block text-xs uppercase tracking-[0.24em] text-emerald-200/70">Message</label>
+          <textarea
+            value={supportMessageDraft}
+            onChange={(event) => setSupportMessageDraft(event.target.value)}
+            rows={12}
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none"
+            placeholder="Write your complaint, bug report, or support request here..."
+          />
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={submitSupportMessage} disabled={isSendingSupport} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              {isSendingSupport ? "Sending..." : "Send Support Message"}
+            </button>
+            <button type="button" onClick={() => setCurrentPage("capture")} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
+              Back to Capture Page
+            </button>
+          </div>
+          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${supportFeedback.startsWith("Your message was sent") ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
+        </div>
+
+        <div className="space-y-5">
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">What To Include</p>
+            <div className="mt-4 space-y-3 text-sm text-slate-300">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Which page you were using when the problem happened.</div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Your device, browser, or whether you were on iPhone.</div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">What you clicked and what appeared on screen.</div>
+            </div>
+          </div>
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Reply Email</p>
+            <p className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4 text-sm leading-7 text-slate-200">{authEmail || authEmailInput || "No email available"}</p>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -1477,7 +1644,11 @@ export default function App() {
   const clearSession = (message = "Please sign in again.") => {
     setAuthToken("");
     setAuthEmail("");
+    setHistoryItems([]);
+    setActiveHistoryId("");
     setCurrentPage("capture");
+    setSupportMessageDraft("");
+    setSupportFeedback("");
     setActiveRoomId("");
     setActiveRoom(null);
     setCollaborationRooms([]);
@@ -1497,7 +1668,7 @@ export default function App() {
       setAuthChecked(true);
       return undefined;
     }
-    fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }).then(async (response) => {
+    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -1507,7 +1678,7 @@ export default function App() {
       }
       if (!response.ok) {
         setAuthChecked(true);
-        setAuthMessage(data.detail || "Using the saved session while the server reconnects.");
+        setAuthMessage(data.detail || "Opening your saved session while the server reconnects.");
         return;
       }
       const nextToken = data.token || token;
@@ -1515,9 +1686,13 @@ export default function App() {
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
       setAuthChecked(true);
-    }).catch(() => {
+    }).catch((error) => {
       if (cancelled) return;
-      setAuthMessage("Using the saved session while the server finishes reconnecting.");
+      setAuthMessage(
+        isAbortError(error)
+          ? "Opening your saved session while the server wakes up."
+          : "Using the saved session while the server finishes reconnecting.",
+      );
       setAuthChecked(true);
     });
     return () => {
@@ -1527,11 +1702,12 @@ export default function App() {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyItems));
+      const historyKey = getHistoryStorageKey(authEmail);
+      window.localStorage.setItem(historyKey, JSON.stringify(normalizeHistoryItems(historyItems)));
     } catch {
       // Ignore storage errors.
     }
-  }, [historyItems]);
+  }, [authEmail, historyItems]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -1545,9 +1721,17 @@ export default function App() {
   }, [authEmailInput]);
 
   useEffect(() => {
+    if (!authChecked || !authEmail) return;
+    const cachedHistory = loadHistoryItems(authEmail);
+    skipNextHistorySyncRef.current = true;
+    setHistoryItems(cachedHistory);
+    setActiveHistoryId((current) => (cachedHistory.some((item) => item.id === current) ? current : ""));
+  }, [authChecked, authEmail]);
+
+  useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      fetch(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }).then(async (response) => {
+      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
@@ -1572,6 +1756,9 @@ export default function App() {
 
   const finishGoogleLogin = async (credential) => {
     setAuthMessage("");
+    const previewEmail = extractEmailFromJwt(credential);
+    if (previewEmail) setAuthEmailInput(previewEmail);
+    setIsGoogleSigningIn(true);
     try {
       const response = await fetch(`${API_BASE_URL}/auth/google`, {
         method: "POST",
@@ -1588,6 +1775,8 @@ export default function App() {
       setAuthMessage("You are signed in.");
     } catch (err) {
       setAuthMessage(err.message || "Google sign-in failed.");
+    } finally {
+      setIsGoogleSigningIn(false);
     }
   };
 
@@ -1622,11 +1811,11 @@ export default function App() {
   const startAppleLogin = async () => {
     setAuthMessage("");
     if (!APPLE_CLIENT_ID) {
-      setAuthMessage("Apple login is not configured on the website yet. Missing VITE_APPLE_CLIENT_ID.");
+      setAuthMessage("Apple sign-in is not available on this website yet.");
       return;
     }
     if (!isAppleWebSigninSupported()) {
-      setAuthMessage("Apple login needs an HTTPS website on a real domain. It will not start on localhost or an IP address.");
+      setAuthMessage("Apple sign-in needs an HTTPS website on a real domain.");
       return;
     }
 
@@ -1751,6 +1940,82 @@ export default function App() {
     return response;
   };
 
+  const pushHistoryToServer = async (items) => {
+    const response = await authFetch("/history", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: normalizeHistoryItems(items) }),
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Could not save history.");
+    return normalizeHistoryItems(data.items || items);
+  };
+
+  const loadHistoryFromServer = async () => {
+    const response = await authFetch("/history");
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Could not load history.");
+    return normalizeHistoryItems(data.items || []);
+  };
+
+  useEffect(() => {
+    if (!authChecked || !authToken || !authEmail) return undefined;
+
+    let cancelled = false;
+    historyHydratingRef.current = true;
+
+    const hydrateHistory = async () => {
+      try {
+        const remoteItems = await loadHistoryFromServer();
+        if (cancelled) return;
+        const mergedItems = mergeHistoryItems(loadHistoryItems(authEmail), remoteItems);
+        skipNextHistorySyncRef.current = true;
+        setHistoryItems(mergedItems);
+        setActiveHistoryId((current) => (mergedItems.some((item) => item.id === current) ? current : ""));
+
+        const mergedChanged = JSON.stringify(mergedItems) !== JSON.stringify(remoteItems);
+        if (mergedChanged) {
+          await pushHistoryToServer(mergedItems);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setAuthMessage((current) => current || (err.message || "Could not sync your history right now."));
+        }
+      } finally {
+        if (!cancelled) historyHydratingRef.current = false;
+      }
+    };
+
+    hydrateHistory();
+
+    return () => {
+      cancelled = true;
+      historyHydratingRef.current = false;
+    };
+  }, [authChecked, authEmail, authToken]);
+
+  useEffect(() => {
+    if (!authChecked || !authToken || !authEmail) return undefined;
+    if (historyHydratingRef.current) return undefined;
+    if (skipNextHistorySyncRef.current) {
+      skipNextHistorySyncRef.current = false;
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      pushHistoryToServer(historyItems).then((serverItems) => {
+        skipNextHistorySyncRef.current = true;
+        setHistoryItems(serverItems);
+      }).catch(() => {
+        // Keep the local history cache if the server is temporarily unavailable.
+      });
+    }, 500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [authChecked, authEmail, authToken, historyItems]);
+
   const refreshCollaborationRooms = async (silent = false) => {
     if (!authToken) return;
     try {
@@ -1874,8 +2139,15 @@ export default function App() {
   ].filter((section) => (section.content || "").trim());
 
   const addHistoryItem = (item) => {
-    setHistoryItems((current) => [item, ...current].slice(0, MAX_HISTORY_ITEMS));
-    setActiveHistoryId(item.id);
+    const timestamp = new Date().toISOString();
+    const nextItem = {
+      ...item,
+      id: item.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: item.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+    setHistoryItems((current) => mergeHistoryItems([nextItem], current));
+    setActiveHistoryId(nextItem.id);
   };
 
   const loadHistoryItem = (item) => {
@@ -1957,6 +2229,35 @@ export default function App() {
       clearSession("You have signed out.");
       setStatus("");
       setError("");
+    }
+  };
+
+  const submitSupportMessage = async () => {
+    const message = supportMessageDraft.trim();
+    if (!message) {
+      setSupportFeedback("Write your message before sending it.");
+      return;
+    }
+
+    setIsSendingSupport(true);
+    setSupportFeedback("");
+    try {
+      const response = await authFetch("/support/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          page: currentPage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Your support message could not be sent.");
+      setSupportMessageDraft("");
+      setSupportFeedback(`Your message was sent to ${SUPPORT_DESTINATION_EMAIL}.`);
+    } catch (err) {
+      setSupportFeedback(err.message || "Your support message could not be sent.");
+    } finally {
+      setIsSendingSupport(false);
     }
   };
 
@@ -3059,9 +3360,12 @@ export default function App() {
               <div className="flex flex-wrap gap-3">
                 {progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === 0 ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}
               </div>
-              <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO.AI</p>
-              <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI is an AI lecture transcription and study tool for students.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build your study pack.</p>
+              <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/40 p-4 sm:p-5">
+                <img src={BRAND_ART_URL} alt="Mabaso AI microphone and study logo" className="mx-auto w-full max-w-[320px] rounded-[24px]" />
+              </div>
+              <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO</p>
+              <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI turns lectures into a full study workspace for students.</h1>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build transcripts, guides, flashcards, tests, podcasts, and collaboration rooms.</p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">AI lecture transcription</div>
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Study guides and summaries</div>
@@ -3070,7 +3374,7 @@ export default function App() {
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Access</p>
-              <h2 className="mt-3 text-3xl font-semibold text-white">Continue into MABASO</h2>
+              <h2 className="mt-3 text-3xl font-semibold text-white">Continue into Mabaso</h2>
               <div className="mt-8 space-y-5">
                 {authEmailInput ? (
                   <div className="rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">
@@ -3078,19 +3382,22 @@ export default function App() {
                   </div>
                 ) : null}
                 <div ref={googleButtonRef} className="min-h-[44px] w-full max-w-[320px] overflow-hidden" />
-                <button
-                  type="button"
-                  onClick={startAppleLogin}
-                  disabled={isAppleSigningIn}
-                  className="flex w-full max-w-[320px] items-center justify-center gap-3 rounded-full border border-white/10 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:opacity-60"
-                >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                    <path d="M16.37 12.48c.03 3.12 2.73 4.16 2.76 4.17-.02.07-.43 1.49-1.41 2.96-.85 1.27-1.73 2.53-3.12 2.56-1.37.03-1.81-.81-3.38-.81-1.56 0-2.06.79-3.35.84-1.34.05-2.36-1.35-3.22-2.61-1.75-2.53-3.08-7.15-1.29-10.26.89-1.54 2.48-2.51 4.21-2.54 1.31-.03 2.55.88 3.35.88.8 0 2.31-1.08 3.89-.92.66.03 2.52.27 3.71 2.01-.1.06-2.22 1.3-2.2 3.72Zm-2.72-6.31c.71-.86 1.18-2.04 1.05-3.22-1.02.04-2.26.68-2.99 1.54-.66.76-1.24 1.96-1.09 3.1 1.14.09 2.31-.58 3.03-1.42Z" fill="currentColor" />
-                  </svg>
-                  <span>{isAppleSigningIn ? "Connecting iPhone..." : "Continue with iPhone"}</span>
-                </button>
+                {isGoogleSigningIn ? <div className="max-w-[320px] rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">Finishing Google sign-in and opening your capture page...</div> : null}
+                {isAppleConfigured ? (
+                  <button
+                    type="button"
+                    onClick={startAppleLogin}
+                    disabled={isAppleSigningIn || !appleSignInAvailable}
+                    className="flex w-full max-w-[320px] items-center justify-center gap-3 rounded-full border border-white/10 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:opacity-60"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                      <path d="M16.37 12.48c.03 3.12 2.73 4.16 2.76 4.17-.02.07-.43 1.49-1.41 2.96-.85 1.27-1.73 2.53-3.12 2.56-1.37.03-1.81-.81-3.38-.81-1.56 0-2.06.79-3.35.84-1.34.05-2.36-1.35-3.22-2.61-1.75-2.53-3.08-7.15-1.29-10.26.89-1.54 2.48-2.51 4.21-2.54 1.31-.03 2.55.88 3.35.88.8 0 2.31-1.08 3.89-.92.66.03 2.52.27 3.71 2.01-.1.06-2.22 1.3-2.2 3.72Zm-2.72-6.31c.71-.86 1.18-2.04 1.05-3.22-1.02.04-2.26.68-2.99 1.54-.66.76-1.24 1.96-1.09 3.1 1.14.09 2.31-.58 3.03-1.42Z" fill="currentColor" />
+                    </svg>
+                    <span>{isAppleSigningIn ? "Connecting iPhone..." : "Continue with iPhone"}</span>
+                  </button>
+                ) : null}
                 <div className="rounded-2xl border border-emerald-300/18 bg-emerald-300/8 px-4 py-4 text-sm leading-7 text-slate-200">
-                  Sign in with Google or iPhone, then upload a lecture, add notes or slides, and let the app build the study workspace. This device remembers the last email used here until you sign out or the session expires.
+                  Sign in with {loginMethodLabel}, then upload a lecture, add notes or slides, and let the app build the study workspace. This device remembers the last email used here, and each session now stays active for up to {SESSION_DURATION_LABEL} before it expires.
                 </div>
                 {authMessage ? <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-slate-200">{authMessage}</div> : null}
               </div>
@@ -3110,7 +3417,7 @@ export default function App() {
       </div>
       <main className="relative mx-auto max-w-7xl overflow-x-clip px-3 py-6 sm:px-6 lg:px-8">
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-          <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO.AI</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
+          <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
               <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-full px-4 py-2 text-sm ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
@@ -3133,7 +3440,10 @@ export default function App() {
         {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
-            <button type="button" onClick={() => setCurrentPage("about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
+            <div className="flex flex-wrap items-center gap-4">
+              <button type="button" onClick={() => setCurrentPage("about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); setCurrentPage("support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support</button>
+            </div>
           </div>
 
           <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)] xl:p-6">
@@ -3158,11 +3468,37 @@ export default function App() {
                     </div>
                     <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Non-YouTube public links are also supported when the backend can read them.</p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-emerald-50/85"><span>{transcribeActionMeta.eyebrow}</span><span>{transcribeActionMeta.badge}</span></div>{transcribeActionMeta.showProgress ? <div className="mt-3"><div className="h-1.5 overflow-hidden rounded-full bg-black/20"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#dcfce7,#bbf7d0,#86efac)]" style={{ width: `${transcribeActionMeta.progressValue}%` }} /></div><p className="mt-2 text-[11px] leading-5 text-emerald-50/90">{transcribeActionMeta.statusLine}</p></div> : null}<span className="mt-3 block text-base font-semibold">Transcribe Lecture</span><span className="mt-2 block text-xs leading-5 text-emerald-50/85">{transcribeActionMeta.detail}</span></button>
-                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-amber-50/90"><span>{guideActionMeta.eyebrow}</span><span>{guideActionMeta.badge}</span></div>{guideActionMeta.showProgress ? <div className="mt-3"><div className="h-1.5 overflow-hidden rounded-full bg-black/20"><div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#fde68a,#fdba74,#fb923c)]" style={{ width: `${guideActionMeta.progressValue}%` }} /></div><p className="mt-2 text-[11px] leading-5 text-amber-50/90">{guideActionMeta.statusLine}</p></div> : null}<span className="mt-3 block text-base font-semibold">Generate Study Guide</span><span className="mt-2 block text-xs leading-5 text-amber-50/90">{guideActionMeta.detail}</span></button>
-                    <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className="min-h-[124px] rounded-[22px] border border-sky-300/25 bg-sky-400/15 px-5 py-4 text-left text-sky-50 disabled:opacity-50"><div className="flex items-center justify-between text-[10px] uppercase tracking-[0.24em] text-sky-100/90"><span>{workspaceActionMeta.eyebrow}</span><span>{workspaceActionMeta.badge}</span></div><span className="mt-3 block text-base font-semibold">Open Study Workspace</span><span className="mt-2 block text-xs leading-5 text-sky-100/90">{workspaceActionMeta.detail}</span></button>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
+                      <span className="block text-base font-semibold">Transcribe Lecture</span>
+                      {transcribeActionMeta.showProgress ? (
+                        <div className="mt-4">
+                          <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
+                            <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#dcfce7,#bbf7d0,#86efac)]" style={{ width: `${transcribeActionMeta.progressValue}%` }} />
+                          </div>
+                          <p className="mt-3 text-xs leading-6 text-emerald-50/90">{transcribeActionMeta.statusLine}</p>
+                          <div className="mt-3 space-y-2">
+                            {transcribeActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-emerald-200/25 bg-emerald-200/10 text-emerald-50" : step.tone === "current" ? "border-emerald-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-emerald-50/70"}`}>{step.label}</div>)}
+                          </div>
+                        </div>
+                      ) : null}
+                    </button>
+                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
+                      <span className="block text-base font-semibold">Generate Study Guide</span>
+                      {guideActionMeta.showProgress ? (
+                        <div className="mt-4">
+                          <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
+                            <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#fde68a,#fdba74,#fb923c)]" style={{ width: `${guideActionMeta.progressValue}%` }} />
+                          </div>
+                          <p className="mt-3 text-xs leading-6 text-amber-50/90">{guideActionMeta.statusLine}</p>
+                          <div className="mt-3 space-y-2">
+                            {guideActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-amber-100/25 bg-amber-100/10 text-amber-50" : step.tone === "current" ? "border-amber-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-amber-50/70"}`}>{step.label}</div>)}
+                          </div>
+                        </div>
+                      ) : null}
+                    </button>
                   </div>
+                  {hasResults ? <div className="rounded-2xl border border-sky-300/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-50">Study workspace is ready. Open it from the Workspace tab above.</div> : null}
                   <input ref={fileInputRef} type="file" accept={LECTURE_MEDIA_ACCEPT} className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />
                   <input ref={bulkLectureFileInputRef} type="file" accept={BULK_LECTURE_ACCEPT} multiple className="hidden" onChange={(event) => { handleLectureBundleFilesChange(event.target.files); event.target.value = ""; }} />
                   <input ref={lectureNotesFileInputRef} type="file" accept={NOTE_SOURCE_ACCEPT} multiple className="hidden" onChange={(event) => { handleLectureNotesFileChange(event.target.files); event.target.value = ""; }} />
@@ -3222,7 +3558,7 @@ export default function App() {
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Memo reference: {pastQuestionMemo.trim() ? "Added" : "Not added"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Podcast ready: {podcastData.script ? "Yes" : "Not yet"}</div>
-                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces: {historyItems.length}</div>
+                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces for this email: {historyItems.length}</div>
                 </div>
               </div>
             </aside>
@@ -3273,6 +3609,7 @@ export default function App() {
         </section> : null}
 
         {currentPage === "about" ? renderHelpAboutPage() : null}
+        {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
 
         <input
