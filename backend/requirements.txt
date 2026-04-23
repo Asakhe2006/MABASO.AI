@@ -8,4 +8,5 @@ google-auth>=2.39.0
 requests>=2.32.0
 PyJWT[crypto]>=2.10.1
 yt-dlp>=2024.1.0
+curl-cffi>=0.7.4
 youtube-transcript-api>=1.2.4

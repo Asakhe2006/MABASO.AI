@@ -906,6 +906,9 @@ export default function App() {
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
   const loginMethodLabel = isAppleConfigured ? "Google, Apple, or email" : "Google or email";
   const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
+  const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in)/i.test(authMessage.trim());
+  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session)/i.test(authMessage.trim());
+  const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
@@ -1914,14 +1917,23 @@ export default function App() {
       setAuthCodeInput("");
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
+      setAuthMode("login");
       setCurrentPage("capture");
-      setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : "Signed in successfully.");
+      setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : (pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
       setAuthMessage("You are signed in.");
     } catch (err) {
       setAuthMessage(err.message || "Verification failed.");
     } finally {
       setIsVerifyingEmailCode(false);
     }
+  };
+
+  const startForgotPassword = () => {
+    setAuthMode("reset");
+    setPendingEmailAuthMode("");
+    setPendingEmailAuthEmail("");
+    setAuthCodeInput("");
+    setAuthMessage("Enter your email and a new password, then verify with the code sent to your email.");
   };
 
   const startAppleLogin = async () => {
@@ -3525,7 +3537,7 @@ export default function App() {
                         setAuthCodeInput("");
                         setAuthMessage("");
                       }}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${authMode === "login" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${["login", "reset"].includes(authMode) ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
                     >
                       Log In
                     </button>
@@ -3562,10 +3574,19 @@ export default function App() {
                         value={authPasswordInput}
                         onChange={(event) => setAuthPasswordInput(event.target.value)}
                         className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
-                        placeholder={authMode === "register" ? "Create a password" : "Enter your password"}
-                        autoComplete={authMode === "register" ? "new-password" : "current-password"}
+                        placeholder={authMode === "register" ? "Create a password" : authMode === "reset" ? "Enter a new password" : "Enter your password"}
+                        autoComplete={authMode === "login" ? "current-password" : "new-password"}
                       />
                       <p className="mt-2 text-xs leading-6 text-slate-400">Use at least {MIN_PASSWORD_LENGTH} characters.</p>
+                      {authMode === "login" ? (
+                        <button
+                          type="button"
+                          onClick={startForgotPassword}
+                          className="mt-2 text-sm font-medium text-rose-200 transition hover:text-white"
+                        >
+                          Forgot Password?
+                        </button>
+                      ) : null}
                     </div>
                     <button
                       type="button"
@@ -3573,13 +3594,13 @@ export default function App() {
                       disabled={isRequestingEmailCode || isVerifyingEmailCode}
                       className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                     >
-                      {isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : "Logging In...") : authMode === "register" ? "Create Account" : "Log In"}
+                      {isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : authMode === "reset" ? "Sending Reset Code..." : "Logging In...") : authMode === "register" ? "Create Account" : authMode === "reset" ? "Reset Password" : "Log In"}
                     </button>
                   </div>
                   {emailAuthCodeRequested ? (
                     <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-emerald-300/8 p-4">
                       <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Verification</p>
-                      <p className="mt-2 text-sm leading-7 text-slate-200">Enter the verification code sent to {pendingEmailAuthEmail} to finish {pendingEmailAuthMode === "register" ? "creating your account" : "signing in"}.</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">Enter the verification code sent to {pendingEmailAuthEmail} to finish {pendingEmailAuthMode === "register" ? "creating your account" : pendingEmailAuthMode === "reset" ? "resetting your password" : "signing in"}.</p>
                       <input
                         type="text"
                         inputMode="numeric"
@@ -3596,7 +3617,7 @@ export default function App() {
                           disabled={isVerifyingEmailCode}
                           className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-50"
                         >
-                          {isVerifyingEmailCode ? "Verifying..." : "Verify and Continue"}
+                          {isVerifyingEmailCode ? "Verifying..." : pendingEmailAuthMode === "reset" ? "Verify and Reset Password" : "Verify and Continue"}
                         </button>
                         <button
                           type="button"
@@ -3610,7 +3631,7 @@ export default function App() {
                     </div>
                   ) : null}
                 </div>
-                {authMessage ? <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-slate-200">{authMessage}</div> : null}
+                {authMessage ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
           </div>

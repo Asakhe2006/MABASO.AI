@@ -155,6 +155,7 @@ YOUTUBE_PROXY_HTTP_URL = os.getenv("YOUTUBE_PROXY_HTTP_URL", "").strip()
 YOUTUBE_PROXY_HTTPS_URL = os.getenv("YOUTUBE_PROXY_HTTPS_URL", "").strip()
 YOUTUBE_WEBSHARE_PROXY_USERNAME = os.getenv("YOUTUBE_WEBSHARE_PROXY_USERNAME", "").strip()
 YOUTUBE_WEBSHARE_PROXY_PASSWORD = os.getenv("YOUTUBE_WEBSHARE_PROXY_PASSWORD", "").strip()
+YTDLP_IMPERSONATE_TARGET = os.getenv("YTDLP_IMPERSONATE_TARGET", "chrome").strip()
 YOUTUBE_WEBSHARE_PROXY_LOCATIONS = tuple(
     location.strip()
     for location in os.getenv("YOUTUBE_WEBSHARE_PROXY_LOCATIONS", "").split(",")
@@ -2402,7 +2403,13 @@ def create_youtube_requests_session() -> requests.Session:
     return session
 
 
-def build_ytdlp_options(*, output_template: str | None = None, progress_hook: Any = None, skip_download: bool = False) -> dict[str, Any]:
+def build_ytdlp_options(
+    *,
+    output_template: str | None = None,
+    progress_hook: Any = None,
+    skip_download: bool = False,
+    use_cookiefile: bool = True,
+) -> dict[str, Any]:
     options: dict[str, Any] = {
         "noplaylist": True,
         "quiet": True,
@@ -2421,6 +2428,8 @@ def build_ytdlp_options(*, output_template: str | None = None, progress_hook: An
             }
         },
     }
+    if YTDLP_IMPERSONATE_TARGET:
+        options["impersonate"] = YTDLP_IMPERSONATE_TARGET
     if output_template:
         options["outtmpl"] = output_template
     if progress_hook:
@@ -2428,7 +2437,7 @@ def build_ytdlp_options(*, output_template: str | None = None, progress_hook: An
     if skip_download:
         options["skip_download"] = True
     cookie_path = resolve_youtube_cookiefile()
-    if cookie_path:
+    if use_cookiefile and cookie_path:
         options["cookiefile"] = str(cookie_path)
     proxy_url = YOUTUBE_PROXY_HTTPS_URL or YOUTUBE_PROXY_HTTP_URL
     if proxy_url:
@@ -2757,22 +2766,38 @@ def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None
     normalized_url = normalize_video_url(video_url)
     subtitle_prefix = f"captions_{uuid4().hex}"
     output_template = str(UPLOAD_DIR / f"{subtitle_prefix}.%(ext)s")
-    options = build_ytdlp_options(output_template=output_template, skip_download=True)
-    options.update({
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["all"],
-        "subtitlesformat": "vtt/best",
-    })
-
     update_job(job_id, status="processing", stage="Checking downloadable captions", progress=9)
-    try:
-        with yt_dlp.YoutubeDL(options) as downloader:
-            downloader.extract_info(normalized_url, download=True)
-    except Exception as exc:
-        logger.info("Could not download subtitles with yt-dlp for %s: %s", video_url, exc)
+    subtitle_attempts = [True, False] if has_youtube_cookie_source() else [False]
+    for attempt_index, use_cookiefile in enumerate(subtitle_attempts, start=1):
         cleanup_caption_files(subtitle_prefix)
-        return None
+        options = build_ytdlp_options(
+            output_template=output_template,
+            skip_download=True,
+            use_cookiefile=use_cookiefile,
+        )
+        options.update({
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["all"],
+            "subtitlesformat": "vtt/best",
+        })
+
+        if attempt_index > 1:
+            update_job(job_id, status="processing", stage="Retrying caption download without saved cookies", progress=10)
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                downloader.extract_info(normalized_url, download=True)
+            break
+        except Exception as exc:
+            logger.info(
+                "Could not download subtitles with yt-dlp for %s (use_cookiefile=%s): %s",
+                video_url,
+                use_cookiefile,
+                exc,
+            )
+            if attempt_index == len(subtitle_attempts):
+                cleanup_caption_files(subtitle_prefix)
+                return None
 
     subtitle_files = sorted(
         [
@@ -2824,23 +2849,53 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         {
             "format": "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best",
             "drop_extractor_args": False,
+            "use_cookiefile": has_youtube_cookie_source(),
         },
         {
             "format": "best[acodec!=none]/best",
             "drop_extractor_args": True,
+            "use_cookiefile": has_youtube_cookie_source(),
         },
     ]
+    if has_youtube_cookie_source():
+        download_attempts.extend([
+            {
+                "format": "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best",
+                "drop_extractor_args": False,
+                "use_cookiefile": False,
+            },
+            {
+                "format": "best[acodec!=none]/best",
+                "drop_extractor_args": True,
+                "use_cookiefile": False,
+            },
+        ])
 
     for attempt_index, attempt in enumerate(download_attempts, start=1):
         cleanup_download_artifacts(download_prefix)
-        options = build_ytdlp_options(output_template=output_template, progress_hook=progress_hook)
+        options = build_ytdlp_options(
+            output_template=output_template,
+            progress_hook=progress_hook,
+            use_cookiefile=attempt["use_cookiefile"],
+        )
         options["format"] = attempt["format"]
         if attempt["drop_extractor_args"]:
             options.pop("extractor_args", None)
             update_job(
                 job_id,
                 status="processing",
-                stage="Retrying video download with a fallback format",
+                stage=(
+                    "Retrying video download with a fallback format"
+                    if attempt["use_cookiefile"]
+                    else "Retrying video download without saved cookies"
+                ),
+                progress=4,
+            )
+        elif not attempt["use_cookiefile"]:
+            update_job(
+                job_id,
+                status="processing",
+                stage="Retrying video download without saved cookies",
                 progress=4,
             )
 
@@ -2861,10 +2916,11 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         except Exception as exc:
             last_error = str(exc).strip()
             logger.info(
-                "Video download attempt %s failed for %s with format %s: %s",
+                "Video download attempt %s failed for %s with format %s (use_cookiefile=%s): %s",
                 attempt_index,
                 video_url,
                 attempt["format"],
+                attempt["use_cookiefile"],
                 exc,
             )
             candidate_paths = []
