@@ -1320,7 +1320,7 @@ export default function App() {
 
   const renderSupportPage = () => (
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+      <div className="border-b border-white/10 pb-5">
         <div className="flex items-start gap-4">
           {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
           <div className="min-w-0">
@@ -1328,9 +1328,6 @@ export default function App() {
             <h2 className="mt-2 text-3xl font-semibold text-white">Send a complaint or support message.</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Type what went wrong, what device you used, and what you expected to happen. You can return to the capture page with the back arrow when you are done.</p>
           </div>
-        </div>
-        <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50">
-          Signed in as {authEmail || authEmailInput || "Unknown user"}
         </div>
       </div>
 
@@ -1363,10 +1360,6 @@ export default function App() {
               <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Your device, browser, or whether you were on iPhone.</div>
               <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">What you clicked and what appeared on screen.</div>
             </div>
-          </div>
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Reply Email</p>
-            <p className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4 text-sm leading-7 text-slate-200">{authEmail || authEmailInput || "No email available"}</p>
           </div>
         </div>
       </div>
@@ -3616,9 +3609,6 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
-                </div>
-                <div className="rounded-2xl border border-emerald-300/18 bg-emerald-300/8 px-4 py-4 text-sm leading-7 text-slate-200">
-                  Sign in with {loginMethodLabel}, or use your email and password first and then confirm with a verification code. This device remembers the last email used here, and each session now stays active for up to {SESSION_DURATION_LABEL} before it expires.
                 </div>
                 {authMessage ? <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-slate-200">{authMessage}</div> : null}
               </div>

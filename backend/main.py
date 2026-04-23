@@ -659,8 +659,8 @@ def mark_user_verified(email: str):
 
 def normalize_email_password_auth_mode(mode: str) -> str:
     normalized = compact_text(mode, "login").lower()
-    if normalized not in {"login", "register"}:
-        raise HTTPException(status_code=400, detail="Authentication mode must be login or register.")
+    if normalized not in {"login", "register", "reset"}:
+        raise HTTPException(status_code=400, detail="Authentication mode must be login, register, or reset.")
     return normalized
 
 
@@ -1237,8 +1237,11 @@ def request_email_password_code(email: str, password: str, mode: str) -> str:
     if resolved_mode == "register":
         if has_password_credential(email):
             raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
-    else:
+    elif resolved_mode == "login":
         verify_password_credential(email, validated_password)
+    else:
+        if not has_password_credential(email):
+            raise HTTPException(status_code=400, detail="No account with this email exists yet.")
     return create_login_code(email)
 
 
@@ -1251,8 +1254,13 @@ def verify_email_password_auth(email: str, password: str, code: str, mode: str) 
             raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
         store_password_credential(email, validated_password)
         mark_user_verified(email)
-    else:
+    elif resolved_mode == "login":
         verify_password_credential(email, validated_password)
+    else:
+        if not has_password_credential(email):
+            raise HTTPException(status_code=400, detail="No account with this email exists yet.")
+        store_password_credential(email, validated_password)
+        mark_user_verified(email)
     return create_session(email)
 
 
