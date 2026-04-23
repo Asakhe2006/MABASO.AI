@@ -6,10 +6,11 @@ function resolveApiBaseUrl() {
   if (configuredUrl) return configuredUrl.replace(/\/+$/, "");
   if (typeof window !== "undefined") {
     const host = window.location.hostname || "";
-    if (host === "localhost" || host === "127.0.0.1") return "http://127.0.0.1:8000";
-    if (host.endsWith(".onrender.com")) return "https://mabaso-ai-api.onrender.com";
+    const isLocalHost = host === "localhost" || host === "127.0.0.1" || /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    if (isLocalHost) return "http://127.0.0.1:8000";
+    return "https://mabaso-ai-api.onrender.com";
   }
-  return "http://127.0.0.1:8000";
+  return "https://mabaso-ai-api.onrender.com";
 }
 
 const API_BASE_URL = resolveApiBaseUrl();
@@ -627,6 +628,22 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
 
 function isAbortError(error) {
   return error?.name === "AbortError";
+}
+
+function getReadableRequestError(error) {
+  if (isAbortError(error)) {
+    return "The Mabaso server took too long to respond. Try again in a few seconds.";
+  }
+
+  const message = String(error?.message || "").trim();
+  if (/failed to fetch/i.test(message)) {
+    return (
+      "The app could not reach the Mabaso server. Refresh the page and try again. "
+      + `If it keeps happening, check that Render web env VITE_API_BASE_URL is set to ${API_BASE_URL}.`
+    );
+  }
+
+  return message || "The app could not reach the Mabaso server right now.";
 }
 
 function decodeJwtPayload(token) {
@@ -1932,7 +1949,12 @@ export default function App() {
     if (!authToken) throw new Error("Please sign in to continue.");
     const headers = new Headers(options.headers || {});
     headers.set("Authorization", `Bearer ${authToken}`);
-    const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+    let response;
+    try {
+      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...options, headers }, 30000);
+    } catch (err) {
+      throw new Error(getReadableRequestError(err));
+    }
     if (response.status === 401) {
       clearSession("Your session expired. Please sign in again.");
       throw new Error("Your session expired. Please sign in again.");
