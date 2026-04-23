@@ -3527,7 +3527,7 @@ export default function App() {
                       }}
                       className={`rounded-full px-4 py-2 text-sm font-semibold ${authMode === "login" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
                     >
-                      Email Sign In
+                      Log In
                     </button>
                     <button
                       type="button"
@@ -3573,7 +3573,7 @@ export default function App() {
                       disabled={isRequestingEmailCode || isVerifyingEmailCode}
                       className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                     >
-                      {isRequestingEmailCode ? "Sending Code..." : authMode === "register" ? "Create Account and Send Code" : "Send Sign-In Code"}
+                      {isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : "Logging In...") : authMode === "register" ? "Create Account" : "Log In"}
                     </button>
                   </div>
                   {emailAuthCodeRequested ? (
