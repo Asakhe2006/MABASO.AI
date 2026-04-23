@@ -748,12 +748,40 @@ def get_smtp_settings() -> dict[str, Any]:
 
 def send_smtp_message(message: EmailMessage):
     smtp_settings = get_smtp_settings()
-    with smtplib.SMTP(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
-        if smtp_settings["use_tls"]:
-            server.starttls()
-        if smtp_settings["username"]:
-            server.login(smtp_settings["username"], smtp_settings["password"])
-        server.send_message(message)
+    try:
+        with smtplib.SMTP(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
+            if smtp_settings["use_tls"]:
+                server.starttls()
+            if smtp_settings["username"]:
+                server.login(smtp_settings["username"], smtp_settings["password"])
+            server.send_message(message)
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.exception("SMTP authentication failed for host %s", smtp_settings["host"])
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "SMTP login failed. Recheck SMTP_USERNAME, SMTP_PASSWORD, "
+                "and your Gmail app password."
+            ),
+        ) from exc
+    except smtplib.SMTPConnectError as exc:
+        logger.exception("SMTP connection failed for host %s", smtp_settings["host"])
+        raise HTTPException(
+            status_code=502,
+            detail="The backend could not connect to the SMTP server. Recheck SMTP_HOST and SMTP_PORT.",
+        ) from exc
+    except smtplib.SMTPException as exc:
+        logger.exception("SMTP error while sending email")
+        raise HTTPException(
+            status_code=502,
+            detail=f"SMTP error while sending email ({exc.__class__.__name__}).",
+        ) from exc
+    except OSError as exc:
+        logger.exception("SMTP network error while sending email")
+        raise HTTPException(
+            status_code=502,
+            detail="The backend could not reach the SMTP server. Recheck SMTP_HOST, SMTP_PORT, and TLS settings.",
+        ) from exc
 
 
 def send_verification_email(email: str, code: str):
