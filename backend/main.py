@@ -122,6 +122,8 @@ SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
+MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
+PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
@@ -140,13 +142,13 @@ APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
 APPLE_TOKEN_VALIDATION_URL = f"{APPLE_IDENTITY_ISSUER}/auth/token"
 APPLE_AUTH_HTTP_TIMEOUT = float(os.getenv("APPLE_AUTH_HTTP_TIMEOUT", "15"))
 YOUTUBE_LANGUAGE_PREFERENCES = ("en", "en-US", "en-GB")
-YTDLP_YOUTUBE_PLAYER_CLIENTS = ("android_vr", "web_safari", "mweb", "tv_simply")
+YTDLP_YOUTUBE_PLAYER_CLIENTS = ("ios", "android_vr", "web_safari", "mweb", "tv_simply")
 YOUTUBE_USER_AGENT = os.getenv(
     "YOUTUBE_USER_AGENT",
     (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/135.0.0.0 Safari/537.36"
     ),
 ).strip()
 YOUTUBE_PROXY_HTTP_URL = os.getenv("YOUTUBE_PROXY_HTTP_URL", "").strip()
@@ -274,6 +276,19 @@ class RequestCodeRequest(BaseModel):
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str
+
+
+class EmailPasswordAuthRequest(BaseModel):
+    email: str
+    password: str
+    mode: str = "login"
+
+
+class EmailPasswordVerifyRequest(BaseModel):
+    email: str
+    password: str
+    code: str
+    mode: str = "login"
 
 
 class GoogleAuthRequest(BaseModel):
@@ -498,6 +513,17 @@ def init_db():
             ON study_history_items (email, updated_at DESC)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_password_credentials (
+                email TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
 
 
 def hash_value(value: str) -> str:
@@ -629,6 +655,86 @@ def mark_user_verified(email: str):
             "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
             (now_iso, email),
         )
+
+
+def normalize_email_password_auth_mode(mode: str) -> str:
+    normalized = compact_text(mode, "login").lower()
+    if normalized not in {"login", "register"}:
+        raise HTTPException(status_code=400, detail="Authentication mode must be login or register.")
+    return normalized
+
+
+def validate_password_value(password: str) -> str:
+    value = password or ""
+    if len(value) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Use a password with at least {MIN_PASSWORD_LENGTH} characters.",
+        )
+    if len(value) > 256:
+        raise HTTPException(status_code=400, detail="Use a shorter password.")
+    return value
+
+
+def hash_password_value(password: str, salt: str) -> str:
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return base64.urlsafe_b64encode(derived).decode("ascii")
+
+
+def get_password_credential(email: str) -> sqlite3.Row | None:
+    with get_db_connection() as connection:
+        return connection.execute(
+            """
+            SELECT email, password_hash, password_salt, created_at, updated_at
+            FROM email_password_credentials
+            WHERE email = ?
+            """,
+            (email,),
+        ).fetchone()
+
+
+def has_password_credential(email: str) -> bool:
+    return get_password_credential(email) is not None
+
+
+def store_password_credential(email: str, password: str):
+    validated_password = validate_password_value(password)
+    now_iso = utc_now().isoformat()
+    salt = secrets.token_hex(16)
+    password_hash = hash_password_value(validated_password, salt)
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            (email, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO email_password_credentials (email, password_hash, password_salt, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                password_salt = excluded.password_salt,
+                updated_at = excluded.updated_at
+            """,
+            (email, password_hash, salt, now_iso, now_iso),
+        )
+
+
+def verify_password_credential(email: str, password: str):
+    validated_password = validate_password_value(password)
+    credential = get_password_credential(email)
+    if not credential:
+        raise HTTPException(status_code=400, detail="Email or password is incorrect.")
+
+    expected_hash = credential["password_hash"]
+    actual_hash = hash_password_value(validated_password, credential["password_salt"])
+    if not hmac.compare_digest(expected_hash, actual_hash):
+        raise HTTPException(status_code=400, detail="Email or password is incorrect.")
 
 
 def build_apple_client_secret() -> str:
@@ -849,6 +955,26 @@ def create_login_code(email: str) -> str:
         )
 
     return code
+
+
+def consume_login_code(email: str, code: str):
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT code_hash, expires_at FROM login_codes WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="No verification code was requested for this email yet.")
+
+    if datetime.fromisoformat(row["expires_at"]) <= utc_now():
+        raise HTTPException(status_code=400, detail="That verification code has expired. Request a new code.")
+
+    if not hmac.compare_digest(row["code_hash"], hash_value(code)):
+        raise HTTPException(status_code=400, detail="The verification code is incorrect.")
+
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM login_codes WHERE email = ?", (email,))
 
 
 def create_session(email: str) -> str:
@@ -1101,24 +1227,32 @@ def require_authenticated_user(authorization: str | None = Header(None)) -> str:
 
 
 def verify_login_code(email: str, code: str) -> str:
-    with get_db_connection() as connection:
-        row = connection.execute(
-            "SELECT code_hash, expires_at FROM login_codes WHERE email = ?",
-            (email,),
-        ).fetchone()
+    consume_login_code(email, code)
+    return create_session(email)
 
-    if not row:
-        raise HTTPException(status_code=400, detail="No verification code was requested for this email yet.")
 
-    if datetime.fromisoformat(row["expires_at"]) <= utc_now():
-        raise HTTPException(status_code=400, detail="That verification code has expired. Request a new code.")
+def request_email_password_code(email: str, password: str, mode: str) -> str:
+    resolved_mode = normalize_email_password_auth_mode(mode)
+    validated_password = validate_password_value(password)
+    if resolved_mode == "register":
+        if has_password_credential(email):
+            raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    else:
+        verify_password_credential(email, validated_password)
+    return create_login_code(email)
 
-    if not hmac.compare_digest(row["code_hash"], hash_value(code)):
-        raise HTTPException(status_code=400, detail="The verification code is incorrect.")
 
-    with get_db_connection() as connection:
-        connection.execute("DELETE FROM login_codes WHERE email = ?", (email,))
-
+def verify_email_password_auth(email: str, password: str, code: str, mode: str) -> str:
+    resolved_mode = normalize_email_password_auth_mode(mode)
+    validated_password = validate_password_value(password)
+    consume_login_code(email, code)
+    if resolved_mode == "register":
+        if has_password_credential(email):
+            raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+        store_password_credential(email, validated_password)
+        mark_user_verified(email)
+    else:
+        verify_password_credential(email, validated_password)
     return create_session(email)
 
 
@@ -1997,6 +2131,24 @@ async def verify_login(payload: VerifyCodeRequest):
     return {"token": session_token, "email": email}
 
 
+@app.post("/auth/email-password/request-code")
+async def request_email_password_login_code(payload: EmailPasswordAuthRequest):
+    email = validate_email_address(payload.email)
+    code = request_email_password_code(email, payload.password, payload.mode)
+    await asyncio.to_thread(send_verification_email, email, code)
+    return {"message": "Verification code sent.", "email": email, "mode": normalize_email_password_auth_mode(payload.mode)}
+
+
+@app.post("/auth/email-password/verify-code")
+async def verify_email_password_login(payload: EmailPasswordVerifyRequest):
+    email = validate_email_address(payload.email)
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Verification code is required.")
+    session_token = verify_email_password_auth(email, payload.password, code, payload.mode)
+    return {"token": session_token, "email": email}
+
+
 @app.post("/auth/google")
 async def google_login(payload: GoogleAuthRequest):
     credential = payload.credential.strip()
@@ -2188,6 +2340,10 @@ def resolve_youtube_cookiefile() -> Path | None:
     return cookie_path
 
 
+def has_youtube_cookie_source() -> bool:
+    return bool(YOUTUBE_COOKIES_FILE or YOUTUBE_COOKIES_TXT)
+
+
 def load_youtube_request_cookies() -> dict[str, str]:
     cookies = {
         "CONSENT": "YES+cb.20210328-17-p0.en+FX+700",
@@ -2214,7 +2370,28 @@ def build_youtube_request_headers() -> dict[str, str]:
     return {
         "User-Agent": YOUTUBE_USER_AGENT,
         "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.youtube.com/",
+        "Origin": "https://www.youtube.com",
     }
+
+
+def build_youtube_request_proxies() -> dict[str, str]:
+    proxies: dict[str, str] = {}
+    if YOUTUBE_PROXY_HTTP_URL:
+        proxies["http"] = YOUTUBE_PROXY_HTTP_URL
+    if YOUTUBE_PROXY_HTTPS_URL:
+        proxies["https"] = YOUTUBE_PROXY_HTTPS_URL
+    return proxies
+
+
+def create_youtube_requests_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(build_youtube_request_headers())
+    session.cookies.update(load_youtube_request_cookies())
+    proxy_map = build_youtube_request_proxies()
+    if proxy_map:
+        session.proxies.update(proxy_map)
+    return session
 
 
 def build_ytdlp_options(*, output_template: str | None = None, progress_hook: Any = None, skip_download: bool = False) -> dict[str, Any]:
@@ -2224,6 +2401,10 @@ def build_ytdlp_options(*, output_template: str | None = None, progress_hook: An
         "no_warnings": True,
         "restrictfilenames": True,
         "geo_bypass": True,
+        "retries": 2,
+        "fragment_retries": 2,
+        "extractor_retries": 2,
+        "socket_timeout": 20,
         "http_headers": build_youtube_request_headers(),
         "extractor_args": {
             "youtube": {
@@ -2241,6 +2422,9 @@ def build_ytdlp_options(*, output_template: str | None = None, progress_hook: An
     cookie_path = resolve_youtube_cookiefile()
     if cookie_path:
         options["cookiefile"] = str(cookie_path)
+    proxy_url = YOUTUBE_PROXY_HTTPS_URL or YOUTUBE_PROXY_HTTP_URL
+    if proxy_url:
+        options["proxy"] = proxy_url
     return options
 
 
@@ -2504,53 +2688,57 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
     if not video_id:
         return None
 
-    headers = build_youtube_request_headers()
-    cookies = load_youtube_request_cookies()
-    watch_url = f"https://www.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1"
     update_job(job_id, status="processing", stage="Checking YouTube watch-page captions", progress=7)
+    watch_urls = [
+        f"https://www.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1",
+        f"https://m.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1",
+        f"https://www.youtube.com/embed/{video_id}?hl=en",
+    ]
 
-    try:
-        response = requests.get(watch_url, headers=headers, cookies=cookies, timeout=20)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.info("Could not fetch YouTube watch page for %s: %s", video_url, exc)
-        return None
+    with create_youtube_requests_session() as session:
+        for watch_url in watch_urls:
+            try:
+                response = session.get(watch_url, timeout=20)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                logger.info("Could not fetch YouTube watch page for %s via %s: %s", video_url, watch_url, exc)
+                continue
 
-    player_response = None
-    for marker in (
-        "var ytInitialPlayerResponse = ",
-        "ytInitialPlayerResponse = ",
-        'window["ytInitialPlayerResponse"] = ',
-        "window['ytInitialPlayerResponse'] = ",
-    ):
-        player_response = extract_json_object_from_text(response.text, marker)
-        if player_response:
-            break
+            player_response = None
+            for marker in (
+                "var ytInitialPlayerResponse = ",
+                "ytInitialPlayerResponse = ",
+                'window["ytInitialPlayerResponse"] = ',
+                "window['ytInitialPlayerResponse'] = ",
+            ):
+                player_response = extract_json_object_from_text(response.text, marker)
+                if player_response:
+                    break
 
-    caption_tracks = (
-        player_response.get("captions", {})
-        .get("playerCaptionsTracklistRenderer", {})
-        .get("captionTracks", [])
-        if isinstance(player_response, dict)
-        else []
-    )
-    caption_track = choose_youtube_caption_track(caption_tracks)
-    base_url = caption_track.get("baseUrl", "") if isinstance(caption_track, dict) else ""
-    if not base_url:
-        return None
+            caption_tracks = (
+                player_response.get("captions", {})
+                .get("playerCaptionsTracklistRenderer", {})
+                .get("captionTracks", [])
+                if isinstance(player_response, dict)
+                else []
+            )
+            caption_track = choose_youtube_caption_track(caption_tracks)
+            base_url = caption_track.get("baseUrl", "") if isinstance(caption_track, dict) else ""
+            if not base_url:
+                continue
 
-    caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
-    try:
-        caption_response = requests.get(caption_url, headers=headers, cookies=cookies, timeout=20)
-        caption_response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.info("Could not fetch YouTube caption track for %s: %s", video_url, exc)
-        return None
+            caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
+            try:
+                caption_response = session.get(caption_url, timeout=20)
+                caption_response.raise_for_status()
+            except requests.RequestException as exc:
+                logger.info("Could not fetch YouTube caption track for %s via %s: %s", video_url, watch_url, exc)
+                continue
 
-    transcript_text = subtitle_body_to_text(caption_response.text)
-    if transcript_text:
-        update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
-        return transcript_text
+            transcript_text = subtitle_body_to_text(caption_response.text)
+            if transcript_text:
+                update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
+                return transcript_text
     return None
 
 
@@ -2738,6 +2926,11 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
     is_youtube_source = bool(source_url and extract_youtube_video_id(source_url))
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
         if is_youtube_source:
+            if has_youtube_cookie_source():
+                return (
+                    "This YouTube video still blocked direct server-side download after the hosted backend tried the saved YouTube cookies. "
+                    "Try a different public YouTube link, add a YouTube proxy on Render, or upload the lecture file directly."
+                )
             return (
                 "This YouTube video blocked direct server-side download from the hosted backend. "
                 "Public captions are still checked first, but this video may need YOUTUBE_COOKIES_TXT or a YouTube proxy on Render."

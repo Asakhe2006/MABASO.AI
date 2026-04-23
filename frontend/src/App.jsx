@@ -24,11 +24,11 @@ const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
-const SUPPORT_DESTINATION_EMAIL = "mabasoasakhe@gmail.com";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
+const MIN_PASSWORD_LENGTH = 8;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -784,6 +784,13 @@ export default function App() {
   const [authEmailInput, setAuthEmailInput] = useState(
     () => window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || window.localStorage.getItem(AUTH_EMAIL_KEY) || "",
   );
+  const [authPasswordInput, setAuthPasswordInput] = useState("");
+  const [authCodeInput, setAuthCodeInput] = useState("");
+  const [authMode, setAuthMode] = useState("login");
+  const [pendingEmailAuthMode, setPendingEmailAuthMode] = useState("");
+  const [pendingEmailAuthEmail, setPendingEmailAuthEmail] = useState("");
+  const [isRequestingEmailCode, setIsRequestingEmailCode] = useState(false);
+  const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
@@ -897,7 +904,8 @@ export default function App() {
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const isAppleConfigured = Boolean(APPLE_CLIENT_ID);
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
-  const loginMethodLabel = isAppleConfigured ? "Google or Apple" : "Google";
+  const loginMethodLabel = isAppleConfigured ? "Google, Apple, or email" : "Google or email";
+  const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
@@ -1316,9 +1324,9 @@ export default function App() {
         <div className="flex items-start gap-4">
           {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support and Contact</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">Send a complaint or support message.</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Type what went wrong, what device you used, and what you expected to happen. Your message will be sent to {SUPPORT_DESTINATION_EMAIL} and you can return to the capture page with the back arrow.</p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Type what went wrong, what device you used, and what you expected to happen. You can return to the capture page with the back arrow when you are done.</p>
           </div>
         </div>
         <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-sm leading-7 text-emerald-50">
@@ -1338,13 +1346,13 @@ export default function App() {
           />
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button type="button" onClick={submitSupportMessage} disabled={isSendingSupport} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
-              {isSendingSupport ? "Sending..." : "Send Support Message"}
+              {isSendingSupport ? "Sending..." : "Send Message"}
             </button>
             <button type="button" onClick={() => setCurrentPage("capture")} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
               Back to Capture Page
             </button>
           </div>
-          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${supportFeedback.startsWith("Your message was sent") ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
+          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${supportFeedback.startsWith("Support message sent") ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
         </div>
 
         <div className="space-y-5">
@@ -1661,6 +1669,12 @@ export default function App() {
   const clearSession = (message = "Please sign in again.") => {
     setAuthToken("");
     setAuthEmail("");
+    setAuthPasswordInput("");
+    setAuthCodeInput("");
+    setPendingEmailAuthMode("");
+    setPendingEmailAuthEmail("");
+    setIsRequestingEmailCode(false);
+    setIsVerifyingEmailCode(false);
     setHistoryItems([]);
     setActiveHistoryId("");
     setCurrentPage("capture");
@@ -1825,6 +1839,98 @@ export default function App() {
     }
   };
 
+  const validateEmailPasswordInputs = () => {
+    const email = authEmailInput.trim().toLowerCase();
+    if (!email) throw new Error("Enter your email address.");
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Enter a valid email address.");
+    if (authPasswordInput.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
+    }
+    return email;
+  };
+
+  const requestEmailPasswordCode = async () => {
+    setAuthMessage("");
+    let email = "";
+    try {
+      email = validateEmailPasswordInputs();
+    } catch (err) {
+      setAuthMessage(err.message || "Enter your email and password.");
+      return;
+    }
+
+    setIsRequestingEmailCode(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/email-password/request-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: authPasswordInput,
+          mode: authMode,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not send a verification code.");
+      setAuthEmailInput(email);
+      setPendingEmailAuthEmail(email);
+      setPendingEmailAuthMode(authMode);
+      setAuthCodeInput("");
+      setAuthMessage("Verification code sent. Check your email, then enter the code below.");
+    } catch (err) {
+      setAuthMessage(err.message || "Could not send a verification code.");
+    } finally {
+      setIsRequestingEmailCode(false);
+    }
+  };
+
+  const verifyEmailPasswordCode = async () => {
+    const email = pendingEmailAuthEmail || authEmailInput.trim().toLowerCase();
+    if (!email) {
+      setAuthMessage("Enter your email first.");
+      return;
+    }
+    if (!authCodeInput.trim()) {
+      setAuthMessage("Enter the verification code from your email.");
+      return;
+    }
+    if (authPasswordInput.length < MIN_PASSWORD_LENGTH) {
+      setAuthMessage(`Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+
+    setIsVerifyingEmailCode(true);
+    setAuthMessage("");
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/email-password/verify-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: authPasswordInput,
+          code: authCodeInput.trim(),
+          mode: pendingEmailAuthMode || authMode,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Verification failed.");
+      setAuthToken(data.token || "");
+      setAuthEmail(data.email || email);
+      setAuthEmailInput(data.email || email);
+      setAuthPasswordInput("");
+      setAuthCodeInput("");
+      setPendingEmailAuthEmail("");
+      setPendingEmailAuthMode("");
+      setCurrentPage("capture");
+      setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : "Signed in successfully.");
+      setAuthMessage("You are signed in.");
+    } catch (err) {
+      setAuthMessage(err.message || "Verification failed.");
+    } finally {
+      setIsVerifyingEmailCode(false);
+    }
+  };
+
   const startAppleLogin = async () => {
     setAuthMessage("");
     if (!APPLE_CLIENT_ID) {
@@ -1879,9 +1985,6 @@ export default function App() {
   useEffect(() => {
     if (authToken || !authChecked) return;
     if (!GOOGLE_CLIENT_ID) {
-      if (!APPLE_CLIENT_ID) {
-        setAuthMessage("Google and Apple login are not configured on the website yet.");
-      }
       return;
     }
 
@@ -2275,7 +2378,7 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Your support message could not be sent.");
       setSupportMessageDraft("");
-      setSupportFeedback(`Your message was sent to ${SUPPORT_DESTINATION_EMAIL}.`);
+      setSupportFeedback("Support message sent.");
     } catch (err) {
       setSupportFeedback(err.message || "Your support message could not be sent.");
     } finally {
@@ -3418,8 +3521,104 @@ export default function App() {
                     <span>{isAppleSigningIn ? "Connecting iPhone..." : "Continue with iPhone"}</span>
                   </button>
                 ) : null}
+                <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setPendingEmailAuthMode("");
+                        setPendingEmailAuthEmail("");
+                        setAuthCodeInput("");
+                        setAuthMessage("");
+                      }}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${authMode === "login" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
+                    >
+                      Email Sign In
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("register");
+                        setPendingEmailAuthMode("");
+                        setPendingEmailAuthEmail("");
+                        setAuthCodeInput("");
+                        setAuthMessage("");
+                      }}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold ${authMode === "register" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
+                    >
+                      Create Account
+                    </button>
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Email</label>
+                      <input
+                        type="email"
+                        value={authEmailInput}
+                        onChange={(event) => setAuthEmailInput(event.target.value)}
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
+                        placeholder="you@example.com"
+                        autoComplete="email"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Password</label>
+                      <input
+                        type="password"
+                        value={authPasswordInput}
+                        onChange={(event) => setAuthPasswordInput(event.target.value)}
+                        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
+                        placeholder={authMode === "register" ? "Create a password" : "Enter your password"}
+                        autoComplete={authMode === "register" ? "new-password" : "current-password"}
+                      />
+                      <p className="mt-2 text-xs leading-6 text-slate-400">Use at least {MIN_PASSWORD_LENGTH} characters.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={requestEmailPasswordCode}
+                      disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                      className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      {isRequestingEmailCode ? "Sending Code..." : authMode === "register" ? "Create Account and Send Code" : "Send Sign-In Code"}
+                    </button>
+                  </div>
+                  {emailAuthCodeRequested ? (
+                    <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-emerald-300/8 p-4">
+                      <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Verification</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">Enter the verification code sent to {pendingEmailAuthEmail} to finish {pendingEmailAuthMode === "register" ? "creating your account" : "signing in"}.</p>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={authCodeInput}
+                        onChange={(event) => setAuthCodeInput(event.target.value)}
+                        className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm tracking-[0.35em] text-white outline-none"
+                        placeholder="000000"
+                        autoComplete="one-time-code"
+                      />
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onClick={verifyEmailPasswordCode}
+                          disabled={isVerifyingEmailCode}
+                          className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                        >
+                          {isVerifyingEmailCode ? "Verifying..." : "Verify and Continue"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={requestEmailPasswordCode}
+                          disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                          className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          Resend Code
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="rounded-2xl border border-emerald-300/18 bg-emerald-300/8 px-4 py-4 text-sm leading-7 text-slate-200">
-                  Sign in with {loginMethodLabel}, then upload a lecture, add notes or slides, and let the app build the study workspace. This device remembers the last email used here, and each session now stays active for up to {SESSION_DURATION_LABEL} before it expires.
+                  Sign in with {loginMethodLabel}, or use your email and password first and then confirm with a verification code. This device remembers the last email used here, and each session now stays active for up to {SESSION_DURATION_LABEL} before it expires.
                 </div>
                 {authMessage ? <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-slate-200">{authMessage}</div> : null}
               </div>
@@ -3464,7 +3663,7 @@ export default function App() {
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
             <div className="flex flex-wrap items-center gap-4">
               <button type="button" onClick={() => setCurrentPage("about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
-              <button type="button" onClick={() => { setSupportFeedback(""); setCurrentPage("support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); setCurrentPage("support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support and Contact</button>
             </div>
           </div>
 
