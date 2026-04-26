@@ -51,6 +51,14 @@ services:
         sync: false
       - key: YOUTUBE_PROXY_HTTPS_URL
         sync: false
+      - key: YOUTUBE_WEBSHARE_PROXY_USERNAME
+        sync: false
+      - key: YOUTUBE_WEBSHARE_PROXY_PASSWORD
+        sync: false
+      - key: YOUTUBE_WEBSHARE_PROXY_LOCATIONS
+        sync: false
+      - key: YTDLP_IMPERSONATE_TARGET
+        sync: false
 
   - type: web
     name: mabaso-ai-web

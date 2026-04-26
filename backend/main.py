@@ -2409,6 +2409,7 @@ def build_ytdlp_options(
     progress_hook: Any = None,
     skip_download: bool = False,
     use_cookiefile: bool = True,
+    use_impersonation: bool = True,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {
         "noplaylist": True,
@@ -2428,7 +2429,7 @@ def build_ytdlp_options(
             }
         },
     }
-    if YTDLP_IMPERSONATE_TARGET:
+    if use_impersonation and YTDLP_IMPERSONATE_TARGET:
         options["impersonate"] = YTDLP_IMPERSONATE_TARGET
     if output_template:
         options["outtmpl"] = output_template
@@ -2443,6 +2444,19 @@ def build_ytdlp_options(
     if proxy_url:
         options["proxy"] = proxy_url
     return options
+
+
+def is_unavailable_impersonation_target_error(exc: Exception) -> bool:
+    lowered = str(exc or "").strip().lower()
+    return "impersonate target" in lowered and "not available" in lowered
+
+
+def iter_ytdlp_option_variants(options: dict[str, Any]):
+    yield options
+    if options.get("impersonate"):
+        fallback_options = dict(options)
+        fallback_options.pop("impersonate", None)
+        yield fallback_options
 
 
 def extract_youtube_video_id(video_url: str) -> str | None:
@@ -2770,12 +2784,12 @@ def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None
     subtitle_attempts = [True, False] if has_youtube_cookie_source() else [False]
     for attempt_index, use_cookiefile in enumerate(subtitle_attempts, start=1):
         cleanup_caption_files(subtitle_prefix)
-        options = build_ytdlp_options(
+        base_options = build_ytdlp_options(
             output_template=output_template,
             skip_download=True,
             use_cookiefile=use_cookiefile,
         )
-        options.update({
+        base_options.update({
             "writesubtitles": True,
             "writeautomaticsub": True,
             "subtitleslangs": ["all"],
@@ -2785,8 +2799,28 @@ def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None
         if attempt_index > 1:
             update_job(job_id, status="processing", stage="Retrying caption download without saved cookies", progress=10)
         try:
-            with yt_dlp.YoutubeDL(options) as downloader:
-                downloader.extract_info(normalized_url, download=True)
+            last_variant_error: Exception | None = None
+            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                if variant_index > 1:
+                    update_job(
+                        job_id,
+                        status="processing",
+                        stage="Retrying caption download without browser impersonation",
+                        progress=10,
+                    )
+                try:
+                    with yt_dlp.YoutubeDL(options) as downloader:
+                        downloader.extract_info(normalized_url, download=True)
+                    last_variant_error = None
+                    break
+                except Exception as variant_exc:
+                    last_variant_error = variant_exc
+                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                        logger.info("Retrying subtitle download without impersonation for %s: %s", video_url, variant_exc)
+                        continue
+                    raise
+            if last_variant_error is not None:
+                raise last_variant_error
             break
         except Exception as exc:
             logger.info(
@@ -2873,14 +2907,14 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
 
     for attempt_index, attempt in enumerate(download_attempts, start=1):
         cleanup_download_artifacts(download_prefix)
-        options = build_ytdlp_options(
+        base_options = build_ytdlp_options(
             output_template=output_template,
             progress_hook=progress_hook,
             use_cookiefile=attempt["use_cookiefile"],
         )
-        options["format"] = attempt["format"]
+        base_options["format"] = attempt["format"]
         if attempt["drop_extractor_args"]:
-            options.pop("extractor_args", None)
+            base_options.pop("extractor_args", None)
             update_job(
                 job_id,
                 status="processing",
@@ -2900,17 +2934,37 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
             )
 
         try:
-            with yt_dlp.YoutubeDL(options) as downloader:
-                info = downloader.extract_info(normalized_url, download=True)
-                requested_downloads = info.get("requested_downloads") or []
-                candidate_paths = [
-                    Path(item["filepath"])
-                    for item in requested_downloads
-                    if isinstance(item, dict) and item.get("filepath")
-                ]
-                prepared_path = Path(downloader.prepare_filename(info))
-                if prepared_path not in candidate_paths:
-                    candidate_paths.append(prepared_path)
+            last_variant_error: Exception | None = None
+            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                if variant_index > 1:
+                    update_job(
+                        job_id,
+                        status="processing",
+                        stage="Retrying video download without browser impersonation",
+                        progress=4,
+                    )
+                try:
+                    with yt_dlp.YoutubeDL(options) as downloader:
+                        info = downloader.extract_info(normalized_url, download=True)
+                        requested_downloads = info.get("requested_downloads") or []
+                        candidate_paths = [
+                            Path(item["filepath"])
+                            for item in requested_downloads
+                            if isinstance(item, dict) and item.get("filepath")
+                        ]
+                        prepared_path = Path(downloader.prepare_filename(info))
+                        if prepared_path not in candidate_paths:
+                            candidate_paths.append(prepared_path)
+                    last_variant_error = None
+                    break
+                except Exception as variant_exc:
+                    last_variant_error = variant_exc
+                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                        logger.info("Retrying video download without impersonation for %s: %s", video_url, variant_exc)
+                        continue
+                    raise
+            if last_variant_error is not None:
+                raise last_variant_error
             last_error = ""
             break
         except Exception as exc:
@@ -2988,6 +3042,11 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
     message = str(exc).strip()
     lowered = message.lower()
     is_youtube_source = bool(source_url and extract_youtube_video_id(source_url))
+    if "impersonate target" in lowered and "not available" in lowered:
+        return (
+            "The backend downloader could not use its browser impersonation target. "
+            "Try the link again after redeploying this fallback, or leave YTDLP_IMPERSONATE_TARGET empty and use public captions, backend cookies, or a proxy for blocked YouTube links."
+        )
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
         if is_youtube_source:
             if has_youtube_cookie_source():

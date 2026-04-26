@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 function resolveApiBaseUrl() {
@@ -29,6 +29,8 @@ const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
 const MIN_PASSWORD_LENGTH = 8;
+const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
+const RECORDING_SILENCE_THRESHOLD = 0.02;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -56,6 +58,7 @@ const helpAboutSections = [
     points: [
       "The capture page is where you add lecture material. This can be a recorded lecture, a video file, live recording, typed notes, slide files, or past papers.",
       "When you press Transcribe Lecture, MABASO reads the audio or video first, creates a transcript, and then uses that transcript as the foundation for the rest of the pack.",
+      "When you use Add Lecture Files, MABASO starts reading notes, slides, and past papers first, then moves into lecture transcription automatically so the guide can use all readable sources together.",
       "When you press Generate Study Guide, MABASO can still work even if you only uploaded notes, slides, or past papers. A transcript helps, but it is not the only valid source.",
       "The study workspace is the revision area. It lets the student move between the guide, transcript, formulas, worked examples, flashcards, the test, podcast, and study chat without uploading again.",
     ],
@@ -115,6 +118,7 @@ const helpAboutSections = [
       "The capture page accepts lecture media and supporting documents. Students can upload one file at a time or use the combined lecture-file button to let MABASO sort them automatically.",
     points: [
       "Lecture media supports common audio and video uploads, while notes, slides, and past papers support text, images, PDFs, PowerPoint files, and Word documents in DOCX format.",
+      "Public video links work best when the lecture is openly accessible. Some YouTube links still need public captions, backend cookies, or a proxy before the server can read them.",
       "History stores the recent study packs built on this device so students can reopen them quickly without rebuilding everything immediately.",
       "Downloads are grouped under one Download menu in the study workspace so the student can choose the exact format they want instead of scanning several buttons.",
       "Back arrows appear on pages where students can return, which makes it easier to move between capture, help, study tools, and collaboration without losing direction.",
@@ -128,6 +132,7 @@ const helpAboutSections = [
     points: [
       "The Transcribe Lecture button should carry the live transcription stages when lecture audio, video, or a public video link is being processed.",
       "The Generate Study Guide button should carry the live reading and guide-building stages when notes, slides, or past papers are being read or turned into revision material.",
+      "Live recording now watches for 10 minutes of silence. When that happens, MABASO stops the recorder and starts transcription automatically. A manual stop still only saves the recording so the student stays in control.",
       "If a scan or source file is too messy, too broken, or too unreadable, students should expect weaker notes. Clean PDFs, typed notes, and clearer slide files usually produce stronger study packs.",
       "If the guide feels mixed up, too transcript-heavy, or too shallow, students should add better notes or slides and regenerate instead of trusting a weak first draft.",
     ],
@@ -282,7 +287,7 @@ function sanitizeFileName(value) {
 function formatGroupedSourceLabel(names = [], singularLabel = "file", pluralLabel = "files") {
   const cleanedNames = (names || []).map((name) => (name || "").trim()).filter(Boolean);
   if (!cleanedNames.length) return "";
-  if (cleanedNames.length === 1) return cleanedNames[0];
+  if (cleanedNames.length === 1) return cleanedNames[0] || `1 ${singularLabel}`;
   return `${cleanedNames.length} ${pluralLabel}`;
 }
 
@@ -403,7 +408,7 @@ function createStudySourceEntry(name, text, prefix) {
 
 function normalizeStudySourceText(text) {
   return (text || "")
-    .replace(/\u0000/g, " ")
+    .split("\0").join(" ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{4,}/g, "\n\n\n")
     .replace(/[^\S\r\n]{2,}/g, " ")
@@ -597,6 +602,7 @@ function getErrorHint(message) {
   const text = (message || "").toLowerCase();
   if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
   if (text.includes("ffmpeg")) return "Install ffmpeg on the backend server for larger files.";
+  if (text.includes("impersonate target")) return "If a video link still fails, leave YTDLP_IMPERSONATE_TARGET empty or add YouTube cookies or a proxy on the backend.";
   if (text.includes("blocked direct server-side download")) return "Try a video with public captions, or upload the lecture file directly.";
   if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
     return "Try another public video link, or upload the lecture file directly. YouTube links may also need public captions or working backend cookies.";
@@ -785,6 +791,7 @@ export default function App() {
     () => window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || window.localStorage.getItem(AUTH_EMAIL_KEY) || "",
   );
   const [authPasswordInput, setAuthPasswordInput] = useState("");
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [authCodeInput, setAuthCodeInput] = useState("");
   const [authMode, setAuthMode] = useState("login");
   const [pendingEmailAuthMode, setPendingEmailAuthMode] = useState("");
@@ -828,6 +835,7 @@ export default function App() {
   const [isExtractingNotes, setIsExtractingNotes] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
   const [isExtractingPastPapers, setIsExtractingPastPapers] = useState(false);
+  const [isProcessingLectureBundle, setIsProcessingLectureBundle] = useState(false);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizAnswerImages, setQuizAnswerImages] = useState({});
   const [quizResults, setQuizResults] = useState({});
@@ -872,6 +880,13 @@ export default function App() {
   const podcastAudioUrlRef = useRef("");
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const recordingStreamRef = useRef(null);
+  const recordingAudioContextRef = useRef(null);
+  const recordingSourceNodeRef = useRef(null);
+  const recordingAnalyserRef = useRef(null);
+  const recordingMonitorFrameRef = useRef(0);
+  const recordingLastSoundAtRef = useRef(0);
+  const recordingStopReasonRef = useRef("");
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
@@ -889,26 +904,34 @@ export default function App() {
   const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || podcastData.script);
   const selectedQuizQuestions = quizQuestions;
-  const formattedGuide = normalizeRenderedMathText(prettifyMathText(summary));
-  const formattedFormula = normalizeRenderedMathText(prettifyMathText(formula));
-  const formattedExample = normalizeRenderedMathText(prettifyMathText(example));
-  const activeRoomFormattedGuide = normalizeRenderedMathText(prettifyMathText(activeRoom?.summary || ""));
-  const activeRoomFormattedFormula = normalizeRenderedMathText(prettifyMathText(activeRoom?.formula || ""));
-  const activeRoomFormattedExample = normalizeRenderedMathText(prettifyMathText(activeRoom?.example || ""));
+  const deferredTranscript = useDeferredValue(transcript);
+  const deferredSummary = useDeferredValue(summary);
+  const deferredFormula = useDeferredValue(formula);
+  const deferredExample = useDeferredValue(example);
+  const deferredActiveRoomSummary = useDeferredValue(activeRoom?.summary || "");
+  const deferredActiveRoomFormula = useDeferredValue(activeRoom?.formula || "");
+  const deferredActiveRoomExample = useDeferredValue(activeRoom?.example || "");
+  const formattedGuide = normalizeRenderedMathText(prettifyMathText(deferredSummary));
+  const formattedFormula = normalizeRenderedMathText(prettifyMathText(deferredFormula));
+  const formattedExample = normalizeRenderedMathText(prettifyMathText(deferredExample));
+  const activeRoomFormattedGuide = normalizeRenderedMathText(prettifyMathText(deferredActiveRoomSummary));
+  const activeRoomFormattedFormula = normalizeRenderedMathText(prettifyMathText(deferredActiveRoomFormula));
+  const activeRoomFormattedExample = normalizeRenderedMathText(prettifyMathText(deferredActiveRoomExample));
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const isAppleConfigured = Boolean(APPLE_CLIENT_ID);
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
-  const loginMethodLabel = isAppleConfigured ? "Google, Apple, or email" : "Google or email";
   const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
   const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in)/i.test(authMessage.trim());
   const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session)/i.test(authMessage.trim());
+  const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
+  const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
@@ -972,7 +995,7 @@ export default function App() {
         return {
           eyebrow: "Live recording",
           badge: "REC",
-          detail: "Recording is running. Stop it when the lecture is finished so the file can be transcribed.",
+          detail: "Recording is running. MABASO auto-stops after 10 minutes of silence, while a manual stop only saves the file.",
           showProgress: false,
           progressValue: 0,
           statusLine: "",
@@ -986,6 +1009,16 @@ export default function App() {
           showProgress: true,
           progressValue,
           statusLine: status || "Preparing the lecture transcript.",
+        };
+      }
+      if (isProcessingLectureBundle) {
+        return {
+          eyebrow: "Auto-processing files",
+          badge: "Working",
+          detail: status || "Reading notes, slides, and lecture media from the uploaded bundle.",
+          showProgress: false,
+          progressValue: 0,
+          statusLine: "",
         };
       }
       if (file) {
@@ -1017,6 +1050,16 @@ export default function App() {
           showProgress: true,
           progressValue,
           statusLine: status || "Preparing lecture sources for the guide.",
+        };
+      }
+      if (isProcessingLectureBundle) {
+        return {
+          eyebrow: "Auto-processing files",
+          badge: "Working",
+          detail: status || "Reading notes, slides, and lecture media from the uploaded bundle.",
+          showProgress: false,
+          progressValue: 0,
+          statusLine: "",
         };
       }
       if (hasStudyInputs) {
@@ -1777,6 +1820,10 @@ export default function App() {
     if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
   }, []);
 
+  useEffect(() => () => {
+    cleanupRecordingMonitoring({ stopStream: true });
+  }, []);
+
   useEffect(() => {
     setIsDownloadMenuOpen(false);
   }, [activeTab, currentPage]);
@@ -2281,47 +2328,49 @@ export default function App() {
   };
 
   const loadHistoryItem = (item) => {
-    setTranscript(item.transcript || "");
-    setSummary(item.summary || "");
-    setFormula(item.formula || "");
-    setExample(item.example || "");
-    setFlashcards(item.flashcards || []);
-    setQuizQuestions(item.quizQuestions || []);
-    setStudyImages(item.studyImages || []);
-    setLectureNoteSources(
-      normalizeStudySourceEntries(
-        item.lectureNoteSources,
-        item.lectureNotes,
-        item.lectureNoteFileNames || [item.lectureNotesFileName],
-        "LECTURE NOTE",
-      ),
-    );
-    setPastQuestionMemo(item.pastQuestionMemo || "");
-    setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
-    setPastQuestionPaperSources(
-      normalizeStudySourceEntries(
-        item.pastQuestionPaperSources,
-        item.pastQuestionPapers,
-        item.pastQuestionPaperFileNames,
-        "PAST QUESTION PAPER",
-      ),
-    );
-    setPodcastData(normalizePodcastData(item.podcastData));
-    setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
-    setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
-    setActivePodcastSegmentIndex(0);
-    setIsPodcastAutoPlaying(false);
-    setQuizAnswers({});
-    setQuizAnswerImages({});
-    setQuizResults({});
-    setQuizSubmitted(false);
-    setChatMessages([]);
-    setChatReferenceImages([]);
-    setActiveHistoryId(item.id);
-    setActiveTab("guide");
-    setCurrentPage("workspace");
+    startTransition(() => {
+      setTranscript(item.transcript || "");
+      setSummary(item.summary || "");
+      setFormula(item.formula || "");
+      setExample(item.example || "");
+      setFlashcards(item.flashcards || []);
+      setQuizQuestions(item.quizQuestions || []);
+      setStudyImages(item.studyImages || []);
+      setLectureNoteSources(
+        normalizeStudySourceEntries(
+          item.lectureNoteSources,
+          item.lectureNotes,
+          item.lectureNoteFileNames || [item.lectureNotesFileName],
+          "LECTURE NOTE",
+        ),
+      );
+      setPastQuestionMemo(item.pastQuestionMemo || "");
+      setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
+      setPastQuestionPaperSources(
+        normalizeStudySourceEntries(
+          item.pastQuestionPaperSources,
+          item.pastQuestionPapers,
+          item.pastQuestionPaperFileNames,
+          "PAST QUESTION PAPER",
+        ),
+      );
+      setPodcastData(normalizePodcastData(item.podcastData));
+      setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
+      setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
+      setActivePodcastSegmentIndex(0);
+      setIsPodcastAutoPlaying(false);
+      setQuizAnswers({});
+      setQuizAnswerImages({});
+      setQuizResults({});
+      setQuizSubmitted(false);
+      setChatMessages([]);
+      setChatReferenceImages([]);
+      setActiveHistoryId(item.id);
+      setActiveTab("guide");
+      setCurrentPage("workspace");
+    });
     setStatus(`Loaded ${item.title} from history.`);
   };
 
@@ -2393,41 +2442,97 @@ export default function App() {
 
   const handleFileChange = (selectedFile) => {
     if (!selectedFile) return;
-    setFile(selectedFile);
-    setVideoUrl("");
+    startTransition(() => {
+      setFile(selectedFile);
+      setVideoUrl("");
+    });
     setError("");
     setStatus(`${selectedFile.name} selected.`);
   };
 
-  const handleLectureNotesFileChange = async (selectedFiles) => {
-    const files = Array.from(selectedFiles || []);
-    if (!files.length) return;
-    setIsExtractingNotes(true);
-    setCurrentJobType("notes");
-    setError("");
-    setStatus("Reading lecture notes...");
-    setProgress(10);
-    try {
-      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
-        sourceName: "lecture note",
-        sourcePrefix: "LECTURE NOTE",
-      });
-      setLectureNoteSources((current) => mergeStudySourceEntries(current, extractedEntries));
-      setStatus(
-        `${addedNames.length} lecture note source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`,
-      );
-      setProgress(100);
-    } catch (err) {
-      setError(err.message || "Lecture note reading failed.");
-      setStatus("Lecture note reading failed.");
-    } finally {
-      setIsExtractingNotes(false);
-      setCurrentJobType("");
-      setProgress(0);
+  const cleanupRecordingMonitoring = ({ stopStream = false } = {}) => {
+    if (recordingMonitorFrameRef.current) {
+      window.cancelAnimationFrame(recordingMonitorFrameRef.current);
+      recordingMonitorFrameRef.current = 0;
     }
+    if (recordingSourceNodeRef.current) {
+      try {
+        recordingSourceNodeRef.current.disconnect();
+      } catch {
+        // Ignore disconnect errors when the node is already detached.
+      }
+      recordingSourceNodeRef.current = null;
+    }
+    recordingAnalyserRef.current = null;
+    if (recordingAudioContextRef.current) {
+      recordingAudioContextRef.current.close().catch(() => {
+        // Ignore audio context shutdown errors.
+      });
+      recordingAudioContextRef.current = null;
+    }
+    if (stopStream && recordingStreamRef.current) {
+      recordingStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    recordingStreamRef.current = null;
+    recordingLastSoundAtRef.current = 0;
   };
 
-  const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix }) => {
+  const beginRecordingSilenceMonitoring = (stream) => {
+    cleanupRecordingMonitoring();
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    const audioContext = new AudioContextCtor();
+    const sourceNode = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.92;
+    sourceNode.connect(analyser);
+
+    recordingStreamRef.current = stream;
+    recordingAudioContextRef.current = audioContext;
+    recordingSourceNodeRef.current = sourceNode;
+    recordingAnalyserRef.current = analyser;
+    recordingLastSoundAtRef.current = Date.now();
+
+    audioContext.resume().catch(() => {
+      // Browsers can start the context suspended. Recording still continues even if resume fails.
+    });
+
+    const samples = new Uint8Array(analyser.fftSize);
+    const monitor = () => {
+      const recorder = mediaRecorderRef.current;
+      if (!recorder || recorder.state !== "recording" || !recordingAnalyserRef.current) {
+        recordingMonitorFrameRef.current = 0;
+        return;
+      }
+
+      recordingAnalyserRef.current.getByteTimeDomainData(samples);
+      let sumSquares = 0;
+      for (const sample of samples) {
+        const normalized = (sample - 128) / 128;
+        sumSquares += normalized * normalized;
+      }
+      const rms = Math.sqrt(sumSquares / samples.length);
+      const now = Date.now();
+      if (rms >= RECORDING_SILENCE_THRESHOLD) {
+        recordingLastSoundAtRef.current = now;
+      } else if (recordingLastSoundAtRef.current && now - recordingLastSoundAtRef.current >= RECORDING_SILENCE_AUTO_STOP_MS) {
+        recordingStopReasonRef.current = "silence";
+        setRecording(false);
+        setStatus("10 minutes of silence detected. Stopping the recording and preparing transcription...");
+        recorder.stop();
+        recordingMonitorFrameRef.current = 0;
+        return;
+      }
+
+      recordingMonitorFrameRef.current = window.requestAnimationFrame(monitor);
+    };
+
+    recordingMonitorFrameRef.current = window.requestAnimationFrame(monitor);
+  };
+
+  const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus }) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return { extractedEntries: [], addedNames: [], skippedNames: [] };
 
@@ -2436,8 +2541,8 @@ export default function App() {
     const skippedNames = [];
     for (const [index, selectedFile] of files.entries()) {
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
-      setProgress(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
-      setStatus(`Reading ${sourceName} ${index + 1} of ${files.length}: ${selectedFile.name}`);
+      onProgress?.(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
+      onStatus?.(`Reading ${sourceName} ${index + 1} of ${files.length}: ${selectedFile.name}`);
       if (isTextFile) {
         const text = normalizeStudySourceText(await selectedFile.text());
         if (isLikelyReadableStudySourceText(text)) {
@@ -2469,60 +2574,178 @@ export default function App() {
     return { extractedEntries, addedNames, skippedNames };
   };
 
-  const handleLectureSlidesFilesChange = async (selectedFiles) => {
+  const createStudySourceBatchSnapshot = (currentSources, sourcePrefix) => ({
+    extractedEntries: [],
+    addedNames: [],
+    skippedNames: [],
+    nextSources: currentSources,
+    text: studySourceEntriesToText(currentSources, sourcePrefix),
+  });
+
+  const extractAndApplyStudySourceFiles = async (selectedFiles, {
+    sourceName,
+    sourcePrefix,
+    currentSources,
+    setSources,
+    setBusy,
+    jobType,
+    startStatus,
+    successMessage,
+    failureStatus,
+    interactive = true,
+  }) => {
     const files = Array.from(selectedFiles || []);
-    if (!files.length) return;
-    setIsExtractingSlides(true);
-    setCurrentJobType("slides");
-    setError("");
-    setStatus("Reading slide sources...");
-    setProgress(10);
+    if (!files.length) return createStudySourceBatchSnapshot(currentSources, sourcePrefix);
+
+    setBusy(true);
+    if (interactive) {
+      setCurrentJobType(jobType);
+      setError("");
+      setStatus(startStatus);
+      setProgress(10);
+    }
+
     try {
-      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
-        sourceName: "slide source",
-        sourcePrefix: "SLIDE SOURCE",
+      const result = await extractStudySourceFiles(files, {
+        sourceName,
+        sourcePrefix,
+        onProgress: interactive ? (value) => setProgress(value) : undefined,
+        onStatus: interactive ? (nextStatus) => setStatus(nextStatus) : undefined,
       });
-      setLectureSlideSources((current) => mergeStudySourceEntries(current, extractedEntries));
-      setStatus(
-        `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`,
-      );
-      setProgress(100);
+      const nextSources = mergeStudySourceEntries(currentSources, result.extractedEntries);
+      startTransition(() => {
+        setSources((existing) => mergeStudySourceEntries(existing, result.extractedEntries));
+      });
+      if (interactive) {
+        setStatus(successMessage(result));
+        setProgress(100);
+      }
+      return {
+        ...result,
+        nextSources,
+        text: studySourceEntriesToText(nextSources, sourcePrefix),
+      };
     } catch (err) {
-      setError(err.message || "Slide reading failed.");
-      setStatus("Slide reading failed.");
+      if (interactive) {
+        setError(err.message || failureStatus);
+        setStatus(failureStatus);
+      }
+      throw err;
     } finally {
-      setIsExtractingSlides(false);
-      setCurrentJobType("");
-      setProgress(0);
+      setBusy(false);
+      if (interactive) {
+        setCurrentJobType("");
+        setProgress(0);
+      }
     }
   };
 
-  const handlePastQuestionPapersFilesChange = async (selectedFiles) => {
-    const files = Array.from(selectedFiles || []);
-    if (!files.length) return;
-    setIsExtractingPastPapers(true);
-    setCurrentJobType("past_papers");
-    setError("");
-    setStatus("Reading past question papers...");
-    setProgress(10);
-    try {
-      const { extractedEntries, addedNames, skippedNames } = await extractStudySourceFiles(files, {
-        sourceName: "past question paper",
-        sourcePrefix: "PAST QUESTION PAPER",
-      });
-      setPastQuestionPaperSources((current) => mergeStudySourceEntries(current, extractedEntries));
-      setStatus(
-        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generate the study guide again to refresh notes and test questions with this reference.`,
-      );
-      setProgress(100);
-    } catch (err) {
-      setError(err.message || "Past question paper reading failed.");
-      setStatus("Past question paper reading failed.");
-    } finally {
-      setIsExtractingPastPapers(false);
-      setCurrentJobType("");
-      setProgress(0);
+  const transcribeLectureFile = async (selectedFile, options = {}) => {
+    const {
+      autoGenerateGuide = true,
+      guideOverrides = {},
+      initialStatus = "Submitting lecture for transcription...",
+      failureStatus = "Transcription failed.",
+      surfaceError = true,
+      resetOutputsBeforeTranscribe = true,
+    } = options;
+
+    if (!selectedFile) {
+      throw new Error("Upload or record a lecture first.");
     }
+
+    setIsTranscribing(true);
+    if (surfaceError) setError("");
+    setStatus(initialStatus);
+    setProgress(0);
+    if (resetOutputsBeforeTranscribe) resetGeneratedOutputs();
+    setActiveTab("transcript");
+    setCurrentJobType("transcription");
+    startTransition(() => {
+      setFile(selectedFile);
+      setVideoUrl("");
+    });
+
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const response = await authFetch("/upload-audio/", { method: "POST", body: formData });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || failureStatus);
+      const job = await pollJob(data.job_id, "transcription");
+      const transcriptText = job.transcript || "";
+      startTransition(() => {
+        setTranscript(transcriptText);
+      });
+
+      if (autoGenerateGuide) {
+        setStatus("Transcript ready. Generating study guide...");
+        setProgress(100);
+        await generateStudyGuide(transcriptText, guideOverrides);
+      } else {
+        setStatus("Transcript ready.");
+        setProgress(100);
+      }
+
+      return transcriptText;
+    } catch (err) {
+      if (surfaceError) {
+        setError(err.message || failureStatus);
+        setStatus(failureStatus);
+      }
+      throw err;
+    } finally {
+      setIsTranscribing(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const handleLectureNotesFileChange = async (selectedFiles) => {
+    await extractAndApplyStudySourceFiles(selectedFiles, {
+      sourceName: "lecture note",
+      sourcePrefix: "LECTURE NOTE",
+      currentSources: lectureNoteSources,
+      setSources: setLectureNoteSources,
+      setBusy: setIsExtractingNotes,
+      jobType: "notes",
+      startStatus: "Reading lecture notes...",
+      successMessage: ({ addedNames, skippedNames }) => (
+        `${addedNames.length} lecture note source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`
+      ),
+      failureStatus: "Lecture note reading failed.",
+    });
+  };
+
+  const handleLectureSlidesFilesChange = async (selectedFiles) => {
+    await extractAndApplyStudySourceFiles(selectedFiles, {
+      sourceName: "slide source",
+      sourcePrefix: "SLIDE SOURCE",
+      currentSources: lectureSlideSources,
+      setSources: setLectureSlideSources,
+      setBusy: setIsExtractingSlides,
+      jobType: "slides",
+      startStatus: "Reading slide sources...",
+      successMessage: ({ addedNames, skippedNames }) => (
+        `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`
+      ),
+      failureStatus: "Slide reading failed.",
+    });
+  };
+
+  const handlePastQuestionPapersFilesChange = async (selectedFiles) => {
+    await extractAndApplyStudySourceFiles(selectedFiles, {
+      sourceName: "past question paper",
+      sourcePrefix: "PAST QUESTION PAPER",
+      currentSources: pastQuestionPaperSources,
+      setSources: setPastQuestionPaperSources,
+      setBusy: setIsExtractingPastPapers,
+      jobType: "past_papers",
+      startStatus: "Reading past question papers...",
+      successMessage: ({ addedNames, skippedNames }) => (
+        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generate the study guide again to refresh notes and test questions with this reference.`
+      ),
+      failureStatus: "Past question paper reading failed.",
+    });
   };
 
   const handleLectureBundleFilesChange = async (selectedFiles) => {
@@ -2547,25 +2770,136 @@ export default function App() {
       }
     }
 
+    const activeLectureMediaFile = lectureMediaFiles[0] || null;
+    const noteBaseSources = lectureNoteSources;
+    const slideBaseSources = lectureSlideSources;
+    const pastPaperBaseSources = pastQuestionPaperSources;
+    const warningMessages = [];
+
     setError("");
     setStatus(`Sorting ${files.length} lecture file${files.length === 1 ? "" : "s"} into the right sections...`);
+    setProgress(4);
+    setIsProcessingLectureBundle(true);
 
-    if (lectureMediaFiles.length) {
-      handleFileChange(lectureMediaFiles[0]);
+    if (activeLectureMediaFile) {
+      startTransition(() => {
+        setFile(activeLectureMediaFile);
+        setVideoUrl("");
+      });
+    } else {
+      resetGeneratedOutputs();
+      startTransition(() => {
+        setFile(null);
+        setVideoUrl("");
+      });
     }
-    if (noteFiles.length) await handleLectureNotesFileChange(noteFiles);
-    if (slideFiles.length) await handleLectureSlidesFilesChange(slideFiles);
-    if (pastPaperFiles.length) await handlePastQuestionPapersFilesChange(pastPaperFiles);
 
-    const summaryParts = [];
-    if (lectureMediaFiles.length) summaryParts.push("1 lecture file ready");
-    if (noteFiles.length) summaryParts.push(`${noteFiles.length} note source${noteFiles.length === 1 ? "" : "s"}`);
-    if (slideFiles.length) summaryParts.push(`${slideFiles.length} slide source${slideFiles.length === 1 ? "" : "s"}`);
-    if (pastPaperFiles.length) summaryParts.push(`${pastPaperFiles.length} past paper source${pastPaperFiles.length === 1 ? "" : "s"}`);
+    const notePromise = extractAndApplyStudySourceFiles(noteFiles, {
+      sourceName: "lecture note",
+      sourcePrefix: "LECTURE NOTE",
+      currentSources: noteBaseSources,
+      setSources: setLectureNoteSources,
+      setBusy: setIsExtractingNotes,
+      jobType: "notes",
+      startStatus: "Reading lecture notes...",
+      successMessage: () => "",
+      failureStatus: "Lecture note reading failed.",
+      interactive: false,
+    });
+    const slidePromise = extractAndApplyStudySourceFiles(slideFiles, {
+      sourceName: "slide source",
+      sourcePrefix: "SLIDE SOURCE",
+      currentSources: slideBaseSources,
+      setSources: setLectureSlideSources,
+      setBusy: setIsExtractingSlides,
+      jobType: "slides",
+      startStatus: "Reading slide sources...",
+      successMessage: () => "",
+      failureStatus: "Slide reading failed.",
+      interactive: false,
+    });
+    const pastPaperPromise = extractAndApplyStudySourceFiles(pastPaperFiles, {
+      sourceName: "past question paper",
+      sourcePrefix: "PAST QUESTION PAPER",
+      currentSources: pastPaperBaseSources,
+      setSources: setPastQuestionPaperSources,
+      setBusy: setIsExtractingPastPapers,
+      jobType: "past_papers",
+      startStatus: "Reading past question papers...",
+      successMessage: () => "",
+      failureStatus: "Past question paper reading failed.",
+      interactive: false,
+    });
+    const transcriptPromise = activeLectureMediaFile
+      ? transcribeLectureFile(activeLectureMediaFile, {
+        autoGenerateGuide: false,
+        initialStatus: noteFiles.length || slideFiles.length || pastPaperFiles.length
+          ? "Reading notes and slides, then transcribing the lecture automatically..."
+          : "Submitting lecture for transcription...",
+        surfaceError: false,
+      })
+      : Promise.resolve("");
 
-    if (summaryParts.length) {
+    try {
+      const [noteOutcome, slideOutcome, pastPaperOutcome, transcriptOutcome] = await Promise.allSettled([
+        notePromise,
+        slidePromise,
+        pastPaperPromise,
+        transcriptPromise,
+      ]);
+
+      const noteResult = noteOutcome.status === "fulfilled"
+        ? noteOutcome.value
+        : createStudySourceBatchSnapshot(noteBaseSources, "LECTURE NOTE");
+      const slideResult = slideOutcome.status === "fulfilled"
+        ? slideOutcome.value
+        : createStudySourceBatchSnapshot(slideBaseSources, "SLIDE SOURCE");
+      const pastPaperResult = pastPaperOutcome.status === "fulfilled"
+        ? pastPaperOutcome.value
+        : createStudySourceBatchSnapshot(pastPaperBaseSources, "PAST QUESTION PAPER");
+      const transcriptText = transcriptOutcome.status === "fulfilled" ? transcriptOutcome.value : "";
+
+      if (noteOutcome.status === "rejected") warningMessages.push(noteOutcome.reason?.message || "Lecture notes could not be read automatically.");
+      if (slideOutcome.status === "rejected") warningMessages.push(slideOutcome.reason?.message || "Slides could not be read automatically.");
+      if (pastPaperOutcome.status === "rejected") warningMessages.push(pastPaperOutcome.reason?.message || "Past papers could not be read automatically.");
+      if (transcriptOutcome.status === "rejected") warningMessages.push(transcriptOutcome.reason?.message || "Lecture transcription failed.");
+
+      const resolvedPastQuestionPapers = [
+        pastPaperResult.text,
+        pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : "",
+      ].filter(Boolean).join("\n\n");
+
+      if (!(transcriptText.trim() || noteResult.text.trim() || slideResult.text.trim() || resolvedPastQuestionPapers.trim())) {
+        throw new Error(warningMessages[0] || "No lecture files were ready to process.");
+      }
+
+      setError("");
+      setStatus("Lecture sources are ready. Generating the study guide...");
+      await generateStudyGuide(transcriptText, {
+        lectureNotesText: noteResult.text,
+        lectureSlidesText: slideResult.text,
+        pastQuestionPapersText: resolvedPastQuestionPapers,
+        lectureNoteSources: noteResult.nextSources,
+        lectureSlideSources: slideResult.nextSources,
+        pastQuestionPaperSources: pastPaperResult.nextSources,
+        pastQuestionMemo,
+      });
+
+      const summaryParts = [];
+      if (activeLectureMediaFile) summaryParts.push("1 lecture file");
+      if (noteResult.addedNames.length) summaryParts.push(`${noteResult.addedNames.length} note source${noteResult.addedNames.length === 1 ? "" : "s"}`);
+      if (slideResult.addedNames.length) summaryParts.push(`${slideResult.addedNames.length} slide source${slideResult.addedNames.length === 1 ? "" : "s"}`);
+      if (pastPaperResult.addedNames.length) summaryParts.push(`${pastPaperResult.addedNames.length} past paper source${pastPaperResult.addedNames.length === 1 ? "" : "s"}`);
       const extraMediaNote = lectureMediaFiles.length > 1 ? " The first lecture media file was kept as the active lecture file." : "";
-      setStatus(`Lecture files sorted: ${summaryParts.join(", ")}.${extraMediaNote}`);
+      const warningNote = warningMessages.length ? ` ${warningMessages[0]}` : "";
+      setStatus(`Lecture files processed: ${summaryParts.length ? summaryParts.join(", ") : "readable study sources"} ready.${extraMediaNote}${warningNote}`);
+    } catch (err) {
+      setError(err.message || "Lecture bundle processing failed.");
+      setStatus("Lecture bundle processing failed.");
+    } finally {
+      setIsProcessingLectureBundle(false);
+      setCurrentJobType("");
+      setProgress(0);
     }
   };
 
@@ -2624,28 +2958,53 @@ export default function App() {
     setError("");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      recordingStopReasonRef.current = "";
       mediaRecorderRef.current = new MediaRecorder(stream);
       mediaRecorderRef.current.ondataavailable = (event) => {
         audioChunksRef.current.push(event.data);
       };
-      mediaRecorderRef.current.onstop = () => {
+      mediaRecorderRef.current.onstop = async () => {
+        const stopReason = recordingStopReasonRef.current || "manual";
+        recordingStopReasonRef.current = "";
         const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
         audioChunksRef.current = [];
-        setFile(new File([blob], "mabaso-lecture.wav", { type: "audio/wav" }));
-        stream.getTracks().forEach((track) => track.stop());
+        cleanupRecordingMonitoring({ stopStream: true });
+        const recordedFile = new File([blob], "mabaso-lecture.wav", { type: "audio/wav" });
+        startTransition(() => {
+          setFile(recordedFile);
+          setVideoUrl("");
+        });
+        setRecording(false);
+        if (stopReason === "silence") {
+          setStatus("10 minutes of silence detected. Transcribing the saved recording...");
+          try {
+            await transcribeLectureFile(recordedFile, {
+              initialStatus: "10 minutes of silence detected. Transcribing the saved recording...",
+            });
+          } catch {
+            // transcribeLectureFile already updates the UI error state when auto-processing fails.
+          }
+        } else {
+          setStatus("Recording saved. Transcribe it when you are ready.");
+        }
       };
+      beginRecordingSilenceMonitoring(stream);
       mediaRecorderRef.current.start();
       setRecording(true);
-      setStatus("Recording started.");
+      setStatus("Recording started. MABASO will stop automatically after 10 minutes of silence.");
     } catch {
+      cleanupRecordingMonitoring({ stopStream: true });
       setError("Microphone access failed. Please allow recording permissions.");
     }
   };
 
   const stopRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== "recording") return;
+    recordingStopReasonRef.current = "manual";
     mediaRecorderRef.current?.stop();
     setRecording(false);
-    setStatus("Recording saved.");
+    setStatus("Stopping the recording...");
   };
 
   const pollJob = async (jobId, jobType) => {
@@ -2662,9 +3021,21 @@ export default function App() {
     }
   };
 
-  const generateStudyGuide = async (transcriptText = transcript) => {
+  const generateStudyGuide = async (transcriptText = transcript, sourceOverrides = {}) => {
     const resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
-    if (!(resolvedTranscript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+    const resolvedLectureNoteSources = Array.isArray(sourceOverrides.lectureNoteSources) ? sourceOverrides.lectureNoteSources : lectureNoteSources;
+    const resolvedLectureSlideSources = Array.isArray(sourceOverrides.lectureSlideSources) ? sourceOverrides.lectureSlideSources : lectureSlideSources;
+    const resolvedPastQuestionPaperSources = Array.isArray(sourceOverrides.pastQuestionPaperSources) ? sourceOverrides.pastQuestionPaperSources : pastQuestionPaperSources;
+    const resolvedPastQuestionMemo = typeof sourceOverrides.pastQuestionMemo === "string" ? sourceOverrides.pastQuestionMemo : pastQuestionMemo;
+    const resolvedLectureNotes = typeof sourceOverrides.lectureNotesText === "string" ? sourceOverrides.lectureNotesText : lectureNotes;
+    const resolvedLectureSlides = typeof sourceOverrides.lectureSlidesText === "string" ? sourceOverrides.lectureSlidesText : lectureSlides;
+    const resolvedPastQuestionPapers = typeof sourceOverrides.pastQuestionPapersText === "string"
+      ? sourceOverrides.pastQuestionPapersText
+      : [
+        studySourceEntriesToText(resolvedPastQuestionPaperSources, "PAST QUESTION PAPER"),
+        resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
+      ].filter(Boolean).join("\n\n");
+    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
     setIsGeneratingSummary(true);
@@ -2680,68 +3051,74 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript: resolvedTranscript,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
+          lecture_notes: resolvedLectureNotes,
+          lecture_slides: resolvedLectureSlides,
+          past_question_papers: resolvedPastQuestionPapers,
         }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Study guide generation failed.");
       const job = await pollJob(data.job_id, "study_guide");
-      setSummary(job.summary || "");
-      setFormula(job.formula || "");
-      setExample(job.worked_example || "");
-      setFlashcards(job.flashcards || []);
-      setQuizQuestions(job.quiz_questions || []);
-      setStudyImages(job.study_images || []);
-      setQuizAnswers({});
-      setQuizAnswerImages({});
-      setQuizResults({});
-      setQuizSubmitted(false);
-      setPodcastData(createEmptyPodcastData());
-      setPodcastSpeakerCount(2);
-      setPodcastTargetMinutes(10);
+      const resolvedLectureNoteFileNames = resolvedLectureNoteSources.map((item) => item.name);
+      const resolvedLectureSlidesFileNames = resolvedLectureSlideSources.map((item) => item.name);
+      const resolvedPastQuestionPaperFileNames = resolvedPastQuestionPaperSources.map((item) => item.name);
+      const resolvedLectureNotesFileName = formatGroupedSourceLabel(resolvedLectureNoteFileNames, "note file", "note files");
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName: resolvedLectureNotesFileName,
+        lectureSlideFileNames: resolvedLectureSlidesFileNames,
+        pastQuestionPaperFileNames: resolvedPastQuestionPaperFileNames,
+      });
       replacePodcastAudioUrl("");
       replacePodcastAudioSegments([]);
-      setActivePodcastSegmentIndex(0);
-      setIsPodcastAutoPlaying(false);
+      startTransition(() => {
+        setSummary(job.summary || "");
+        setFormula(job.formula || "");
+        setExample(job.worked_example || "");
+        setFlashcards(job.flashcards || []);
+        setQuizQuestions(job.quiz_questions || []);
+        setStudyImages(job.study_images || []);
+        setQuizAnswers({});
+        setQuizAnswerImages({});
+        setQuizResults({});
+        setQuizSubmitted(false);
+        setPodcastData(createEmptyPodcastData());
+        setPodcastSpeakerCount(2);
+        setPodcastTargetMinutes(10);
+        setActivePodcastSegmentIndex(0);
+        setIsPodcastAutoPlaying(false);
+        addHistoryItem({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: new Date().toISOString(),
+          title: extractHistoryTitle(job.summary || "", sourceLabel),
+          fileName: sourceLabel,
+          summary: job.summary || "",
+          transcript: job.transcript || resolvedTranscript,
+          formula: job.formula || "",
+          example: job.worked_example || "",
+          flashcards: job.flashcards || [],
+          quizQuestions: job.quiz_questions || [],
+          studyImages: job.study_images || [],
+          lectureNotes: resolvedLectureNotes,
+          lectureNotesFileName: resolvedLectureNotesFileName,
+          lectureNoteSources: resolvedLectureNoteSources,
+          lectureNoteFileNames: resolvedLectureNoteFileNames,
+          lectureSlides: resolvedLectureSlides,
+          lectureSlideFileNames: resolvedLectureSlidesFileNames,
+          lectureSlideSources: resolvedLectureSlideSources,
+          pastQuestionMemo: resolvedPastQuestionMemo,
+          pastQuestionPapers: resolvedPastQuestionPapers,
+          pastQuestionPaperFileNames: resolvedPastQuestionPaperFileNames,
+          pastQuestionPaperSources: resolvedPastQuestionPaperSources,
+          podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
+        });
+      });
       setUsedFallbackSummary(Boolean(job.used_fallback));
       setActiveTab("guide");
       setCurrentPage("workspace");
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
-      const sourceLabel = getPrimarySourceLabel({
-        fileName: file?.name || "",
-        videoUrl,
-        lectureNotesFileName,
-        lectureSlideFileNames,
-        pastQuestionPaperFileNames,
-      });
-      addHistoryItem({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
-        title: extractHistoryTitle(job.summary || "", sourceLabel),
-        fileName: sourceLabel,
-        summary: job.summary || "",
-        transcript: job.transcript || resolvedTranscript,
-        formula: job.formula || "",
-        example: job.worked_example || "",
-        flashcards: job.flashcards || [],
-        quizQuestions: job.quiz_questions || [],
-        studyImages: job.study_images || [],
-        lectureNotes,
-        lectureNotesFileName,
-        lectureNoteSources,
-        lectureNoteFileNames,
-        lectureSlides,
-        lectureSlideFileNames,
-        lectureSlideSources,
-        pastQuestionMemo,
-        pastQuestionPapers,
-        pastQuestionPaperFileNames,
-        pastQuestionPaperSources,
-        podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
-      });
     } catch (err) {
       setError(err.message || "Study guide generation failed.");
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
@@ -2873,31 +3250,11 @@ export default function App() {
   };
 
   const upload = async () => {
-    if (!file) return setError("Upload or record a lecture first.");
-    setIsTranscribing(true);
-    setError("");
-    setStatus("Submitting lecture for transcription...");
-    setProgress(0);
-    resetGeneratedOutputs();
-    setActiveTab("transcript");
-    setCurrentJobType("transcription");
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await authFetch("/upload-audio/", { method: "POST", body: formData });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Upload failed.");
-      const job = await pollJob(data.job_id, "transcription");
-      setTranscript(job.transcript || "");
-      setStatus("Transcript ready. Generating study guide...");
-      setProgress(100);
-      await generateStudyGuide(job.transcript || "");
+      await transcribeLectureFile(file);
     } catch (err) {
       setError(err.message || "Transcription failed.");
       setStatus("Transcription failed.");
-    } finally {
-      setIsTranscribing(false);
-      setCurrentJobType("");
     }
   };
 
@@ -2920,7 +3277,9 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Video-link transcription failed.");
       const job = await pollJob(data.job_id, "video");
-      setTranscript(job.transcript || "");
+      startTransition(() => {
+        setTranscript(job.transcript || "");
+      });
       setStatus("Video transcript ready. Generating study guide...");
       setProgress(100);
       await generateStudyGuide(job.transcript || "");
@@ -3561,7 +3920,10 @@ export default function App() {
                       <input
                         type="email"
                         value={authEmailInput}
-                        onChange={(event) => setAuthEmailInput(event.target.value)}
+                        onChange={(event) => {
+                          setAuthEmailInput(event.target.value);
+                          if (authPasswordIsIncorrect) setAuthMessage("");
+                        }}
                         className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
                         placeholder="you@example.com"
                         autoComplete="email"
@@ -3569,15 +3931,31 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Password</label>
-                      <input
-                        type="password"
-                        value={authPasswordInput}
-                        onChange={(event) => setAuthPasswordInput(event.target.value)}
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
-                        placeholder={authMode === "register" ? "Create a password" : authMode === "reset" ? "Enter a new password" : "Enter your password"}
-                        autoComplete={authMode === "login" ? "current-password" : "new-password"}
-                      />
-                      <p className="mt-2 text-xs leading-6 text-slate-400">Use at least {MIN_PASSWORD_LENGTH} characters.</p>
+                      <div className="relative mt-2">
+                        <input
+                          type={showAuthPassword ? "text" : "password"}
+                          value={authPasswordInput}
+                          onChange={(event) => {
+                            setAuthPasswordInput(event.target.value);
+                            if (authPasswordIsIncorrect) setAuthMessage("");
+                          }}
+                          className={`w-full rounded-2xl border px-4 py-3 pr-16 text-sm outline-none ${authPasswordIsIncorrect ? "border-rose-300/55 bg-rose-500/10 text-rose-50 placeholder:text-rose-200/70" : "border-white/10 bg-slate-900 text-white"}`}
+                          placeholder={authMode === "register" ? "Create a password" : authMode === "reset" ? "Enter a new password" : "Enter your password"}
+                          autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAuthPassword((current) => !current)}
+                          className="absolute right-2 top-1/2 inline-flex h-10 min-w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-slate-950/80 px-3 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                          aria-label={showAuthPassword ? "Hide password" : "Show password"}
+                          aria-pressed={showAuthPassword}
+                        >
+                          {showAuthPassword ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      <p className={`mt-2 text-xs leading-6 ${authPasswordIsIncorrect ? "text-rose-200" : "text-slate-400"}`}>
+                        {authPasswordIsIncorrect ? "Incorrect password." : `Use at least ${MIN_PASSWORD_LENGTH} characters.`}
+                      </p>
                       {authMode === "login" ? (
                         <button
                           type="button"
@@ -3631,7 +4009,7 @@ export default function App() {
                     </div>
                   ) : null}
                 </div>
-                {authMessage ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
+                {showAuthMessageBanner ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
           </div>
@@ -3682,11 +4060,11 @@ export default function App() {
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleLectureBundleFilesChange(event.dataTransfer.files); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
                 <div className="space-y-5">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
-                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background.</p></div>
+                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></button>
-                    <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Mix media, notes, slides, past papers</span></button>
-                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>Direct microphone capture</span></button>
+                    <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></button>
+                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>Auto-stop after 10 min silence</span></button>
                     <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Upload Notes</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">TXT MD PDF DOCX IMG</span></button>
                     <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Slides</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
                     <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Past Paper</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
@@ -3698,7 +4076,7 @@ export default function App() {
                       <input ref={videoUrlInputRef} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none" placeholder="Paste a YouTube or public video URL here" />
                       <button type="button" onClick={transcribeVideoLink} disabled={loading || !videoUrl.trim()} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribingVideo ? "Reading Link..." : "Transcribe Video Link"}</button>
                     </div>
-                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Non-YouTube public links are also supported when the backend can read them.</p>
+                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Public captions help most, and some YouTube links still need backend cookies or a proxy when the server cannot read the link directly.</p>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
@@ -3758,7 +4136,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
@@ -3812,7 +4190,7 @@ export default function App() {
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? <div className="min-w-0 space-y-4">{studyImages.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Photo guides for concepts students should recognise by sight.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Use these real photos together with the notes below when the lesson includes physical objects, structures, machines, instruments, or clearly named types.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{studyImages.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.query || "Real photo"}</p><p className="text-xs text-slate-400">Open source photo for concept recognition</p></div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
-                {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{transcript || "The lecture transcript will appear here after transcription."}</div> : null}
+                {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
