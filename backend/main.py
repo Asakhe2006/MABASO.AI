@@ -60,6 +60,21 @@ except ImportError:
     A4 = None
 
 try:
+    from pptx import Presentation
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+    from pptx.util import Inches, Pt
+except ImportError:
+    Presentation = None
+    RGBColor = None
+    MSO_SHAPE = None
+    MSO_ANCHOR = None
+    PP_ALIGN = None
+    Inches = None
+    Pt = None
+
+try:
     from pypdf import PdfReader
 except ImportError:
     PdfReader = None
@@ -93,6 +108,7 @@ STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
 ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
+PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
 APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "").strip()
@@ -126,6 +142,7 @@ MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
+PRESENTATION_REQUEST_TIMEOUT = float(os.getenv("PRESENTATION_REQUEST_TIMEOUT", "150"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
 STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
 MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "6"))
@@ -133,6 +150,8 @@ UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
 PODCAST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+PRESENTATION_OUTPUT_DIR = UPLOAD_DIR / "presentations"
+PRESENTATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 SESSION_TOKEN_PREFIX = "mabaso.v1"
@@ -264,6 +283,15 @@ class PodcastGenerationRequest(BaseModel):
     past_question_papers: str = ""
     speaker_count: int = 2
     target_minutes: int = 10
+
+
+class PresentationGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    design_id: str = "emerald-scholar"
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -1232,6 +1260,11 @@ def verify_login_code(email: str, code: str) -> str:
     return create_session(email)
 
 
+def login_with_email_password(email: str, password: str) -> str:
+    verify_password_credential(email, password)
+    return create_session(email)
+
+
 def request_email_password_code(email: str, password: str, mode: str) -> str:
     resolved_mode = normalize_email_password_auth_mode(mode)
     validated_password = validate_password_value(password)
@@ -1432,9 +1465,14 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "podcast_overview": "",
         "podcast_script": "",
         "podcast_segments": [],
+        "presentation_title": "",
+        "presentation_subtitle": "",
+        "presentation_design_id": "",
+        "presentation_slides": [],
         "study_images": [],
         "_podcast_audio_files": [],
         "_podcast_download_file": "",
+        "_presentation_download_file": "",
     }
     return job_id
 
@@ -2143,9 +2181,18 @@ async def verify_login(payload: VerifyCodeRequest):
 @app.post("/auth/email-password/request-code")
 async def request_email_password_login_code(payload: EmailPasswordAuthRequest):
     email = validate_email_address(payload.email)
-    code = request_email_password_code(email, payload.password, payload.mode)
+    code = await asyncio.to_thread(request_email_password_code, email, payload.password, payload.mode)
     await asyncio.to_thread(send_verification_email, email, code)
     return {"message": "Verification code sent.", "email": email, "mode": normalize_email_password_auth_mode(payload.mode)}
+
+
+@app.post("/auth/email-password/login")
+async def login_with_email_password_route(payload: EmailPasswordAuthRequest):
+    email = validate_email_address(payload.email)
+    if normalize_email_password_auth_mode(payload.mode) != "login":
+        raise HTTPException(status_code=400, detail="Direct sign-in is only available for login mode.")
+    session_token = await asyncio.to_thread(login_with_email_password, email, payload.password)
+    return {"token": session_token, "email": email}
 
 
 @app.post("/auth/email-password/verify-code")
@@ -2154,7 +2201,7 @@ async def verify_email_password_login(payload: EmailPasswordVerifyRequest):
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
-    session_token = verify_email_password_auth(email, payload.password, code, payload.mode)
+    session_token = await asyncio.to_thread(verify_email_password_auth, email, payload.password, code, payload.mode)
     return {"token": session_token, "email": email}
 
 
@@ -2275,6 +2322,31 @@ async def download_podcast_audio(
         media_type="audio/mpeg",
         headers={
             "Content-Disposition": f'attachment; filename="{sanitize_download_filename(job.get("podcast_title") or "lecture-podcast")}.mp3"',
+        },
+    )
+
+
+@app.get("/jobs/{job_id}/presentation-download")
+async def download_presentation_file(
+    job_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("owner_email") and job["owner_email"] != current_user:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    file_name = job.get("_presentation_download_file") or ""
+    file_path = Path(file_name)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="The downloadable PowerPoint file is no longer available.")
+
+    return Response(
+        content=file_path.read_bytes(),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={
+            "Content-Disposition": f'attachment; filename="{sanitize_download_filename(job.get("presentation_title") or "lecture-presentation")}.pptx"',
         },
     )
 
@@ -2770,6 +2842,143 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
             if transcript_text:
                 update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
                 return transcript_text
+    return None
+
+
+def choose_ytdlp_caption_entry(info: dict[str, Any]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    preferred_languages = tuple(language.lower() for language in YOUTUBE_LANGUAGE_PREFERENCES)
+
+    for source_name in ("subtitles", "automatic_captions"):
+        language_map = info.get(source_name, {})
+        if not isinstance(language_map, dict):
+            continue
+        for language_code, entries in language_map.items():
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                url = compact_text(entry.get("url"))
+                if not url:
+                    continue
+                candidates.append(
+                    {
+                        "url": url,
+                        "language_code": compact_text(language_code).lower(),
+                        "ext": compact_text(entry.get("ext")).lower(),
+                        "is_auto": source_name == "automatic_captions",
+                    }
+                )
+
+    if not candidates:
+        return None
+
+    def caption_priority(entry: dict[str, Any]) -> tuple[int, int, int, str]:
+        language_code = entry["language_code"]
+        language_score = 4
+        if language_code in preferred_languages:
+            language_score = 0
+        elif any(language_code.startswith(language) for language in preferred_languages):
+            language_score = 1
+        elif language_code.startswith("en"):
+            language_score = 2
+        elif language_code.endswith("-orig") or language_code == "orig":
+            language_score = 3
+
+        ext = entry["ext"]
+        format_score = 3
+        if ext == "vtt":
+            format_score = 0
+        elif ext in {"srv3", "srv2", "ttml", "xml"}:
+            format_score = 1
+        elif ext in {"json3", "srt"}:
+            format_score = 2
+
+        return (language_score, 1 if entry["is_auto"] else 0, format_score, language_code)
+
+    return sorted(candidates, key=caption_priority)[0]
+
+
+def fetch_ytdlp_caption_track(video_url: str, job_id: str) -> str | None:
+    if yt_dlp is None:
+        return None
+
+    normalized_url = normalize_video_url(video_url)
+    update_job(job_id, status="processing", stage="Checking yt-dlp caption metadata", progress=11)
+
+    metadata_attempts = [True, False] if has_youtube_cookie_source() else [False]
+    info: dict[str, Any] | None = None
+
+    for attempt_index, use_cookiefile in enumerate(metadata_attempts, start=1):
+        base_options = build_ytdlp_options(
+            skip_download=True,
+            use_cookiefile=use_cookiefile,
+        )
+        base_options.update(
+            {
+                "writesubtitles": False,
+                "writeautomaticsub": False,
+                "simulate": True,
+            }
+        )
+
+        if attempt_index > 1:
+            update_job(job_id, status="processing", stage="Retrying caption metadata without saved cookies", progress=12)
+
+        try:
+            last_variant_error: Exception | None = None
+            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                if variant_index > 1:
+                    update_job(job_id, status="processing", stage="Retrying caption metadata without browser impersonation", progress=12)
+                try:
+                    with yt_dlp.YoutubeDL(options) as downloader:
+                        info = downloader.extract_info(normalized_url, download=False)
+                    last_variant_error = None
+                    break
+                except Exception as variant_exc:
+                    last_variant_error = variant_exc
+                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                        logger.info("Retrying caption metadata without impersonation for %s: %s", video_url, variant_exc)
+                        continue
+                    raise
+            if last_variant_error is not None:
+                raise last_variant_error
+            if info:
+                break
+        except Exception as exc:
+            logger.info(
+                "Could not inspect yt-dlp caption metadata for %s (use_cookiefile=%s): %s",
+                video_url,
+                use_cookiefile,
+                exc,
+            )
+            info = None
+            continue
+
+    if not isinstance(info, dict):
+        return None
+
+    caption_entry = choose_ytdlp_caption_entry(info)
+    if not caption_entry:
+        return None
+
+    caption_url = caption_entry["url"]
+    if "fmt=" not in caption_url:
+        caption_url = f"{caption_url}&fmt=vtt"
+
+    with create_youtube_requests_session() as session:
+        try:
+            response = session.get(caption_url, timeout=20)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.info("Could not fetch yt-dlp caption URL for %s: %s", video_url, exc)
+            return None
+
+    transcript_text = subtitle_body_to_text(response.text)
+    if transcript_text:
+        update_job(job_id, status="processing", stage="Caption metadata found. Preparing transcript", progress=16)
+        return transcript_text
     return None
 
 
@@ -4374,6 +4583,554 @@ async def generate_podcast_package(
     }
 
 
+PRESENTATION_THEMES: dict[str, dict[str, str]] = {
+    "emerald-scholar": {
+        "id": "emerald-scholar",
+        "name": "Emerald Scholar",
+        "background": "061912",
+        "surface": "0F2B20",
+        "surface_alt": "15392A",
+        "accent": "4ADE80",
+        "accent_soft": "D9F99D",
+        "text": "F8FAFC",
+        "muted": "CFE8DA",
+        "dark_text": "052E16",
+    },
+    "sunset-classroom": {
+        "id": "sunset-classroom",
+        "name": "Sunset Classroom",
+        "background": "FFF8F1",
+        "surface": "FFF1E1",
+        "surface_alt": "F6D2B6",
+        "accent": "EA580C",
+        "accent_soft": "FDBA74",
+        "text": "7C2D12",
+        "muted": "9A3412",
+        "dark_text": "7C2D12",
+    },
+    "midnight-grid": {
+        "id": "midnight-grid",
+        "name": "Midnight Grid",
+        "background": "020617",
+        "surface": "0F172A",
+        "surface_alt": "172554",
+        "accent": "38BDF8",
+        "accent_soft": "A5F3FC",
+        "text": "E2E8F0",
+        "muted": "BFDBFE",
+        "dark_text": "082F49",
+    },
+}
+
+
+def ensure_presentation_support():
+    if Presentation is None or RGBColor is None or MSO_SHAPE is None or PP_ALIGN is None or Inches is None or Pt is None:
+        raise HTTPException(
+            status_code=500,
+            detail="PowerPoint generation is not configured on the server yet. Install python-pptx and redeploy.",
+        )
+
+
+def normalize_presentation_design_id(value: str) -> str:
+    design_id = compact_text(value, "emerald-scholar").lower()
+    return design_id if design_id in PRESENTATION_THEMES else "emerald-scholar"
+
+
+def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_slides, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw_slide in raw_slides:
+        if not isinstance(raw_slide, dict):
+            continue
+        title = compact_text(raw_slide.get("title"))
+        bullets = [
+            compact_text(item)
+            for item in (raw_slide.get("bullets") or [])
+            if compact_text(item)
+        ]
+        note = compact_text(raw_slide.get("note"))
+        if not title or len(bullets) < 2:
+            continue
+        normalized.append(
+            {
+                "title": title,
+                "bullets": bullets[:5],
+                "note": note,
+            }
+        )
+        if len(normalized) >= 8:
+            break
+    return normalized
+
+
+def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]:
+    title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
+    topic = title_lines[0] if title_lines else "Lecture Presentation"
+    short_summary = compact_text(extract_section(summary, "SHORT SUMMARY"), compact_text(transcript[:240], "Lecture overview"))
+    concept_points = extract_bullet_points(extract_section(summary, "KEY CONCEPTS"))[:8]
+    definition_points = extract_bullet_points(extract_section(summary, "IMPORTANT DEFINITIONS"))[:6]
+    formula_points = [line.strip() for line in extract_section(summary, "IMPORTANT FORMULAS").splitlines() if compact_text(line)][:4]
+    example_points = [line.strip() for line in extract_section(summary, "WORKED EXAMPLES").splitlines() if compact_text(line)][:4]
+    mistake_points = extract_bullet_points(extract_section(summary, "COMMON MISTAKES TO AVOID"))[:4]
+    revision_points = extract_bullet_points(extract_section(summary, "QUICK REVISION PLAN"))[:4]
+    exam_points = extract_bullet_points(extract_section(summary, "EXAM TIPS"))[:4]
+
+    slides = [
+        {
+            "title": "Overview",
+            "bullets": [
+                short_summary or "Introduce the lecture topic in one short overview.",
+                concept_points[0] if len(concept_points) > 0 else "Explain the main direction of the lesson before going deeper.",
+                concept_points[1] if len(concept_points) > 1 else "",
+            ],
+            "note": "Open by framing the lecture in simple language before diving into detail.",
+        },
+        {
+            "title": "Core Concepts",
+            "bullets": concept_points[:5] or definition_points[:5] or [short_summary, "Explain the first major idea clearly."],
+            "note": "Keep each point concrete and tie it to the lecture wording where possible.",
+        },
+        {
+            "title": "Definitions and Terms",
+            "bullets": definition_points[:5] or concept_points[3:8] or [short_summary, "Define the most exam-relevant terminology."],
+            "note": "Clarify what each term means before using it in examples.",
+        },
+        {
+            "title": "Formulas and Rules",
+            "bullets": formula_points[:4] or ["Highlight the key formulas or rules from the lesson.", "Explain what each part represents."],
+            "note": "Slow down here and mention when students normally use each formula.",
+        },
+        {
+            "title": "Worked Example",
+            "bullets": example_points[:4] or ["Walk through one representative example from the lecture.", "Point out the order of steps clearly."],
+            "note": "Show the method, not just the final answer.",
+        },
+        {
+            "title": "Common Mistakes",
+            "bullets": mistake_points[:4] or ["Explain the most common confusion point.", "Show how to avoid careless errors."],
+            "note": "Use this slide to prevent predictable test mistakes.",
+        },
+        {
+            "title": "Revision Focus",
+            "bullets": revision_points[:4] or exam_points[:4] or ["End with a short revision sequence students can follow."],
+            "note": "Finish with what to revise first, second, and third.",
+        },
+    ]
+
+    for slide in slides:
+        bullets = [compact_text(item) for item in slide.get("bullets", []) if compact_text(item)]
+        while len(bullets) < 2:
+            bullets.append("Connect this point back to the lecture and explain why it matters.")
+        slide["bullets"] = bullets[:5]
+
+    normalized_slides = normalize_presentation_slides(slides)
+    return {
+        "title": topic,
+        "subtitle": short_summary or "Lecture summary prepared for classroom presentation.",
+        "slides": normalized_slides[:7],
+    }
+
+
+def presentation_slides_to_text(title: str, subtitle: str, slides: list[dict[str, Any]]) -> str:
+    blocks = [
+        "POWERPOINT TITLE",
+        title,
+        "",
+        "SUBTITLE",
+        subtitle,
+        "",
+    ]
+    for index, slide in enumerate(slides, start=1):
+        blocks.append(f"SLIDE {index}: {slide['title']}")
+        blocks.extend(f"- {bullet}" for bullet in slide.get("bullets", []))
+        if slide.get("note"):
+            blocks.append(f"Presenter note: {slide['note']}")
+        blocks.append("")
+    return "\n".join(blocks).strip()
+
+
+def rgb_from_hex(value: str) -> RGBColor:
+    return RGBColor.from_string(value.upper())
+
+
+def style_shape(shape: Any, fill_hex: str, *, transparency: float = 0.0):
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = rgb_from_hex(fill_hex)
+    if transparency:
+        shape.fill.transparency = transparency
+    shape.line.color.rgb = rgb_from_hex(fill_hex)
+    shape.line.transparency = 1
+
+
+def add_textbox(
+    slide: Any,
+    *,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    text: str,
+    font_size: int,
+    color_hex: str,
+    bold: bool = False,
+    align: Any = None,
+    font_name: str = "Aptos",
+):
+    box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+    frame = box.text_frame
+    frame.clear()
+    frame.word_wrap = True
+    if MSO_ANCHOR is not None:
+        frame.vertical_anchor = MSO_ANCHOR.TOP
+    paragraph = frame.paragraphs[0]
+    paragraph.alignment = align or PP_ALIGN.LEFT
+    run = paragraph.add_run()
+    run.text = text
+    run.font.name = font_name
+    run.font.size = Pt(font_size)
+    run.font.bold = bold
+    run.font.color.rgb = rgb_from_hex(color_hex)
+    return box
+
+
+def add_bullet_list(
+    slide: Any,
+    *,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    bullets: list[str],
+    color_hex: str,
+    font_name: str = "Aptos",
+):
+    box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+    frame = box.text_frame
+    frame.clear()
+    frame.word_wrap = True
+    if MSO_ANCHOR is not None:
+        frame.vertical_anchor = MSO_ANCHOR.TOP
+
+    for index, bullet in enumerate(bullets):
+        paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
+        paragraph.alignment = PP_ALIGN.LEFT
+        paragraph.level = 0
+        paragraph.space_after = Pt(8)
+        run = paragraph.add_run()
+        run.text = f"• {bullet}"
+        run.font.name = font_name
+        run.font.size = Pt(19)
+        run.font.color.rgb = rgb_from_hex(color_hex)
+    return box
+
+
+def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: int, *, is_title: bool = False):
+    background = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
+    style_shape(background, theme["background"])
+
+    theme_id = theme["id"]
+    if theme_id == "emerald-scholar":
+        accent_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.45), Inches(0.45), Inches(0.24), Inches(6.55))
+        style_shape(accent_bar, theme["accent"])
+        orb = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.7), Inches(-0.5), Inches(3.2), Inches(3.2))
+        style_shape(orb, theme["accent"], transparency=0.72)
+        ribbon = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.9), Inches(6.55), Inches(3.7), Inches(0.5))
+        style_shape(ribbon, theme["surface_alt"])
+    elif theme_id == "sunset-classroom":
+        panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(4.1), Inches(7.5))
+        style_shape(panel, theme["surface_alt"], transparency=0.18)
+        orb = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.8), Inches(0.35), Inches(2.0), Inches(2.0))
+        style_shape(orb, theme["accent_soft"], transparency=0.12)
+        footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.7), Inches(6.55), Inches(4.6), Inches(0.48))
+        style_shape(footer, theme["accent"])
+    else:
+        stripe = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.45))
+        style_shape(stripe, theme["accent"])
+        side = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(11.85), Inches(0.45), Inches(1.0), Inches(6.5))
+        style_shape(side, theme["surface_alt"])
+        for offset in range(4):
+            dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(0.8 + (offset * 0.38)), Inches(6.7), Inches(0.16), Inches(0.16))
+            style_shape(dot, theme["accent_soft"])
+
+    if not is_title:
+        banner = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.85), Inches(0.58), Inches(2.8), Inches(0.48))
+        style_shape(banner, theme["surface"])
+        add_textbox(
+            slide,
+            left=1.05,
+            top=0.68,
+            width=2.3,
+            height=0.2,
+            text=f"Slide {slide_index}",
+            font_size=11,
+            color_hex=theme["accent_soft"] if theme_id != "sunset-classroom" else "FFF7ED",
+            bold=True,
+        )
+
+
+def add_presentation_title_slide(presentation: Any, title: str, subtitle: str, theme: dict[str, str]):
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    decorate_presentation_slide(slide, theme, 0, is_title=True)
+    add_textbox(
+        slide,
+        left=0.95,
+        top=1.12,
+        width=8.8,
+        height=1.8,
+        text=title,
+        font_size=28,
+        color_hex=theme["text"],
+        bold=True,
+        font_name="Aptos Display",
+    )
+    add_textbox(
+        slide,
+        left=0.98,
+        top=3.02,
+        width=8.2,
+        height=1.45,
+        text=subtitle,
+        font_size=18,
+        color_hex=theme["muted"],
+    )
+    badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.98), Inches(5.95), Inches(3.3), Inches(0.58))
+    style_shape(badge, theme["surface"])
+    add_textbox(
+        slide,
+        left=1.15,
+        top=6.08,
+        width=2.95,
+        height=0.22,
+        text="Prepared in Mabaso AI",
+        font_size=12,
+        color_hex=theme["accent_soft"] if theme["id"] != "sunset-classroom" else "FFF7ED",
+        bold=True,
+    )
+
+
+def add_presentation_content_slide(
+    presentation: Any,
+    slide_index: int,
+    slide_content: dict[str, Any],
+    theme: dict[str, str],
+):
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    decorate_presentation_slide(slide, theme, slide_index)
+
+    title_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.82), Inches(1.18), Inches(7.7), Inches(0.95))
+    style_shape(title_box, theme["surface"])
+    add_textbox(
+        slide,
+        left=1.05,
+        top=1.42,
+        width=7.2,
+        height=0.3,
+        text=slide_content["title"],
+        font_size=23,
+        color_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+        bold=True,
+        font_name="Aptos Display",
+    )
+
+    body_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.85), Inches(2.35), Inches(7.5), Inches(4.35))
+    style_shape(body_panel, theme["surface_alt"] if theme["id"] == "sunset-classroom" else theme["surface"])
+    add_bullet_list(
+        slide,
+        left=1.14,
+        top=2.67,
+        width=6.85,
+        height=3.7,
+        bullets=slide_content.get("bullets", []),
+        color_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+    )
+
+    note_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(1.95), Inches(3.65), Inches(3.95))
+    style_shape(note_panel, theme["accent"])
+    add_textbox(
+        slide,
+        left=9.02,
+        top=2.22,
+        width=3.08,
+        height=0.3,
+        text="Revision cue",
+        font_size=14,
+        color_hex=theme["dark_text"],
+        bold=True,
+        font_name="Aptos Display",
+    )
+    add_textbox(
+        slide,
+        left=9.02,
+        top=2.72,
+        width=2.98,
+        height=2.55,
+        text=slide_content.get("note") or "Explain why these points matter before moving to the next slide.",
+        font_size=16,
+        color_hex=theme["dark_text"],
+    )
+
+    footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(6.06), Inches(3.65), Inches(0.62))
+    style_shape(footer, theme["surface_alt"] if theme["id"] != "sunset-classroom" else theme["surface"])
+    add_textbox(
+        slide,
+        left=8.98,
+        top=6.24,
+        width=3.05,
+        height=0.22,
+        text=PRESENTATION_THEMES[theme["id"]]["name"],
+        font_size=11,
+        color_hex=theme["muted"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+        bold=True,
+    )
+
+
+def add_presentation_closing_slide(presentation: Any, title: str, theme: dict[str, str]):
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    decorate_presentation_slide(slide, theme, len(presentation.slides))
+    add_textbox(
+        slide,
+        left=1.0,
+        top=1.45,
+        width=8.8,
+        height=0.9,
+        text=f"Closing Review: {title}",
+        font_size=26,
+        color_hex=theme["text"],
+        bold=True,
+        font_name="Aptos Display",
+    )
+    add_textbox(
+        slide,
+        left=1.02,
+        top=2.7,
+        width=7.6,
+        height=2.6,
+        text=(
+            "1. Revisit the major concepts.\n"
+            "2. Repeat the worked example in your own words.\n"
+            "3. Finish with the common mistakes before the test."
+        ),
+        font_size=19,
+        color_hex=theme["muted"],
+    )
+
+
+def build_presentation_file(
+    job_id: str,
+    *,
+    title: str,
+    subtitle: str,
+    slides: list[dict[str, Any]],
+    design_id: str,
+) -> str:
+    ensure_presentation_support()
+    output_dir = PRESENTATION_OUTPUT_DIR / job_id
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    presentation = Presentation()
+    presentation.slide_width = Inches(13.333)
+    presentation.slide_height = Inches(7.5)
+    theme = PRESENTATION_THEMES[normalize_presentation_design_id(design_id)]
+
+    add_presentation_title_slide(presentation, title, subtitle, theme)
+    for slide_index, slide_content in enumerate(slides, start=1):
+        add_presentation_content_slide(presentation, slide_index, slide_content, theme)
+    add_presentation_closing_slide(presentation, title, theme)
+
+    file_path = output_dir / "lecture-presentation.pptx"
+    presentation.save(str(file_path))
+    return str(file_path)
+
+
+async def generate_presentation_package(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    design_id: str,
+    job_id: str,
+) -> dict[str, Any]:
+    normalized_design_id = normalize_presentation_design_id(design_id)
+    fallback_package = build_presentation_fallback(summary, transcript)
+    context_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+    ]
+    combined_source = "\n\n".join(block for block in context_blocks if block)
+
+    def _generate_plan() -> dict[str, Any]:
+        response = client.with_options(timeout=PRESENTATION_REQUEST_TIMEOUT).chat.completions.create(
+            model=PRESENTATION_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 4200),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create concise academic PowerPoint structures for students. "
+                        "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
+                        "Rules:\n"
+                        "- `slides` must be an array of 6 to 8 objects.\n"
+                        "- Each slide object must contain `title`, `bullets`, and `note`.\n"
+                        "- `bullets` must contain 3 to 5 short bullet strings.\n"
+                        "- Keep bullet lines concise, readable, and presentation-ready.\n"
+                        "- Cover overview, core concepts, formulas or rules when present, worked examples, mistakes, and revision or exam focus.\n"
+                        "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
+                        "- Do not return markdown, numbering, or commentary outside JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": combined_source or presentation_slides_to_text(
+                        fallback_package["title"],
+                        fallback_package["subtitle"],
+                        fallback_package["slides"],
+                    ),
+                },
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    update_job(job_id, status="processing", stage="Designing PowerPoint storyboard", progress=18)
+    try:
+        generated_package = await asyncio.to_thread(_generate_plan)
+    except Exception as exc:
+        logger.warning("Presentation plan generation failed, using fallback outline: %s", exc)
+        generated_package = {}
+
+    normalized_slides = normalize_presentation_slides(generated_package.get("slides"))
+    if not normalized_slides:
+        normalized_slides = fallback_package["slides"]
+
+    title = compact_text(generated_package.get("title"), fallback_package["title"])
+    subtitle = compact_text(generated_package.get("subtitle"), fallback_package["subtitle"])
+
+    update_job(job_id, status="processing", stage="Building PowerPoint file", progress=56)
+    download_file = await asyncio.to_thread(
+        build_presentation_file,
+        job_id,
+        title=title,
+        subtitle=subtitle,
+        slides=normalized_slides,
+        design_id=normalized_design_id,
+    )
+
+    return {
+        "presentation_title": title,
+        "presentation_subtitle": subtitle,
+        "presentation_design_id": normalized_design_id,
+        "presentation_slides": normalized_slides,
+        "_presentation_download_file": download_file,
+    }
+
+
 def determine_quiz_total_marks(
     summary: str,
     transcript: str,
@@ -4833,6 +5590,17 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                 )
                 return
 
+            transcript = await asyncio.to_thread(fetch_ytdlp_caption_track, video_url, job_id)
+            if transcript:
+                update_job(
+                    job_id,
+                    status="completed",
+                    stage="Video transcription completed",
+                    progress=100,
+                    transcript=transcript,
+                )
+                return
+
         transcript = await asyncio.to_thread(download_subtitles_from_video_url, video_url, job_id)
         if transcript:
             update_job(
@@ -4975,6 +5743,44 @@ async def run_podcast_job(
             job_id,
             status="failed",
             stage="Podcast generation failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+
+
+async def run_presentation_job(
+    job_id: str,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    design_id: str,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting PowerPoint generation", progress=8)
+        presentation_package = await generate_presentation_package(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            design_id,
+            job_id,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="PowerPoint ready",
+            progress=100,
+            **presentation_package,
+        )
+    except Exception as exc:
+        logger.exception("PowerPoint generation failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="PowerPoint generation failed",
             progress=100,
             error=format_job_error(exc),
         )
@@ -5154,6 +5960,38 @@ async def create_podcast(payload: PodcastGenerationRequest, current_user: str = 
             past_question_papers,
             speaker_count,
             target_minutes,
+        )
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-presentation/")
+async def create_presentation(payload: PresentationGenerationRequest, current_user: str = Depends(require_authenticated_user)):
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate a study guide or add lecture material before creating the PowerPoint presentation.",
+        )
+
+    ensure_openai_key()
+    ensure_presentation_support()
+    design_id = normalize_presentation_design_id(payload.design_id)
+    job_id = create_job("presentation", owner_email=current_user)
+    asyncio.create_task(
+        run_presentation_job(
+            job_id,
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            design_id,
         )
     )
     return {"job_id": job_id}

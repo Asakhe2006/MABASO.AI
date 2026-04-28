@@ -19,6 +19,7 @@ const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
 const APPLE_REDIRECT_URI = (import.meta.env.VITE_APPLE_REDIRECT_URI || "").trim();
 const JOB_POLL_INTERVAL_MS = 2000;
 const ROOM_REFRESH_INTERVAL_MS = 5000;
+const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
@@ -43,12 +44,39 @@ const tabs = [
   { id: "examples", label: "Worked Examples" },
   { id: "flashcards", label: "Flashcards" },
   { id: "quiz", label: "Test" },
+  { id: "presentation", label: "PowerPoint Presentation" },
   { id: "podcast", label: "Podcast Generator" },
   { id: "chat", label: "Study Chat" },
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
+const presentationDesigns = [
+  {
+    id: "emerald-scholar",
+    name: "Emerald Scholar",
+    accent: "Emerald focus",
+    description: "Deep green lecture slides with sharp contrast, strong headings, and a polished academic feel.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.35),transparent_42%),linear-gradient(135deg,#061912,#0f2b20_58%,#15392a)]",
+    chipClassName: "border-emerald-300/30 bg-emerald-300/10 text-emerald-50",
+  },
+  {
+    id: "sunset-classroom",
+    name: "Sunset Classroom",
+    accent: "Warm and bright",
+    description: "Soft cream and orange slides for friendlier presentations, revision classes, and classroom explanations.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.22),transparent_38%),linear-gradient(135deg,#fff8f1,#fff1e1_55%,#f6d2b6)]",
+    chipClassName: "border-orange-300/40 bg-orange-300/15 text-orange-50",
+  },
+  {
+    id: "midnight-grid",
+    name: "Midnight Grid",
+    accent: "Tech deck",
+    description: "Dark navy slides with cool blue accents for modern demos, systems topics, and technical lectures.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.28),transparent_40%),linear-gradient(135deg,#020617,#0f172a_58%,#172554)]",
+    chipClassName: "border-sky-300/35 bg-sky-300/10 text-sky-50",
+  },
+];
 const helpAboutSections = [
   {
     kicker: "How It Works",
@@ -60,7 +88,7 @@ const helpAboutSections = [
       "When you press Transcribe Lecture, MABASO reads the audio or video first, creates a transcript, and then uses that transcript as the foundation for the rest of the pack.",
       "When you use Add Lecture Files, MABASO starts reading notes, slides, and past papers first, then moves into lecture transcription automatically so the guide can use all readable sources together.",
       "When you press Generate Study Guide, MABASO can still work even if you only uploaded notes, slides, or past papers. A transcript helps, but it is not the only valid source.",
-      "The study workspace is the revision area. It lets the student move between the guide, transcript, formulas, worked examples, flashcards, the test, podcast, and study chat without uploading again.",
+      "The study workspace is the revision area. It lets the student move between the guide, transcript, formulas, worked examples, flashcards, the test, PowerPoint presentation, podcast, and study chat without uploading again.",
     ],
   },
   {
@@ -720,6 +748,16 @@ function createEmptyPodcastData() {
   };
 }
 
+function createEmptyPresentationData() {
+  return {
+    jobId: "",
+    title: "",
+    subtitle: "",
+    designId: presentationDesigns[0].id,
+    slides: [],
+  };
+}
+
 function getPodcastTurnStartSeconds(segments, index) {
   const safeIndex = Math.max(0, Number(index || 0));
   return Math.max(
@@ -760,6 +798,55 @@ function sanitizePodcastForHistory(value) {
   };
 }
 
+function normalizePresentationData(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const rawSlides = Array.isArray(raw.slides) ? raw.slides : Array.isArray(raw.presentation_slides) ? raw.presentation_slides : [];
+  return {
+    jobId: raw.jobId || raw.job_id || "",
+    title: raw.title || raw.presentation_title || "",
+    subtitle: raw.subtitle || raw.presentation_subtitle || "",
+    designId: raw.designId || raw.design_id || raw.presentation_design_id || presentationDesigns[0].id,
+    slides: rawSlides
+      .filter((slide) => slide && typeof slide === "object")
+      .map((slide) => ({
+        title: slide.title || "",
+        bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean).slice(0, 5) : [],
+        note: slide.note || "",
+      }))
+      .filter((slide) => slide.title || slide.bullets.length),
+  };
+}
+
+function sanitizePresentationForHistory(value) {
+  const presentation = normalizePresentationData(value);
+  return {
+    ...presentation,
+    jobId: "",
+  };
+}
+
+function presentationToText(presentation) {
+  const normalized = normalizePresentationData(presentation);
+  const blocks = [];
+  if (normalized.title) {
+    blocks.push("POWERPOINT TITLE");
+    blocks.push(normalized.title);
+    blocks.push("");
+  }
+  if (normalized.subtitle) {
+    blocks.push("SUBTITLE");
+    blocks.push(normalized.subtitle);
+    blocks.push("");
+  }
+  normalized.slides.forEach((slide, index) => {
+    blocks.push(`SLIDE ${index + 1}: ${slide.title || "Untitled slide"}`);
+    (slide.bullets || []).forEach((bullet) => blocks.push(`- ${bullet}`));
+    if (slide.note) blocks.push(`Presenter note: ${slide.note}`);
+    blocks.push("");
+  });
+  return blocks.join("\n").trim();
+}
+
 function getPodcastEstimatedMinutes(podcast) {
   const total = (podcast?.segments || []).reduce((sum, segment) => sum + Number(segment?.estimated_minutes || 0), 0);
   if (total > 0) return total.toFixed(total >= 10 ? 0 : 1);
@@ -796,6 +883,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [pendingEmailAuthMode, setPendingEmailAuthMode] = useState("");
   const [pendingEmailAuthEmail, setPendingEmailAuthEmail] = useState("");
+  const [isSigningInWithPassword, setIsSigningInWithPassword] = useState(false);
   const [isRequestingEmailCode, setIsRequestingEmailCode] = useState(false);
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
@@ -817,6 +905,8 @@ export default function App() {
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
   const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
   const [pastQuestionMemo, setPastQuestionMemo] = useState("");
+  const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
+  const [selectedPresentationDesign, setSelectedPresentationDesign] = useState(presentationDesigns[0].id);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -830,6 +920,7 @@ export default function App() {
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isGeneratingPresentation, setIsGeneratingPresentation] = useState(false);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
   const [isLoadingPodcastAudio, setIsLoadingPodcastAudio] = useState(false);
   const [isExtractingNotes, setIsExtractingNotes] = useState(false);
@@ -904,9 +995,9 @@ export default function App() {
   const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
-  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || podcastData.script);
+  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script);
   const selectedQuizQuestions = quizQuestions;
   const deferredTranscript = useDeferredValue(transcript);
   const deferredSummary = useDeferredValue(summary);
@@ -946,7 +1037,7 @@ export default function App() {
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const canExportCurrent = hasResults || activeTab === "chat";
-  const canShareCurrentTool = Boolean(activeRoom && activeTab !== "podcast");
+  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
@@ -1330,7 +1421,7 @@ export default function App() {
           <div className="mt-4 space-y-3 text-sm text-slate-300">
             <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">1. Capture or upload the lecture sources.</div>
             <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">2. Build the study guide and review the notes, formulas, and worked examples.</div>
-            <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">3. Use flashcards, test, podcast, and chat for active revision.</div>
+            <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">3. Use flashcards, test, presentation, podcast, and chat for active revision.</div>
             <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">4. Reopen from history or move into collaboration when the pack is ready.</div>
           </div>
         </div>
@@ -1612,6 +1703,94 @@ export default function App() {
     </section>
   );
 
+  const renderPresentationPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-[24px] border border-sky-300/15 bg-[linear-gradient(180deg,rgba(14,116,144,0.22),rgba(2,6,23,0.96))] p-5">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-sky-100/80">PowerPoint Generator</p>
+            <h4 className="mt-2 text-3xl font-semibold text-white">Create a designed lecture presentation.</h4>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose one design first, then generate the deck separately from your study guide, tests, and flashcards.</p>
+          </div>
+          <div className="force-mobile-stack flex flex-wrap gap-3">
+            <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#0ea5e9,#2563eb)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Presentation..." : "Generate Presentation"}</button>
+            <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-3">
+          {presentationDesigns.map((design) => {
+            const isSelected = selectedPresentationDesign === design.id;
+            return (
+              <button
+                key={design.id}
+                type="button"
+                onClick={() => setSelectedPresentationDesign(design.id)}
+                className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10" : "border-white/10 bg-slate-950/60 hover:bg-white/10"}`}
+              >
+                <div className={`h-36 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName}`}>
+                  <div className="flex h-full flex-col justify-between p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.accent}</span>
+                      {isSelected ? <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-white">Selected</span> : null}
+                    </div>
+                    <div>
+                      <p className="text-lg font-semibold text-white">{design.name}</p>
+                      <p className="mt-2 max-w-[220px] text-xs leading-6 text-white/80">Lecture title, key bullets, and a designed side note panel.</p>
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
+                <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {presentationData.slides.length ? (
+        <>
+          <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Current Deck</p>
+                <h4 className="phone-safe-copy mt-2 text-2xl font-semibold text-white">{presentationData.title || "Lecture presentation"}</h4>
+                <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{presentationData.subtitle || "A concise lecture deck is ready for download."}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length} slides</div>
+                <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationDesigns.find((design) => design.id === presentationData.designId)?.name || "Selected design"}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {presentationData.slides.map((slide, index) => (
+              <div key={`${slide.title}-${index}`} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Slide {index + 1}</p>
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{(slide.bullets || []).length} points</span>
+                </div>
+                <h5 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{slide.title || "Untitled slide"}</h5>
+                <div className="mt-4 space-y-2">
+                  {(slide.bullets || []).map((bullet, bulletIndex) => (
+                    <div key={`${slide.title}-${bulletIndex}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm leading-7 text-slate-200">{bullet}</div>
+                  ))}
+                </div>
+                <div className="mt-4 rounded-2xl border border-sky-300/16 bg-sky-300/8 px-4 py-3 text-sm leading-7 text-sky-50">
+                  <p className="text-xs uppercase tracking-[0.22em] text-sky-100/75">Presenter note</p>
+                  <p className="mt-2">{slide.note || "Use this slide to explain the idea clearly before moving on."}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Choose one of the three designs above, then generate the PowerPoint separately when your lecture material is ready.</div>
+      )}
+    </div>
+  );
+
   const renderPodcastPanel = () => (
     <div className="space-y-5">
       <div className="rounded-[24px] border border-amber-300/15 bg-[linear-gradient(180deg,rgba(120,53,15,0.28),rgba(12,10,9,0.92))] p-5">
@@ -1712,6 +1891,7 @@ export default function App() {
     setAuthCodeInput("");
     setPendingEmailAuthMode("");
     setPendingEmailAuthEmail("");
+    setIsSigningInWithPassword(false);
     setIsRequestingEmailCode(false);
     setIsVerifyingEmailCode(false);
     setHistoryItems([]);
@@ -1738,16 +1918,15 @@ export default function App() {
       setAuthChecked(true);
       return undefined;
     }
+    setAuthChecked(true);
     fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
         clearSession("Sign in to continue.");
-        setAuthChecked(true);
         return;
       }
       if (!response.ok) {
-        setAuthChecked(true);
         setAuthMessage(data.detail || "Opening your saved session while the server reconnects.");
         return;
       }
@@ -1755,7 +1934,6 @@ export default function App() {
       setAuthToken(nextToken);
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-      setAuthChecked(true);
     }).catch((error) => {
       if (cancelled) return;
       setAuthMessage(
@@ -1763,7 +1941,6 @@ export default function App() {
           ? "Opening your saved session while the server wakes up."
           : "Using the saved session while the server finishes reconnecting.",
       );
-      setAuthChecked(true);
     });
     return () => {
       cancelled = true;
@@ -1890,6 +2067,46 @@ export default function App() {
       throw new Error(`Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
     }
     return email;
+  };
+
+  const signInWithEmailPassword = async () => {
+    let email = "";
+    setAuthMessage("");
+    try {
+      email = validateEmailPasswordInputs();
+    } catch (err) {
+      setAuthMessage(err.message || "Enter your email and password.");
+      return;
+    }
+
+    setIsSigningInWithPassword(true);
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: authPasswordInput,
+          mode: "login",
+        }),
+      }, 20000);
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not sign in.");
+      setAuthToken(data.token || "");
+      setAuthEmail(data.email || email);
+      setAuthEmailInput(data.email || email);
+      setAuthPasswordInput("");
+      setAuthCodeInput("");
+      setPendingEmailAuthEmail("");
+      setPendingEmailAuthMode("");
+      setCurrentPage("capture");
+      setStatus("Signed in successfully.");
+      setAuthMessage("You are signed in.");
+    } catch (err) {
+      setAuthMessage(getReadableRequestError(err));
+    } finally {
+      setIsSigningInWithPassword(false);
+    }
   };
 
   const requestEmailPasswordCode = async () => {
@@ -2101,12 +2318,13 @@ export default function App() {
   }, [authChecked, authToken]);
 
   const authFetch = async (path, options = {}) => {
+    const { timeoutMs = 30000, ...requestOptions } = options;
     if (!authToken) throw new Error("Please sign in to continue.");
-    const headers = new Headers(options.headers || {});
+    const headers = new Headers(requestOptions.headers || {});
     headers.set("Authorization", `Bearer ${authToken}`);
     let response;
     try {
-      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...options, headers }, 30000);
+      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...requestOptions, headers }, timeoutMs);
     } catch (err) {
       throw new Error(getReadableRequestError(err));
     }
@@ -2297,6 +2515,7 @@ export default function App() {
     if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
     if (activeTab === "flashcards") return flashcardsToText(flashcards) || "No flashcards generated yet.";
     if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
+    if (activeTab === "presentation") return presentationToText(presentationData) || "No PowerPoint presentation generated yet.";
     if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
     if (activeTab === "chat") return chatToText(chatMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
@@ -2311,6 +2530,7 @@ export default function App() {
     { title: "Worked Examples", content: formattedExample || example },
     { title: "Flashcards", content: flashcardsToText(flashcards) },
     { title: "Test", content: quizToText(quizQuestions) },
+    { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
     { title: "Podcast Debate Script", content: podcastData.script || "" },
     { title: "Study Chat", content: chatToText(chatMessages) },
   ].filter((section) => (section.content || "").trim());
@@ -2356,6 +2576,8 @@ export default function App() {
           "PAST QUESTION PAPER",
         ),
       );
+      setPresentationData(normalizePresentationData(item.presentationData));
+      setSelectedPresentationDesign(normalizePresentationData(item.presentationData).designId || presentationDesigns[0].id);
       setPodcastData(normalizePodcastData(item.podcastData));
       setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
       setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
@@ -2382,6 +2604,8 @@ export default function App() {
     setFlashcards([]);
     setQuizQuestions([]);
     setStudyImages([]);
+    setPresentationData(createEmptyPresentationData());
+    setSelectedPresentationDesign(presentationDesigns[0].id);
     setPodcastData(createEmptyPodcastData());
     setPodcastSpeakerCount(2);
     setPodcastTargetMinutes(10);
@@ -2555,7 +2779,11 @@ export default function App() {
       }
       const formData = new FormData();
       formData.append("file", selectedFile);
-      const response = await authFetch("/extract-slide-text/", { method: "POST", body: formData });
+      const response = await authFetch("/extract-slide-text/", {
+        method: "POST",
+        body: formData,
+        timeoutMs: STUDY_SOURCE_EXTRACT_TIMEOUT_MS,
+      });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
       const cleanedText = normalizeStudySourceText(data.text || "");
@@ -3083,6 +3311,8 @@ export default function App() {
         setQuizAnswerImages({});
         setQuizResults({});
         setQuizSubmitted(false);
+        setPresentationData(createEmptyPresentationData());
+        setSelectedPresentationDesign(presentationDesigns[0].id);
         setPodcastData(createEmptyPodcastData());
         setPodcastSpeakerCount(2);
         setPodcastTargetMinutes(10);
@@ -3111,6 +3341,7 @@ export default function App() {
           pastQuestionPapers: resolvedPastQuestionPapers,
           pastQuestionPaperFileNames: resolvedPastQuestionPaperFileNames,
           pastQuestionPaperSources: resolvedPastQuestionPaperSources,
+          presentationData: sanitizePresentationForHistory(createEmptyPresentationData()),
           podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
         });
       });
@@ -3124,6 +3355,88 @@ export default function App() {
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
       setIsGeneratingSummary(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const generatePresentation = async () => {
+    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
+    }
+
+    setIsGeneratingPresentation(true);
+    setError("");
+    setStatus("Designing the PowerPoint presentation...");
+    setProgress(0);
+    setCurrentJobType("presentation");
+
+    try {
+      const response = await authFetch("/generate-presentation/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          design_id: selectedPresentationDesign,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "PowerPoint generation failed.");
+      const job = await pollJob(data.job_id, "presentation");
+      const nextPresentationData = normalizePresentationData({
+        jobId: data.job_id,
+        title: job.presentation_title,
+        subtitle: job.presentation_subtitle,
+        designId: job.presentation_design_id,
+        slides: job.presentation_slides,
+      });
+      setPresentationData(nextPresentationData);
+      setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
+      setActiveTab("presentation");
+      setCurrentPage("workspace");
+      setProgress(100);
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
+      addHistoryItem({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+        title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
+        fileName: sourceLabel,
+        summary,
+        transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureNoteSources,
+        lectureNoteFileNames,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources,
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources,
+        presentationData: sanitizePresentationForHistory(nextPresentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+      });
+      setStatus("PowerPoint presentation ready.");
+    } catch (err) {
+      setError(err.message || "PowerPoint generation failed.");
+      setStatus("PowerPoint generation failed.");
+    } finally {
+      setIsGeneratingPresentation(false);
       setCurrentJobType("");
     }
   };
@@ -3238,6 +3551,7 @@ export default function App() {
         pastQuestionPapers,
         pastQuestionPaperFileNames,
         pastQuestionPaperSources,
+        presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(nextPodcastData),
       });
     } catch (err) {
@@ -3350,7 +3664,7 @@ export default function App() {
           flashcards,
           quiz_questions: selectedQuizQuestions,
           invited_emails: parseInviteEmails(roomInviteInput),
-          active_tab: activeTab === "podcast" ? "guide" : activeTab,
+          active_tab: ["podcast", "presentation"].includes(activeTab) ? "guide" : activeTab,
           test_visibility: newRoomVisibility,
         }),
       });
@@ -3419,8 +3733,8 @@ export default function App() {
 
   const shareTabToRoom = async (tabId = activeTab) => {
     if (!activeRoomId) return;
-    if (tabId === "podcast") {
-      setError("Podcast Generator is personal for now, so it cannot be synced into the collaboration room yet.");
+    if (["podcast", "presentation"].includes(tabId)) {
+      setError("Podcast and PowerPoint tools stay personal for now, so they cannot be synced into the collaboration room yet.");
       return;
     }
     try {
@@ -3592,6 +3906,29 @@ export default function App() {
     }
   };
 
+  const downloadPresentationFile = async () => {
+    if (!presentationData.jobId) return setError("Generate the PowerPoint presentation again to download the file.");
+    try {
+      const response = await authFetch(`/jobs/${presentationData.jobId}/presentation-download`);
+      if (!response.ok) {
+        const data = await parseJsonSafe(response);
+        throw new Error(data.detail || "Could not download the PowerPoint presentation.");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${sanitizeFileName(presentationData.title || extractHistoryTitle(summary, workspaceFileLabel) || "lecture-presentation")}.pptx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setStatus("PowerPoint presentation downloaded.");
+    } catch (err) {
+      setError(err.message || "Could not download the PowerPoint presentation.");
+    }
+  };
+
   const downloadPodcastAudio = async () => {
     if (!podcastData.jobId) return setError("Generate the podcast again to download the audio.");
     try {
@@ -3626,6 +3963,7 @@ export default function App() {
         { title: "Worked Examples", content: item.example || "" },
         { title: "Flashcards", content: flashcardsToText(item.flashcards || []) },
         { title: "Test", content: quizToText(item.quizQuestions || []) },
+        { title: "PowerPoint Presentation", content: presentationToText(item.presentationData) },
         { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
@@ -3854,11 +4192,11 @@ export default function App() {
               </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO</p>
               <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI turns lectures into a full study workspace for students.</h1>
-              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build transcripts, guides, flashcards, tests, podcasts, and collaboration rooms.</p>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build transcripts, guides, flashcards, tests, presentations, podcasts, and collaboration rooms.</p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">AI lecture transcription</div>
                 <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Study guides and summaries</div>
-                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Flashcards, tests, podcasts, past papers, and collaboration</div>
+                <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Flashcards, tests, presentations, podcasts, past papers, and collaboration</div>
               </div>
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
@@ -3968,11 +4306,11 @@ export default function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={requestEmailPasswordCode}
-                      disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                      onClick={authMode === "login" ? signInWithEmailPassword : requestEmailPasswordCode}
+                      disabled={isSigningInWithPassword || isRequestingEmailCode || isVerifyingEmailCode}
                       className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                     >
-                      {isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : authMode === "reset" ? "Sending Reset Code..." : "Logging In...") : authMode === "register" ? "Create Account" : authMode === "reset" ? "Reset Password" : "Log In"}
+                      {isSigningInWithPassword ? "Logging In..." : isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : "Sending Reset Code...") : authMode === "register" ? "Create Account" : authMode === "reset" ? "Reset Password" : "Log In"}
                     </button>
                   </div>
                   {emailAuthCodeRequested ? (
@@ -4136,7 +4474,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
@@ -4167,6 +4505,7 @@ export default function App() {
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Past papers: {pastQuestionPaperFileNames.length || 0}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Memo reference: {pastQuestionMemo.trim() ? "Added" : "Not added"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
+                  <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Presentation ready: {presentationData.slides.length ? "Yes" : "Not yet"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Podcast ready: {podcastData.script ? "Yes" : "Not yet"}</div>
                   <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces for this email: {historyItems.length}</div>
                 </div>
@@ -4182,7 +4521,7 @@ export default function App() {
                 <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
                 <div className="relative">
                   <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
-                  {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
+                  {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
                 </div>
                 {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
                 <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
@@ -4210,6 +4549,7 @@ export default function App() {
                   scoreValue: score,
                   scopeId: "workspace",
                 }) : null}
+                {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
