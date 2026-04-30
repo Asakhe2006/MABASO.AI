@@ -1126,6 +1126,14 @@ function getReadableRequestError(error) {
   return message || "The app could not reach the Mabaso server right now.";
 }
 
+function isTransientServerConnectionMessage(message) {
+  return /could not reach the mabaso server|took too long to respond|failed to fetch|server reconnects|server wakes up/i.test(String(message || ""));
+}
+
+function isTransientHttpStatus(status) {
+  return [502, 503, 504].includes(Number(status));
+}
+
 function decodeJwtPayload(token) {
   try {
     const [, payload = ""] = String(token || "").split(".");
@@ -1356,9 +1364,12 @@ export default function App() {
   );
   const [outputLanguage, setOutputLanguage] = useState(() => window.localStorage.getItem(OUTPUT_LANGUAGE_KEY) || "English");
   const [authPasswordInput, setAuthPasswordInput] = useState("");
+  const [authConfirmPasswordInput, setAuthConfirmPasswordInput] = useState("");
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [authCodeInput, setAuthCodeInput] = useState("");
   const [authMode, setAuthMode] = useState("login");
+  const [registerStep, setRegisterStep] = useState("email");
+  const [pendingRegistrationToken, setPendingRegistrationToken] = useState("");
   const [pendingEmailAuthMode, setPendingEmailAuthMode] = useState("");
   const [pendingEmailAuthEmail, setPendingEmailAuthEmail] = useState("");
   const [isSigningInWithPassword, setIsSigningInWithPassword] = useState(false);
@@ -1484,6 +1495,12 @@ export default function App() {
   const visualReferences = [...uploadedVisualReferences, ...studyImages.filter((image) => image?.image_url)].slice(0, 6);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
+  const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
+  const slideGuideStatusLine = isExtractingSlides
+    ? "Slides are still being read. Please wait before generating the study guide."
+    : slidesReadyForGuide
+      ? "Slide read successful. You can now generate the study guide."
+      : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script);
   const selectedQuizQuestions = quizQuestions;
   const deferredTranscript = useDeferredValue(transcript);
@@ -1514,9 +1531,14 @@ export default function App() {
       : "Pick a template, then let MABASO turn your lecture into a presentation deck.";
   const isAppleConfigured = Boolean(APPLE_CLIENT_ID);
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
-  const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
-  const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in)/i.test(authMessage.trim());
-  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode)/i.test(authMessage.trim());
+  const isRegisterMode = authMode === "register";
+  const isResetMode = authMode === "reset";
+  const isRegistrationEmailStep = isRegisterMode && registerStep === "email";
+  const isRegistrationVerificationStep = isRegisterMode && registerStep === "verify";
+  const isRegistrationPasswordStep = isRegisterMode && registerStep === "password";
+  const showResetVerificationCard = isResetMode && Boolean(pendingEmailAuthEmail);
+  const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in|email verified)/i.test(authMessage.trim());
+  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode|enter your email and we will send a verification code|your study history stays linked to this email)/i.test(authMessage.trim());
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
@@ -3625,7 +3647,12 @@ export default function App() {
     setAuthEmail("");
     setAuthSessionMode("user");
     setAuthAvailableModes([]);
+    setAuthMode("login");
+    setRegisterStep("email");
+    setPendingRegistrationToken("");
     setAuthPasswordInput("");
+    setAuthConfirmPasswordInput("");
+    setShowAuthPassword(false);
     setAuthCodeInput("");
     setPendingEmailAuthMode("");
     setPendingEmailAuthEmail("");
@@ -3872,21 +3899,47 @@ export default function App() {
     }
   };
 
-  const validateEmailPasswordInputs = () => {
-    const email = authEmailInput.trim().toLowerCase();
+  const resetRegistrationFlow = ({ keepEmail = true } = {}) => {
+    setRegisterStep("email");
+    setPendingRegistrationToken("");
+    setPendingEmailAuthMode("");
+    setPendingEmailAuthEmail("");
+    setAuthCodeInput("");
+    setAuthPasswordInput("");
+    setAuthConfirmPasswordInput("");
+    setShowAuthPassword(false);
+    if (!keepEmail) setAuthEmailInput("");
+  };
+
+  const validateAuthEmailInput = (rawValue = authEmailInput) => {
+    const email = String(rawValue || "").trim().toLowerCase();
     if (!email) throw new Error("Enter your email address.");
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Enter a valid email address.");
-    if (authPasswordInput.length < MIN_PASSWORD_LENGTH) {
+    return email;
+  };
+
+  const validateAuthPasswordInput = (rawValue = authPasswordInput) => {
+    const password = String(rawValue || "");
+    if (password.length < MIN_PASSWORD_LENGTH) {
       throw new Error(`Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
     }
-    return email;
+    return password;
+  };
+
+  const validateAuthPasswordConfirmation = () => {
+    const password = validateAuthPasswordInput(authPasswordInput);
+    if (password !== authConfirmPasswordInput) {
+      throw new Error("Password and confirm password must match.");
+    }
+    return password;
   };
 
   const signInWithEmailPassword = async () => {
     let email = "";
     setAuthMessage("");
     try {
-      email = validateEmailPasswordInputs();
+      email = validateAuthEmailInput();
+      validateAuthPasswordInput();
     } catch (err) {
       setAuthMessage(err.message || "Enter your email and password.");
       return;
@@ -3907,7 +3960,10 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not sign in.");
       applyAuthResponse(data, email, { promptForMode: true });
       setAuthPasswordInput("");
+      setAuthConfirmPasswordInput("");
       setAuthCodeInput("");
+      setPendingRegistrationToken("");
+      setRegisterStep("email");
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
       setStatus("Signed in successfully.");
@@ -3919,36 +3975,36 @@ export default function App() {
     }
   };
 
-  const createAccountWithEmailPassword = async () => {
+  const requestRegistrationCode = async () => {
     let email = "";
     setAuthMessage("");
     try {
-      email = validateEmailPasswordInputs();
+      email = validateAuthEmailInput();
     } catch (err) {
-      setAuthMessage(err.message || "Enter your email and password.");
+      setAuthMessage(err.message || "Enter your email address.");
       return;
     }
 
     setIsRequestingEmailCode(true);
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/request-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email,
-          password: authPasswordInput,
-          mode: "register",
         }),
-      }, 20000);
+      }, 25000);
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not create your account.");
-      applyAuthResponse(data, email, { promptForMode: true });
-      setAuthPasswordInput("");
+      if (!response.ok) throw new Error(data.detail || "Could not send a verification code.");
+      setAuthEmailInput(email);
+      setPendingEmailAuthEmail(email);
+      setPendingEmailAuthMode("register");
+      setPendingRegistrationToken("");
       setAuthCodeInput("");
-      setPendingEmailAuthEmail("");
-      setPendingEmailAuthMode("");
-      setStatus("Account created successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+      setAuthPasswordInput("");
+      setAuthConfirmPasswordInput("");
+      setRegisterStep("verify");
+      setAuthMessage("Verification code sent. Check your email, then verify it below.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err));
     } finally {
@@ -3956,11 +4012,102 @@ export default function App() {
     }
   };
 
+  const verifyRegistrationCode = async () => {
+    const email = pendingEmailAuthEmail || authEmailInput.trim().toLowerCase();
+    if (!email) {
+      setAuthMessage("Enter your email first.");
+      return;
+    }
+    if (!authCodeInput.trim()) {
+      setAuthMessage("Enter the verification code from your email.");
+      return;
+    }
+
+    setIsVerifyingEmailCode(true);
+    setAuthMessage("");
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/verify-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          code: authCodeInput.trim(),
+        }),
+      }, 20000);
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Verification failed.");
+      if (!data.registration_token) throw new Error("Verification succeeded, but password setup could not continue. Please try again.");
+      setPendingEmailAuthEmail(email);
+      setPendingEmailAuthMode("register");
+      setPendingRegistrationToken(data.registration_token);
+      setAuthCodeInput("");
+      setRegisterStep("password");
+      setAuthMessage("Email verified. Create and confirm your password to finish the account.");
+    } catch (err) {
+      setAuthMessage(getReadableRequestError(err));
+    } finally {
+      setIsVerifyingEmailCode(false);
+    }
+  };
+
+  const completeRegistrationWithPassword = async () => {
+    let email = "";
+    let password = "";
+    setAuthMessage("");
+    if (!pendingRegistrationToken) {
+      setAuthMessage("Verify your email first before creating a password.");
+      return;
+    }
+    try {
+      email = validateAuthEmailInput(pendingEmailAuthEmail || authEmailInput);
+      password = validateAuthPasswordConfirmation();
+    } catch (err) {
+      setAuthMessage(err.message || "Create and confirm your password.");
+      return;
+    }
+
+    setIsSigningInWithPassword(true);
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          registration_token: pendingRegistrationToken,
+        }),
+      }, 20000);
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not create your account.");
+      applyAuthResponse(data, email, { promptForMode: true });
+      setAuthMode("login");
+      setRegisterStep("email");
+      setPendingRegistrationToken("");
+      setAuthPasswordInput("");
+      setAuthConfirmPasswordInput("");
+      setAuthCodeInput("");
+      setPendingEmailAuthEmail("");
+      setPendingEmailAuthMode("");
+      setStatus("Account created successfully.");
+      setAuthMessage(
+        data?.available_modes?.includes("admin")
+          ? "Choose user mode or admin mode to continue."
+          : "You are signed in. Your history will sync to this email on any device.",
+      );
+    } catch (err) {
+      setAuthMessage(getReadableRequestError(err));
+    } finally {
+      setIsSigningInWithPassword(false);
+    }
+  };
+
   const requestEmailPasswordCode = async () => {
     setAuthMessage("");
     let email = "";
+    let password = "";
     try {
-      email = validateEmailPasswordInputs();
+      email = validateAuthEmailInput();
+      password = authMode === "reset" ? validateAuthPasswordConfirmation() : validateAuthPasswordInput();
     } catch (err) {
       setAuthMessage(err.message || "Enter your email and password.");
       return;
@@ -3973,7 +4120,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email,
-          password: authPasswordInput,
+          password,
           mode: authMode,
         }),
       }, 20000);
@@ -4001,8 +4148,14 @@ export default function App() {
       setAuthMessage("Enter the verification code from your email.");
       return;
     }
-    if (authPasswordInput.length < MIN_PASSWORD_LENGTH) {
-      setAuthMessage(`Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
+    try {
+      if ((pendingEmailAuthMode || authMode) === "reset") {
+        validateAuthPasswordConfirmation();
+      } else {
+        validateAuthPasswordInput();
+      }
+    } catch (err) {
+      setAuthMessage(err.message || `Use a password with at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
 
@@ -4023,11 +4176,14 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Verification failed.");
       applyAuthResponse(data, email, { promptForMode: true });
       setAuthPasswordInput("");
+      setAuthConfirmPasswordInput("");
       setAuthCodeInput("");
+      setPendingRegistrationToken("");
+      setRegisterStep("email");
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
       setAuthMode("login");
-      setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : (pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
+      setStatus((pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
       setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err));
@@ -4038,10 +4194,26 @@ export default function App() {
 
   const startForgotPassword = () => {
     setAuthMode("reset");
+    setRegisterStep("email");
+    setPendingRegistrationToken("");
     setPendingEmailAuthMode("");
     setPendingEmailAuthEmail("");
     setAuthCodeInput("");
+    setAuthPasswordInput("");
+    setAuthConfirmPasswordInput("");
     setAuthMessage("Enter your email and a new password, then verify with the code sent to your email.");
+  };
+
+  const openLoginMode = () => {
+    setAuthMode("login");
+    resetRegistrationFlow();
+    setAuthMessage("");
+  };
+
+  const openRegisterMode = () => {
+    setAuthMode("register");
+    resetRegistrationFlow();
+    setAuthMessage("Enter your email and we will send a verification code.");
   };
 
   const startAppleLogin = async () => {
@@ -5181,9 +5353,13 @@ export default function App() {
     let transientFailureCount = 0;
     while (true) {
       try {
-        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: 45000 });
+        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: 90000 });
         const data = await parseJsonSafe(response);
-        if (!response.ok) throw new Error(data.detail || "Could not read job status.");
+        if (!response.ok) {
+          const requestError = new Error(data.detail || "Could not read job status.");
+          requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
+          throw requestError;
+        }
         transientFailureCount = 0;
         setCurrentJobType(jobType);
         setStatus(data.stage || "Processing...");
@@ -5193,8 +5369,8 @@ export default function App() {
         await wait(JOB_POLL_INTERVAL_MS);
       } catch (err) {
         const message = String(err?.message || "");
-        const isTransient = /could not reach the mabaso server|took too long to respond|failed to fetch/i.test(message);
-        if (!isTransient || transientFailureCount >= 2) throw err;
+        const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+        if (!isTransient || transientFailureCount >= 4) throw err;
         transientFailureCount += 1;
         setStatus(`Connection dropped while checking ${jobType.replace(/_/g, " ")}. Retrying...`);
         await wait(JOB_POLL_INTERVAL_MS * transientFailureCount);
@@ -5227,21 +5403,39 @@ export default function App() {
     setProgress(0);
     setChatMessages([]);
     try {
-      const response = await authFetch("/generate-study-guide/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript: resolvedTranscript,
-          lecture_notes: resolvedLectureNotes,
-          lecture_slides: resolvedLectureSlides,
-          past_question_papers: resolvedPastQuestionPapers,
-          language: outputLanguage,
-        }),
-        timeoutMs: 45000,
-      });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Study guide generation failed.");
-      const job = await pollJob(data.job_id, "study_guide");
+      let submitAttempt = 0;
+      let jobRequest = null;
+      while (!jobRequest) {
+        try {
+          const response = await authFetch("/generate-study-guide/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transcript: resolvedTranscript,
+              lecture_notes: resolvedLectureNotes,
+              lecture_slides: resolvedLectureSlides,
+              past_question_papers: resolvedPastQuestionPapers,
+              language: outputLanguage,
+            }),
+            timeoutMs: 90000,
+          });
+          const data = await parseJsonSafe(response);
+          if (!response.ok) {
+            const requestError = new Error(data.detail || "Study guide generation failed.");
+            requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
+            throw requestError;
+          }
+          jobRequest = data;
+        } catch (err) {
+          const message = String(err?.message || "");
+          const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+          if (!isTransient || submitAttempt >= 2) throw err;
+          submitAttempt += 1;
+          setStatus("The Mabaso server is reconnecting. Retrying the study guide request...");
+          await wait(1400 * submitAttempt);
+        }
+      }
+      const job = await pollJob(jobRequest.job_id, "study_guide");
       const resolvedLectureNoteFileNames = resolvedLectureNoteSources.map((item) => item.name);
       const resolvedLectureSlidesFileNames = resolvedLectureSlideSources.map((item) => item.name);
       const resolvedPastQuestionPaperFileNames = resolvedPastQuestionPaperSources.map((item) => item.name);
@@ -6194,32 +6388,20 @@ export default function App() {
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
-                      onClick={() => {
-                        setAuthMode("login");
-                        setPendingEmailAuthMode("");
-                        setPendingEmailAuthEmail("");
-                        setAuthCodeInput("");
-                        setAuthMessage("");
-                      }}
+                      onClick={openLoginMode}
                       className={`rounded-full px-4 py-2 text-sm font-semibold ${["login", "reset"].includes(authMode) ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
                     >
                       Log In
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAuthMode("register");
-                        setPendingEmailAuthMode("");
-                        setPendingEmailAuthEmail("");
-                        setAuthCodeInput("");
-                        setAuthMessage("");
-                      }}
+                      onClick={openRegisterMode}
                       className={`rounded-full px-4 py-2 text-sm font-semibold ${authMode === "register" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
                     >
                       Create Account
                     </button>
                   </div>
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-4 space-y-4">
                     <div>
                       <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Email</label>
                       <input
@@ -6229,61 +6411,180 @@ export default function App() {
                           setAuthEmailInput(event.target.value);
                           if (authPasswordIsIncorrect) setAuthMessage("");
                         }}
-                        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
+                        disabled={isRegistrationVerificationStep || isRegistrationPasswordStep}
+                        className={`mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none disabled:cursor-not-allowed disabled:opacity-75`}
                         placeholder="you@example.com"
                         autoComplete="email"
                       />
+                      {isRegistrationEmailStep ? <p className="mt-2 text-xs leading-6 text-slate-400">Enter your email and we will verify it first, then let you create your password.</p> : null}
+                      {isRegistrationVerificationStep ? <p className="mt-2 text-xs leading-6 text-emerald-200">Step 2 of 3. We sent a verification code to {pendingEmailAuthEmail || authEmailInput}.</p> : null}
+                      {isRegistrationPasswordStep ? <p className="mt-2 text-xs leading-6 text-emerald-200">Step 3 of 3. Email verified for {pendingEmailAuthEmail || authEmailInput}. Create the password you will use on any device.</p> : null}
                     </div>
-                    <div>
-                      <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Password</label>
-                      <div className="relative mt-2">
+
+                    {(authMode === "login" || isResetMode || isRegistrationPasswordStep) ? (
+                      <div>
+                        <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">{isResetMode ? "New Password" : "Password"}</label>
+                        <div className="relative mt-2">
+                          <input
+                            type={showAuthPassword ? "text" : "password"}
+                            value={authPasswordInput}
+                            onChange={(event) => {
+                              setAuthPasswordInput(event.target.value);
+                              if (authPasswordIsIncorrect) setAuthMessage("");
+                            }}
+                            className={`w-full rounded-2xl border px-4 py-3 pr-16 text-sm outline-none ${authPasswordIsIncorrect ? "border-rose-300/55 bg-rose-500/10 text-rose-50 placeholder:text-rose-200/70" : "border-white/10 bg-slate-900 text-white"}`}
+                            placeholder={isRegistrationPasswordStep ? "Create a password" : isResetMode ? "Enter a new password" : "Enter your password"}
+                            autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowAuthPassword((current) => !current)}
+                            className="absolute right-2 top-1/2 inline-flex h-10 min-w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-slate-950/80 px-3 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                            aria-label={showAuthPassword ? "Hide password" : "Show password"}
+                            aria-pressed={showAuthPassword}
+                          >
+                            {showAuthPassword ? "Hide" : "Show"}
+                          </button>
+                        </div>
+                        <p className={`mt-2 text-xs leading-6 ${authPasswordIsIncorrect ? "text-rose-200" : "text-slate-400"}`}>
+                          {authPasswordIsIncorrect ? "Incorrect password." : `Use at least ${MIN_PASSWORD_LENGTH} characters.`}
+                        </p>
+                        {authMode === "login" ? (
+                          <button
+                            type="button"
+                            onClick={startForgotPassword}
+                            className="mt-2 text-sm font-medium text-rose-200 transition hover:text-white"
+                          >
+                            Forgot Password?
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {(isResetMode || isRegistrationPasswordStep) ? (
+                      <div>
+                        <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Confirm Password</label>
                         <input
                           type={showAuthPassword ? "text" : "password"}
-                          value={authPasswordInput}
-                          onChange={(event) => {
-                            setAuthPasswordInput(event.target.value);
-                            if (authPasswordIsIncorrect) setAuthMessage("");
-                          }}
-                          className={`w-full rounded-2xl border px-4 py-3 pr-16 text-sm outline-none ${authPasswordIsIncorrect ? "border-rose-300/55 bg-rose-500/10 text-rose-50 placeholder:text-rose-200/70" : "border-white/10 bg-slate-900 text-white"}`}
-                          placeholder={authMode === "register" ? "Create a password" : authMode === "reset" ? "Enter a new password" : "Enter your password"}
-                          autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                          value={authConfirmPasswordInput}
+                          onChange={(event) => setAuthConfirmPasswordInput(event.target.value)}
+                          className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none"
+                          placeholder="Confirm your password"
+                          autoComplete="new-password"
                         />
-                        <button
-                          type="button"
-                          onClick={() => setShowAuthPassword((current) => !current)}
-                          className="absolute right-2 top-1/2 inline-flex h-10 min-w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-slate-950/80 px-3 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
-                          aria-label={showAuthPassword ? "Hide password" : "Show password"}
-                          aria-pressed={showAuthPassword}
-                        >
-                          {showAuthPassword ? "Hide" : "Show"}
-                        </button>
                       </div>
-                      <p className={`mt-2 text-xs leading-6 ${authPasswordIsIncorrect ? "text-rose-200" : "text-slate-400"}`}>
-                        {authPasswordIsIncorrect ? "Incorrect password." : `Use at least ${MIN_PASSWORD_LENGTH} characters.`}
-                      </p>
-                      {authMode === "login" ? (
+                    ) : null}
+
+                    {authMode === "login" ? (
+                      <button
+                        type="button"
+                        onClick={signInWithEmailPassword}
+                        disabled={isSigningInWithPassword || isRequestingEmailCode || isVerifyingEmailCode}
+                        className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {isSigningInWithPassword ? "Logging In..." : "Log In"}
+                      </button>
+                    ) : null}
+
+                    {isRegistrationEmailStep ? (
+                      <div className="space-y-3">
                         <button
                           type="button"
-                          onClick={startForgotPassword}
-                          className="mt-2 text-sm font-medium text-rose-200 transition hover:text-white"
+                          onClick={requestRegistrationCode}
+                          disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                          className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                         >
-                          Forgot Password?
+                          {isRequestingEmailCode ? "Sending Verification Code..." : "Send Verification Code"}
                         </button>
-                      ) : null}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={authMode === "login" ? signInWithEmailPassword : authMode === "register" ? createAccountWithEmailPassword : requestEmailPasswordCode}
-                      disabled={isSigningInWithPassword || isRequestingEmailCode || isVerifyingEmailCode}
-                      className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      {isSigningInWithPassword ? "Logging In..." : isRequestingEmailCode ? (authMode === "register" ? "Creating Account..." : "Sending Reset Code...") : authMode === "register" ? "Create Account" : authMode === "reset" ? "Reset Password" : "Log In"}
-                    </button>
+                        <p className="text-xs leading-6 text-slate-400">Your study history stays linked to this email and loads again when you sign in on another device.</p>
+                      </div>
+                    ) : null}
+
+                    {isRegistrationVerificationStep ? (
+                      <div className="rounded-2xl border border-emerald-300/18 bg-emerald-300/8 p-4">
+                        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Verify Email</p>
+                        <p className="mt-2 text-sm leading-7 text-slate-200">Enter the code sent to {pendingEmailAuthEmail} before you create the password for this account.</p>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={authCodeInput}
+                          onChange={(event) => setAuthCodeInput(event.target.value)}
+                          className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm tracking-[0.35em] text-white outline-none"
+                          placeholder="000000"
+                          autoComplete="one-time-code"
+                        />
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={verifyRegistrationCode}
+                            disabled={isVerifyingEmailCode}
+                            className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                          >
+                            {isVerifyingEmailCode ? "Verifying..." : "Verify Email"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={requestRegistrationCode}
+                            disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                            className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            Resend Code
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              resetRegistrationFlow();
+                              setAuthMessage("Enter your email and we will send a verification code.");
+                            }}
+                            className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white"
+                          >
+                            Use Another Email
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isRegistrationPasswordStep ? (
+                      <div className="space-y-3">
+                        <p className="text-xs leading-6 text-slate-400">This account will remember your work with {pendingEmailAuthEmail} and sync study history after sign-in on any device.</p>
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={completeRegistrationWithPassword}
+                            disabled={isSigningInWithPassword}
+                            className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            {isSigningInWithPassword ? "Creating Account..." : "Create Account"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              resetRegistrationFlow();
+                              setAuthMessage("Enter your email and we will send a verification code.");
+                            }}
+                            className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white"
+                          >
+                            Start Over
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isResetMode ? (
+                      <button
+                        type="button"
+                        onClick={requestEmailPasswordCode}
+                        disabled={isRequestingEmailCode || isVerifyingEmailCode}
+                        className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {isRequestingEmailCode ? "Sending Reset Code..." : "Send Reset Code"}
+                      </button>
+                    ) : null}
                   </div>
-                  {emailAuthCodeRequested ? (
+                  {showResetVerificationCard ? (
                     <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-emerald-300/8 p-4">
                       <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Verification</p>
-                      <p className="mt-2 text-sm leading-7 text-slate-200">Enter the verification code sent to {pendingEmailAuthEmail} to finish {pendingEmailAuthMode === "register" ? "creating your account" : pendingEmailAuthMode === "reset" ? "resetting your password" : "signing in"}.</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">Enter the verification code sent to {pendingEmailAuthEmail} to finish resetting your password.</p>
                       <input
                         type="text"
                         inputMode="numeric"
@@ -6300,7 +6601,7 @@ export default function App() {
                           disabled={isVerifyingEmailCode}
                           className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 disabled:opacity-50"
                         >
-                          {isVerifyingEmailCode ? "Verifying..." : pendingEmailAuthMode === "reset" ? "Verify and Reset Password" : "Verify and Continue"}
+                          {isVerifyingEmailCode ? "Verifying..." : "Verify and Reset Password"}
                         </button>
                         <button
                           type="button"
@@ -6438,20 +6739,23 @@ export default function App() {
                         </div>
                       ) : null}
                     </button>
-                    <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
-                      <span className="block text-base font-semibold">Generate Study Guide</span>
-                      {guideActionMeta.showProgress ? (
-                        <div className="mt-4">
-                          <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
-                            <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#fde68a,#fdba74,#fb923c)]" style={{ width: `${guideActionMeta.progressValue}%` }} />
+                    <div>
+                      <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
+                        <span className="block text-base font-semibold">Generate Study Guide</span>
+                        {guideActionMeta.showProgress ? (
+                          <div className="mt-4">
+                            <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
+                              <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#fde68a,#fdba74,#fb923c)]" style={{ width: `${guideActionMeta.progressValue}%` }} />
+                            </div>
+                            <p className="mt-3 text-xs leading-6 text-amber-50/90">{guideActionMeta.statusLine}</p>
+                            <div className="mt-3 space-y-2">
+                              {guideActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-amber-100/25 bg-amber-100/10 text-amber-50" : step.tone === "current" ? "border-amber-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-amber-50/70"}`}>{step.label}</div>)}
+                            </div>
                           </div>
-                          <p className="mt-3 text-xs leading-6 text-amber-50/90">{guideActionMeta.statusLine}</p>
-                          <div className="mt-3 space-y-2">
-                            {guideActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-amber-100/25 bg-amber-100/10 text-amber-50" : step.tone === "current" ? "border-amber-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-amber-50/70"}`}>{step.label}</div>)}
-                          </div>
-                        </div>
-                      ) : null}
-                    </button>
+                        ) : null}
+                      </button>
+                      <p className={`mt-2 text-xs leading-6 ${slidesReadyForGuide ? "text-emerald-200" : "text-rose-200"}`}>{slideGuideStatusLine}</p>
+                    </div>
                   </div>
                   {hasResults ? <div className="rounded-2xl border border-sky-300/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-50">Study workspace is ready. Open it from the Workspace tab above.</div> : null}
                   <input ref={fileInputRef} type="file" accept={LECTURE_MEDIA_ACCEPT} className="hidden" onChange={(event) => handleFileChange(event.target.files?.[0])} />

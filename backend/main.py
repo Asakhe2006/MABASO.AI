@@ -139,6 +139,7 @@ MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 *
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
+REGISTRATION_TOKEN_TTL_MINUTES = int(os.getenv("REGISTRATION_TOKEN_TTL_MINUTES", str(LOGIN_CODE_TTL_MINUTES)))
 SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
@@ -332,6 +333,12 @@ class EmailPasswordVerifyRequest(BaseModel):
     password: str
     code: str
     mode: str = "login"
+
+
+class EmailPasswordRegistrationCompleteRequest(BaseModel):
+    email: str
+    registration_token: str
+    password: str
 
 
 class GoogleAuthRequest(BaseModel):
@@ -573,6 +580,16 @@ def init_db():
                 password_salt TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_email_password_registrations (
+                email TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
             """
         )
@@ -1653,6 +1670,79 @@ def login_with_email_password(email: str, password: str) -> str:
 def register_with_email_password(email: str, password: str) -> str:
     ensure_user_account_is_active(email)
     validated_password = validate_password_value(password)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    store_password_credential(email, validated_password)
+    mark_user_verified(email)
+    return create_session(email)
+
+
+def request_email_password_registration_code(email: str) -> str:
+    ensure_user_account_is_active(email)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM pending_email_password_registrations WHERE email = ?", (email,))
+    return create_login_code(email)
+
+
+def create_pending_registration_token(email: str) -> str:
+    token = secrets.token_urlsafe(32)
+    now_iso = utc_now().isoformat()
+    expiry_iso = iso_in_future(minutes=REGISTRATION_TOKEN_TTL_MINUTES)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO pending_email_password_registrations (email, token_hash, expires_at, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                token_hash = excluded.token_hash,
+                expires_at = excluded.expires_at,
+                created_at = excluded.created_at
+            """,
+            (email, hash_value(token), expiry_iso, now_iso),
+        )
+
+    return token
+
+
+def consume_pending_registration_token(email: str, token: str):
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT token_hash, expires_at FROM pending_email_password_registrations WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="Verify your email first before creating a password.")
+
+    if datetime.fromisoformat(row["expires_at"]) <= utc_now():
+        raise HTTPException(status_code=400, detail="Your password setup link expired. Verify your email again.")
+
+    if not hmac.compare_digest(row["token_hash"], hash_value(token)):
+        raise HTTPException(status_code=400, detail="Your password setup step is no longer valid. Verify your email again.")
+
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM pending_email_password_registrations WHERE email = ?", (email,))
+
+
+def verify_email_password_registration_code(email: str, code: str) -> str:
+    ensure_user_account_is_active(email)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    consume_login_code(email, code)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    return create_pending_registration_token(email)
+
+
+def complete_email_password_registration(email: str, registration_token: str, password: str) -> str:
+    ensure_user_account_is_active(email)
+    validated_password = validate_password_value(password)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    consume_pending_registration_token(email, registration_token.strip())
     if has_password_credential(email):
         raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
     store_password_credential(email, validated_password)
@@ -3137,6 +3227,63 @@ async def request_email_password_login_code(payload: EmailPasswordAuthRequest, r
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
     return {"message": "Verification code sent.", "email": email, "mode": normalize_email_password_auth_mode(payload.mode)}
+
+
+@app.post("/auth/email-password/register/request-code")
+async def request_email_password_registration_code_route(payload: RequestCodeRequest, request: Request):
+    started_at = utc_now()
+    email = validate_email_address(payload.email)
+    code = await asyncio.to_thread(request_email_password_registration_code, email)
+    await asyncio.to_thread(send_verification_email, email, code)
+    record_audit_log(
+        action="auth.email_password.register_code_request",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="user-register",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return {"message": "Verification code sent.", "email": email}
+
+
+@app.post("/auth/email-password/register/verify-code")
+async def verify_email_password_registration_code_route(payload: VerifyCodeRequest, request: Request):
+    started_at = utc_now()
+    email = validate_email_address(payload.email)
+    code = payload.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="Verification code is required.")
+    registration_token = await asyncio.to_thread(verify_email_password_registration_code, email, code)
+    record_audit_log(
+        action="auth.email_password.register_code_verify",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="user-register",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return {"message": "Email verified.", "email": email, "registration_token": registration_token}
+
+
+@app.post("/auth/email-password/register/complete")
+async def complete_email_password_registration_route(payload: EmailPasswordRegistrationCompleteRequest, request: Request):
+    started_at = utc_now()
+    email = validate_email_address(payload.email)
+    session_token = await asyncio.to_thread(
+        complete_email_password_registration,
+        email,
+        payload.registration_token,
+        payload.password,
+    )
+    record_audit_log(
+        action="auth.email_password.register_complete",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="user-register",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.post("/auth/email-password/login")
