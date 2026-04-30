@@ -305,6 +305,7 @@ class PresentationGenerationRequest(BaseModel):
     past_question_papers: str = ""
     design_id: str = "emerald-scholar"
     language: str = "English"
+    reference_images: list[str] = []
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -3603,7 +3604,10 @@ def get_youtube_proxy_url(*, prefer_https: bool = True) -> str:
     return build_webshare_proxy_url()
 
 
-def build_youtube_request_proxies() -> dict[str, str]:
+def build_youtube_request_proxies(*, use_proxy: bool = True) -> dict[str, str]:
+    if not use_proxy:
+        return {}
+
     proxies: dict[str, str] = {}
     fallback_proxy_url = build_webshare_proxy_url()
     if YOUTUBE_PROXY_HTTP_URL:
@@ -3619,7 +3623,20 @@ def build_youtube_request_proxies() -> dict[str, str]:
     return proxies
 
 
-def create_youtube_requests_session() -> Any:
+def iter_youtube_proxy_attempts() -> list[bool]:
+    return [True, False] if has_youtube_proxy_source() else [False]
+
+
+def is_proxy_auth_error(exc: Exception) -> bool:
+    lowered = str(exc or "").strip().lower()
+    return (
+        "response 407" in lowered
+        or "proxy authentication required" in lowered
+        or ("connect tunnel failed" in lowered and "407" in lowered)
+    )
+
+
+def create_youtube_requests_session(*, use_proxy: bool = True) -> Any:
     if curl_requests is not None:
         try:
             session = curl_requests.Session(impersonate="chrome")
@@ -3627,9 +3644,13 @@ def create_youtube_requests_session() -> Any:
             session = curl_requests.Session()
     else:
         session = requests.Session()
+    try:
+        session.trust_env = False
+    except Exception:
+        pass
     session.headers.update(build_youtube_request_headers())
     session.cookies.update(load_youtube_request_cookies())
-    proxy_map = build_youtube_request_proxies()
+    proxy_map = build_youtube_request_proxies(use_proxy=use_proxy)
     if proxy_map:
         session.proxies.update(proxy_map)
     return session
@@ -3642,6 +3663,7 @@ def build_ytdlp_options(
     skip_download: bool = False,
     use_cookiefile: bool = True,
     use_impersonation: bool = True,
+    use_proxy: bool = True,
 ) -> dict[str, Any]:
     options: dict[str, Any] = {
         "noplaylist": True,
@@ -3672,9 +3694,11 @@ def build_ytdlp_options(
     cookie_path = resolve_youtube_cookiefile()
     if use_cookiefile and cookie_path:
         options["cookiefile"] = str(cookie_path)
-    proxy_url = get_youtube_proxy_url()
+    proxy_url = get_youtube_proxy_url() if use_proxy else ""
     if proxy_url:
         options["proxy"] = proxy_url
+    elif not use_proxy:
+        options["proxy"] = ""
     return options
 
 
@@ -3959,50 +3983,65 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
         f"https://www.youtube-nocookie.com/embed/{video_id}?hl=en",
     ]
 
-    with create_youtube_requests_session() as session:
-        for watch_url in watch_urls:
-            try:
-                response = session.get(watch_url, timeout=20)
-                response.raise_for_status()
-            except requests.RequestException as exc:
-                logger.info("Could not fetch YouTube watch page for %s via %s: %s", video_url, watch_url, exc)
-                continue
+    for use_proxy in iter_youtube_proxy_attempts():
+        if not use_proxy:
+            update_job(job_id, status="processing", stage="Retrying watch-page captions without proxy", progress=8)
+        with create_youtube_requests_session(use_proxy=use_proxy) as session:
+            for watch_url in watch_urls:
+                try:
+                    response = session.get(watch_url, timeout=20)
+                    response.raise_for_status()
+                except Exception as exc:
+                    logger.info(
+                        "Could not fetch YouTube watch page for %s via %s (use_proxy=%s): %s",
+                        video_url,
+                        watch_url,
+                        use_proxy,
+                        exc,
+                    )
+                    continue
 
-            player_response = None
-            for marker in (
-                "var ytInitialPlayerResponse = ",
-                "ytInitialPlayerResponse = ",
-                'window["ytInitialPlayerResponse"] = ',
-                "window['ytInitialPlayerResponse'] = ",
-            ):
-                player_response = extract_json_object_from_text(response.text, marker)
-                if player_response:
-                    break
+                player_response = None
+                for marker in (
+                    "var ytInitialPlayerResponse = ",
+                    "ytInitialPlayerResponse = ",
+                    'window["ytInitialPlayerResponse"] = ',
+                    "window['ytInitialPlayerResponse'] = ",
+                ):
+                    player_response = extract_json_object_from_text(response.text, marker)
+                    if player_response:
+                        break
 
-            caption_tracks = (
-                player_response.get("captions", {})
-                .get("playerCaptionsTracklistRenderer", {})
-                .get("captionTracks", [])
-                if isinstance(player_response, dict)
-                else []
-            )
-            caption_track = choose_youtube_caption_track(caption_tracks)
-            base_url = caption_track.get("baseUrl", "") if isinstance(caption_track, dict) else ""
-            if not base_url:
-                continue
+                caption_tracks = (
+                    player_response.get("captions", {})
+                    .get("playerCaptionsTracklistRenderer", {})
+                    .get("captionTracks", [])
+                    if isinstance(player_response, dict)
+                    else []
+                )
+                caption_track = choose_youtube_caption_track(caption_tracks)
+                base_url = caption_track.get("baseUrl", "") if isinstance(caption_track, dict) else ""
+                if not base_url:
+                    continue
 
-            caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
-            try:
-                caption_response = session.get(caption_url, timeout=20)
-                caption_response.raise_for_status()
-            except requests.RequestException as exc:
-                logger.info("Could not fetch YouTube caption track for %s via %s: %s", video_url, watch_url, exc)
-                continue
+                caption_url = base_url if "fmt=" in base_url else f"{base_url}&fmt=vtt"
+                try:
+                    caption_response = session.get(caption_url, timeout=20)
+                    caption_response.raise_for_status()
+                except Exception as exc:
+                    logger.info(
+                        "Could not fetch YouTube caption track for %s via %s (use_proxy=%s): %s",
+                        video_url,
+                        watch_url,
+                        use_proxy,
+                        exc,
+                    )
+                    continue
 
-            transcript_text = subtitle_body_to_text(caption_response.text)
-            if transcript_text:
-                update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
-                return transcript_text
+                transcript_text = subtitle_body_to_text(caption_response.text)
+                if transcript_text:
+                    update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
+                    return transcript_text
     return None
 
 
@@ -4072,50 +4111,58 @@ def fetch_ytdlp_caption_track(video_url: str, job_id: str) -> str | None:
     info: dict[str, Any] | None = None
 
     for attempt_index, use_cookiefile in enumerate(metadata_attempts, start=1):
-        base_options = build_ytdlp_options(
-            skip_download=True,
-            use_cookiefile=use_cookiefile,
-        )
-        base_options.update(
-            {
-                "writesubtitles": False,
-                "writeautomaticsub": False,
-                "simulate": True,
-            }
-        )
-
         if attempt_index > 1:
             update_job(job_id, status="processing", stage="Retrying caption metadata without saved cookies", progress=12)
 
-        try:
-            last_variant_error: Exception | None = None
-            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
-                if variant_index > 1:
-                    update_job(job_id, status="processing", stage="Retrying caption metadata without browser impersonation", progress=12)
-                try:
-                    with yt_dlp.YoutubeDL(options) as downloader:
-                        info = downloader.extract_info(normalized_url, download=False)
-                    last_variant_error = None
-                    break
-                except Exception as variant_exc:
-                    last_variant_error = variant_exc
-                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
-                        logger.info("Retrying caption metadata without impersonation for %s: %s", video_url, variant_exc)
-                        continue
-                    raise
-            if last_variant_error is not None:
-                raise last_variant_error
-            if info:
-                break
-        except Exception as exc:
-            logger.info(
-                "Could not inspect yt-dlp caption metadata for %s (use_cookiefile=%s): %s",
-                video_url,
-                use_cookiefile,
-                exc,
+        for use_proxy in iter_youtube_proxy_attempts():
+            base_options = build_ytdlp_options(
+                skip_download=True,
+                use_cookiefile=use_cookiefile,
+                use_proxy=use_proxy,
             )
-            info = None
-            continue
+            base_options.update(
+                {
+                    "writesubtitles": False,
+                    "writeautomaticsub": False,
+                    "simulate": True,
+                }
+            )
+            if not use_proxy:
+                update_job(job_id, status="processing", stage="Retrying caption metadata without proxy", progress=12)
+
+            try:
+                last_variant_error: Exception | None = None
+                for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                    if variant_index > 1:
+                        update_job(job_id, status="processing", stage="Retrying caption metadata without browser impersonation", progress=12)
+                    try:
+                        with yt_dlp.YoutubeDL(options) as downloader:
+                            info = downloader.extract_info(normalized_url, download=False)
+                        last_variant_error = None
+                        break
+                    except Exception as variant_exc:
+                        last_variant_error = variant_exc
+                        if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                            logger.info("Retrying caption metadata without impersonation for %s: %s", video_url, variant_exc)
+                            continue
+                        raise
+                if last_variant_error is not None:
+                    raise last_variant_error
+                if info:
+                    break
+            except Exception as exc:
+                logger.info(
+                    "Could not inspect yt-dlp caption metadata for %s (use_cookiefile=%s, use_proxy=%s): %s",
+                    video_url,
+                    use_cookiefile,
+                    use_proxy,
+                    exc,
+                )
+                info = None
+                continue
+
+        if info:
+            break
 
     if not isinstance(info, dict):
         return None
@@ -4128,18 +4175,21 @@ def fetch_ytdlp_caption_track(video_url: str, job_id: str) -> str | None:
     if "fmt=" not in caption_url:
         caption_url = f"{caption_url}&fmt=vtt"
 
-    with create_youtube_requests_session() as session:
-        try:
-            response = session.get(caption_url, timeout=20)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            logger.info("Could not fetch yt-dlp caption URL for %s: %s", video_url, exc)
-            return None
+    for use_proxy in iter_youtube_proxy_attempts():
+        if not use_proxy:
+            update_job(job_id, status="processing", stage="Retrying caption URL without proxy", progress=13)
+        with create_youtube_requests_session(use_proxy=use_proxy) as session:
+            try:
+                response = session.get(caption_url, timeout=20)
+                response.raise_for_status()
+            except Exception as exc:
+                logger.info("Could not fetch yt-dlp caption URL for %s (use_proxy=%s): %s", video_url, use_proxy, exc)
+                continue
 
-    transcript_text = subtitle_body_to_text(response.text)
-    if transcript_text:
-        update_job(job_id, status="processing", stage="Caption metadata found. Preparing transcript", progress=16)
-        return transcript_text
+        transcript_text = subtitle_body_to_text(response.text)
+        if transcript_text:
+            update_job(job_id, status="processing", stage="Caption metadata found. Preparing transcript", progress=16)
+            return transcript_text
     return None
 
 
@@ -4153,75 +4203,75 @@ def download_subtitles_from_video_url(video_url: str, job_id: str) -> str | None
     update_job(job_id, status="processing", stage="Checking downloadable captions", progress=9)
     subtitle_attempts = [True, False] if has_youtube_cookie_source() else [False]
     for attempt_index, use_cookiefile in enumerate(subtitle_attempts, start=1):
-        cleanup_caption_files(subtitle_prefix)
-        base_options = build_ytdlp_options(
-            output_template=output_template,
-            skip_download=True,
-            use_cookiefile=use_cookiefile,
-        )
-        base_options.update({
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": ["all"],
-            "subtitlesformat": "vtt/best",
-        })
-
         if attempt_index > 1:
             update_job(job_id, status="processing", stage="Retrying caption download without saved cookies", progress=10)
-        try:
-            last_variant_error: Exception | None = None
-            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
-                if variant_index > 1:
-                    update_job(
-                        job_id,
-                        status="processing",
-                        stage="Retrying caption download without browser impersonation",
-                        progress=10,
-                    )
-                try:
-                    with yt_dlp.YoutubeDL(options) as downloader:
-                        downloader.extract_info(normalized_url, download=True)
-                    last_variant_error = None
-                    break
-                except Exception as variant_exc:
-                    last_variant_error = variant_exc
-                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
-                        logger.info("Retrying subtitle download without impersonation for %s: %s", video_url, variant_exc)
-                        continue
-                    raise
-            if last_variant_error is not None:
-                raise last_variant_error
-            break
-        except Exception as exc:
-            logger.info(
-                "Could not download subtitles with yt-dlp for %s (use_cookiefile=%s): %s",
-                video_url,
-                use_cookiefile,
-                exc,
+        for use_proxy in iter_youtube_proxy_attempts():
+            cleanup_caption_files(subtitle_prefix)
+            base_options = build_ytdlp_options(
+                output_template=output_template,
+                skip_download=True,
+                use_cookiefile=use_cookiefile,
+                use_proxy=use_proxy,
             )
-            if attempt_index == len(subtitle_attempts):
+            base_options.update({
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitleslangs": ["all"],
+                "subtitlesformat": "vtt/best",
+            })
+            if not use_proxy:
+                update_job(job_id, status="processing", stage="Retrying caption download without proxy", progress=10)
+            try:
+                last_variant_error: Exception | None = None
+                for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                    if variant_index > 1:
+                        update_job(
+                            job_id,
+                            status="processing",
+                            stage="Retrying caption download without browser impersonation",
+                            progress=10,
+                        )
+                    try:
+                        with yt_dlp.YoutubeDL(options) as downloader:
+                            downloader.extract_info(normalized_url, download=True)
+                        last_variant_error = None
+                        break
+                    except Exception as variant_exc:
+                        last_variant_error = variant_exc
+                        if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                            logger.info("Retrying subtitle download without impersonation for %s: %s", video_url, variant_exc)
+                            continue
+                        raise
+                if last_variant_error is not None:
+                    raise last_variant_error
+                subtitle_files = sorted(
+                    [
+                        path
+                        for path in UPLOAD_DIR.glob(f"{subtitle_prefix}*")
+                        if path.is_file() and path.suffix.lower() in {".vtt", ".srt"}
+                    ],
+                    key=subtitle_file_priority,
+                )
+                transcript_text = ""
+                for subtitle_file in subtitle_files:
+                    transcript_text = read_subtitle_file(subtitle_file)
+                    if transcript_text:
+                        break
                 cleanup_caption_files(subtitle_prefix)
-                return None
+                if transcript_text:
+                    update_job(job_id, status="processing", stage="Downloadable captions found. Preparing transcript", progress=16)
+                    return transcript_text
+            except Exception as exc:
+                logger.info(
+                    "Could not download subtitles with yt-dlp for %s (use_cookiefile=%s, use_proxy=%s): %s",
+                    video_url,
+                    use_cookiefile,
+                    use_proxy,
+                    exc,
+                )
+                cleanup_caption_files(subtitle_prefix)
+                continue
 
-    subtitle_files = sorted(
-        [
-            path
-            for path in UPLOAD_DIR.glob(f"{subtitle_prefix}*")
-            if path.is_file() and path.suffix.lower() in {".vtt", ".srt"}
-        ],
-        key=subtitle_file_priority,
-    )
-
-    transcript_text = ""
-    for subtitle_file in subtitle_files:
-        transcript_text = read_subtitle_file(subtitle_file)
-        if transcript_text:
-            break
-
-    cleanup_caption_files(subtitle_prefix)
-    if transcript_text:
-        update_job(job_id, status="processing", stage="Downloadable captions found. Preparing transcript", progress=16)
-        return transcript_text
     return None
 
 
@@ -4276,79 +4326,92 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         ])
 
     for attempt_index, attempt in enumerate(download_attempts, start=1):
-        cleanup_download_artifacts(download_prefix)
-        base_options = build_ytdlp_options(
-            output_template=output_template,
-            progress_hook=progress_hook,
-            use_cookiefile=attempt["use_cookiefile"],
-        )
-        base_options["format"] = attempt["format"]
-        if attempt["drop_extractor_args"]:
-            base_options.pop("extractor_args", None)
-            update_job(
-                job_id,
-                status="processing",
-                stage=(
-                    "Retrying video download with a fallback format"
-                    if attempt["use_cookiefile"]
-                    else "Retrying video download without saved cookies"
-                ),
-                progress=4,
+        for use_proxy in iter_youtube_proxy_attempts():
+            cleanup_download_artifacts(download_prefix)
+            base_options = build_ytdlp_options(
+                output_template=output_template,
+                progress_hook=progress_hook,
+                use_cookiefile=attempt["use_cookiefile"],
+                use_proxy=use_proxy,
             )
-        elif not attempt["use_cookiefile"]:
-            update_job(
-                job_id,
-                status="processing",
-                stage="Retrying video download without saved cookies",
-                progress=4,
-            )
+            base_options["format"] = attempt["format"]
+            if attempt["drop_extractor_args"]:
+                base_options.pop("extractor_args", None)
+                update_job(
+                    job_id,
+                    status="processing",
+                    stage=(
+                        "Retrying video download with a fallback format"
+                        if attempt["use_cookiefile"]
+                        else "Retrying video download without saved cookies"
+                    ),
+                    progress=4,
+                )
+            elif not attempt["use_cookiefile"]:
+                update_job(
+                    job_id,
+                    status="processing",
+                    stage="Retrying video download without saved cookies",
+                    progress=4,
+                )
+            if not use_proxy:
+                update_job(
+                    job_id,
+                    status="processing",
+                    stage="Retrying video download without proxy",
+                    progress=4,
+                )
 
-        try:
-            last_variant_error: Exception | None = None
-            for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
-                if variant_index > 1:
-                    update_job(
-                        job_id,
-                        status="processing",
-                        stage="Retrying video download without browser impersonation",
-                        progress=4,
-                    )
-                try:
-                    with yt_dlp.YoutubeDL(options) as downloader:
-                        info = downloader.extract_info(normalized_url, download=True)
-                        requested_downloads = info.get("requested_downloads") or []
-                        candidate_paths = [
-                            Path(item["filepath"])
-                            for item in requested_downloads
-                            if isinstance(item, dict) and item.get("filepath")
-                        ]
-                        prepared_path = Path(downloader.prepare_filename(info))
-                        if prepared_path not in candidate_paths:
-                            candidate_paths.append(prepared_path)
-                    last_variant_error = None
-                    break
-                except Exception as variant_exc:
-                    last_variant_error = variant_exc
-                    if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
-                        logger.info("Retrying video download without impersonation for %s: %s", video_url, variant_exc)
-                        continue
-                    raise
-            if last_variant_error is not None:
-                raise last_variant_error
-            last_error = ""
+            try:
+                last_variant_error: Exception | None = None
+                for variant_index, options in enumerate(iter_ytdlp_option_variants(base_options), start=1):
+                    if variant_index > 1:
+                        update_job(
+                            job_id,
+                            status="processing",
+                            stage="Retrying video download without browser impersonation",
+                            progress=4,
+                        )
+                    try:
+                        with yt_dlp.YoutubeDL(options) as downloader:
+                            info = downloader.extract_info(normalized_url, download=True)
+                            requested_downloads = info.get("requested_downloads") or []
+                            candidate_paths = [
+                                Path(item["filepath"])
+                                for item in requested_downloads
+                                if isinstance(item, dict) and item.get("filepath")
+                            ]
+                            prepared_path = Path(downloader.prepare_filename(info))
+                            if prepared_path not in candidate_paths:
+                                candidate_paths.append(prepared_path)
+                        last_variant_error = None
+                        break
+                    except Exception as variant_exc:
+                        last_variant_error = variant_exc
+                        if variant_index == 1 and is_unavailable_impersonation_target_error(variant_exc):
+                            logger.info("Retrying video download without impersonation for %s: %s", video_url, variant_exc)
+                            continue
+                        raise
+                if last_variant_error is not None:
+                    raise last_variant_error
+                last_error = ""
+                break
+            except Exception as exc:
+                last_error = str(exc).strip()
+                logger.info(
+                    "Video download attempt %s failed for %s with format %s (use_cookiefile=%s, use_proxy=%s): %s",
+                    attempt_index,
+                    video_url,
+                    attempt["format"],
+                    attempt["use_cookiefile"],
+                    use_proxy,
+                    exc,
+                )
+                candidate_paths = []
+                continue
+
+        if not last_error:
             break
-        except Exception as exc:
-            last_error = str(exc).strip()
-            logger.info(
-                "Video download attempt %s failed for %s with format %s (use_cookiefile=%s): %s",
-                attempt_index,
-                video_url,
-                attempt["format"],
-                attempt["use_cookiefile"],
-                exc,
-            )
-            candidate_paths = []
-            continue
 
     if last_error:
         cleanup_download_artifacts(download_prefix)
@@ -4412,6 +4475,17 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
     message = str(exc).strip()
     lowered = message.lower()
     is_youtube_source = bool(source_url and extract_youtube_video_id(source_url))
+    if is_proxy_auth_error(exc):
+        if is_youtube_source:
+            return (
+                "The configured YouTube proxy rejected authentication (HTTP 407). "
+                "Recheck YOUTUBE_PROXY_HTTP_URL and YOUTUBE_PROXY_HTTPS_URL, or verify your "
+                "YOUTUBE_WEBSHARE_PROXY_USERNAME and YOUTUBE_WEBSHARE_PROXY_PASSWORD values on Render."
+            )
+        return (
+            "The configured outbound proxy rejected authentication (HTTP 407). "
+            "Recheck the proxy URL or credentials configured on the backend."
+        )
     if "impersonate target" in lowered and "not available" in lowered:
         return (
             "The backend downloader could not use its browser impersonation target. "
@@ -5760,6 +5834,7 @@ async def generate_podcast_package(
 PRESENTATION_THEMES: dict[str, dict[str, str]] = {
     "emerald-scholar": {
         "id": "emerald-scholar",
+        "style_family": "emerald-scholar",
         "name": "Emerald Scholar",
         "background": "061912",
         "surface": "0F2B20",
@@ -5772,6 +5847,7 @@ PRESENTATION_THEMES: dict[str, dict[str, str]] = {
     },
     "sunset-classroom": {
         "id": "sunset-classroom",
+        "style_family": "sunset-classroom",
         "name": "Sunset Classroom",
         "background": "FFF8F1",
         "surface": "FFF1E1",
@@ -5784,6 +5860,7 @@ PRESENTATION_THEMES: dict[str, dict[str, str]] = {
     },
     "midnight-grid": {
         "id": "midnight-grid",
+        "style_family": "midnight-grid",
         "name": "Midnight Grid",
         "background": "020617",
         "surface": "0F172A",
@@ -5793,6 +5870,110 @@ PRESENTATION_THEMES: dict[str, dict[str, str]] = {
         "text": "E2E8F0",
         "muted": "BFDBFE",
         "dark_text": "082F49",
+    },
+    "aurora-waves": {
+        "id": "aurora-waves",
+        "style_family": "midnight-grid",
+        "name": "Aurora Waves",
+        "background": "04111F",
+        "surface": "0B1730",
+        "surface_alt": "1D2E67",
+        "accent": "60A5FA",
+        "accent_soft": "BFDBFE",
+        "text": "EFF6FF",
+        "muted": "DBEAFE",
+        "dark_text": "1E3A8A",
+    },
+    "glass-cube": {
+        "id": "glass-cube",
+        "style_family": "sunset-classroom",
+        "name": "Glass Cube",
+        "background": "F0FDFA",
+        "surface": "DDF8F3",
+        "surface_alt": "BDEEE5",
+        "accent": "0F766E",
+        "accent_soft": "99F6E4",
+        "text": "134E4A",
+        "muted": "115E59",
+        "dark_text": "134E4A",
+    },
+    "celebration-night": {
+        "id": "celebration-night",
+        "style_family": "midnight-grid",
+        "name": "Celebration Night",
+        "background": "111827",
+        "surface": "1F2937",
+        "surface_alt": "312E81",
+        "accent": "F59E0B",
+        "accent_soft": "FDE68A",
+        "text": "F9FAFB",
+        "muted": "E0E7FF",
+        "dark_text": "78350F",
+    },
+    "amber-lux": {
+        "id": "amber-lux",
+        "style_family": "midnight-grid",
+        "name": "Amber Lux",
+        "background": "09090B",
+        "surface": "18181B",
+        "surface_alt": "3F3F46",
+        "accent": "F59E0B",
+        "accent_soft": "FCD34D",
+        "text": "FAFAFA",
+        "muted": "FDE68A",
+        "dark_text": "78350F",
+    },
+    "editorial-sage": {
+        "id": "editorial-sage",
+        "style_family": "emerald-scholar",
+        "name": "Editorial Sage",
+        "background": "F7F7F2",
+        "surface": "E9F2E4",
+        "surface_alt": "D7E7CF",
+        "accent": "2F6B4F",
+        "accent_soft": "CBE7D6",
+        "text": "1F3A2A",
+        "muted": "466A55",
+        "dark_text": "1F3A2A",
+    },
+    "clinical-blue": {
+        "id": "clinical-blue",
+        "style_family": "sunset-classroom",
+        "name": "Clinical Blue",
+        "background": "F4FBFF",
+        "surface": "E7F4FB",
+        "surface_alt": "D4ECF8",
+        "accent": "2563EB",
+        "accent_soft": "BFDBFE",
+        "text": "1E3A8A",
+        "muted": "3B82F6",
+        "dark_text": "1E3A8A",
+    },
+    "festival-pop": {
+        "id": "festival-pop",
+        "style_family": "sunset-classroom",
+        "name": "Festival Pop",
+        "background": "FFF7FB",
+        "surface": "FFE4F1",
+        "surface_alt": "FED7E2",
+        "accent": "DB2777",
+        "accent_soft": "F9A8D4",
+        "text": "9D174D",
+        "muted": "BE185D",
+        "dark_text": "9D174D",
+    },
+    "summit-minimal": {
+        "id": "summit-minimal",
+        "style_family": "sunset-classroom",
+        "name": "Summit Minimal",
+        "background": "FFFDEA",
+        "surface": "F5F3FF",
+        "surface_alt": "DBEAFE",
+        "accent": "4F46E5",
+        "accent_soft": "C7D2FE",
+        "text": "3730A3",
+        "muted": "4338CA",
+        "dark_text": "3730A3",
     },
 }
 
@@ -5812,6 +5993,14 @@ def normalize_presentation_design_id(value: str) -> str:
 
 def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
     combined = " ".join([title, *bullets]).lower()
+    if any(marker in combined for marker in ["table", "tabulate", "rows", "columns", "summary table"]):
+        return "table"
+    if any(marker in combined for marker in ["graph", "trend", "increase", "decrease", "curve", "plot"]):
+        return "graph"
+    if any(marker in combined for marker in ["chart", "distribution", "breakdown", "percentage", "share"]):
+        return "chart"
+    if any(marker in combined for marker in ["photo", "image", "diagram", "structure", "appearance", "recognise"]):
+        return "photo"
     if any(marker in combined for marker in ["compare", "difference", "advantage", "disadvantage", "versus"]):
         return "comparison"
     if any(marker in combined for marker in ["step", "process", "procedure", "method", "workflow"]):
@@ -5855,6 +6044,15 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
         visual_title = compact_text(raw_slide.get("visual_title"), compact_text(raw_slide.get("note"), "Visual summary"))
         visual_items = normalize_visual_items(raw_slide.get("visual_items"), bullets[:4])
         visual_type = compact_text(raw_slide.get("visual_type"), infer_presentation_visual_type(title, bullets)).lower()
+        flow_note = compact_text(
+            raw_slide.get("flow_note"),
+            f"This slide moves the deck from {title.lower()} into the next teachable idea.",
+        )
+        reference_image_index = 0
+        try:
+            reference_image_index = max(0, int(raw_slide.get("reference_image_index") or 0))
+        except (TypeError, ValueError):
+            reference_image_index = 0
         normalized.append(
             {
                 "title": title,
@@ -5862,6 +6060,8 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
                 "visual_title": visual_title or "Visual summary",
                 "visual_items": visual_items or bullets[:3],
                 "visual_type": visual_type,
+                "flow_note": flow_note,
+                "reference_image_index": reference_image_index,
             }
         )
         if len(normalized) >= 8:
@@ -5892,6 +6092,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Lecture flow",
             "visual_type": "flow",
             "visual_items": ["Overview", "Core concepts", "Applied example"],
+            "flow_note": "Open the deck with the topic, the route through the lesson, and what students should expect next.",
         },
         {
             "title": "Core Concepts",
@@ -5899,6 +6100,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Concept cluster",
             "visual_type": "cluster",
             "visual_items": concept_points[:4],
+            "flow_note": "Move from the overview into the key building blocks students must understand before details or examples.",
         },
         {
             "title": "Definitions and Terms",
@@ -5906,6 +6108,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Key terms",
             "visual_type": "comparison",
             "visual_items": definition_points[:4] or concept_points[:4],
+            "flow_note": "Clarify vocabulary and distinctions so the rest of the deck uses the same language consistently.",
         },
         {
             "title": "Formulas and Rules",
@@ -5913,6 +6116,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Formula sheet",
             "visual_type": "formula",
             "visual_items": formula_points[:4],
+            "flow_note": "Introduce the rules, equations, or structured logic that support the worked reasoning in later slides.",
         },
         {
             "title": "Worked Example",
@@ -5920,6 +6124,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Method steps",
             "visual_type": "flow",
             "visual_items": example_points[:4],
+            "flow_note": "Turn the theory into action with one clear example students can imitate in classwork or exams.",
         },
         {
             "title": "Common Mistakes",
@@ -5927,6 +6132,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Compare correct vs wrong",
             "visual_type": "comparison",
             "visual_items": mistake_points[:4],
+            "flow_note": "Pause after the example to point out errors, misconceptions, and checks that improve accuracy.",
         },
         {
             "title": "Revision Focus",
@@ -5934,6 +6140,7 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Revision sequence",
             "visual_type": "timeline",
             "visual_items": revision_points[:4] or exam_points[:4],
+            "flow_note": "Close the learning journey with a short revision route that tells students what to revisit first.",
         },
     ]
 
@@ -5967,12 +6174,18 @@ def presentation_slides_to_text(title: str, subtitle: str, slides: list[dict[str
             blocks.append(f"Visual panel: {slide['visual_title']} ({slide.get('visual_type', 'cluster')})")
         for item in slide.get("visual_items", []):
             blocks.append(f"  * {item}")
+        if slide.get("flow_note"):
+            blocks.append(f"Flow note: {slide['flow_note']}")
         blocks.append("")
     return "\n".join(blocks).strip()
 
 
 def rgb_from_hex(value: str) -> RGBColor:
     return RGBColor.from_string(value.upper())
+
+
+def get_presentation_style_family(theme: dict[str, str]) -> str:
+    return compact_text(theme.get("style_family"), compact_text(theme.get("id"), "midnight-grid"))
 
 
 def style_shape(shape: Any, fill_hex: str, *, transparency: float = 0.0):
@@ -6075,7 +6288,51 @@ def add_visual_card(
     return card
 
 
-def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], theme: dict[str, str]):
+def load_presentation_reference_image(source: str) -> BytesIO | None:
+    resolved_source = compact_text(source)
+    if not resolved_source:
+        return None
+
+    if resolved_source.startswith("data:image/"):
+        try:
+            _, encoded = resolved_source.split(",", 1)
+            return BytesIO(base64.b64decode(encoded))
+        except (ValueError, binascii.Error):
+            return None
+
+    if resolved_source.startswith("http://") or resolved_source.startswith("https://"):
+        try:
+            response = requests.get(resolved_source, timeout=20)
+            response.raise_for_status()
+            return BytesIO(response.content)
+        except Exception:
+            return None
+    return None
+
+
+def resolve_reference_image_source(reference_images: list[str], slide_content: dict[str, Any]) -> str:
+    if not reference_images:
+        return ""
+
+    try:
+        requested_index = max(0, int(slide_content.get("reference_image_index") or 0))
+    except (TypeError, ValueError):
+        requested_index = 0
+
+    valid_sources = [compact_text(item) for item in reference_images if compact_text(item)]
+    if not valid_sources:
+        return ""
+    if requested_index >= len(valid_sources):
+        requested_index = 0
+    return valid_sources[requested_index]
+
+
+def draw_presentation_visual_panel(
+    slide: Any,
+    slide_content: dict[str, Any],
+    theme: dict[str, str],
+    reference_images: list[str],
+):
     panel_left = 8.72
     panel_top = 1.95
     panel_width = 3.65
@@ -6096,10 +6353,50 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
         font_name="Aptos Display",
     )
 
+    style_family = get_presentation_style_family(theme)
+    uses_dark_text = style_family == "sunset-classroom"
+    primary_fill = theme["surface"] if not uses_dark_text else theme["surface_alt"]
+    secondary_fill = theme["surface_alt"] if not uses_dark_text else theme["surface"]
+    primary_text = theme["text"] if not uses_dark_text else theme["dark_text"]
+    soft_fill = theme["accent_soft"] if not uses_dark_text else theme["surface"]
+
     visual_type = compact_text(slide_content.get("visual_type"), "cluster").lower()
     visual_items = [compact_text(item) for item in slide_content.get("visual_items", []) if compact_text(item)]
     if not visual_items:
         visual_items = [compact_text(item) for item in slide_content.get("bullets", []) if compact_text(item)][:4]
+    reference_source = resolve_reference_image_source(reference_images, slide_content)
+    reference_stream = load_presentation_reference_image(reference_source)
+
+    def draw_chart_bars(items: list[str], *, line_mode: bool = False):
+        axis = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(panel_left + 0.36), Inches(panel_top + 0.96), Inches(0.05), Inches(2.9))
+        style_shape(axis, theme["surface"])
+        base = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(panel_left + 0.36), Inches(panel_top + 3.81), Inches(2.78), Inches(0.05))
+        style_shape(base, theme["surface"])
+        for index, item in enumerate(items[:4] or ["Point A", "Point B", "Point C"]):
+            normalized_item = compact_text(item, f"Point {index + 1}")
+            bar_height = min(2.1, 0.8 + (0.22 * len(normalized_item.split())))
+            x = panel_left + 0.62 + (index * 0.62)
+            y = panel_top + 3.78 - bar_height
+            if line_mode:
+                marker = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(0.26), Inches(0.26))
+                style_shape(marker, theme["accent_soft"])
+                if index > 0:
+                    connector = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x - 0.42), Inches(y + 0.12), Inches(0.44), Inches(0.04))
+                    style_shape(connector, theme["surface"])
+            else:
+                bar = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(0.34), Inches(bar_height))
+                style_shape(bar, theme["surface"])
+            add_textbox(
+                slide,
+                left=x - 0.08,
+                top=panel_top + 3.96,
+                width=0.54,
+                height=0.42,
+                text=normalized_item[:18],
+                font_size=8,
+                color_hex=primary_text,
+                align=PP_ALIGN.CENTER,
+            )
 
     if visual_type == "flow":
         for index, item in enumerate(visual_items[:4]):
@@ -6110,9 +6407,9 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
                 top=y,
                 width=2.82,
                 height=0.54,
-                fill_hex=theme["surface"],
+                fill_hex=primary_fill,
                 text=item,
-                text_hex=theme["text"],
+                text_hex=primary_text,
                 font_size=12,
                 bold=True,
             )
@@ -6122,7 +6419,7 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
                 top=y,
                 width=0.38,
                 height=0.38,
-                fill_hex=theme["accent_soft"] if theme["id"] != "sunset-classroom" else theme["surface_alt"],
+                fill_hex=soft_fill,
                 text=str(index + 1),
                 text_hex=theme["dark_text"],
                 font_size=11,
@@ -6137,9 +6434,9 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
             top=panel_top + 0.84,
             width=1.42,
             height=2.76,
-            fill_hex=theme["surface"],
+            fill_hex=primary_fill,
             text="\n\n".join(left_items) or "Point A",
-            text_hex=theme["text"],
+            text_hex=primary_text,
             font_size=12,
             bold=True,
         )
@@ -6149,28 +6446,28 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
             top=panel_top + 0.84,
             width=1.42,
             height=2.76,
-            fill_hex=theme["surface_alt"],
+            fill_hex=secondary_fill,
             text="\n\n".join(right_items) or "Point B",
-            text_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+            text_hex=primary_text,
             font_size=12,
             bold=True,
         )
     elif visual_type == "timeline":
         line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(panel_left + 0.46), Inches(panel_top + 0.86), Inches(0.08), Inches(3.2))
-        style_shape(line, theme["surface"])
+        style_shape(line, primary_fill)
         for index, item in enumerate(visual_items[:4]):
             y = panel_top + 0.78 + (index * 0.82)
             dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(panel_left + 0.25), Inches(y), Inches(0.42), Inches(0.42))
-            style_shape(dot, theme["surface_alt"])
+            style_shape(dot, secondary_fill)
             add_visual_card(
                 slide,
                 left=panel_left + 0.82,
                 top=y - 0.04,
                 width=2.35,
                 height=0.5,
-                fill_hex=theme["surface"],
+                fill_hex=primary_fill,
                 text=item,
-                text_hex=theme["text"],
+                text_hex=primary_text,
                 font_size=11,
                 bold=True,
             )
@@ -6178,7 +6475,7 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
         positions = [(panel_left + 1.14, panel_top + 0.92), (panel_left + 0.32, panel_top + 2.08), (panel_left + 1.95, panel_top + 2.08)]
         for (x, y), item in zip(positions, visual_items[:3] or ["Phase 1", "Phase 2", "Phase 3"], strict=False):
             circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(1.05), Inches(1.05))
-            style_shape(circle, theme["surface"])
+            style_shape(circle, primary_fill)
             add_textbox(
                 slide,
                 left=x + 0.12,
@@ -6187,7 +6484,7 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
                 height=0.48,
                 text=item,
                 font_size=11,
-                color_hex=theme["text"],
+                color_hex=primary_text,
                 bold=True,
                 align=PP_ALIGN.CENTER,
             )
@@ -6199,12 +6496,116 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
                 top=panel_top + 0.84 + (index * 0.76),
                 width=3.02,
                 height=0.5,
-                fill_hex=theme["surface"],
+                fill_hex=primary_fill,
                 text=item,
-                text_hex=theme["text"],
+                text_hex=primary_text,
                 font_size=12,
                 bold=True,
             )
+    elif visual_type == "table":
+        header = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 0.24), Inches(panel_top + 0.82), Inches(3.02), Inches(0.46))
+        style_shape(header, primary_fill)
+        add_textbox(
+            slide,
+            left=panel_left + 0.38,
+            top=panel_top + 0.94,
+            width=1.12,
+            height=0.18,
+            text="Point",
+            font_size=10,
+            color_hex=primary_text,
+            bold=True,
+        )
+        add_textbox(
+            slide,
+            left=panel_left + 1.74,
+            top=panel_top + 0.94,
+            width=1.25,
+            height=0.18,
+            text="Detail",
+            font_size=10,
+            color_hex=primary_text,
+            bold=True,
+        )
+        for index, item in enumerate(visual_items[:4] or slide_content.get("bullets", [])[:4]):
+            label, _, detail = compact_text(item, "Key point").partition(":")
+            row_top = panel_top + 1.38 + (index * 0.68)
+            left_cell = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 0.24), Inches(row_top), Inches(1.18), Inches(0.5))
+            right_cell = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 1.56), Inches(row_top), Inches(1.7), Inches(0.5))
+            style_shape(left_cell, secondary_fill)
+            style_shape(right_cell, primary_fill)
+            add_textbox(
+                slide,
+                left=panel_left + 0.34,
+                top=row_top + 0.12,
+                width=0.98,
+                height=0.22,
+                text=label[:22],
+                font_size=10,
+                color_hex=primary_text,
+                bold=True,
+            )
+            add_textbox(
+                slide,
+                left=panel_left + 1.68,
+                top=row_top + 0.12,
+                width=1.44,
+                height=0.22,
+                text=(detail or label)[:38],
+                font_size=9,
+                color_hex=primary_text,
+            )
+    elif visual_type in {"chart", "graph"}:
+        draw_chart_bars(visual_items, line_mode=visual_type == "graph")
+        summary_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 0.38), Inches(panel_top + 4.04), Inches(2.74), Inches(0.42))
+        style_shape(summary_box, primary_fill)
+        add_textbox(
+            slide,
+            left=panel_left + 0.54,
+            top=panel_top + 4.14,
+            width=2.42,
+            height=0.2,
+            text=compact_text(slide_content.get("flow_note"), "Trend summary"),
+            font_size=8,
+            color_hex=primary_text,
+        )
+    elif visual_type == "photo":
+        if reference_stream is not None:
+            try:
+                slide.shapes.add_picture(
+                    reference_stream,
+                    Inches(panel_left + 0.26),
+                    Inches(panel_top + 0.82),
+                    width=Inches(3.06),
+                    height=Inches(2.36),
+                )
+            except Exception:
+                reference_stream = None
+        if reference_stream is None:
+            add_visual_card(
+                slide,
+                left=panel_left + 0.28,
+                top=panel_top + 0.84,
+                width=3.02,
+                height=1.38,
+                fill_hex=primary_fill,
+                text=visual_items[0] if visual_items else "Reference image",
+                text_hex=primary_text,
+                font_size=13,
+                bold=True,
+            )
+        caption_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 0.28), Inches(panel_top + 3.36), Inches(3.02), Inches(0.96))
+        style_shape(caption_box, primary_fill)
+        add_textbox(
+            slide,
+            left=panel_left + 0.46,
+            top=panel_top + 3.54,
+            width=2.64,
+            height=0.58,
+            text="\n".join((visual_items[:2] or slide_content.get("bullets", [])[:2]))[:160],
+            font_size=10,
+            color_hex=primary_text,
+        )
     else:
         add_visual_card(
             slide,
@@ -6212,9 +6613,9 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
             top=panel_top + 1.28,
             width=1.78,
             height=0.7,
-            fill_hex=theme["surface"],
+            fill_hex=primary_fill,
             text=visual_items[0] if visual_items else "Core idea",
-            text_hex=theme["text"],
+            text_hex=primary_text,
             font_size=12,
             bold=True,
         )
@@ -6226,9 +6627,9 @@ def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], th
                 top=y,
                 width=1.46,
                 height=0.58,
-                fill_hex=theme["surface_alt"] if theme["id"] != "sunset-classroom" else theme["surface"],
+                fill_hex=secondary_fill,
                 text=item,
-                text_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+                text_hex=primary_text,
                 font_size=11,
                 bold=True,
             )
@@ -6238,15 +6639,15 @@ def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: 
     background = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
     style_shape(background, theme["background"])
 
-    theme_id = theme["id"]
-    if theme_id == "emerald-scholar":
+    style_family = get_presentation_style_family(theme)
+    if style_family == "emerald-scholar":
         accent_bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.45), Inches(0.45), Inches(0.24), Inches(6.55))
         style_shape(accent_bar, theme["accent"])
         orb = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.7), Inches(-0.5), Inches(3.2), Inches(3.2))
         style_shape(orb, theme["accent"], transparency=0.72)
         ribbon = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.9), Inches(6.55), Inches(3.7), Inches(0.5))
         style_shape(ribbon, theme["surface_alt"])
-    elif theme_id == "sunset-classroom":
+    elif style_family == "sunset-classroom":
         panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(4.1), Inches(7.5))
         style_shape(panel, theme["surface_alt"], transparency=0.18)
         orb = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.8), Inches(0.35), Inches(2.0), Inches(2.0))
@@ -6273,14 +6674,27 @@ def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: 
             height=0.2,
             text=f"Slide {slide_index}",
             font_size=11,
-            color_hex=theme["accent_soft"] if theme_id != "sunset-classroom" else "FFF7ED",
+            color_hex=theme["accent_soft"] if style_family != "sunset-classroom" else "FFF7ED",
             bold=True,
         )
+    add_textbox(
+        slide,
+        left=12.0,
+        top=7.02,
+        width=0.72,
+        height=0.14,
+        text="mabaso",
+        font_size=9,
+        color_hex=theme["muted"],
+        bold=True,
+        align=PP_ALIGN.RIGHT,
+    )
 
 
 def add_presentation_title_slide(presentation: Any, title: str, subtitle: str, theme: dict[str, str]):
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     decorate_presentation_slide(slide, theme, 0, is_title=True)
+    style_family = get_presentation_style_family(theme)
     add_textbox(
         slide,
         left=0.95,
@@ -6313,7 +6727,7 @@ def add_presentation_title_slide(presentation: Any, title: str, subtitle: str, t
         height=0.22,
         text="Prepared in Mabaso AI",
         font_size=12,
-        color_hex=theme["accent_soft"] if theme["id"] != "sunset-classroom" else "FFF7ED",
+        color_hex=theme["accent_soft"] if style_family != "sunset-classroom" else "FFF7ED",
         bold=True,
     )
 
@@ -6323,9 +6737,12 @@ def add_presentation_content_slide(
     slide_index: int,
     slide_content: dict[str, Any],
     theme: dict[str, str],
+    reference_images: list[str],
 ):
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     decorate_presentation_slide(slide, theme, slide_index)
+    style_family = get_presentation_style_family(theme)
+    uses_dark_text = style_family == "sunset-classroom"
 
     title_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.82), Inches(1.18), Inches(7.7), Inches(0.95))
     style_shape(title_box, theme["surface"])
@@ -6337,13 +6754,13 @@ def add_presentation_content_slide(
         height=0.3,
         text=slide_content["title"],
         font_size=23,
-        color_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+        color_hex=theme["text"] if not uses_dark_text else theme["dark_text"],
         bold=True,
         font_name="Aptos Display",
     )
 
     body_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.85), Inches(2.35), Inches(7.5), Inches(4.35))
-    style_shape(body_panel, theme["surface_alt"] if theme["id"] == "sunset-classroom" else theme["surface"])
+    style_shape(body_panel, theme["surface_alt"] if uses_dark_text else theme["surface"])
     add_bullet_list(
         slide,
         left=1.14,
@@ -6351,21 +6768,21 @@ def add_presentation_content_slide(
         width=6.85,
         height=3.7,
         bullets=slide_content.get("bullets", []),
-        color_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+        color_hex=theme["text"] if not uses_dark_text else theme["dark_text"],
     )
-    draw_presentation_visual_panel(slide, slide_content, theme)
+    draw_presentation_visual_panel(slide, slide_content, theme, reference_images)
 
     footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(6.06), Inches(3.65), Inches(0.62))
-    style_shape(footer, theme["surface_alt"] if theme["id"] != "sunset-classroom" else theme["surface"])
+    style_shape(footer, theme["surface_alt"] if not uses_dark_text else theme["surface"])
     add_textbox(
         slide,
         left=8.98,
         top=6.24,
         width=3.05,
         height=0.22,
-        text=PRESENTATION_THEMES[theme["id"]]["name"],
+        text=theme["name"],
         font_size=11,
-        color_hex=theme["muted"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+        color_hex=theme["muted"] if not uses_dark_text else theme["dark_text"],
         bold=True,
     )
 
@@ -6420,6 +6837,7 @@ def build_presentation_file(
     subtitle: str,
     slides: list[dict[str, Any]],
     design_id: str,
+    reference_images: list[str],
 ) -> str:
     ensure_presentation_support()
     output_dir = PRESENTATION_OUTPUT_DIR / job_id
@@ -6434,7 +6852,7 @@ def build_presentation_file(
 
     add_presentation_title_slide(presentation, title, subtitle, theme)
     for slide_index, slide_content in enumerate(slides, start=1):
-        add_presentation_content_slide(presentation, slide_index, slide_content, theme)
+        add_presentation_content_slide(presentation, slide_index, slide_content, theme, reference_images)
     add_presentation_closing_slide(presentation, title, theme)
 
     file_path = output_dir / "lecture-presentation.pptx"
@@ -6451,6 +6869,7 @@ async def generate_presentation_package(
     design_id: str,
     job_id: str,
     output_language: str,
+    reference_images: list[str],
 ) -> dict[str, Any]:
     normalized_design_id = normalize_presentation_design_id(design_id)
     fallback_package = build_presentation_fallback(summary, transcript)
@@ -6475,25 +6894,37 @@ async def generate_presentation_package(
                         "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
                         "Rules:\n"
                         "- `slides` must be an array of 6 to 8 objects.\n"
-                        "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, and `visual_items`.\n"
+                        "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, `visual_items`, `flow_note`, and `reference_image_index`.\n"
                         "- `bullets` must contain 3 to 5 short bullet strings.\n"
                         "- `visual_items` must contain 2 to 4 short labels for a diagram panel on the slide.\n"
-                        "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster.\n"
+                        "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster, table, chart, graph, photo.\n"
+                        "- `flow_note` must explain how the slide advances the lesson flow in one sentence.\n"
+                        f"- `reference_image_index` must be an integer from 0 to {max(len(reference_images) - 1, 0)} and only point to a real lecture image when a photo or diagram would help.\n"
                         "- This is a formal PowerPoint deck, not speaker notes. Do not write what the presenter should say.\n"
                         "- Keep bullet lines concise, readable, and presentation-ready.\n"
                         f"- Write the slide text in {output_language}.\n"
                         "- When the lecture material covers multiple topics, keep those topics separate instead of mixing them into one slide.\n"
                         "- Cover overview, core concepts, formulas or rules when present, worked examples, mistakes, and revision or exam focus.\n"
+                        "- Use tables, graphs, charts, and photos when they help students understand the material quickly.\n"
                         "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
                         "- Do not return markdown, numbering, or commentary outside JSON."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": combined_source or presentation_slides_to_text(
-                        fallback_package["title"],
-                        fallback_package["subtitle"],
-                        fallback_package["slides"],
+                    "content": (
+                        (
+                            f"REFERENCE IMAGES AVAILABLE: {len(reference_images)}\n"
+                            "When a real lecture image exists, prefer matching that image with a `photo` slide instead of inventing an unrelated visual.\n\n"
+                        )
+                        if reference_images
+                        else ""
+                    ) + (
+                        combined_source or presentation_slides_to_text(
+                            fallback_package["title"],
+                            fallback_package["subtitle"],
+                            fallback_package["slides"],
+                        )
                     ),
                 },
             ],
@@ -6522,6 +6953,7 @@ async def generate_presentation_package(
         subtitle=subtitle,
         slides=normalized_slides,
         design_id=normalized_design_id,
+        reference_images=reference_images,
     )
 
     return {
@@ -7300,6 +7732,7 @@ async def run_presentation_job(
     past_question_papers: str,
     design_id: str,
     output_language: str,
+    reference_images: list[str],
 ):
     try:
         update_job(job_id, status="processing", stage="Starting PowerPoint generation", progress=8)
@@ -7312,6 +7745,7 @@ async def run_presentation_job(
             design_id,
             job_id,
             output_language,
+            reference_images,
         )
         update_job(
             job_id,
@@ -7522,6 +7956,7 @@ async def create_study_guide(
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
+    reference_images = [compact_text(item) for item in (payload.reference_images or []) if compact_text(item)][:6]
     if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
@@ -7638,6 +8073,7 @@ async def create_presentation(
             past_question_papers,
             design_id,
             output_language,
+            reference_images,
         )
     )
     record_audit_log(
@@ -7647,7 +8083,7 @@ async def create_presentation(
         resource_type="presentation",
         resource_name=design_id,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"job_id": job_id, "design_id": design_id, "language": output_language},
+        metadata={"job_id": job_id, "design_id": design_id, "language": output_language, "reference_images": len(reference_images)},
     )
     return {"job_id": job_id}
 

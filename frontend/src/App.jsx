@@ -72,6 +72,8 @@ const presentationDesigns = [
     description: "Deep green lecture slides with sharp contrast, strong headings, and a polished academic feel.",
     previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.35),transparent_42%),linear-gradient(135deg,#061912,#0f2b20_58%,#15392a)]",
     chipClassName: "border-emerald-300/30 bg-emerald-300/10 text-emerald-50",
+    previewTitleClassName: "text-emerald-50",
+    previewDecorationClassName: "after:absolute after:-right-8 after:top-6 after:h-28 after:w-36 after:rounded-full after:bg-emerald-200/20 after:blur-2xl",
   },
   {
     id: "sunset-classroom",
@@ -80,6 +82,8 @@ const presentationDesigns = [
     description: "Soft cream and orange slides for friendlier presentations, revision classes, and classroom explanations.",
     previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.22),transparent_38%),linear-gradient(135deg,#fff8f1,#fff1e1_55%,#f6d2b6)]",
     chipClassName: "border-orange-300/40 bg-orange-300/15 text-orange-50",
+    previewTitleClassName: "text-orange-950",
+    previewDecorationClassName: "after:absolute after:-right-6 after:bottom-2 after:h-20 after:w-44 after:rounded-full after:bg-orange-200/55 after:blur-2xl",
   },
   {
     id: "midnight-grid",
@@ -88,8 +92,110 @@ const presentationDesigns = [
     description: "Dark navy slides with cool blue accents for modern demos, systems topics, and technical lectures.",
     previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.28),transparent_40%),linear-gradient(135deg,#020617,#0f172a_58%,#172554)]",
     chipClassName: "border-sky-300/35 bg-sky-300/10 text-sky-50",
+    previewTitleClassName: "text-sky-50",
+    previewDecorationClassName: "after:absolute after:right-3 after:top-4 after:h-24 after:w-24 after:rounded-[28px] after:border after:border-sky-200/20 after:bg-sky-300/10",
+  },
+  {
+    id: "aurora-waves",
+    name: "Aurora Waves",
+    accent: "Blue ribbon",
+    description: "Airy blue curves and soft light for clean lecture introductions, summaries, and concept walkthroughs.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(191,219,254,0.8),transparent_42%),linear-gradient(135deg,#f8fbff,#dbeafe_58%,#bfdbfe)]",
+    chipClassName: "border-blue-300/40 bg-blue-300/20 text-blue-950",
+    previewTitleClassName: "text-blue-700",
+    previewDecorationClassName: "after:absolute after:right-0 after:bottom-0 after:h-28 after:w-44 after:rounded-[999px] after:bg-[radial-gradient(circle_at_center,rgba(96,165,250,0.4),transparent_60%)]",
+  },
+  {
+    id: "glass-cube",
+    name: "Glass Cube",
+    accent: "Clean geometry",
+    description: "Fresh mint geometry for engineering, business, and structured explanation decks.",
+    previewClassName: "bg-[linear-gradient(135deg,#ecfeff,#d1fae5_46%,#bae6fd)]",
+    chipClassName: "border-teal-300/45 bg-teal-300/20 text-teal-950",
+    previewTitleClassName: "text-teal-950",
+    previewDecorationClassName: "after:absolute after:right-4 after:top-3 after:h-24 after:w-24 after:rotate-12 after:rounded-[26px] after:border after:border-teal-600/20 after:bg-white/35",
+  },
+  {
+    id: "celebration-night",
+    name: "Celebration Night",
+    accent: "Event style",
+    description: "Dark celebratory slides with amber highlights for launches, recaps, and energetic storytelling.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.2),transparent_30%),linear-gradient(135deg,#111827,#1f2937_60%,#312e81)]",
+    chipClassName: "border-amber-300/40 bg-amber-300/15 text-amber-50",
+    previewTitleClassName: "text-amber-50",
+    previewDecorationClassName: "after:absolute after:right-6 after:top-5 after:h-4 after:w-4 after:rounded-full after:bg-amber-200 before:absolute before:right-12 before:top-10 before:h-3 before:w-3 before:rounded-full before:bg-white/70",
+  },
+  {
+    id: "amber-lux",
+    name: "Amber Lux",
+    accent: "Black and gold",
+    description: "Luxury black slides with gold light streaks for premium reports and standout final presentations.",
+    previewClassName: "bg-[radial-gradient(circle_at_bottom_right,rgba(245,158,11,0.55),transparent_30%),linear-gradient(135deg,#09090b,#18181b_56%,#3f3f46)]",
+    chipClassName: "border-amber-300/40 bg-amber-300/15 text-amber-50",
+    previewTitleClassName: "text-amber-100",
+    previewDecorationClassName: "after:absolute after:right-0 after:bottom-1 after:h-20 after:w-40 after:rounded-[999px] after:bg-[linear-gradient(90deg,transparent,rgba(245,158,11,0.55),transparent)]",
+  },
+  {
+    id: "festival-pop",
+    name: "Festival Pop",
+    accent: "Bright curve",
+    description: "Playful pink gradients for lighter classroom decks, youth workshops, and visual revision packs.",
+    previewClassName: "bg-[linear-gradient(135deg,#fff7fb,#ffe4f1_52%,#fed7e2)]",
+    chipClassName: "border-pink-300/45 bg-pink-300/20 text-pink-950",
+    previewTitleClassName: "text-pink-950",
+    previewDecorationClassName: "after:absolute after:-left-6 after:bottom-0 after:h-14 after:w-[130%] after:rounded-t-[999px] after:bg-[linear-gradient(90deg,#ec4899,#a855f7,#38bdf8)]",
+  },
+  {
+    id: "editorial-sage",
+    name: "Editorial Sage",
+    accent: "Magazine feel",
+    description: "Calm editorial green for professional lectures, essays, and policy or humanities presentations.",
+    previewClassName: "bg-[linear-gradient(135deg,#f7f7f2,#e9f2e4_60%,#d7e7cf)]",
+    chipClassName: "border-lime-300/40 bg-lime-300/20 text-lime-950",
+    previewTitleClassName: "text-emerald-950",
+    previewDecorationClassName: "after:absolute after:right-5 after:bottom-5 after:h-20 after:w-16 after:rounded-[18px] after:bg-[linear-gradient(180deg,#a7f3d0,#fef3c7)]",
+  },
+  {
+    id: "clinical-blue",
+    name: "Clinical Blue",
+    accent: "Lab visual",
+    description: "Bright scientific blue styling that fits medical, biology, chemistry, and lab-based content.",
+    previewClassName: "bg-[linear-gradient(135deg,#f4fbff,#e7f4fb_54%,#d4ecf8)]",
+    chipClassName: "border-sky-300/40 bg-sky-300/20 text-sky-950",
+    previewTitleClassName: "text-sky-800",
+    previewDecorationClassName: "after:absolute after:right-4 after:bottom-3 after:h-24 after:w-24 after:rounded-full after:border after:border-sky-300/40 after:bg-white/50 before:absolute before:right-12 before:bottom-11 before:h-10 before:w-10 before:rounded-full before:border before:border-sky-200/50",
+  },
+  {
+    id: "summit-minimal",
+    name: "Summit Minimal",
+    accent: "Soft summit",
+    description: "Pastel geometric slides for polished study summaries, revision decks, and calm closing presentations.",
+    previewClassName: "bg-[linear-gradient(135deg,#fffdea,#f5f3ff_56%,#dbeafe)]",
+    chipClassName: "border-indigo-300/40 bg-indigo-300/20 text-indigo-950",
+    previewTitleClassName: "text-indigo-800",
+    previewDecorationClassName: "after:absolute after:right-0 after:bottom-0 after:h-24 after:w-36 after:bg-[linear-gradient(135deg,transparent_10%,rgba(79,70,229,0.15),rgba(96,165,250,0.25))] after:[clip-path:polygon(35%_100%,100%_100%,100%_15%)]",
   },
 ];
+
+function getPresentationDesignFamily(designId) {
+  if (["sunset-classroom", "glass-cube", "festival-pop", "clinical-blue", "summit-minimal"].includes(designId)) return "light";
+  if (["midnight-grid", "aurora-waves", "celebration-night", "amber-lux"].includes(designId)) return "dark";
+  return "emerald";
+}
+
+function getPresentationVisualTypeLabel(value) {
+  const normalized = (value || "cluster").toLowerCase();
+  if (normalized === "flow") return "Flow";
+  if (normalized === "comparison") return "Comparison";
+  if (normalized === "timeline") return "Timeline";
+  if (normalized === "cycle") return "Cycle";
+  if (normalized === "formula") return "Formula";
+  if (normalized === "table") return "Table";
+  if (normalized === "chart") return "Chart";
+  if (normalized === "graph") return "Graph";
+  if (normalized === "photo") return "Photo";
+  return "Cluster";
+}
 const helpAboutSections = [
   {
     kicker: "How It Works",
@@ -675,6 +781,9 @@ function getErrorHint(message) {
   const text = (message || "").toLowerCase();
   if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
   if (text.includes("ffmpeg")) return "Install ffmpeg on the backend server for larger files.";
+  if (text.includes("http 407") || text.includes("response 407") || text.includes("proxy rejected authentication")) {
+    return "The backend proxy credentials are being rejected. Recheck your YouTube proxy URL or Webshare username and password on Render.";
+  }
   if (text.includes("impersonate target")) return "If a video link still fails, leave YTDLP_IMPERSONATE_TARGET empty or add YouTube cookies or a proxy on the backend.";
   if (text.includes("blocked direct server-side download")) return "Try a video with public captions, or upload the lecture file directly.";
   if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
@@ -874,6 +983,8 @@ function normalizePresentationData(value) {
         visualTitle: slide.visual_title || slide.visualTitle || slide.note || "",
         visualType: slide.visual_type || slide.visualType || "cluster",
         visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
+        flowNote: slide.flow_note || slide.flowNote || "",
+        referenceImageIndex: Number(slide.reference_image_index ?? slide.referenceImageIndex ?? 0) || 0,
       }))
       .filter((slide) => slide.title || slide.bullets.length),
   };
@@ -905,6 +1016,7 @@ function presentationToText(presentation) {
     (slide.bullets || []).forEach((bullet) => blocks.push(`- ${bullet}`));
     if (slide.visualTitle) blocks.push(`Visual panel: ${slide.visualTitle} (${slide.visualType || "cluster"})`);
     (slide.visualItems || []).forEach((item) => blocks.push(`  * ${item}`));
+    if (slide.flowNote) blocks.push(`Flow note: ${slide.flowNote}`);
     blocks.push("");
   });
   return blocks.join("\n").trim();
@@ -981,6 +1093,7 @@ export default function App() {
   const [pastQuestionMemo, setPastQuestionMemo] = useState("");
   const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
   const [selectedPresentationDesign, setSelectedPresentationDesign] = useState(presentationDesigns[0].id);
+  const [selectedPresentationSlideIndex, setSelectedPresentationSlideIndex] = useState(0);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -1047,6 +1160,7 @@ export default function App() {
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
   const podcastAudioUrlRef = useRef("");
+  const presentationViewerRef = useRef(null);
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingStreamRef = useRef(null);
@@ -1095,6 +1209,16 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
+  const activePresentationDesign = presentationDesigns.find((design) => design.id === (presentationData.designId || selectedPresentationDesign)) || presentationDesigns[0];
+  const activePresentationDesignFamily = getPresentationDesignFamily(activePresentationDesign?.id);
+  const activePresentationSlide = presentationData.slides[selectedPresentationSlideIndex] || presentationData.slides[0] || null;
+  const isPresentationJobActive = currentJobType === "presentation" && (isGeneratingPresentation || progress < 100 || !presentationData.slides.length);
+  const presentationProgressValue = Math.max(0, Math.min(100, Number(isPresentationJobActive ? progress : presentationData.slides.length ? 100 : 0) || 0));
+  const presentationStageLine = isPresentationJobActive
+    ? (status || "Generating slides, please wait...")
+    : presentationData.slides.length
+      ? "Your slides are ready to view, explain, and download."
+      : "Pick a template, then let MABASO turn your lecture into a presentation deck.";
   const isAppleConfigured = Boolean(APPLE_CLIENT_ID);
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
   const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
@@ -1123,6 +1247,25 @@ export default function App() {
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const isAdminAccount = authAvailableModes.includes("admin");
+
+  useEffect(() => {
+    setSelectedPresentationSlideIndex(0);
+  }, [presentationData.jobId, presentationData.title]);
+
+  useEffect(() => {
+    if (!presentationData.slides.length && selectedPresentationSlideIndex !== 0) {
+      setSelectedPresentationSlideIndex(0);
+      return;
+    }
+    if (selectedPresentationSlideIndex >= presentationData.slides.length && presentationData.slides.length) {
+      setSelectedPresentationSlideIndex(0);
+    }
+  }, [presentationData.slides.length, selectedPresentationSlideIndex]);
+
+  const focusPresentationViewer = () => {
+    setSelectedPresentationSlideIndex(0);
+    presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const clearHistory = () => {
     setHistoryItems([]);
@@ -1784,54 +1927,291 @@ export default function App() {
     </section>
   );
 
+  const renderPresentationVisualPreview = (slide, { compact = false } = {}) => {
+    const visualType = (slide?.visualType || "cluster").toLowerCase();
+    const visualItems = (slide?.visualItems || []).filter(Boolean);
+    const referenceImage = visualReferences[slide?.referenceImageIndex || 0]?.image_url || visualReferences[0]?.image_url || "";
+    const shellClassName = activePresentationDesignFamily === "dark"
+      ? "border-white/10 bg-slate-950/45 text-white"
+      : activePresentationDesignFamily === "light"
+        ? "border-slate-200 bg-white/90 text-slate-900"
+        : "border-emerald-200/15 bg-emerald-950/35 text-white";
+    const cardClassName = activePresentationDesignFamily === "light"
+      ? "border-slate-200 bg-slate-50/90 text-slate-700"
+      : "border-white/10 bg-white/10 text-slate-100";
+    const mutedClassName = activePresentationDesignFamily === "light" ? "text-slate-500" : "text-slate-200/65";
+    const barClassName = activePresentationDesignFamily === "light"
+      ? "bg-[linear-gradient(180deg,#60a5fa,#2563eb)]"
+      : "bg-[linear-gradient(180deg,#93c5fd,#38bdf8)]";
+
+    if (visualType === "photo" && referenceImage) {
+      return (
+        <div className={`h-full overflow-hidden rounded-[22px] border ${shellClassName}`}>
+          <img src={referenceImage} alt={slide?.visualTitle || "Lecture reference"} className="h-full w-full object-cover" loading="lazy" />
+        </div>
+      );
+    }
+
+    if (visualType === "table") {
+      return (
+        <div className={`h-full rounded-[22px] border p-3 ${shellClassName}`}>
+          <div className={`grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-hidden rounded-2xl border ${cardClassName}`}>
+            <div className="border-r border-current/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.22em]">Point</div>
+            <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.22em]">Detail</div>
+            {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => {
+              const [label, ...rest] = String(item).split(":");
+              return (
+                <div key={`${item}-${index}`} className="contents">
+                  <div className="border-r border-t border-current/10 px-3 py-2 text-xs font-semibold">{label.trim()}</div>
+                  <div className={`border-t border-current/10 px-3 py-2 text-xs ${mutedClassName}`}>{(rest.join(":").trim() || label.trim())}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "chart" || visualType === "graph") {
+      const chartItems = (visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4);
+      return (
+        <div className={`h-full rounded-[22px] border p-3 ${shellClassName}`}>
+          <div className="flex h-full items-end gap-2">
+            {chartItems.map((item, index) => {
+              const height = Math.min(92, 34 + item.length * 1.7 + index * 8);
+              return (
+                <div key={`${item}-${index}`} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
+                  <div className={`w-full rounded-t-2xl ${barClassName}`} style={{ height: `${height}%` }} />
+                  <p className={`line-clamp-2 text-center text-[10px] ${mutedClassName}`}>{item}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "comparison") {
+      const leftItems = visualItems.filter((_, index) => index % 2 === 0).slice(0, 2);
+      const rightItems = visualItems.filter((_, index) => index % 2 === 1).slice(0, 2);
+      return (
+        <div className={`grid h-full grid-cols-2 gap-3 rounded-[22px] border p-3 ${shellClassName}`}>
+          <div className={`rounded-2xl border p-3 ${cardClassName}`}>
+            {leftItems.map((item, index) => <div key={`${item}-${index}`} className="rounded-xl border border-current/10 px-3 py-2 text-xs">{item}</div>)}
+          </div>
+          <div className={`rounded-2xl border p-3 ${cardClassName}`}>
+            {(rightItems.length ? rightItems : leftItems).map((item, index) => <div key={`${item}-${index}`} className="rounded-xl border border-current/10 px-3 py-2 text-xs">{item}</div>)}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "timeline") {
+      return (
+        <div className={`h-full rounded-[22px] border p-4 ${shellClassName}`}>
+          <div className="relative h-full pl-6">
+            <div className="absolute left-2 top-0 h-full w-px bg-current/20" />
+            {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
+              <div key={`${item}-${index}`} className="relative mb-3">
+                <span className="absolute -left-[1.1rem] top-1.5 h-2.5 w-2.5 rounded-full bg-current/80" />
+                <div className={`rounded-xl border px-3 py-2 text-xs ${cardClassName}`}>{item}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "cycle") {
+      return (
+        <div className={`flex h-full items-center justify-center rounded-[22px] border p-4 ${shellClassName}`}>
+          <div className="grid grid-cols-2 gap-3">
+            {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
+              <div key={`${item}-${index}`} className={`flex aspect-square items-center justify-center rounded-full border px-3 text-center text-xs ${cardClassName}`}>{item}</div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "formula") {
+      return (
+        <div className={`space-y-2 rounded-[22px] border p-3 ${shellClassName}`}>
+          {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
+            <div key={`${item}-${index}`} className={`rounded-2xl border px-3 py-3 font-mono text-xs ${cardClassName}`}>{item}</div>
+          ))}
+        </div>
+      );
+    }
+
+    if (visualType === "flow") {
+      return (
+        <div className={`space-y-2 rounded-[22px] border p-3 ${shellClassName}`}>
+          {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
+            <div key={`${item}-${index}`} className="flex items-center gap-2">
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${cardClassName}`}>{index + 1}</span>
+              <div className={`min-w-0 flex-1 rounded-2xl border px-3 py-2 text-xs ${cardClassName}`}>{item}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div className={`relative h-full rounded-[22px] border p-4 ${shellClassName}`}>
+        <div className="absolute left-1/2 top-[46%] h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-current/10 bg-current/10" />
+        <div className="relative flex h-full flex-wrap items-center justify-center gap-2">
+          {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
+            <span key={`${item}-${index}`} className={`rounded-full border px-3 py-2 text-[11px] ${cardClassName}`}>{item}</span>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderPresentationSlideCanvas = (slide, index, { thumbnail = false } = {}) => {
+    const frameClassName = activePresentationDesignFamily === "dark"
+      ? "border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.16),transparent_34%),linear-gradient(135deg,rgba(9,16,32,0.98),rgba(15,23,42,0.98),rgba(30,41,59,0.96))] text-white"
+      : activePresentationDesignFamily === "light"
+        ? "border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(191,219,254,0.45),transparent_30%),linear-gradient(135deg,#ffffff,#f8fafc_56%,#eff6ff)] text-slate-900"
+        : "border-emerald-300/12 bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.16),transparent_30%),linear-gradient(135deg,#061912,#0f2b20_52%,#15392a)] text-white";
+    const mutedClassName = activePresentationDesignFamily === "light" ? "text-slate-600" : "text-slate-200/72";
+    const chipClassName = activePresentationDesignFamily === "light"
+      ? "border-slate-200 bg-white/85 text-slate-700"
+      : "border-white/10 bg-white/10 text-slate-100";
+    const bulletCardClassName = activePresentationDesignFamily === "light"
+      ? "border-slate-200/90 bg-white/90 text-slate-700"
+      : "border-white/10 bg-slate-950/35 text-slate-100";
+
+    return (
+      <div className={`relative overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "p-6"} ${frameClassName}`}>
+        <div className="absolute inset-0 opacity-80">
+          <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
+          <div className="absolute bottom-0 right-0 h-28 w-56 rounded-[999px] bg-current/5" />
+        </div>
+        <div className="relative">
+          <div className="flex items-center justify-between gap-3">
+            <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Slide {index + 1}</span>
+            {!thumbnail ? <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>{getPresentationVisualTypeLabel(slide?.visualType)}</span> : null}
+          </div>
+          <div className={`${thumbnail ? "mt-3 space-y-3" : "mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_280px]"}`}>
+            <div className="min-w-0">
+              <h5 className={`${thumbnail ? "text-sm" : "text-[1.95rem]"} font-semibold leading-tight`}>{slide?.title || "Untitled slide"}</h5>
+              {!thumbnail ? <p className={`mt-3 text-sm leading-6 ${mutedClassName}`}>{slide?.visualTitle || "Visual explanation for the lecture point on this slide."}</p> : null}
+              <div className={`${thumbnail ? "mt-3 space-y-2" : "mt-5 space-y-3"}`}>
+                {(slide?.bullets || []).slice(0, thumbnail ? 2 : 5).map((bullet, bulletIndex) => (
+                  <div key={`${slide?.title}-${bulletIndex}`} className={`rounded-2xl border px-4 py-3 text-sm leading-6 ${bulletCardClassName}`}>
+                    {bullet}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className={`${thumbnail ? "hidden" : "block"} h-[250px]`}>
+              {renderPresentationVisualPreview(slide)}
+            </div>
+          </div>
+          {!thumbnail ? (
+            <div className="mt-5 flex items-end justify-between gap-4">
+              <p className={`max-w-2xl text-sm leading-6 ${mutedClassName}`}>{slide?.flowNote || "This slide keeps the lesson moving in a clear teaching order."}</p>
+              <span className={`text-[11px] font-semibold uppercase tracking-[0.28em] ${mutedClassName}`}>mabaso</span>
+            </div>
+          ) : (
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <p className={`line-clamp-2 text-[10px] leading-5 ${mutedClassName}`}>{slide?.flowNote || slide?.visualTitle || "Lecture flow note"}</p>
+              <span className={`text-[9px] font-semibold uppercase tracking-[0.24em] ${mutedClassName}`}>mabaso</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderPresentationPanel = () => (
     <div className="space-y-5">
-      <div className="rounded-[24px] border border-sky-300/15 bg-[linear-gradient(180deg,rgba(14,116,144,0.22),rgba(2,6,23,0.96))] p-5">
+      <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(2,8,23,0.35)]">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-sky-100/80">PowerPoint Generator</p>
-            <h4 className="mt-2 text-3xl font-semibold text-white">Create a designed lecture presentation.</h4>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose one design first, then generate the deck separately from your study guide, tests, and flashcards.</p>
+            <p className="text-xs uppercase tracking-[0.28em] text-sky-100/75">AI Presentation Maker</p>
+            <h4 className="mt-2 text-3xl font-semibold text-white">Build lecture slides with real structure, visuals, and flow.</h4>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose a template first. MABASO will generate slide titles, bullet points, visual panels, and a cleaner teaching sequence from your lecture guide, notes, slides, and past papers.</p>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#0ea5e9,#2563eb)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Presentation..." : "Generate Presentation"}</button>
+            <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
             <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
           </div>
         </div>
 
-        <div className="mt-5 grid gap-4 xl:grid-cols-3">
-          {presentationDesigns.map((design) => {
-            const isSelected = selectedPresentationDesign === design.id;
-            return (
-              <button
-                key={design.id}
-                type="button"
-                onClick={() => setSelectedPresentationDesign(design.id)}
-                className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10" : "border-white/10 bg-slate-950/60 hover:bg-white/10"}`}
-              >
-                <div className={`h-36 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName}`}>
-                  <div className="flex h-full flex-col justify-between p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.accent}</span>
-                      {isSelected ? <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-white">Selected</span> : null}
-                    </div>
-                    <div>
-                      <p className="text-lg font-semibold text-white">{design.name}</p>
-                      <p className="mt-2 max-w-[220px] text-xs leading-6 text-white/80">Lecture title, key bullets, and a designed side note panel.</p>
+        <div className="mt-6 rounded-[28px] border border-white/10 bg-slate-950/70 p-5">
+          <div className="grid gap-5 xl:grid-cols-[140px_minmax(0,1fr)]">
+            <div className="flex items-center justify-center rounded-[28px] bg-[linear-gradient(135deg,#fff7ed,#fed7aa)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+              <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,#fb923c,#fdba74)] text-4xl font-black text-white shadow-[0_18px_40px_rgba(251,146,60,0.35)]">P</div>
+            </div>
+            <div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-lg font-semibold text-white">{isPresentationJobActive ? "It takes about 1 minute to generate, please wait patiently..." : "Slides are ready to view and explain."}</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-300">{presentationStageLine}</p>
+                </div>
+                <button type="button" onClick={focusPresentationViewer} disabled={!presentationData.slides.length} className="rounded-2xl border border-sky-300/30 bg-white px-4 py-3 text-sm font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">View now</button>
+              </div>
+              <div className="mt-5 flex items-center gap-4">
+                <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#60a5fa,#2563eb)] transition-all duration-500" style={{ width: `${presentationProgressValue}%` }} />
+                </div>
+                <span className="text-sm font-semibold text-slate-200">{presentationProgressValue}%</span>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{visualReferences.length} visual reference{visualReferences.length === 1 ? "" : "s"}</span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length || 0} slide{presentationData.slides.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Template Gallery</p>
+              <h5 className="mt-2 text-2xl font-semibold text-white">Start by choosing a template.</h5>
+            </div>
+            <p className="max-w-2xl text-sm leading-7 text-slate-300">Tables, graphs, photos, and comparison panels are now chosen automatically when the lecture content needs them. Uploaded slide or note images are used first when a photo panel fits the topic.</p>
+          </div>
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {presentationDesigns.map((design) => {
+              const isSelected = selectedPresentationDesign === design.id;
+              return (
+                <button
+                  key={design.id}
+                  type="button"
+                  onClick={() => setSelectedPresentationDesign(design.id)}
+                  className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10"}`}
+                >
+                  <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName} ${design.previewDecorationClassName}`}>
+                    <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent,rgba(15,23,42,0.06))]" />
+                    <div className="relative flex h-full flex-col justify-between p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.accent}</span>
+                        {isSelected ? <span className="rounded-full border border-white/15 bg-white/30 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-white">Selected</span> : null}
+                      </div>
+                      <div>
+                        <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${design.previewTitleClassName}`}>Presentation</p>
+                        <p className={`mt-1 text-xl font-semibold ${design.previewTitleClassName}`}>Title</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
-                <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
-              </button>
-            );
-          })}
+                  <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
       {presentationData.slides.length ? (
         <>
-          <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
+          <div ref={presentationViewerRef} className="rounded-[30px] border border-white/10 bg-slate-950/75 p-5 shadow-[0_20px_55px_rgba(2,8,23,0.35)]">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Current Deck</p>
@@ -1840,31 +2220,68 @@ export default function App() {
               </div>
               <div className="flex flex-wrap gap-2">
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length} slides</div>
-                <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationDesigns.find((design) => design.id === presentationData.designId)?.name || "Selected design"}</div>
+                <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</div>
+                <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{outputLanguage}</div>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
+              <div className="rounded-[28px] border border-white/10 bg-slate-950/80 p-3">
+                <div className="space-y-3">
+                  {presentationData.slides.map((slide, index) => (
+                    <button
+                      key={`${slide.title}-${index}`}
+                      type="button"
+                      onClick={() => setSelectedPresentationSlideIndex(index)}
+                      className={`w-full rounded-[24px] border p-2 text-left transition ${selectedPresentationSlideIndex === index ? "border-sky-300/40 bg-sky-300/10" : "border-white/10 bg-white/[0.03] hover:bg-white/10"}`}
+                    >
+                      {renderPresentationSlideCanvas(slide, index, { thumbnail: true })}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-4 text-center text-xs uppercase tracking-[0.22em] text-slate-400">Slide {selectedPresentationSlideIndex + 1}/{presentationData.slides.length}</p>
+              </div>
+
+              <div className="min-w-0">
+                {activePresentationSlide ? renderPresentationSlideCanvas(activePresentationSlide, selectedPresentationSlideIndex) : null}
               </div>
             </div>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            {presentationData.slides.map((slide, index) => (
-              <div key={`${slide.title}-${index}`} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Slide {index + 1}</p>
-                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{(slide.bullets || []).length} points</span>
-                </div>
-                <h5 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{slide.title || "Untitled slide"}</h5>
-                <div className="mt-4 space-y-2">
-                  {(slide.bullets || []).map((bullet, bulletIndex) => (
-                    <div key={`${slide.title}-${bulletIndex}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm leading-7 text-slate-200">{bullet}</div>
-                  ))}
-                </div>
-                {(slide.visualTitle || (slide.visualItems || []).length) ? <div className="mt-4 rounded-2xl border border-sky-300/16 bg-sky-300/8 px-4 py-3 text-sm leading-7 text-sky-50"><p className="text-xs uppercase tracking-[0.22em] text-sky-100/75">{slide.visualType || "visual"} panel</p><p className="mt-2 font-semibold">{slide.visualTitle || "Visual summary"}</p><div className="mt-3 flex flex-wrap gap-2">{(slide.visualItems || []).map((item, itemIndex) => <span key={`${slide.title}-${itemIndex}`} className="rounded-full border border-sky-100/10 bg-slate-950/45 px-3 py-2 text-xs text-sky-50">{item}</span>)}</div></div> : null}
+          <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(15,23,42,0.88))] p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Slide Flow</p>
+                <h4 className="mt-2 text-2xl font-semibold text-white">How the presentation moves from one idea to the next.</h4>
               </div>
-            ))}
+              <p className="max-w-2xl text-sm leading-7 text-slate-300">Each slide keeps a short teaching note so students can understand why it appears in that order, not just what is written on it.</p>
+            </div>
+            <div className="mt-5 space-y-3">
+              {presentationData.slides.map((slide, index) => (
+                <button
+                  key={`${slide.title}-flow-${index}`}
+                  type="button"
+                  onClick={() => setSelectedPresentationSlideIndex(index)}
+                  className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${selectedPresentationSlideIndex === index ? "border-sky-300/35 bg-sky-300/10" : "border-white/10 bg-white/[0.03] hover:bg-white/10"}`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-slate-300">Section {index + 1}</span>
+                        <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-slate-300">{getPresentationVisualTypeLabel(slide.visualType)}</span>
+                      </div>
+                      <p className="mt-3 text-lg font-semibold text-white">{slide.title || `Slide ${index + 1}`}</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">{slide.flowNote || slide.visualTitle || "This slide supports the lecture flow."}</p>
+                    </div>
+                    <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-200">{(slide.bullets || []).length} points</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </>
       ) : (
-        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Choose one of the three designs above, then generate the PowerPoint separately when your lecture material is ready.</div>
+        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Choose a template above, then generate the presentation. Once the deck is ready, you will see the slide progress, a “View now” action, the slide thumbnails, and a full flow explanation underneath.</div>
       )}
     </div>
   );
@@ -3723,6 +4140,7 @@ export default function App() {
           past_question_papers: pastQuestionPapers,
           design_id: selectedPresentationDesign,
           language: outputLanguage,
+          reference_images: visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6),
         }),
       });
       const data = await parseJsonSafe(response);
@@ -3736,6 +4154,7 @@ export default function App() {
         slides: job.presentation_slides,
       });
       setPresentationData(nextPresentationData);
+      setSelectedPresentationSlideIndex(0);
       setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
       setActiveTab("presentation");
       setCurrentPage("workspace");
