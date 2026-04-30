@@ -23,7 +23,7 @@ import textwrap
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -33,6 +33,11 @@ from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
 import requests
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
+
 try:
     import yt_dlp
 except ImportError:
@@ -177,6 +182,8 @@ YOUTUBE_PROXY_HTTP_URL = os.getenv("YOUTUBE_PROXY_HTTP_URL", "").strip()
 YOUTUBE_PROXY_HTTPS_URL = os.getenv("YOUTUBE_PROXY_HTTPS_URL", "").strip()
 YOUTUBE_WEBSHARE_PROXY_USERNAME = os.getenv("YOUTUBE_WEBSHARE_PROXY_USERNAME", "").strip()
 YOUTUBE_WEBSHARE_PROXY_PASSWORD = os.getenv("YOUTUBE_WEBSHARE_PROXY_PASSWORD", "").strip()
+YOUTUBE_WEBSHARE_PROXY_HOST = os.getenv("YOUTUBE_WEBSHARE_PROXY_HOST", "p.webshare.io").strip()
+YOUTUBE_WEBSHARE_PROXY_PORT = os.getenv("YOUTUBE_WEBSHARE_PROXY_PORT", "80").strip()
 YTDLP_IMPERSONATE_TARGET = os.getenv("YTDLP_IMPERSONATE_TARGET", "chrome").strip()
 YOUTUBE_WEBSHARE_PROXY_LOCATIONS = tuple(
     location.strip()
@@ -3567,17 +3574,55 @@ def build_youtube_request_headers() -> dict[str, str]:
     }
 
 
+def build_webshare_proxy_url() -> str:
+    if not (YOUTUBE_WEBSHARE_PROXY_USERNAME and YOUTUBE_WEBSHARE_PROXY_PASSWORD):
+        return ""
+
+    host = YOUTUBE_WEBSHARE_PROXY_HOST or "p.webshare.io"
+    port = YOUTUBE_WEBSHARE_PROXY_PORT or "80"
+    username = quote(YOUTUBE_WEBSHARE_PROXY_USERNAME, safe="")
+    password = quote(YOUTUBE_WEBSHARE_PROXY_PASSWORD, safe="")
+    return f"http://{username}:{password}@{host}:{port}"
+
+
+def has_youtube_proxy_source() -> bool:
+    return bool(YOUTUBE_PROXY_HTTP_URL or YOUTUBE_PROXY_HTTPS_URL or build_webshare_proxy_url())
+
+
+def get_youtube_proxy_url(*, prefer_https: bool = True) -> str:
+    if prefer_https and YOUTUBE_PROXY_HTTPS_URL:
+        return YOUTUBE_PROXY_HTTPS_URL
+    if YOUTUBE_PROXY_HTTP_URL:
+        return YOUTUBE_PROXY_HTTP_URL
+    if not prefer_https and YOUTUBE_PROXY_HTTPS_URL:
+        return YOUTUBE_PROXY_HTTPS_URL
+    return build_webshare_proxy_url()
+
+
 def build_youtube_request_proxies() -> dict[str, str]:
     proxies: dict[str, str] = {}
+    fallback_proxy_url = build_webshare_proxy_url()
     if YOUTUBE_PROXY_HTTP_URL:
         proxies["http"] = YOUTUBE_PROXY_HTTP_URL
+    elif fallback_proxy_url:
+        proxies["http"] = fallback_proxy_url
     if YOUTUBE_PROXY_HTTPS_URL:
         proxies["https"] = YOUTUBE_PROXY_HTTPS_URL
+    elif YOUTUBE_PROXY_HTTP_URL:
+        proxies["https"] = YOUTUBE_PROXY_HTTP_URL
+    elif fallback_proxy_url:
+        proxies["https"] = fallback_proxy_url
     return proxies
 
 
-def create_youtube_requests_session() -> requests.Session:
-    session = requests.Session()
+def create_youtube_requests_session() -> Any:
+    if curl_requests is not None:
+        try:
+            session = curl_requests.Session(impersonate="chrome")
+        except Exception:
+            session = curl_requests.Session()
+    else:
+        session = requests.Session()
     session.headers.update(build_youtube_request_headers())
     session.cookies.update(load_youtube_request_cookies())
     proxy_map = build_youtube_request_proxies()
@@ -3623,7 +3668,7 @@ def build_ytdlp_options(
     cookie_path = resolve_youtube_cookiefile()
     if use_cookiefile and cookie_path:
         options["cookiefile"] = str(cookie_path)
-    proxy_url = YOUTUBE_PROXY_HTTPS_URL or YOUTUBE_PROXY_HTTP_URL
+    proxy_url = get_youtube_proxy_url()
     if proxy_url:
         options["proxy"] = proxy_url
     return options
@@ -3907,6 +3952,7 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
         f"https://www.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1",
         f"https://m.youtube.com/watch?v={video_id}&hl=en&bpctr=9999999999&has_verified=1",
         f"https://www.youtube.com/embed/{video_id}?hl=en",
+        f"https://www.youtube-nocookie.com/embed/{video_id}?hl=en",
     ]
 
     with create_youtube_requests_session() as session:
@@ -4370,9 +4416,20 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
     if "sign in to confirm you're not a bot" in lowered or "cookies-from-browser" in lowered:
         if is_youtube_source:
             if has_youtube_cookie_source():
+                if has_youtube_proxy_source():
+                    return (
+                        "This YouTube video still blocked direct server-side download after the hosted backend tried the saved YouTube cookies "
+                        "and proxy settings. Try a different public YouTube link with captions, adjust the proxy route on Render, or upload "
+                        "the lecture file directly."
+                    )
                 return (
                     "This YouTube video still blocked direct server-side download after the hosted backend tried the saved YouTube cookies. "
                     "Try a different public YouTube link, add a YouTube proxy on Render, or upload the lecture file directly."
+                )
+            if has_youtube_proxy_source():
+                return (
+                    "This YouTube video blocked direct server-side download from the hosted backend even after the configured proxy route was tried. "
+                    "Public captions are still checked first, but this video may still need working YouTube cookies or a different public link."
                 )
             return (
                 "This YouTube video blocked direct server-side download from the hosted backend. "

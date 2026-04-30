@@ -23,6 +23,12 @@ services:
         sync: false
       - key: APP_SECRET
         sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: ADMIN_LOGIN_MAX_ATTEMPTS
+        value: "3"
+      - key: ADMIN_LOGIN_LOCKOUT_MINUTES
+        value: "15"
       - key: SESSION_TTL_MINUTES
         value: "90"
       - key: SESSION_REFRESH_WINDOW_MINUTES
@@ -55,6 +61,10 @@ services:
         sync: false
       - key: YOUTUBE_WEBSHARE_PROXY_PASSWORD
         sync: false
+      - key: YOUTUBE_WEBSHARE_PROXY_HOST
+        value: "p.webshare.io"
+      - key: YOUTUBE_WEBSHARE_PROXY_PORT
+        value: "80"
       - key: YOUTUBE_WEBSHARE_PROXY_LOCATIONS
         sync: false
       - key: YTDLP_IMPERSONATE_TARGET
