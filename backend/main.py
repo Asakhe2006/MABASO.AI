@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
@@ -140,6 +140,9 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
+ADMIN_EMAILS_RAW = os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")).strip()
+ADMIN_LOGIN_MAX_ATTEMPTS = int(os.getenv("ADMIN_LOGIN_MAX_ATTEMPTS", "3"))
+ADMIN_LOGIN_LOCKOUT_MINUTES = int(os.getenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
 PRESENTATION_REQUEST_TIMEOUT = float(os.getenv("PRESENTATION_REQUEST_TIMEOUT", "150"))
@@ -273,6 +276,7 @@ class StudyGuideRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
+    language: str = "English"
 
 
 class PodcastGenerationRequest(BaseModel):
@@ -283,6 +287,7 @@ class PodcastGenerationRequest(BaseModel):
     past_question_papers: str = ""
     speaker_count: int = 2
     target_minutes: int = 10
+    language: str = "English"
 
 
 class PresentationGenerationRequest(BaseModel):
@@ -292,6 +297,7 @@ class PresentationGenerationRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     design_id: str = "emerald-scholar"
+    language: str = "English"
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -356,6 +362,11 @@ class StudyChatRequest(BaseModel):
     past_question_papers: str = ""
     history: list[ChatTurn] = []
     reference_images: list[str] = []
+    language: str = "English"
+
+
+class SessionModeRequest(BaseModel):
+    mode: str = "user"
 
 
 class PdfSection(BaseModel):
@@ -403,6 +414,10 @@ class CollaborationTestVisibilityRequest(BaseModel):
 class CollaborationQuizAnswerRequest(BaseModel):
     question_number: str
     answer_text: str = ""
+
+
+class AdminUserStatusRequest(BaseModel):
+    status: str = "active"
 
 
 app.add_middleware(
@@ -553,6 +568,57 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                user_agent TEXT NOT NULL,
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_name TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
+            ON audit_logs (created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_email_created_at
+            ON audit_logs (email, created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_login_attempts (
+                email TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                failure_count INTEGER NOT NULL,
+                last_failed_at TEXT NOT NULL,
+                locked_until TEXT NOT NULL,
+                PRIMARY KEY (email, ip_address)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_account_states (
+                email TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL
+            )
+            """
+        )
 
 
 def hash_value(value: str) -> str:
@@ -573,7 +639,12 @@ def is_signed_session_token(token: str) -> bool:
     return bool(token and token.startswith(f"{SESSION_TOKEN_PREFIX}."))
 
 
-def build_signed_session_token(email: str, expires_at: datetime | None = None) -> str:
+def build_signed_session_token(
+    email: str,
+    expires_at: datetime | None = None,
+    session_mode: str = "user",
+) -> str:
+    resolved_mode = normalize_session_mode(session_mode, email)
     expiry = expires_at or (utc_now() + timedelta(minutes=SESSION_TTL_MINUTES))
     payload = json.dumps(
         {
@@ -581,6 +652,7 @@ def build_signed_session_token(email: str, expires_at: datetime | None = None) -
             "exp": int(expiry.timestamp()),
             "iat": int(utc_now().timestamp()),
             "nonce": uuid4().hex,
+            "mode": resolved_mode,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -623,7 +695,11 @@ def decode_signed_session_token(token: str) -> dict[str, Any] | None:
     expires_at = int(payload.get("exp", 0) or 0)
     if not email or not expires_at:
         return None
-    return {"email": email, "exp": expires_at}
+    return {
+        "email": email,
+        "exp": expires_at,
+        "mode": normalize_session_mode(str(payload.get("mode") or "user"), email),
+    }
 
 
 def normalize_email(email: str) -> str:
@@ -637,6 +713,262 @@ def validate_email_address(email: str) -> str:
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
     return normalized
+
+
+SUPPORTED_OUTPUT_LANGUAGES: dict[str, str] = {
+    "english": "English",
+    "en": "English",
+    "isizulu": "isiZulu",
+    "zulu": "isiZulu",
+    "zu": "isiZulu",
+    "afrikaans": "Afrikaans",
+    "af": "Afrikaans",
+    "isixhosa": "isiXhosa",
+    "xhosa": "isiXhosa",
+    "xh": "isiXhosa",
+    "sesotho": "Sesotho",
+    "st": "Sesotho",
+    "setswana": "Setswana",
+    "tswana": "Setswana",
+    "tn": "Setswana",
+    "sepedi": "Sepedi",
+    "northern sotho": "Sepedi",
+    "nso": "Sepedi",
+    "portuguese": "Portuguese",
+    "pt": "Portuguese",
+    "french": "French",
+    "fr": "French",
+}
+
+
+def normalize_output_language(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip()).lower()
+    if not cleaned:
+        return "English"
+    return SUPPORTED_OUTPUT_LANGUAGES.get(cleaned, cleaned.title())
+
+
+def get_admin_email_set() -> set[str]:
+    return {
+        normalize_email(item)
+        for item in re.split(r"[\s,;]+", ADMIN_EMAILS_RAW)
+        if normalize_email(item)
+    }
+
+
+def is_admin_email(email: str) -> bool:
+    return normalize_email(email) in get_admin_email_set()
+
+
+def get_available_auth_modes(email: str) -> list[str]:
+    return ["user", "admin"] if is_admin_email(email) else ["user"]
+
+
+def normalize_session_mode(mode: str, email: str) -> str:
+    requested_mode = (mode or "user").strip().lower() or "user"
+    if requested_mode not in {"user", "admin"}:
+        raise HTTPException(status_code=400, detail="Session mode must be either user or admin.")
+    if requested_mode == "admin" and not is_admin_email(email):
+        raise HTTPException(status_code=403, detail="Admin access is not available for this account.")
+    return requested_mode
+
+
+def normalize_user_account_status(value: str) -> str:
+    status = (value or "active").strip().lower() or "active"
+    if status not in {"active", "suspended"}:
+        raise HTTPException(status_code=400, detail="User status must be either active or suspended.")
+    return status
+
+
+def get_user_account_status(email: str) -> str:
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return "active"
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT status FROM user_account_states WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+    return normalize_user_account_status(row["status"]) if row else "active"
+
+
+def ensure_user_account_is_active(email: str):
+    if get_user_account_status(email) != "active":
+        raise HTTPException(status_code=403, detail="This account has been suspended. Contact the administrator.")
+
+
+def set_user_account_status(email: str, status: str, updated_by: str):
+    normalized_email = validate_email_address(email)
+    normalized_status = normalize_user_account_status(status)
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at) VALUES (?, ?)",
+            (normalized_email, utc_now().isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO user_account_states (email, status, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                status = excluded.status,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+            """,
+            (normalized_email, normalized_status, utc_now().isoformat(), normalize_email(updated_by)),
+        )
+
+
+def revoke_all_sessions_for_user(email: str):
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT token_hash, expires_at FROM sessions WHERE email = ?",
+            (normalized_email,),
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO revoked_sessions (token_hash, expires_at, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (row["token_hash"], row["expires_at"], utc_now().isoformat()),
+            )
+        connection.execute("DELETE FROM sessions WHERE email = ?", (normalized_email,))
+
+
+def get_client_ip(request: Request | None) -> str:
+    if request is None:
+        return ""
+
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:120]
+
+    real_ip = (request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip[:120]
+
+    client_host = getattr(request.client, "host", "") or ""
+    return client_host[:120]
+
+
+def record_audit_log(
+    *,
+    action: str,
+    status: str = "success",
+    email: str = "",
+    request: Request | None = None,
+    resource_type: str = "",
+    resource_name: str = "",
+    duration_ms: int = 0,
+    metadata: dict[str, Any] | None = None,
+):
+    normalized_email = normalize_email(email)
+    safe_status = (status or "success").strip().lower() or "success"
+    payload = metadata or {}
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO audit_logs (
+                id, email, ip_address, user_agent, action, resource_type,
+                resource_name, duration_ms, status, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalized_email,
+                get_client_ip(request),
+                (request.headers.get("user-agent") or "")[:400] if request is not None else "",
+                (action or "").strip()[:120],
+                (resource_type or "").strip()[:80],
+                (resource_name or "").strip()[:200],
+                max(0, int(duration_ms or 0)),
+                safe_status[:40],
+                json.dumps(payload, ensure_ascii=False),
+                utc_now().isoformat(),
+            ),
+        )
+
+
+def get_admin_login_attempt_state(email: str, ip_address: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT failure_count, last_failed_at, locked_until
+            FROM admin_login_attempts
+            WHERE email = ? AND ip_address = ?
+            """,
+            (normalized_email, ip_address),
+        ).fetchone()
+
+    if not row:
+        return {"failure_count": 0, "locked_until": None}
+
+    locked_until_raw = (row["locked_until"] or "").strip()
+    locked_until = datetime.fromisoformat(locked_until_raw) if locked_until_raw else None
+    if locked_until and locked_until <= utc_now():
+        clear_admin_login_attempts(normalized_email, ip_address)
+        return {"failure_count": 0, "locked_until": None}
+
+    return {
+        "failure_count": int(row["failure_count"] or 0),
+        "locked_until": locked_until,
+    }
+
+
+def clear_admin_login_attempts(email: str, ip_address: str):
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM admin_login_attempts WHERE email = ? AND ip_address = ?",
+            (normalize_email(email), ip_address),
+        )
+
+
+def ensure_admin_login_allowed(email: str, ip_address: str):
+    if not is_admin_email(email):
+        return
+
+    state = get_admin_login_attempt_state(email, ip_address)
+    locked_until = state.get("locked_until")
+    if locked_until and locked_until > utc_now():
+        readable_time = locked_until.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Admin login is temporarily locked after too many failed attempts. "
+                f"Try again after {readable_time}."
+            ),
+        )
+
+
+def record_admin_login_failure(email: str, ip_address: str) -> dict[str, Any]:
+    current_state = get_admin_login_attempt_state(email, ip_address)
+    failure_count = int(current_state.get("failure_count") or 0) + 1
+    locked_until = ""
+    if failure_count >= ADMIN_LOGIN_MAX_ATTEMPTS:
+        locked_until = iso_in_future(minutes=ADMIN_LOGIN_LOCKOUT_MINUTES)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO admin_login_attempts (email, ip_address, failure_count, last_failed_at, locked_until)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(email, ip_address) DO UPDATE SET
+                failure_count = excluded.failure_count,
+                last_failed_at = excluded.last_failed_at,
+                locked_until = excluded.locked_until
+            """,
+            (normalize_email(email), ip_address, failure_count, utc_now().isoformat(), locked_until),
+        )
+
+    return {
+        "failure_count": failure_count,
+        "locked_until": datetime.fromisoformat(locked_until) if locked_until else None,
+    }
 
 
 def verify_google_auth_is_configured():
@@ -1006,8 +1338,9 @@ def consume_login_code(email: str, code: str):
         connection.execute("DELETE FROM login_codes WHERE email = ?", (email,))
 
 
-def create_session(email: str) -> str:
-    raw_token = build_signed_session_token(email)
+def create_session(email: str, session_mode: str = "user") -> str:
+    ensure_user_account_is_active(email)
+    raw_token = build_signed_session_token(email, session_mode=session_mode)
     token_payload = decode_signed_session_token(raw_token) or {}
     expires_at = datetime.fromtimestamp(
         int(token_payload.get("exp", int((utc_now() + timedelta(minutes=SESSION_TTL_MINUTES)).timestamp()))),
@@ -1200,7 +1533,7 @@ def get_legacy_session_email(token: str) -> str | None:
     return normalize_email(row["email"])
 
 
-def get_session_email(token: str) -> str | None:
+def get_session_context(token: str) -> dict[str, Any] | None:
     if not token:
         return None
 
@@ -1215,6 +1548,7 @@ def get_session_email(token: str) -> str | None:
             return None
 
         email = normalize_email(payload["email"])
+        ensure_user_account_is_active(email)
         with get_db_connection() as connection:
             connection.execute(
                 "DELETE FROM sessions WHERE expires_at <= ?",
@@ -1227,7 +1561,11 @@ def get_session_email(token: str) -> str | None:
             if matching_row:
                 if normalize_email(matching_row["email"]) != email:
                     return None
-                return email
+                return {
+                    "email": email,
+                    "mode": normalize_session_mode(str(payload.get("mode") or "user"), email),
+                    "available_modes": get_available_auth_modes(email),
+                }
 
             superseded_row = connection.execute(
                 "SELECT token_hash FROM sessions WHERE email = ? AND expires_at > ? LIMIT 1",
@@ -1236,9 +1574,26 @@ def get_session_email(token: str) -> str | None:
 
         if superseded_row:
             return None
-        return email
+        return {
+            "email": email,
+            "mode": normalize_session_mode(str(payload.get("mode") or "user"), email),
+            "available_modes": get_available_auth_modes(email),
+        }
 
-    return get_legacy_session_email(token)
+    legacy_email = get_legacy_session_email(token)
+    if not legacy_email:
+        return None
+    ensure_user_account_is_active(legacy_email)
+    return {
+        "email": legacy_email,
+        "mode": "user",
+        "available_modes": get_available_auth_modes(legacy_email),
+    }
+
+
+def get_session_email(token: str) -> str | None:
+    context = get_session_context(token)
+    return context["email"] if context else None
 
 
 def get_authorization_token(authorization: str | None) -> str:
@@ -1249,10 +1604,20 @@ def get_authorization_token(authorization: str | None) -> str:
 
 def require_authenticated_user(authorization: str | None = Header(None)) -> str:
     token = get_authorization_token(authorization)
-    email = get_session_email(token)
-    if not email:
+    context = get_session_context(token)
+    if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
-    return email
+    return context["email"]
+
+
+def require_admin_user(authorization: str | None = Header(None)) -> str:
+    token = get_authorization_token(authorization)
+    context = get_session_context(token)
+    if not context:
+        raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+    if context["mode"] != "admin" or not is_admin_email(context["email"]):
+        raise HTTPException(status_code=403, detail="Admin access is required.")
+    return context["email"]
 
 
 def verify_login_code(email: str, code: str) -> str:
@@ -1266,6 +1631,7 @@ def login_with_email_password(email: str, password: str) -> str:
 
 
 def request_email_password_code(email: str, password: str, mode: str) -> str:
+    ensure_user_account_is_active(email)
     resolved_mode = normalize_email_password_auth_mode(mode)
     validated_password = validate_password_value(password)
     if resolved_mode == "register":
@@ -1280,6 +1646,7 @@ def request_email_password_code(email: str, password: str, mode: str) -> str:
 
 
 def verify_email_password_auth(email: str, password: str, code: str, mode: str) -> str:
+    ensure_user_account_is_active(email)
     resolved_mode = normalize_email_password_auth_mode(mode)
     validated_password = validate_password_value(password)
     consume_login_code(email, code)
@@ -1314,6 +1681,7 @@ def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     if not token_info.get("email_verified"):
         raise HTTPException(status_code=401, detail="Google account email is not verified.")
 
+    ensure_user_account_is_active(email)
     mark_user_verified(email)
     return create_session(email), email
 
@@ -1331,8 +1699,22 @@ def create_session_from_apple_auth(payload: AppleAuthRequest) -> tuple[str, str]
 
     claims = verify_apple_identity_token(identity_token, nonce=payload.nonce)
     email = claims["email"]
+    ensure_user_account_is_active(email)
     mark_user_verified(email)
     return create_session(email), email
+
+
+def build_auth_response(email: str, token: str) -> dict[str, Any]:
+    available_modes = get_available_auth_modes(email)
+    payload = decode_signed_session_token(token) or {}
+    session_mode = normalize_session_mode(str(payload.get("mode") or "user"), email)
+    return {
+        "token": token,
+        "email": email,
+        "session_mode": session_mode,
+        "available_modes": available_modes,
+        "is_admin": "admin" in available_modes,
+    }
 
 
 def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
@@ -1450,6 +1832,7 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "job_id": job_id,
         "job_type": job_type,
         "owner_email": owner_email,
+        "created_at": utc_now().isoformat(),
         "status": "queued",
         "stage": "Waiting",
         "progress": 0,
@@ -1473,6 +1856,7 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "_podcast_audio_files": [],
         "_podcast_download_file": "",
         "_presentation_download_file": "",
+        "_output_language": "English",
     }
     return job_id
 
@@ -1494,6 +1878,7 @@ def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
 
 def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     section_limit = max(2000, MAX_CHAT_CONTEXT_CHARS // 4)
+    output_language = normalize_output_language(payload.language)
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
         cleaned = (value or "").strip()
@@ -1522,7 +1907,8 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
                 "You are MABASO.AI, a lecture study assistant. "
                 "Answer only from the provided lecture context. "
                 "If the material does not support an answer, say that it was not clearly covered. "
-                "Be helpful, concise, and use bullets when they make the answer easier to study."
+                "Be helpful, concise, and use bullets when they make the answer easier to study. "
+                f"Reply in {output_language}."
             ),
         }
     ]
@@ -1795,6 +2181,515 @@ def serialize_collaboration_room_card(room_row: sqlite3.Row) -> dict:
         "test_visibility": normalize_test_visibility(room_row["test_visibility"]),
         "member_count": len(members),
         "members": members,
+    }
+
+
+def load_audit_logs(limit: int = 400, *, days: int = 30) -> list[dict[str, Any]]:
+    cutoff = (utc_now() - timedelta(days=days)).isoformat()
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM audit_logs
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+
+    logs: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        logs.append(
+            {
+                "id": row["id"],
+                "email": normalize_email(row["email"]),
+                "ip_address": row["ip_address"],
+                "user_agent": row["user_agent"],
+                "action": row["action"],
+                "resource_type": row["resource_type"],
+                "resource_name": row["resource_name"],
+                "duration_ms": int(row["duration_ms"] or 0),
+                "status": row["status"],
+                "metadata": metadata if isinstance(metadata, dict) else {},
+                "created_at": row["created_at"],
+            }
+        )
+    return logs
+
+
+def load_history_items_with_owners(limit: int = 240) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT email, payload_json, created_at, updated_at
+            FROM study_history_items
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = normalize_history_item_payload(json.loads(row["payload_json"]))
+        except (json.JSONDecodeError, HTTPException):
+            continue
+        payload["owner_email"] = normalize_email(row["email"])
+        items.append(payload)
+    return items
+
+
+def classify_audit_feature(log: dict[str, Any]) -> str:
+    action = (log.get("action") or "").lower()
+    resource_type = (log.get("resource_type") or "").lower()
+    if "study_guide" in action or resource_type == "study_guide":
+        return "Study Guides"
+    if "presentation" in action or resource_type == "presentation":
+        return "Presentations"
+    if "podcast" in action or resource_type == "podcast":
+        return "Podcasts"
+    if "transcription" in action or "upload" in action or resource_type == "transcription":
+        return "Lecture Capture"
+    if "chat" in action:
+        return "Study Chat"
+    if "collaboration" in action:
+        return "Collaboration"
+    if "auth" in action:
+        return "Authentication"
+    return "Other"
+
+
+def compute_retention_rate(logs: list[dict[str, Any]], days_after_signup: int) -> float:
+    activity_by_email: dict[str, list[datetime]] = {}
+    for log in logs:
+        email = normalize_email(log.get("email", ""))
+        if not email:
+            continue
+        activity_by_email.setdefault(email, []).append(parse_history_datetime(log.get("created_at")))
+
+    if not activity_by_email:
+        return 0.0
+
+    retained = 0
+    for timestamps in activity_by_email.values():
+        ordered = sorted(timestamps)
+        first_day = ordered[0].date()
+        target_day = first_day + timedelta(days=days_after_signup)
+        if any(timestamp.date() >= target_day for timestamp in ordered[1:]):
+            retained += 1
+    return round((retained / len(activity_by_email)) * 100, 1)
+
+
+def build_admin_dashboard_snapshot() -> dict[str, Any]:
+    now = utc_now()
+    logs = load_audit_logs(limit=1600, days=35)
+    history_items = load_history_items_with_owners(limit=300)
+
+    with get_db_connection() as connection:
+        user_rows = connection.execute(
+            "SELECT email, created_at, verified_at FROM users ORDER BY created_at DESC"
+        ).fetchall()
+        session_rows = connection.execute(
+            "SELECT email, expires_at FROM sessions WHERE expires_at > ?",
+            (now.isoformat(),),
+        ).fetchall()
+        account_state_rows = connection.execute(
+            "SELECT email, status, updated_at, updated_by FROM user_account_states"
+        ).fetchall()
+        admin_attempt_rows = connection.execute(
+            "SELECT email, ip_address, failure_count, last_failed_at, locked_until FROM admin_login_attempts"
+        ).fetchall()
+
+    account_state_by_email = {
+        normalize_email(row["email"]): {
+            "status": normalize_user_account_status(row["status"]),
+            "updated_at": row["updated_at"],
+            "updated_by": row["updated_by"],
+        }
+        for row in account_state_rows
+    }
+    sessions_by_email: dict[str, int] = {}
+    for row in session_rows:
+        email = normalize_email(row["email"])
+        sessions_by_email[email] = sessions_by_email.get(email, 0) + 1
+
+    last_login_by_email: dict[str, dict[str, str]] = {}
+    uploads_by_email: dict[str, int] = {}
+    generations_by_email: dict[str, int] = {}
+    failed_auth_by_email: dict[str, int] = {}
+    unique_ips_by_email: dict[str, set[str]] = {}
+    feature_counts: dict[str, int] = {}
+
+    successful_login_actions = {
+        "auth.email_password.login",
+        "auth.email_password.verify_code",
+        "auth.google.login",
+        "auth.apple.login",
+        "auth.code.verify",
+    }
+    upload_actions = {"lecture.upload.request", "lecture.video_link.request"}
+    generation_actions = {
+        "study_guide.request",
+        "study_guide.completed",
+        "presentation.request",
+        "presentation.completed",
+        "podcast.request",
+        "podcast.completed",
+    }
+
+    for log in logs:
+        email = normalize_email(log["email"])
+        action = (log["action"] or "").lower()
+        if email:
+            unique_ips_by_email.setdefault(email, set()).add(log["ip_address"])
+        if action in successful_login_actions and log["status"] == "success" and email and email not in last_login_by_email:
+            last_login_by_email[email] = {"created_at": log["created_at"], "ip_address": log["ip_address"]}
+        if action in upload_actions and email:
+            uploads_by_email[email] = uploads_by_email.get(email, 0) + 1
+        if action in generation_actions and email:
+            generations_by_email[email] = generations_by_email.get(email, 0) + 1
+        if action.startswith("auth.") and log["status"] == "failed" and email:
+            failed_auth_by_email[email] = failed_auth_by_email.get(email, 0) + 1
+        feature = classify_audit_feature(log)
+        feature_counts[feature] = feature_counts.get(feature, 0) + 1
+
+    user_records: list[dict[str, Any]] = []
+    for row in user_rows:
+        email = normalize_email(row["email"])
+        status = account_state_by_email.get(email, {}).get("status", "active")
+        failed_attempts = failed_auth_by_email.get(email, 0)
+        ip_count = len(unique_ips_by_email.get(email, set()))
+        risk_score = "high" if failed_attempts >= 3 or ip_count >= 4 else "medium" if failed_attempts or ip_count >= 2 else "low"
+        last_login = last_login_by_email.get(email, {})
+        user_records.append(
+            {
+                "email": email,
+                "role": "admin" if is_admin_email(email) else "user",
+                "status": status,
+                "created_at": row["created_at"],
+                "last_login_at": last_login.get("created_at", ""),
+                "last_login_ip": last_login.get("ip_address", ""),
+                "sessions_count": sessions_by_email.get(email, 0),
+                "total_uploads": uploads_by_email.get(email, 0),
+                "total_generations": generations_by_email.get(email, 0),
+                "avg_session_duration": "--",
+                "risk_score": risk_score,
+            }
+        )
+
+    total_users = len(user_records)
+    active_1h = {
+        log["email"]
+        for log in logs
+        if log["email"] and parse_history_datetime(log["created_at"]) >= now - timedelta(hours=1)
+    }
+    active_24h = {
+        log["email"]
+        for log in logs
+        if log["email"] and parse_history_datetime(log["created_at"]) >= now - timedelta(hours=24)
+    }
+    active_7d = {
+        log["email"]
+        for log in logs
+        if log["email"] and parse_history_datetime(log["created_at"]) >= now - timedelta(days=7)
+    }
+
+    lectures_today = sum(
+        1
+        for log in logs
+        if log["action"] in upload_actions and parse_history_datetime(log["created_at"]) >= now - timedelta(days=1)
+    )
+    lectures_week = sum(
+        1
+        for log in logs
+        if log["action"] in upload_actions and parse_history_datetime(log["created_at"]) >= now - timedelta(days=7)
+    )
+
+    guide_count = len(history_items)
+    test_count = sum(1 for item in history_items if item.get("quizQuestions"))
+    processing_durations = [
+        log["duration_ms"]
+        for log in logs
+        if log["duration_ms"] > 0 and log["status"] == "success" and log["action"].endswith(".completed")
+    ]
+    avg_processing_time = round(sum(processing_durations) / len(processing_durations), 1) if processing_durations else 0
+    recent_logs_24h = [log for log in logs if parse_history_datetime(log["created_at"]) >= now - timedelta(days=1)]
+    failed_logs_24h = [log for log in recent_logs_24h if log["status"] != "success"]
+    error_rate = round((len(failed_logs_24h) / len(recent_logs_24h)) * 100, 1) if recent_logs_24h else 0.0
+    current_jobs = list(jobs.values())
+    processing_jobs = [job for job in current_jobs if job.get("status") in {"queued", "processing"}]
+    system_state = "green" if error_rate < 10 and len(processing_jobs) <= 6 else "yellow" if error_rate < 25 else "red"
+
+    real_time_activity: list[dict[str, Any]] = []
+    for bucket_index in range(12):
+        bucket_end = now - timedelta(minutes=(11 - bucket_index) * 5)
+        bucket_start = bucket_end - timedelta(minutes=5)
+        real_time_activity.append(
+            {
+                "label": bucket_end.strftime("%H:%M"),
+                "count": sum(
+                    1
+                    for log in logs
+                    if bucket_start <= parse_history_datetime(log["created_at"]) < bucket_end
+                ),
+            }
+        )
+
+    daily_activity: list[dict[str, Any]] = []
+    for day_offset in range(29, -1, -1):
+        day_start = (now - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        active_emails = {
+            log["email"]
+            for log in logs
+            if log["email"] and day_start <= parse_history_datetime(log["created_at"]) < day_end
+        }
+        daily_activity.append({"date": day_start.date().isoformat(), "active_users": len(active_emails)})
+
+    upload_count = sum(1 for log in logs if log["action"] in upload_actions)
+    processed_count = sum(1 for log in logs if log["action"] == "transcription.completed")
+    generated_count = sum(1 for log in logs if log["action"] == "study_guide.completed")
+
+    activity_logs = [
+        {
+            "timestamp": log["created_at"],
+            "user": log["email"] or "anonymous",
+            "ip_address": log["ip_address"],
+            "device": log["user_agent"],
+            "action": log["action"],
+            "resource": log["resource_name"] or log["resource_type"],
+            "duration_ms": log["duration_ms"],
+            "status": log["status"],
+        }
+        for log in logs[:120]
+    ]
+
+    top_users_by_history = sorted(
+        (
+            {
+                "email": email,
+                "saved_items": sum(1 for item in history_items if item.get("owner_email") == email),
+            }
+            for email in {item.get("owner_email") for item in history_items if item.get("owner_email")}
+        ),
+        key=lambda item: item["saved_items"],
+        reverse=True,
+    )[:10]
+
+    content_items = [
+        {
+            "file_name": item.get("fileName") or item.get("title") or "Saved lecture",
+            "owner_email": item.get("owner_email", ""),
+            "title": item.get("title") or "Saved lecture",
+            "upload_date": item.get("updatedAt") or item.get("createdAt") or "",
+            "processing_status": "done",
+            "output_generated": "Y" if item.get("summary") else "N",
+            "size_label": "--",
+            "duration_label": "--",
+        }
+        for item in history_items[:120]
+    ]
+
+    failed_jobs = [
+        {
+            "timestamp": log["created_at"],
+            "email": log["email"],
+            "action": log["action"],
+            "message": str(log["metadata"].get("error") or log["metadata"].get("reason") or log["resource_name"] or "Request failed."),
+        }
+        for log in logs
+        if log["status"] != "success"
+    ][:40]
+
+    session_heatmap = [
+        {
+            "hour": f"{hour:02d}:00",
+            "actions": sum(1 for log in logs if parse_history_datetime(log["created_at"]).hour == hour),
+        }
+        for hour in range(24)
+    ]
+
+    suspicious_activity = []
+    for email, failure_count in failed_auth_by_email.items():
+        if failure_count >= 3:
+            suspicious_activity.append(
+                {
+                    "email": email,
+                    "reason": f"{failure_count} failed login attempts in recent logs.",
+                }
+            )
+    for row in admin_attempt_rows:
+        locked_until = (row["locked_until"] or "").strip()
+        if locked_until and datetime.fromisoformat(locked_until) > now:
+            suspicious_activity.append(
+                {
+                    "email": normalize_email(row["email"]),
+                    "reason": f"Admin login lock active for IP {row['ip_address']}.",
+                }
+            )
+
+    ip_activity: dict[str, dict[str, Any]] = {}
+    for log in logs[:300]:
+        ip_address = log["ip_address"] or "unknown"
+        entry = ip_activity.setdefault(ip_address, {"ip_address": ip_address, "users": set(), "actions": 0})
+        if log["email"]:
+            entry["users"].add(log["email"])
+        entry["actions"] += 1
+
+    device_activity: dict[str, int] = {}
+    for log in logs[:300]:
+        device = (log["user_agent"] or "Unknown device")[:120]
+        device_activity[device] = device_activity.get(device, 0) + 1
+
+    return {
+        "overview": {
+            "kpis": {
+                "total_users": total_users,
+                "active_users_1h": len(active_1h),
+                "active_users_24h": len(active_24h),
+                "active_users_7d": len(active_7d),
+                "lectures_uploaded_today": lectures_today,
+                "lectures_uploaded_week": lectures_week,
+                "study_guides_generated": guide_count,
+                "tests_generated": test_count,
+                "avg_processing_time_ms": avg_processing_time,
+                "error_rate_percent": error_rate,
+                "system_load": len(processing_jobs),
+            },
+            "charts": {
+                "real_time_activity": real_time_activity,
+                "daily_active_users": daily_activity,
+                "feature_usage_breakdown": [{"label": label, "count": count} for label, count in sorted(feature_counts.items(), key=lambda item: item[1], reverse=True)],
+                "conversion_funnel": [
+                    {"label": "Uploaded", "count": upload_count},
+                    {"label": "Processed", "count": processed_count},
+                    {"label": "Generated Output", "count": generated_count or guide_count},
+                ],
+                "wau": len(active_7d),
+                "mau": len({log["email"] for log in logs if log["email"]}),
+            },
+        },
+        "users": user_records,
+        "activity_logs": activity_logs,
+        "content": {
+            "items": content_items,
+            "storage_insights": {
+                "tracked_study_packs": len(history_items),
+                "top_users": top_users_by_history,
+            },
+        },
+        "ai_generation": {
+            "totals": {
+                "study_guides": guide_count,
+                "presentations": sum(
+                    1
+                    for item in history_items
+                    if isinstance(item.get("presentationData"), dict)
+                    and (
+                        item["presentationData"].get("slides")
+                        or item["presentationData"].get("presentation_slides")
+                    )
+                ),
+                "podcasts": sum(
+                    1
+                    for item in history_items
+                    if isinstance(item.get("podcastData"), dict)
+                    and (
+                        item["podcastData"].get("script")
+                        or item["podcastData"].get("podcast_script")
+                    )
+                ),
+            },
+            "success_rate_percent": round(
+                (
+                    len([log for log in logs if log["action"].endswith(".completed") and log["status"] == "success"])
+                    / max(1, len([log for log in logs if log["action"].endswith(".completed")]))
+                ) * 100,
+                1,
+            ),
+            "avg_generation_time_ms": avg_processing_time,
+            "failed_jobs": failed_jobs,
+        },
+        "analytics": {
+            "session_heatmap": session_heatmap,
+            "retention": {
+                "day_1": compute_retention_rate(logs, 1),
+                "day_7": compute_retention_rate(logs, 7),
+                "day_30": compute_retention_rate(logs, 30),
+            },
+            "most_used_tools": [{"label": label, "count": count} for label, count in sorted(feature_counts.items(), key=lambda item: item[1], reverse=True)[:8]],
+            "drop_off_points": [
+                {"label": "Upload to Processed", "count": max(upload_count - processed_count, 0)},
+                {"label": "Processed to Generated", "count": max(processed_count - (generated_count or guide_count), 0)},
+            ],
+            "performance": {
+                "avg_response_time_ms": avg_processing_time,
+                "actions_per_session": round(len(logs) / max(1, len(session_rows)), 1),
+            },
+        },
+        "system_health": {
+            "state": system_state,
+            "api_response_time_ms": avg_processing_time,
+            "queue_length": len(processing_jobs),
+            "active_jobs": [
+                {
+                    "job_id": job.get("job_id", ""),
+                    "job_type": job.get("job_type", ""),
+                    "status": job.get("status", ""),
+                    "stage": job.get("stage", ""),
+                    "progress": job.get("progress", 0),
+                    "owner_email": job.get("owner_email", ""),
+                }
+                for job in processing_jobs[:20]
+            ],
+            "recent_failures": failed_jobs[:12],
+        },
+        "security": {
+            "failed_logins": [
+                {
+                    "timestamp": log["created_at"],
+                    "email": log["email"] or "unknown",
+                    "ip_address": log["ip_address"],
+                    "status": log["status"],
+                    "reason": str(log["metadata"].get("reason") or "Failed login"),
+                }
+                for log in logs
+                if log["action"].startswith("auth.") and log["status"] != "success"
+            ][:40],
+            "suspicious_activity": suspicious_activity[:20],
+            "ip_tracking": [
+                {
+                    "ip_address": item["ip_address"],
+                    "users": sorted(item["users"]),
+                    "actions": item["actions"],
+                }
+                for item in sorted(ip_activity.values(), key=lambda value: value["actions"], reverse=True)[:20]
+            ],
+            "device_tracking": [
+                {"device": device, "actions": count}
+                for device, count in sorted(device_activity.items(), key=lambda item: item[1], reverse=True)[:20]
+            ],
+        },
+        "billing": {
+            "subscriptions": [],
+            "usage": [],
+            "revenue": [],
+        },
+        "settings": {
+            "available_languages": sorted(set(SUPPORTED_OUTPUT_LANGUAGES.values())),
+            "admin_email_count": len(get_admin_email_set()),
+            "feature_flags": {
+                "powerpoint_generation": Presentation is not None,
+                "podcast_generation": True,
+                "collaboration": True,
+            },
+        },
     }
 
 
@@ -2161,96 +3056,253 @@ async def health_check():
 
 
 @app.post("/auth/request-code")
-async def request_login_code(payload: RequestCodeRequest):
+async def request_login_code(payload: RequestCodeRequest, request: Request):
+    started_at = utc_now()
     email = validate_email_address(payload.email)
+    ensure_user_account_is_active(email)
     code = create_login_code(email)
     await asyncio.to_thread(send_verification_email, email, code)
+    record_audit_log(
+        action="auth.code.request",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="email-code",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
     return {"message": "Verification code sent.", "email": email}
 
 
 @app.post("/auth/verify-code")
-async def verify_login(payload: VerifyCodeRequest):
+async def verify_login(payload: VerifyCodeRequest, request: Request):
+    started_at = utc_now()
     email = validate_email_address(payload.email)
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
     session_token = verify_login_code(email, code)
-    return {"token": session_token, "email": email}
+    record_audit_log(
+        action="auth.code.verify",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="email-code",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.post("/auth/email-password/request-code")
-async def request_email_password_login_code(payload: EmailPasswordAuthRequest):
+async def request_email_password_login_code(payload: EmailPasswordAuthRequest, request: Request):
+    started_at = utc_now()
     email = validate_email_address(payload.email)
     code = await asyncio.to_thread(request_email_password_code, email, payload.password, payload.mode)
     await asyncio.to_thread(send_verification_email, email, code)
+    record_audit_log(
+        action="auth.email_password.code_request",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name=normalize_email_password_auth_mode(payload.mode),
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
     return {"message": "Verification code sent.", "email": email, "mode": normalize_email_password_auth_mode(payload.mode)}
 
 
 @app.post("/auth/email-password/login")
-async def login_with_email_password_route(payload: EmailPasswordAuthRequest):
+async def login_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
+    started_at = utc_now()
     email = validate_email_address(payload.email)
     if normalize_email_password_auth_mode(payload.mode) != "login":
         raise HTTPException(status_code=400, detail="Direct sign-in is only available for login mode.")
-    session_token = await asyncio.to_thread(login_with_email_password, email, payload.password)
-    return {"token": session_token, "email": email}
+    ip_address = get_client_ip(request)
+
+    if is_admin_email(email):
+        ensure_admin_login_allowed(email, ip_address)
+
+    try:
+        session_token = await asyncio.to_thread(login_with_email_password, email, payload.password)
+    except HTTPException as exc:
+        if is_admin_email(email):
+            failure_state = record_admin_login_failure(email, ip_address)
+            locked_until = failure_state.get("locked_until")
+            failure_count = int(failure_state.get("failure_count") or 0)
+            if locked_until:
+                detail = (
+                    "Admin login has been locked after 3 failed attempts. "
+                    f"Try again after {locked_until.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}."
+                )
+                status_code = 429
+            else:
+                remaining = max(ADMIN_LOGIN_MAX_ATTEMPTS - failure_count, 0)
+                detail = f"Email or password is incorrect. {remaining} admin attempt{'s' if remaining != 1 else ''} remaining."
+                status_code = 400
+            record_audit_log(
+                action="auth.email_password.login",
+                status="failed",
+                email=email,
+                request=request,
+                resource_type="auth",
+                resource_name="admin-login",
+                duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                metadata={"reason": detail},
+            )
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        record_audit_log(
+            action="auth.email_password.login",
+            status="failed",
+            email=email,
+            request=request,
+            resource_type="auth",
+            resource_name="user-login",
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"reason": exc.detail},
+        )
+        raise
+
+    if is_admin_email(email):
+        clear_admin_login_attempts(email, ip_address)
+
+    record_audit_log(
+        action="auth.email_password.login",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="admin-login" if is_admin_email(email) else "user-login",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.post("/auth/email-password/verify-code")
-async def verify_email_password_login(payload: EmailPasswordVerifyRequest):
+async def verify_email_password_login(payload: EmailPasswordVerifyRequest, request: Request):
+    started_at = utc_now()
     email = validate_email_address(payload.email)
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
     session_token = await asyncio.to_thread(verify_email_password_auth, email, payload.password, code, payload.mode)
-    return {"token": session_token, "email": email}
+    record_audit_log(
+        action="auth.email_password.verify_code",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name=normalize_email_password_auth_mode(payload.mode),
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.post("/auth/google")
-async def google_login(payload: GoogleAuthRequest):
+async def google_login(payload: GoogleAuthRequest, request: Request):
+    started_at = utc_now()
     credential = payload.credential.strip()
     if not credential:
         raise HTTPException(status_code=400, detail="Google credential is required.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
-    return {"token": session_token, "email": email}
+    record_audit_log(
+        action="auth.google.login",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="google",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.post("/auth/apple")
-async def apple_login(payload: AppleAuthRequest):
+async def apple_login(payload: AppleAuthRequest, request: Request):
+    started_at = utc_now()
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
         raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
     session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
-    return {"token": session_token, "email": email}
+    record_audit_log(
+        action="auth.apple.login",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="apple",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
 
 
 @app.get("/auth/me")
 async def auth_me(authorization: str | None = Header(None)):
     token = get_authorization_token(authorization)
-    current_user = get_session_email(token)
-    if not current_user:
+    context = get_session_context(token)
+    if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
     refreshed_token = ""
     if should_refresh_session_token(token):
-        refreshed_token = create_session(current_user)
-    return {"email": current_user, "token": refreshed_token}
+        refreshed_token = create_session(context["email"], session_mode=context["mode"])
+    response = build_auth_response(context["email"], refreshed_token or token)
+    response["token"] = refreshed_token
+    return response
+
+
+@app.post("/auth/select-mode")
+async def select_auth_mode(
+    payload: SessionModeRequest,
+    request: Request,
+    authorization: str | None = Header(None),
+):
+    started_at = utc_now()
+    token = get_authorization_token(authorization)
+    context = get_session_context(token)
+    if not context:
+        raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+
+    next_mode = normalize_session_mode(payload.mode, context["email"])
+    session_token = create_session(context["email"], session_mode=next_mode)
+    record_audit_log(
+        action="auth.mode.select",
+        email=context["email"],
+        request=request,
+        resource_type="auth",
+        resource_name=next_mode,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(context["email"], session_token)
 
 
 @app.post("/auth/logout")
-async def logout(authorization: str | None = Header(None)):
+async def logout(request: Request, authorization: str | None = Header(None)):
     token = get_authorization_token(authorization)
+    context = get_session_context(token)
     revoke_session(token)
+    if context:
+        record_audit_log(
+            action="auth.logout",
+            email=context["email"],
+            request=request,
+            resource_type="auth",
+            resource_name=context["mode"],
+        )
     return {"message": "Logged out."}
 
 
 @app.post("/support/contact")
 async def submit_support_request(
     payload: SupportMessageRequest,
+    request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
+    started_at = utc_now()
     message = (payload.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Support message cannot be empty.")
     await asyncio.to_thread(send_support_email, current_user, message, (payload.page or "").strip())
+    record_audit_log(
+        action="support.contact",
+        email=current_user,
+        request=request,
+        resource_type="support",
+        resource_name=(payload.page or "").strip() or "unknown-page",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
     return {"message": "Support request sent."}
 
 
@@ -2266,6 +3318,65 @@ async def sync_study_history(
 ):
     items = payload.items if isinstance(payload.items, list) else []
     return {"items": replace_history_items_for_user(current_user, items)}
+
+
+@app.get("/admin/dashboard")
+async def get_admin_dashboard(
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    started_at = utc_now()
+    snapshot = build_admin_dashboard_snapshot()
+    record_audit_log(
+        action="admin.dashboard.view",
+        email=current_admin,
+        request=request,
+        resource_type="admin",
+        resource_name="dashboard",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return snapshot
+
+
+@app.post("/admin/users/{target_email}/status")
+async def update_admin_user_status(
+    target_email: str,
+    payload: AdminUserStatusRequest,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    next_status = normalize_user_account_status(payload.status)
+    set_user_account_status(normalized_email, next_status, current_admin)
+    if next_status == "suspended":
+        revoke_all_sessions_for_user(normalized_email)
+    record_audit_log(
+        action="admin.user.status",
+        email=current_admin,
+        request=request,
+        resource_type="admin",
+        resource_name=normalized_email,
+        metadata={"status": next_status},
+    )
+    return {"email": normalized_email, "status": next_status}
+
+
+@app.post("/admin/users/{target_email}/force-logout")
+async def force_logout_admin_user(
+    target_email: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    revoke_all_sessions_for_user(normalized_email)
+    record_audit_log(
+        action="admin.user.force_logout",
+        email=current_admin,
+        request=request,
+        resource_type="admin",
+        resource_name=normalized_email,
+    )
+    return {"email": normalized_email, "message": "User sessions revoked."}
 
 
 @app.get("/jobs/{job_id}")
@@ -4474,6 +5585,7 @@ async def generate_podcast_package(
     speaker_count: int,
     target_minutes: int,
     job_id: str,
+    output_language: str,
 ) -> dict[str, Any]:
     normalized_speaker_count = clamp_podcast_speaker_count(speaker_count)
     normalized_target_minutes = clamp_podcast_target_minutes(target_minutes)
@@ -4517,7 +5629,8 @@ async def generate_podcast_package(
                         "- Include clarifying analogies, common mistakes, and exam-useful examples.\n"
                         "- Do not use stage directions, bullet points, markdown, or narration tags like [music].\n"
                         "- Do not use emojis.\n"
-                        "- Keep every spoken turn between about 35 and 95 words."
+                        "- Keep every spoken turn between about 35 and 95 words.\n"
+                        f"- Write the whole podcast in {output_language}."
                     ),
                 },
                 {
@@ -4636,6 +5749,32 @@ def normalize_presentation_design_id(value: str) -> str:
     return design_id if design_id in PRESENTATION_THEMES else "emerald-scholar"
 
 
+def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
+    combined = " ".join([title, *bullets]).lower()
+    if any(marker in combined for marker in ["compare", "difference", "advantage", "disadvantage", "versus"]):
+        return "comparison"
+    if any(marker in combined for marker in ["step", "process", "procedure", "method", "workflow"]):
+        return "flow"
+    if any(marker in combined for marker in ["timeline", "sequence", "revision plan", "history"]):
+        return "timeline"
+    if any(marker in combined for marker in ["cycle", "loop", "repeat"]):
+        return "cycle"
+    if any(marker in combined for marker in ["formula", "equation", "rule"]):
+        return "formula"
+    return "cluster"
+
+
+def normalize_visual_items(raw_items: Any, fallback_items: list[str]) -> list[str]:
+    items: list[str] = []
+    if isinstance(raw_items, list):
+        items = [compact_text(item) for item in raw_items if compact_text(item)]
+    elif isinstance(raw_items, str):
+        items = [compact_text(item) for item in re.split(r"\n+|;\s*", raw_items) if compact_text(item)]
+    if items:
+        return items[:4]
+    return [compact_text(item) for item in fallback_items if compact_text(item)][:4]
+
+
 def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_slides, list):
         return []
@@ -4650,14 +5789,18 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
             for item in (raw_slide.get("bullets") or [])
             if compact_text(item)
         ]
-        note = compact_text(raw_slide.get("note"))
         if not title or len(bullets) < 2:
             continue
+        visual_title = compact_text(raw_slide.get("visual_title"), compact_text(raw_slide.get("note"), "Visual summary"))
+        visual_items = normalize_visual_items(raw_slide.get("visual_items"), bullets[:4])
+        visual_type = compact_text(raw_slide.get("visual_type"), infer_presentation_visual_type(title, bullets)).lower()
         normalized.append(
             {
                 "title": title,
                 "bullets": bullets[:5],
-                "note": note,
+                "visual_title": visual_title or "Visual summary",
+                "visual_items": visual_items or bullets[:3],
+                "visual_type": visual_type,
             }
         )
         if len(normalized) >= 8:
@@ -4685,37 +5828,51 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
                 concept_points[0] if len(concept_points) > 0 else "Explain the main direction of the lesson before going deeper.",
                 concept_points[1] if len(concept_points) > 1 else "",
             ],
-            "note": "Open by framing the lecture in simple language before diving into detail.",
+            "visual_title": "Lecture flow",
+            "visual_type": "flow",
+            "visual_items": ["Overview", "Core concepts", "Applied example"],
         },
         {
             "title": "Core Concepts",
             "bullets": concept_points[:5] or definition_points[:5] or [short_summary, "Explain the first major idea clearly."],
-            "note": "Keep each point concrete and tie it to the lecture wording where possible.",
+            "visual_title": "Concept cluster",
+            "visual_type": "cluster",
+            "visual_items": concept_points[:4],
         },
         {
             "title": "Definitions and Terms",
             "bullets": definition_points[:5] or concept_points[3:8] or [short_summary, "Define the most exam-relevant terminology."],
-            "note": "Clarify what each term means before using it in examples.",
+            "visual_title": "Key terms",
+            "visual_type": "comparison",
+            "visual_items": definition_points[:4] or concept_points[:4],
         },
         {
             "title": "Formulas and Rules",
             "bullets": formula_points[:4] or ["Highlight the key formulas or rules from the lesson.", "Explain what each part represents."],
-            "note": "Slow down here and mention when students normally use each formula.",
+            "visual_title": "Formula sheet",
+            "visual_type": "formula",
+            "visual_items": formula_points[:4],
         },
         {
             "title": "Worked Example",
             "bullets": example_points[:4] or ["Walk through one representative example from the lecture.", "Point out the order of steps clearly."],
-            "note": "Show the method, not just the final answer.",
+            "visual_title": "Method steps",
+            "visual_type": "flow",
+            "visual_items": example_points[:4],
         },
         {
             "title": "Common Mistakes",
             "bullets": mistake_points[:4] or ["Explain the most common confusion point.", "Show how to avoid careless errors."],
-            "note": "Use this slide to prevent predictable test mistakes.",
+            "visual_title": "Compare correct vs wrong",
+            "visual_type": "comparison",
+            "visual_items": mistake_points[:4],
         },
         {
             "title": "Revision Focus",
             "bullets": revision_points[:4] or exam_points[:4] or ["End with a short revision sequence students can follow."],
-            "note": "Finish with what to revise first, second, and third.",
+            "visual_title": "Revision sequence",
+            "visual_type": "timeline",
+            "visual_items": revision_points[:4] or exam_points[:4],
         },
     ]
 
@@ -4745,8 +5902,10 @@ def presentation_slides_to_text(title: str, subtitle: str, slides: list[dict[str
     for index, slide in enumerate(slides, start=1):
         blocks.append(f"SLIDE {index}: {slide['title']}")
         blocks.extend(f"- {bullet}" for bullet in slide.get("bullets", []))
-        if slide.get("note"):
-            blocks.append(f"Presenter note: {slide['note']}")
+        if slide.get("visual_title"):
+            blocks.append(f"Visual panel: {slide['visual_title']} ({slide.get('visual_type', 'cluster')})")
+        for item in slide.get("visual_items", []):
+            blocks.append(f"  * {item}")
         blocks.append("")
     return "\n".join(blocks).strip()
 
@@ -4824,6 +5983,194 @@ def add_bullet_list(
         run.font.size = Pt(19)
         run.font.color.rgb = rgb_from_hex(color_hex)
     return box
+
+
+def add_visual_card(
+    slide: Any,
+    *,
+    left: float,
+    top: float,
+    width: float,
+    height: float,
+    fill_hex: str,
+    text: str,
+    text_hex: str,
+    font_size: int = 13,
+    bold: bool = False,
+):
+    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
+    style_shape(card, fill_hex)
+    add_textbox(
+        slide,
+        left=left + 0.14,
+        top=top + 0.12,
+        width=max(width - 0.28, 0.2),
+        height=max(height - 0.24, 0.2),
+        text=text,
+        font_size=font_size,
+        color_hex=text_hex,
+        bold=bold,
+    )
+    return card
+
+
+def draw_presentation_visual_panel(slide: Any, slide_content: dict[str, Any], theme: dict[str, str]):
+    panel_left = 8.72
+    panel_top = 1.95
+    panel_width = 3.65
+    panel_height = 4.73
+
+    panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left), Inches(panel_top), Inches(panel_width), Inches(panel_height))
+    style_shape(panel, theme["accent"])
+    add_textbox(
+        slide,
+        left=panel_left + 0.3,
+        top=panel_top + 0.26,
+        width=3.0,
+        height=0.3,
+        text=slide_content.get("visual_title") or "Visual frame",
+        font_size=14,
+        color_hex=theme["dark_text"],
+        bold=True,
+        font_name="Aptos Display",
+    )
+
+    visual_type = compact_text(slide_content.get("visual_type"), "cluster").lower()
+    visual_items = [compact_text(item) for item in slide_content.get("visual_items", []) if compact_text(item)]
+    if not visual_items:
+        visual_items = [compact_text(item) for item in slide_content.get("bullets", []) if compact_text(item)][:4]
+
+    if visual_type == "flow":
+        for index, item in enumerate(visual_items[:4]):
+            y = panel_top + 0.74 + (index * 0.88)
+            add_visual_card(
+                slide,
+                left=panel_left + 0.32,
+                top=y,
+                width=2.82,
+                height=0.54,
+                fill_hex=theme["surface"],
+                text=item,
+                text_hex=theme["text"],
+                font_size=12,
+                bold=True,
+            )
+            add_visual_card(
+                slide,
+                left=panel_left + 2.98,
+                top=y,
+                width=0.38,
+                height=0.38,
+                fill_hex=theme["accent_soft"] if theme["id"] != "sunset-classroom" else theme["surface_alt"],
+                text=str(index + 1),
+                text_hex=theme["dark_text"],
+                font_size=11,
+                bold=True,
+            )
+    elif visual_type == "comparison":
+        left_items = visual_items[::2][:2]
+        right_items = visual_items[1::2][:2] or visual_items[:2]
+        add_visual_card(
+            slide,
+            left=panel_left + 0.24,
+            top=panel_top + 0.84,
+            width=1.42,
+            height=2.76,
+            fill_hex=theme["surface"],
+            text="\n\n".join(left_items) or "Point A",
+            text_hex=theme["text"],
+            font_size=12,
+            bold=True,
+        )
+        add_visual_card(
+            slide,
+            left=panel_left + 1.99,
+            top=panel_top + 0.84,
+            width=1.42,
+            height=2.76,
+            fill_hex=theme["surface_alt"],
+            text="\n\n".join(right_items) or "Point B",
+            text_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+            font_size=12,
+            bold=True,
+        )
+    elif visual_type == "timeline":
+        line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(panel_left + 0.46), Inches(panel_top + 0.86), Inches(0.08), Inches(3.2))
+        style_shape(line, theme["surface"])
+        for index, item in enumerate(visual_items[:4]):
+            y = panel_top + 0.78 + (index * 0.82)
+            dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(panel_left + 0.25), Inches(y), Inches(0.42), Inches(0.42))
+            style_shape(dot, theme["surface_alt"])
+            add_visual_card(
+                slide,
+                left=panel_left + 0.82,
+                top=y - 0.04,
+                width=2.35,
+                height=0.5,
+                fill_hex=theme["surface"],
+                text=item,
+                text_hex=theme["text"],
+                font_size=11,
+                bold=True,
+            )
+    elif visual_type == "cycle":
+        positions = [(panel_left + 1.14, panel_top + 0.92), (panel_left + 0.32, panel_top + 2.08), (panel_left + 1.95, panel_top + 2.08)]
+        for (x, y), item in zip(positions, visual_items[:3] or ["Phase 1", "Phase 2", "Phase 3"], strict=False):
+            circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(1.05), Inches(1.05))
+            style_shape(circle, theme["surface"])
+            add_textbox(
+                slide,
+                left=x + 0.12,
+                top=y + 0.22,
+                width=0.8,
+                height=0.48,
+                text=item,
+                font_size=11,
+                color_hex=theme["text"],
+                bold=True,
+                align=PP_ALIGN.CENTER,
+            )
+    elif visual_type == "formula":
+        for index, item in enumerate(visual_items[:4]):
+            add_visual_card(
+                slide,
+                left=panel_left + 0.28,
+                top=panel_top + 0.84 + (index * 0.76),
+                width=3.02,
+                height=0.5,
+                fill_hex=theme["surface"],
+                text=item,
+                text_hex=theme["text"],
+                font_size=12,
+                bold=True,
+            )
+    else:
+        add_visual_card(
+            slide,
+            left=panel_left + 0.95,
+            top=panel_top + 1.28,
+            width=1.78,
+            height=0.7,
+            fill_hex=theme["surface"],
+            text=visual_items[0] if visual_items else "Core idea",
+            text_hex=theme["text"],
+            font_size=12,
+            bold=True,
+        )
+        orbit_positions = [(panel_left + 0.24, panel_top + 2.42), (panel_left + 1.95, panel_top + 2.42), (panel_left + 1.08, panel_top + 3.38)]
+        for (x, y), item in zip(orbit_positions, visual_items[1:4] or slide_content.get("bullets", [])[:3], strict=False):
+            add_visual_card(
+                slide,
+                left=x,
+                top=y,
+                width=1.46,
+                height=0.58,
+                fill_hex=theme["surface_alt"] if theme["id"] != "sunset-classroom" else theme["surface"],
+                text=item,
+                text_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
+                font_size=11,
+                bold=True,
+            )
 
 
 def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: int, *, is_title: bool = False):
@@ -4945,31 +6292,7 @@ def add_presentation_content_slide(
         bullets=slide_content.get("bullets", []),
         color_hex=theme["text"] if theme["id"] != "sunset-classroom" else theme["dark_text"],
     )
-
-    note_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(1.95), Inches(3.65), Inches(3.95))
-    style_shape(note_panel, theme["accent"])
-    add_textbox(
-        slide,
-        left=9.02,
-        top=2.22,
-        width=3.08,
-        height=0.3,
-        text="Revision cue",
-        font_size=14,
-        color_hex=theme["dark_text"],
-        bold=True,
-        font_name="Aptos Display",
-    )
-    add_textbox(
-        slide,
-        left=9.02,
-        top=2.72,
-        width=2.98,
-        height=2.55,
-        text=slide_content.get("note") or "Explain why these points matter before moving to the next slide.",
-        font_size=16,
-        color_hex=theme["dark_text"],
-    )
+    draw_presentation_visual_panel(slide, slide_content, theme)
 
     footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(6.06), Inches(3.65), Inches(0.62))
     style_shape(footer, theme["surface_alt"] if theme["id"] != "sunset-classroom" else theme["surface"])
@@ -5015,6 +6338,18 @@ def add_presentation_closing_slide(presentation: Any, title: str, theme: dict[st
         font_size=19,
         color_hex=theme["muted"],
     )
+    add_visual_card(
+        slide,
+        left=8.75,
+        top=2.2,
+        width=3.38,
+        height=3.2,
+        fill_hex=theme["surface"],
+        text="Final check\n\nKey ideas\nExamples\nExam traps\nRevision order",
+        text_hex=theme["text"],
+        font_size=16,
+        bold=True,
+    )
 
 
 def build_presentation_file(
@@ -5054,6 +6389,7 @@ async def generate_presentation_package(
     past_question_papers: str,
     design_id: str,
     job_id: str,
+    output_language: str,
 ) -> dict[str, Any]:
     normalized_design_id = normalize_presentation_design_id(design_id)
     fallback_package = build_presentation_fallback(summary, transcript)
@@ -5078,9 +6414,14 @@ async def generate_presentation_package(
                         "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
                         "Rules:\n"
                         "- `slides` must be an array of 6 to 8 objects.\n"
-                        "- Each slide object must contain `title`, `bullets`, and `note`.\n"
+                        "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, and `visual_items`.\n"
                         "- `bullets` must contain 3 to 5 short bullet strings.\n"
+                        "- `visual_items` must contain 2 to 4 short labels for a diagram panel on the slide.\n"
+                        "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster.\n"
+                        "- This is a formal PowerPoint deck, not speaker notes. Do not write what the presenter should say.\n"
                         "- Keep bullet lines concise, readable, and presentation-ready.\n"
+                        f"- Write the slide text in {output_language}.\n"
+                        "- When the lecture material covers multiple topics, keep those topics separate instead of mixing them into one slide.\n"
                         "- Cover overview, core concepts, formulas or rules when present, worked examples, mistakes, and revision or exam focus.\n"
                         "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
                         "- Do not return markdown, numbering, or commentary outside JSON."
@@ -5382,6 +6723,7 @@ async def generate_structured_study_assets(
     lecture_slides: str,
     past_question_papers: str,
     job_id: str,
+    output_language: str,
 ) -> dict[str, Any]:
     fallback_assets = extract_study_assets(summary)
     total_marks = determine_quiz_total_marks(
@@ -5428,6 +6770,7 @@ async def generate_structured_study_assets(
                         "- For true/false questions, the options must be exactly [\"True\", \"False\"].\n"
                         "- Keep each option-based subpart worth 1 mark.\n"
                         f"- The total test must add up to {total_marks} marks.\n"
+                        f"- Write every returned field in {output_language}.\n"
                         "- Return JSON only, with no markdown code fence."
                     ),
                 },
@@ -5465,6 +6808,7 @@ async def generate_study_guide(
     lecture_slides: str,
     past_question_papers: str,
     job_id: str,
+    output_language: str,
 ) -> tuple[str, bool]:
     trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
@@ -5501,6 +6845,15 @@ async def generate_study_guide(
         user_content_parts.append(f"PAST QUESTION PAPERS\n{trimmed_past_papers}")
     if trimmed_transcript:
         user_content_parts.append(f"LECTURE TRANSCRIPT\n{trimmed_transcript}")
+    user_content_parts.append(
+        (
+            "OUTPUT INSTRUCTIONS\n"
+            f"- Write the full study pack in {output_language}.\n"
+            "- Detect when the sources cover multiple distinct topics, chapters, or subtopics.\n"
+            "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
+            "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic."
+        )
+    )
     combined_user_content = "\n\n".join(user_content_parts)
 
     def _generate() -> str:
@@ -5546,6 +6899,16 @@ async def run_transcription_job(job_id: str, file_path: Path):
             progress=100,
             transcript=transcript,
         )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="transcription.completed",
+            email=job.get("owner_email", ""),
+            resource_type="transcription",
+            resource_name=file_path.name,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id},
+        )
     except Exception as exc:
         logger.exception("Transcription job failed")
         update_job(
@@ -5554,6 +6917,17 @@ async def run_transcription_job(job_id: str, file_path: Path):
             stage="Transcription failed",
             progress=100,
             error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="transcription.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="transcription",
+            resource_name=file_path.name,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc)},
         )
     finally:
         if file_path.exists():
@@ -5577,6 +6951,16 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                     progress=100,
                     transcript=transcript,
                 )
+                job = jobs.get(job_id, {})
+                started_at = parse_history_datetime(job.get("created_at"), utc_now())
+                record_audit_log(
+                    action="transcription.completed",
+                    email=job.get("owner_email", ""),
+                    resource_type="transcription",
+                    resource_name=video_url,
+                    duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                    metadata={"job_id": job_id, "source": "youtube_transcript"},
+                )
                 return
 
             transcript = await asyncio.to_thread(fetch_youtube_watch_page_captions, video_url, job_id)
@@ -5587,6 +6971,16 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                     stage="Video transcription completed",
                     progress=100,
                     transcript=transcript,
+                )
+                job = jobs.get(job_id, {})
+                started_at = parse_history_datetime(job.get("created_at"), utc_now())
+                record_audit_log(
+                    action="transcription.completed",
+                    email=job.get("owner_email", ""),
+                    resource_type="transcription",
+                    resource_name=video_url,
+                    duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                    metadata={"job_id": job_id, "source": "watch_page"},
                 )
                 return
 
@@ -5599,6 +6993,16 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                     progress=100,
                     transcript=transcript,
                 )
+                job = jobs.get(job_id, {})
+                started_at = parse_history_datetime(job.get("created_at"), utc_now())
+                record_audit_log(
+                    action="transcription.completed",
+                    email=job.get("owner_email", ""),
+                    resource_type="transcription",
+                    resource_name=video_url,
+                    duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                    metadata={"job_id": job_id, "source": "caption_track"},
+                )
                 return
 
         transcript = await asyncio.to_thread(download_subtitles_from_video_url, video_url, job_id)
@@ -5609,6 +7013,16 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                 stage="Video transcription completed",
                 progress=100,
                 transcript=transcript,
+            )
+            job = jobs.get(job_id, {})
+            started_at = parse_history_datetime(job.get("created_at"), utc_now())
+            record_audit_log(
+                action="transcription.completed",
+                email=job.get("owner_email", ""),
+                resource_type="transcription",
+                resource_name=video_url,
+                duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                metadata={"job_id": job_id, "source": "subtitle_download"},
             )
             return
 
@@ -5632,6 +7046,16 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             progress=100,
             transcript=transcript,
         )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="transcription.completed",
+            email=job.get("owner_email", ""),
+            resource_type="transcription",
+            resource_name=video_url,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "source": "audio_download"},
+        )
     except Exception as exc:
         logger.exception("Video transcription job failed")
         update_job(
@@ -5640,6 +7064,17 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             stage="Video transcription failed",
             progress=100,
             error=format_job_error(exc, video_url),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="transcription.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="transcription",
+            resource_name=video_url,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc, video_url)},
         )
     finally:
         if file_path and file_path.exists():
@@ -5655,6 +7090,7 @@ async def run_summary_job(
     lecture_notes: str,
     lecture_slides: str,
     past_question_papers: str,
+    output_language: str,
 ):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
@@ -5664,6 +7100,7 @@ async def run_summary_job(
             lecture_slides,
             past_question_papers,
             job_id,
+            output_language,
         )
         assets = await generate_structured_study_assets(
             summary,
@@ -5672,6 +7109,7 @@ async def run_summary_job(
             lecture_slides,
             past_question_papers,
             job_id,
+            output_language,
         )
         try:
             study_images = await generate_study_images(
@@ -5697,6 +7135,16 @@ async def run_summary_job(
             study_images=study_images,
             used_fallback=used_fallback,
         )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="study_guide.completed",
+            email=job.get("owner_email", ""),
+            resource_type="study_guide",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "used_fallback": used_fallback},
+        )
     except Exception as exc:
         logger.exception("Study guide job failed")
         update_job(
@@ -5705,6 +7153,17 @@ async def run_summary_job(
             stage="Study guide failed",
             progress=100,
             error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="study_guide.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="study_guide",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc)},
         )
 
 
@@ -5717,6 +7176,7 @@ async def run_podcast_job(
     past_question_papers: str,
     speaker_count: int,
     target_minutes: int,
+    output_language: str,
 ):
     try:
         update_job(job_id, status="processing", stage="Starting podcast generation", progress=8)
@@ -5729,6 +7189,7 @@ async def run_podcast_job(
             speaker_count,
             target_minutes,
             job_id,
+            output_language,
         )
         update_job(
             job_id,
@@ -5736,6 +7197,16 @@ async def run_podcast_job(
             stage="Podcast ready",
             progress=100,
             **podcast_package,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="podcast.completed",
+            email=job.get("owner_email", ""),
+            resource_type="podcast",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id},
         )
     except Exception as exc:
         logger.exception("Podcast generation failed")
@@ -5745,6 +7216,17 @@ async def run_podcast_job(
             stage="Podcast generation failed",
             progress=100,
             error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="podcast.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="podcast",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc)},
         )
 
 
@@ -5756,6 +7238,7 @@ async def run_presentation_job(
     lecture_slides: str,
     past_question_papers: str,
     design_id: str,
+    output_language: str,
 ):
     try:
         update_job(job_id, status="processing", stage="Starting PowerPoint generation", progress=8)
@@ -5767,6 +7250,7 @@ async def run_presentation_job(
             past_question_papers,
             design_id,
             job_id,
+            output_language,
         )
         update_job(
             job_id,
@@ -5774,6 +7258,16 @@ async def run_presentation_job(
             stage="PowerPoint ready",
             progress=100,
             **presentation_package,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="presentation.completed",
+            email=job.get("owner_email", ""),
+            resource_type="presentation",
+            resource_name=design_id,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language},
         )
     except Exception as exc:
         logger.exception("PowerPoint generation failed")
@@ -5784,10 +7278,26 @@ async def run_presentation_job(
             progress=100,
             error=format_job_error(exc),
         )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="presentation.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="presentation",
+            resource_name=design_id,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language, "error": format_job_error(exc)},
+        )
 
 
 @app.post("/upload-audio/")
-async def upload_audio(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
+async def upload_audio(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
 
@@ -5811,6 +7321,15 @@ async def upload_audio(file: UploadFile = File(...), current_user: str = Depends
             )
 
         asyncio.create_task(run_transcription_job(job_id, file_path))
+        record_audit_log(
+            action="lecture.upload.request",
+            email=current_user,
+            request=request,
+            resource_type="transcription",
+            resource_name=file.filename,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id},
+        )
         return {"job_id": job_id}
     finally:
         await file.close()
@@ -5819,8 +7338,10 @@ async def upload_audio(file: UploadFile = File(...), current_user: str = Depends
 @app.post("/transcribe-video-url/")
 async def transcribe_video_url(
     payload: VideoUrlTranscriptionRequest,
+    request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
+    started_at = utc_now()
     try:
         video_url = normalize_video_url(payload.video_url)
     except ValueError as exc:
@@ -5833,11 +7354,25 @@ async def transcribe_video_url(
     job_id = create_job("video_transcription", owner_email=current_user)
     update_job(job_id, status="processing", stage="Preparing video link", progress=1)
     asyncio.create_task(run_video_transcription_job(job_id, video_url))
+    record_audit_log(
+        action="lecture.video_link.request",
+        email=current_user,
+        request=request,
+        resource_type="transcription",
+        resource_name=video_url,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id},
+    )
     return {"job_id": job_id}
 
 
 @app.post("/extract-slide-text/")
-async def extract_slide_text(file: UploadFile = File(...), current_user: str = Depends(require_authenticated_user)):
+async def extract_slide_text(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
     if not file.filename:
         raise HTTPException(status_code=400, detail="No study source file selected.")
 
@@ -5901,17 +7436,31 @@ async def extract_slide_text(file: UploadFile = File(...), current_user: str = D
         text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
         if not text:
             raise HTTPException(status_code=422, detail="MABASO could not read text from that slide image.")
+        record_audit_log(
+            action="study_source.extract",
+            email=current_user,
+            request=request,
+            resource_type="study_source",
+            resource_name=file.filename,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        )
         return {"text": text}
     finally:
         await file.close()
 
 
 @app.post("/generate-study-guide/")
-async def create_study_guide(payload: StudyGuideRequest, current_user: str = Depends(require_authenticated_user)):
+async def create_study_guide(
+    payload: StudyGuideRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
     transcript = payload.transcript.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
     if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
@@ -5920,6 +7469,7 @@ async def create_study_guide(payload: StudyGuideRequest, current_user: str = Dep
 
     ensure_openai_key()
     job_id = create_job("study_guide", owner_email=current_user)
+    update_job(job_id, _output_language=output_language)
     asyncio.create_task(
         run_summary_job(
             job_id,
@@ -5927,18 +7477,34 @@ async def create_study_guide(payload: StudyGuideRequest, current_user: str = Dep
             lecture_notes,
             lecture_slides,
             past_question_papers,
+            output_language,
         )
+    )
+    record_audit_log(
+        action="study_guide.request",
+        email=current_user,
+        request=request,
+        resource_type="study_guide",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language},
     )
     return {"job_id": job_id}
 
 
 @app.post("/generate-podcast/")
-async def create_podcast(payload: PodcastGenerationRequest, current_user: str = Depends(require_authenticated_user)):
+async def create_podcast(
+    payload: PodcastGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
 
     if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
@@ -5950,6 +7516,7 @@ async def create_podcast(payload: PodcastGenerationRequest, current_user: str = 
     speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
     target_minutes = clamp_podcast_target_minutes(payload.target_minutes)
     job_id = create_job("podcast", owner_email=current_user)
+    update_job(job_id, _output_language=output_language)
     asyncio.create_task(
         run_podcast_job(
             job_id,
@@ -5960,18 +7527,34 @@ async def create_podcast(payload: PodcastGenerationRequest, current_user: str = 
             past_question_papers,
             speaker_count,
             target_minutes,
+            output_language,
         )
+    )
+    record_audit_log(
+        action="podcast.request",
+        email=current_user,
+        request=request,
+        resource_type="podcast",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language},
     )
     return {"job_id": job_id}
 
 
 @app.post("/generate-presentation/")
-async def create_presentation(payload: PresentationGenerationRequest, current_user: str = Depends(require_authenticated_user)):
+async def create_presentation(
+    payload: PresentationGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
 
     if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
@@ -5983,6 +7566,7 @@ async def create_presentation(payload: PresentationGenerationRequest, current_us
     ensure_presentation_support()
     design_id = normalize_presentation_design_id(payload.design_id)
     job_id = create_job("presentation", owner_email=current_user)
+    update_job(job_id, _output_language=output_language)
     asyncio.create_task(
         run_presentation_job(
             job_id,
@@ -5992,7 +7576,17 @@ async def create_presentation(payload: PresentationGenerationRequest, current_us
             lecture_slides,
             past_question_papers,
             design_id,
+            output_language,
         )
+    )
+    record_audit_log(
+        action="presentation.request",
+        email=current_user,
+        request=request,
+        resource_type="presentation",
+        resource_name=design_id,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "design_id": design_id, "language": output_language},
     )
     return {"job_id": job_id}
 

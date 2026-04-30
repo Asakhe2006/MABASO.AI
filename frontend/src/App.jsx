@@ -24,7 +24,10 @@ const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
+const AUTH_MODE_KEY = "mabaso-auth-mode";
+const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
+const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
@@ -37,6 +40,16 @@ const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const BULK_LECTURE_ACCEPT = "audio/*,video/*,image/*,.txt,.md,.text,.pdf,.pptx,.docx";
+const outputLanguageOptions = [
+  { value: "English", label: "English" },
+  { value: "isiZulu", label: "isiZulu" },
+  { value: "Afrikaans", label: "Afrikaans" },
+  { value: "isiXhosa", label: "isiXhosa" },
+  { value: "Sesotho", label: "Sesotho" },
+  { value: "Setswana", label: "Setswana" },
+  { value: "French", label: "French" },
+  { value: "Portuguese", label: "Portuguese" },
+];
 const tabs = [
   { id: "guide", label: "Study Guide" },
   { id: "transcript", label: "Transcript" },
@@ -425,12 +438,15 @@ function getPrimarySourceLabel({
     || "Saved lecture";
 }
 
-function createStudySourceEntry(name, text, prefix) {
+function createStudySourceEntry(name, text, prefix, extra = {}) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: (name || prefix || "Study source").trim() || "Study source",
     text: normalizeStudySourceText(text),
     prefix: prefix || "STUDY SOURCE",
+    previewUrl: typeof extra.previewUrl === "string" ? extra.previewUrl : "",
+    fileType: typeof extra.fileType === "string" ? extra.fileType : "",
+    visualSource: Boolean(extra.visualSource),
   };
 }
 
@@ -472,6 +488,9 @@ function normalizeStudySourceEntries(entries, fallbackText = "", fallbackNames =
         name: (entry?.name || defaultPrefix).trim() || defaultPrefix,
         text: (entry?.text || "").trim(),
         prefix: entry?.prefix || defaultPrefix,
+        previewUrl: typeof entry?.previewUrl === "string" ? entry.previewUrl : "",
+        fileType: typeof entry?.fileType === "string" ? entry.fileType : "",
+        visualSource: Boolean(entry?.visualSource),
       }))
       .filter((entry) => entry.text)
     : [];
@@ -498,6 +517,32 @@ function mergeStudySourceEntries(currentEntries, incomingEntries) {
     else nextEntries.push(entry);
   }
   return nextEntries;
+}
+
+function sanitizeStudySourceEntriesForHistory(entries) {
+  return (entries || []).map((entry) => ({
+    id: entry?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: entry?.name || "Study source",
+    text: entry?.text || "",
+    prefix: entry?.prefix || "STUDY SOURCE",
+    fileType: entry?.fileType || "",
+    visualSource: Boolean(entry?.visualSource),
+  }));
+}
+
+function buildUploadedVisualReferences(...sourceGroups) {
+  return sourceGroups
+    .flat()
+    .filter((entry) => entry?.previewUrl)
+    .slice(0, 6)
+    .map((entry, index) => ({
+      id: entry.id || `${entry.name}-${index}`,
+      title: entry.name || "Uploaded source visual",
+      image_url: entry.previewUrl,
+      source_url: entry.previewUrl,
+      query: entry.prefix || "Uploaded source",
+      source_type: "uploaded",
+    }));
 }
 
 function studySourceEntriesToText(entries, defaultPrefix = "STUDY SOURCE") {
@@ -537,7 +582,7 @@ function chatToText(messages) {
 
 function studyImagesToText(images) {
   return (images || [])
-    .map((image, index) => `${index + 1}. ${image.title || image.query || "Reference photo"}\nSource: ${image.source_url || image.image_url || ""}`)
+    .map((image, index) => `${index + 1}. ${image.title || image.query || "Reference photo"}\nSource: ${image.source_type === "uploaded" ? "Uploaded from lecture notes or slides" : image.source_url || image.image_url || ""}`)
     .join("\n\n");
 }
 
@@ -697,6 +742,21 @@ function extractEmailFromJwt(token) {
   return typeof payload?.email === "string" ? payload.email.trim() : "";
 }
 
+function getTokenExpiryTimestamp(token) {
+  if (!token || !String(token).startsWith("mabaso.v1.")) return 0;
+  try {
+    const parts = String(token).split(".");
+    const encodedPayload = parts[2] || "";
+    if (!encodedPayload) return 0;
+    const base64 = encodedPayload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = `${base64}${"=".repeat((4 - (base64.length % 4 || 4)) % 4)}`;
+    const payload = JSON.parse(window.atob(padded));
+    return Number(payload?.exp || 0) * 1000;
+  } catch {
+    return 0;
+  }
+}
+
 function parseInviteEmails(value) {
   return Array.from(new Set((value || "").split(/[\s,;]+/).map((email) => email.trim().toLowerCase()).filter(Boolean)));
 }
@@ -811,7 +871,9 @@ function normalizePresentationData(value) {
       .map((slide) => ({
         title: slide.title || "",
         bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean).slice(0, 5) : [],
-        note: slide.note || "",
+        visualTitle: slide.visual_title || slide.visualTitle || slide.note || "",
+        visualType: slide.visual_type || slide.visualType || "cluster",
+        visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
       }))
       .filter((slide) => slide.title || slide.bullets.length),
   };
@@ -841,7 +903,8 @@ function presentationToText(presentation) {
   normalized.slides.forEach((slide, index) => {
     blocks.push(`SLIDE ${index + 1}: ${slide.title || "Untitled slide"}`);
     (slide.bullets || []).forEach((bullet) => blocks.push(`- ${bullet}`));
-    if (slide.note) blocks.push(`Presenter note: ${slide.note}`);
+    if (slide.visualTitle) blocks.push(`Visual panel: ${slide.visualTitle} (${slide.visualType || "cluster"})`);
+    (slide.visualItems || []).forEach((item) => blocks.push(`  * ${item}`));
     blocks.push("");
   });
   return blocks.join("\n").trim();
@@ -874,9 +937,20 @@ function buildCollaborationPreview(room) {
 export default function App() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
+  const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
+  const [authAvailableModes, setAuthAvailableModes] = useState(() => {
+    try {
+      const value = window.localStorage.getItem(AUTH_AVAILABLE_MODES_KEY) || "[]";
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [authEmailInput, setAuthEmailInput] = useState(
     () => window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || window.localStorage.getItem(AUTH_EMAIL_KEY) || "",
   );
+  const [outputLanguage, setOutputLanguage] = useState(() => window.localStorage.getItem(OUTPUT_LANGUAGE_KEY) || "English");
   const [authPasswordInput, setAuthPasswordInput] = useState("");
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [authCodeInput, setAuthCodeInput] = useState("");
@@ -960,6 +1034,10 @@ export default function App() {
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const [adminDashboard, setAdminDashboard] = useState(null);
+  const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
+  const [adminSearchQuery, setAdminSearchQuery] = useState("");
+  const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
   const fileInputRef = useRef(null);
   const lectureNotesFileInputRef = useRef(null);
   const lectureSlidesFileInputRef = useRef(null);
@@ -995,6 +1073,8 @@ export default function App() {
   const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
+  const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
+  const visualReferences = [...uploadedVisualReferences, ...studyImages.filter((image) => image?.image_url)].slice(0, 6);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script);
@@ -1019,11 +1099,11 @@ export default function App() {
   const appleSignInAvailable = isAppleConfigured && isAppleWebSigninSupported();
   const emailAuthCodeRequested = Boolean(pendingEmailAuthEmail);
   const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in)/i.test(authMessage.trim());
-  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session)/i.test(authMessage.trim());
+  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode)/i.test(authMessage.trim());
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : -1;
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
     fileName: file?.name || "",
@@ -1042,6 +1122,7 @@ export default function App() {
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
+  const isAdminAccount = authAvailableModes.includes("admin");
 
   const clearHistory = () => {
     setHistoryItems([]);
@@ -1777,10 +1858,7 @@ export default function App() {
                     <div key={`${slide.title}-${bulletIndex}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm leading-7 text-slate-200">{bullet}</div>
                   ))}
                 </div>
-                <div className="mt-4 rounded-2xl border border-sky-300/16 bg-sky-300/8 px-4 py-3 text-sm leading-7 text-sky-50">
-                  <p className="text-xs uppercase tracking-[0.22em] text-sky-100/75">Presenter note</p>
-                  <p className="mt-2">{slide.note || "Use this slide to explain the idea clearly before moving on."}</p>
-                </div>
+                {(slide.visualTitle || (slide.visualItems || []).length) ? <div className="mt-4 rounded-2xl border border-sky-300/16 bg-sky-300/8 px-4 py-3 text-sm leading-7 text-sky-50"><p className="text-xs uppercase tracking-[0.22em] text-sky-100/75">{slide.visualType || "visual"} panel</p><p className="mt-2 font-semibold">{slide.visualTitle || "Visual summary"}</p><div className="mt-3 flex flex-wrap gap-2">{(slide.visualItems || []).map((item, itemIndex) => <span key={`${slide.title}-${itemIndex}`} className="rounded-full border border-sky-100/10 bg-slate-950/45 px-3 py-2 text-xs text-sky-50">{item}</span>)}</div></div> : null}
               </div>
             ))}
           </div>
@@ -1884,9 +1962,110 @@ export default function App() {
     </div>
   );
 
+  const renderAdminPage = () => {
+    const sidebarItems = [
+      ["overview", "Overview"],
+      ["users", "Users"],
+      ["activity", "Activity Logs"],
+      ["content", "Content"],
+      ["ai", "AI Generation"],
+      ["analytics", "Analytics"],
+      ["health", "System Health"],
+      ["security", "Security"],
+      ["billing", "Billing"],
+      ["settings", "Settings"],
+    ];
+    const dashboard = adminDashboard || {};
+    const failedLoginCount = (dashboard.security?.failed_logins || []).length;
+    const filteredUsers = (dashboard.users || []).filter((user) => `${user.email} ${user.role} ${user.status}`.toLowerCase().includes(adminSearchQuery.toLowerCase()));
+    const filteredLogs = (dashboard.activity_logs || []).filter((log) => `${log.user} ${log.action} ${log.resource}`.toLowerCase().includes(adminSearchQuery.toLowerCase()));
+    const filteredContent = (dashboard.content?.items || []).filter((item) => `${item.file_name} ${item.owner_email} ${item.title}`.toLowerCase().includes(adminSearchQuery.toLowerCase()));
+
+    const overviewCards = [
+      { label: "Total Users", value: dashboard.overview?.kpis?.total_users ?? 0 },
+      { label: "Active 1h / 24h / 7d", value: `${dashboard.overview?.kpis?.active_users_1h ?? 0} / ${dashboard.overview?.kpis?.active_users_24h ?? 0} / ${dashboard.overview?.kpis?.active_users_7d ?? 0}` },
+      { label: "Lectures Uploaded", value: `${dashboard.overview?.kpis?.lectures_uploaded_today ?? 0} today • ${dashboard.overview?.kpis?.lectures_uploaded_week ?? 0} week` },
+      { label: "Guides / Tests", value: `${dashboard.overview?.kpis?.study_guides_generated ?? 0} / ${dashboard.overview?.kpis?.tests_generated ?? 0}` },
+      { label: "Avg Processing", value: `${dashboard.overview?.kpis?.avg_processing_time_ms ?? 0} ms` },
+      { label: "Error Rate", value: `${dashboard.overview?.kpis?.error_rate_percent ?? 0}%` },
+      { label: "System Load", value: dashboard.overview?.kpis?.system_load ?? 0 },
+      { label: "Health", value: (dashboard.system_health?.state || "green").toUpperCase() },
+    ];
+
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="hero-glow hero-glow-left" />
+          <div className="hero-glow hero-glow-right" />
+          <div className="hero-grid" />
+        </div>
+        <main className="relative mx-auto max-w-[1600px] px-3 py-6 sm:px-6 lg:px-8">
+          <header className="mb-6 rounded-[30px] border border-white/10 bg-slate-950/70 px-5 py-5 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+              <div className="min-w-0">
+                <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
+                <p className="mt-2 text-sm uppercase tracking-[0.28em] text-emerald-200/70">Admin dashboard</p>
+                <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">Secure analytics and operations view.</h1>
+              </div>
+              <div className="flex flex-col gap-3 xl:items-end">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input value={adminSearchQuery} onChange={(event) => setAdminSearchQuery(event.target.value)} className="w-full min-w-[240px] rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none sm:w-[320px]" placeholder="Search users, files, or logs" />
+                  <button type="button" onClick={() => loadAdminDashboard()} className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Refresh</button>
+                  <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">Enter User Mode</button>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{failedLoginCount} security alerts</div>
+                  <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{authEmail}</div>
+                  <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white">Sign Out</button>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="grid gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
+            <aside className="rounded-[28px] border border-white/10 bg-slate-950/70 p-4 shadow-[0_24px_60px_rgba(2,8,23,0.3)] backdrop-blur">
+              <p className="px-2 text-xs uppercase tracking-[0.28em] text-emerald-200/70">Navigation</p>
+              <div className="mt-4 grid gap-2">
+                {sidebarItems.map(([key, label]) => <button key={key} type="button" onClick={() => setAdminSidebarTab(key)} className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold ${adminSidebarTab === key ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{label}</button>)}
+              </div>
+            </aside>
+
+            <section className="space-y-6">
+              {(adminSidebarTab === "overview" || adminSidebarTab === "analytics" || adminSidebarTab === "health") ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{overviewCards.map((card) => <article key={card.label} className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{card.label}</p><p className="mt-3 text-2xl font-semibold text-white">{card.value}</p></article>)}</div> : null}
+
+              {adminSidebarTab === "overview" ? <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Real-time activity</p><div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-4">{(dashboard.overview?.charts?.real_time_activity || []).map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs text-slate-400">{item.label}</p><p className="mt-2 text-xl font-semibold text-white">{item.count}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Feature usage</p><div className="mt-4 space-y-3">{(dashboard.overview?.charts?.feature_usage_breakdown || []).slice(0, 8).map((item) => <div key={item.label} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{item.label}</span><span className="text-sm font-semibold text-emerald-100">{item.count}</span></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Conversion funnel</p><div className="mt-4 space-y-3">{(dashboard.overview?.charts?.conversion_funnel || []).map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-sm text-white">{item.label}</p><p className="mt-2 text-xl font-semibold text-emerald-100">{item.count}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Retention</p><div className="mt-4 grid gap-3 sm:grid-cols-3">{[{ label: "Day 1", value: dashboard.analytics?.retention?.day_1 ?? 0 }, { label: "Day 7", value: dashboard.analytics?.retention?.day_7 ?? 0 }, { label: "Day 30", value: dashboard.analytics?.retention?.day_30 ?? 0 }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs text-slate-400">{item.label}</p><p className="mt-2 text-xl font-semibold text-white">{item.value}%</p></div>)}</div></div></div> : null}
+
+              {adminSidebarTab === "users" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Users</p><h2 className="mt-2 text-2xl font-semibold text-white">User table and account controls</h2></div><div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200">{filteredUsers.length} visible user{filteredUsers.length === 1 ? "" : "s"}</div></div><div className="mt-5 space-y-4">{filteredUsers.length ? filteredUsers.map((user) => <article key={user.email} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div className="min-w-0"><p className="phone-safe-copy text-lg font-semibold text-white">{user.email}</p><p className="mt-2 text-sm text-slate-300">{user.role} • {user.status} • risk {user.risk_score}</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Last login", value: user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never" }, { label: "IP", value: user.last_login_ip || "--" }, { label: "Sessions", value: user.sessions_count }, { label: "Uploads / generations", value: `${user.total_uploads} / ${user.total_generations}` }].map((item) => <div key={`${user.email}-${item.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3"><p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">{item.label}</p><p className="mt-2 text-sm text-white">{item.value}</p></div>)}</div></div><div className="flex flex-wrap gap-2">{user.status !== "suspended" ? <button type="button" onClick={() => updateAdminUserStatus(user.email, "suspended")} className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-100">Suspend</button> : <button type="button" onClick={() => updateAdminUserStatus(user.email, "active")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Activate</button>}<button type="button" onClick={() => forceLogoutAdminUser(user.email)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Force Logout</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Reset Password</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Assign Role</button></div></div></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No users match the current search.</div>}</div></div> : null}
+
+              {adminSidebarTab === "activity" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Activity logs</p><h2 className="mt-2 text-2xl font-semibold text-white">Recent audit trail</h2><div className="mt-5 space-y-3">{filteredLogs.length ? filteredLogs.map((log, index) => <div key={`${log.timestamp}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div className="min-w-0"><p className="phone-safe-copy text-sm font-semibold text-white">{log.action}</p><p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{log.user} • {log.ip_address || "No IP"} • {log.status}</p></div><p className="text-sm text-slate-300">{new Date(log.timestamp).toLocaleString()}</p></div><p className="mt-3 text-sm leading-7 text-slate-200">{log.resource || "No resource"} • {log.duration_ms || 0} ms</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No logs match the current search.</div>}</div></div> : null}
+
+              {adminSidebarTab === "content" ? <div className="grid gap-5 xl:grid-cols-[1.4fr_0.8fr]"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Content management</p><h2 className="mt-2 text-2xl font-semibold text-white">Lecture and study pack records</h2><div className="mt-5 space-y-3">{filteredContent.length ? filteredContent.map((item, index) => <div key={`${item.file_name}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div><p className="phone-safe-copy text-sm font-semibold text-white">{item.file_name}</p><p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{item.owner_email} • {item.processing_status}</p></div><p className="text-sm text-slate-300">{item.upload_date ? new Date(item.upload_date).toLocaleString() : "Unknown date"}</p></div><div className="mt-3 grid gap-2 sm:grid-cols-4"><div className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3 text-sm text-white">{item.title}</div><div className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3 text-sm text-white">Size: {item.size_label}</div><div className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3 text-sm text-white">Duration: {item.duration_label}</div><div className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3 text-sm text-white">Output: {item.output_generated}</div></div></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No saved study packs match the current search.</div>}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Storage insights</p><div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-sm text-slate-300">Tracked study packs</p><p className="mt-2 text-3xl font-semibold text-white">{dashboard.content?.storage_insights?.tracked_study_packs ?? 0}</p></div><div className="mt-4 space-y-3">{(dashboard.content?.storage_insights?.top_users || []).map((item) => <div key={item.email} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{item.email}</span><span className="text-sm font-semibold text-emerald-100">{item.saved_items}</span></div>)}</div></div></div> : null}
+
+              {adminSidebarTab === "ai" ? <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">AI generation</p><div className="mt-4 grid gap-3 sm:grid-cols-2">{[{ label: "Study guides", value: dashboard.ai_generation?.totals?.study_guides ?? 0 }, { label: "Presentations", value: dashboard.ai_generation?.totals?.presentations ?? 0 }, { label: "Podcasts", value: dashboard.ai_generation?.totals?.podcasts ?? 0 }, { label: "Success rate", value: `${dashboard.ai_generation?.success_rate_percent ?? 0}%` }, { label: "Avg generation time", value: `${dashboard.ai_generation?.avg_generation_time_ms ?? 0} ms` }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.label}</p><p className="mt-2 text-2xl font-semibold text-white">{item.value}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Failed jobs</p><div className="mt-4 space-y-3">{(dashboard.ai_generation?.failed_jobs || []).length ? (dashboard.ai_generation?.failed_jobs || []).map((job, index) => <div key={`${job.timestamp}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><p className="text-sm font-semibold text-white">{job.action}</p><p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{job.email || "Unknown user"} • {new Date(job.timestamp).toLocaleString()}</p><p className="mt-3 text-sm leading-7 text-slate-200">{job.message}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No failed AI jobs are recorded right now.</div>}</div></div></div> : null}
+
+              {adminSidebarTab === "analytics" ? <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Session heatmap</p><div className="mt-4 grid gap-2 sm:grid-cols-4 xl:grid-cols-6">{(dashboard.analytics?.session_heatmap || []).map((item) => <div key={item.hour} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3 text-center"><p className="text-xs text-slate-400">{item.hour}</p><p className="mt-2 text-lg font-semibold text-white">{item.actions}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Drop-off points</p><div className="mt-4 space-y-3">{(dashboard.analytics?.drop_off_points || []).map((item) => <div key={item.label} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{item.label}</span><span className="text-sm font-semibold text-emerald-100">{item.count}</span></div>)}</div><div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-sm text-slate-300">Average response time</p><p className="mt-2 text-2xl font-semibold text-white">{dashboard.analytics?.performance?.avg_response_time_ms ?? 0} ms</p><p className="mt-4 text-sm text-slate-300">Actions per session</p><p className="mt-2 text-2xl font-semibold text-white">{dashboard.analytics?.performance?.actions_per_session ?? 0}</p></div></div></div> : null}
+
+              {adminSidebarTab === "health" ? <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">System health</p><div className="mt-4 space-y-3">{[{ label: "State", value: (dashboard.system_health?.state || "green").toUpperCase() }, { label: "API response time", value: `${dashboard.system_health?.api_response_time_ms ?? 0} ms` }, { label: "Queue length", value: dashboard.system_health?.queue_length ?? 0 }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">{item.label}</p><p className="mt-2 text-xl font-semibold text-white">{item.value}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Live jobs</p><div className="mt-4 space-y-3">{(dashboard.system_health?.active_jobs || []).length ? (dashboard.system_health?.active_jobs || []).map((job) => <div key={job.job_id} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-white">{job.job_type}</p><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{job.progress}%</span></div><p className="mt-2 text-sm text-slate-300">{job.stage}</p><p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{job.status} • {job.owner_email || "No owner"}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No queued or processing jobs right now.</div>}</div></div></div> : null}
+
+              {adminSidebarTab === "security" ? <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Failed logins</p><div className="mt-4 space-y-3">{(dashboard.security?.failed_logins || []).length ? (dashboard.security?.failed_logins || []).map((item, index) => <div key={`${item.timestamp}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div><p className="text-sm font-semibold text-white">{item.email}</p><p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{item.ip_address || "No IP"} • {item.status}</p></div><p className="text-sm text-slate-300">{new Date(item.timestamp).toLocaleString()}</p></div><p className="mt-3 text-sm leading-7 text-slate-200">{item.reason}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No recent failed logins.</div>}</div></div><div className="space-y-5"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Suspicious activity</p><div className="mt-4 space-y-3">{(dashboard.security?.suspicious_activity || []).length ? (dashboard.security?.suspicious_activity || []).map((item, index) => <div key={`${item.email}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><p className="text-sm font-semibold text-white">{item.email}</p><p className="mt-2 text-sm leading-7 text-slate-200">{item.reason}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No suspicious activity rules are currently triggered.</div>}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">IP tracking</p><div className="mt-4 space-y-3">{(dashboard.security?.ip_tracking || []).slice(0, 8).map((item) => <div key={item.ip_address} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><p className="text-sm font-semibold text-white">{item.ip_address}</p><p className="mt-2 text-sm text-slate-300">{item.actions} actions • {(item.users || []).join(", ") || "No mapped user"}</p></div>)}</div></div></div></div> : null}
+
+              {adminSidebarTab === "billing" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Billing</p><div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300">Subscriptions and billing metrics are intentionally left empty for now, as requested.</div></div> : null}
+
+              {adminSidebarTab === "settings" ? <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Languages</p><div className="mt-4 flex flex-wrap gap-2">{(dashboard.settings?.available_languages || outputLanguageOptions.map((item) => item.value)).map((language) => <span key={language} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white">{language}</span>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Feature flags</p><div className="mt-4 space-y-3">{Object.entries(dashboard.settings?.feature_flags || {}).map(([key, value]) => <div key={key} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{key}</span><span className={`rounded-full px-3 py-1 text-xs ${value ? "bg-emerald-300/10 text-emerald-50" : "bg-slate-900 text-slate-400"}`}>{value ? "Enabled" : "Disabled"}</span></div>)}</div></div></div> : null}
+            </section>
+          </div>
+
+          {isLoadingAdminDashboard ? <div className="pointer-events-none fixed bottom-4 right-4 rounded-full border border-white/10 bg-slate-950/90 px-4 py-2 text-sm text-slate-200">Refreshing admin data...</div> : null}
+        </main>
+      </div>
+    );
+  };
+
   const clearSession = (message = "Please sign in again.") => {
     setAuthToken("");
     setAuthEmail("");
+    setAuthSessionMode("user");
+    setAuthAvailableModes([]);
     setAuthPasswordInput("");
     setAuthCodeInput("");
     setPendingEmailAuthMode("");
@@ -1902,12 +2081,17 @@ export default function App() {
     setActiveRoomId("");
     setActiveRoom(null);
     setCollaborationRooms([]);
+    setAdminDashboard(null);
+    setAdminSidebarTab("overview");
+    setAdminSearchQuery("");
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
+    window.localStorage.removeItem(AUTH_MODE_KEY);
+    window.localStorage.removeItem(AUTH_AVAILABLE_MODES_KEY);
     setAuthMessage(message);
   };
 
@@ -1934,6 +2118,11 @@ export default function App() {
       setAuthToken(nextToken);
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
+      setAuthSessionMode(data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user");
+      setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : []);
+      if ((data.session_mode || "") === "admin") {
+        setCurrentPage("admin");
+      }
     }).catch((error) => {
       if (cancelled) return;
       setAuthMessage(
@@ -1960,12 +2149,19 @@ export default function App() {
     if (!authToken) return;
     window.localStorage.setItem(AUTH_TOKEN_KEY, authToken);
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
-  }, [authEmail, authToken]);
+    window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
+    window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
+  }, [authAvailableModes, authEmail, authSessionMode, authToken]);
 
   useEffect(() => {
     if (!authEmailInput.trim()) return;
     window.localStorage.setItem(REMEMBERED_EMAIL_KEY, authEmailInput.trim());
   }, [authEmailInput]);
+
+  useEffect(() => {
+    if (!outputLanguage) return;
+    window.localStorage.setItem(OUTPUT_LANGUAGE_KEY, outputLanguage);
+  }, [outputLanguage]);
 
   useEffect(() => {
     if (!authChecked || !authEmail) return;
@@ -1984,6 +2180,8 @@ export default function App() {
         if (data.token) {
           setAuthToken(data.token);
         }
+        if (data.session_mode) setAuthSessionMode(data.session_mode);
+        if (Array.isArray(data.available_modes)) setAuthAvailableModes(data.available_modes);
       }).catch(() => {
         // Keep the saved session locally if the server is temporarily unavailable.
       });
@@ -2002,8 +2200,66 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!authToken) return undefined;
+    const handleFocus = () => {
+      refreshSessionIfNeeded().catch(() => {
+        // Leave the current UI state alone until the next authenticated request surfaces the problem.
+      });
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, [authAvailableModes, authEmail, authSessionMode, authToken]);
+
+  useEffect(() => {
     setIsDownloadMenuOpen(false);
   }, [activeTab, currentPage]);
+
+  const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
+    const nextToken = data?.token || "";
+    const nextEmail = data?.email || fallbackEmail || "";
+    const nextMode = data?.session_mode || "user";
+    const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
+    setAuthToken(nextToken);
+    setAuthEmail(nextEmail);
+    setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
+    setAuthSessionMode(nextMode);
+    setAuthAvailableModes(nextAvailableModes);
+    if (nextMode === "admin") {
+      setCurrentPage("admin");
+      return;
+    }
+    if (promptForMode && nextAvailableModes.includes("admin")) {
+      setCurrentPage("mode-select");
+      return;
+    }
+    setCurrentPage("capture");
+  };
+
+  const refreshSessionIfNeeded = async () => {
+    if (!authToken) return authToken;
+    const expiryTimestamp = getTokenExpiryTimestamp(authToken);
+    if (!expiryTimestamp || expiryTimestamp - Date.now() > 12 * 60 * 1000) return authToken;
+
+    const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }, 8000);
+    const data = await parseJsonSafe(response);
+    if (response.status === 401) {
+      clearSession("Your session expired. Please sign in again.");
+      throw new Error("Your session expired. Please sign in again.");
+    }
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not refresh your session.");
+    }
+    const nextToken = data.token || authToken;
+    setAuthToken(nextToken);
+    setAuthEmail(data.email || authEmail || "");
+    setAuthSessionMode(data.session_mode || authSessionMode || "user");
+    setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes);
+    return nextToken;
+  };
 
   const finishGoogleLogin = async (credential) => {
     setAuthMessage("");
@@ -2018,12 +2274,9 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
-      setAuthToken(data.token || "");
-      setAuthEmail(data.email || "");
-      setAuthEmailInput(data.email || "");
-      setCurrentPage("capture");
+      applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage("You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(err.message || "Google sign-in failed.");
     } finally {
@@ -2048,12 +2301,9 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Apple sign-in failed.");
-      setAuthToken(data.token || "");
-      setAuthEmail(data.email || "");
-      setAuthEmailInput(data.email || "");
-      setCurrentPage("capture");
+      applyAuthResponse(data, data.email || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage("You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(err.message || "Apple sign-in failed.");
     }
@@ -2092,16 +2342,13 @@ export default function App() {
       }, 20000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not sign in.");
-      setAuthToken(data.token || "");
-      setAuthEmail(data.email || email);
-      setAuthEmailInput(data.email || email);
+      applyAuthResponse(data, email, { promptForMode: true });
       setAuthPasswordInput("");
       setAuthCodeInput("");
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
-      setCurrentPage("capture");
       setStatus("Signed in successfully.");
-      setAuthMessage("You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err));
     } finally {
@@ -2174,17 +2421,14 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Verification failed.");
-      setAuthToken(data.token || "");
-      setAuthEmail(data.email || email);
-      setAuthEmailInput(data.email || email);
+      applyAuthResponse(data, email, { promptForMode: true });
       setAuthPasswordInput("");
       setAuthCodeInput("");
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
       setAuthMode("login");
-      setCurrentPage("capture");
       setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : (pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
-      setAuthMessage("You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(err.message || "Verification failed.");
     } finally {
@@ -2320,8 +2564,9 @@ export default function App() {
   const authFetch = async (path, options = {}) => {
     const { timeoutMs = 30000, ...requestOptions } = options;
     if (!authToken) throw new Error("Please sign in to continue.");
+    const activeToken = await refreshSessionIfNeeded();
     const headers = new Headers(requestOptions.headers || {});
-    headers.set("Authorization", `Bearer ${authToken}`);
+    headers.set("Authorization", `Bearer ${activeToken}`);
     let response;
     try {
       response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...requestOptions, headers }, timeoutMs);
@@ -2333,6 +2578,32 @@ export default function App() {
       throw new Error("Your session expired. Please sign in again.");
     }
     return response;
+  };
+
+  const chooseSessionMode = async (mode, { silent = false } = {}) => {
+    const targetMode = mode === "admin" ? "admin" : "user";
+    if (targetMode === "user" && authSessionMode === "user") {
+      setCurrentPage("capture");
+      if (!silent) setStatus("User mode opened.");
+      return;
+    }
+
+    try {
+      const response = await authFetch("/auth/select-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: targetMode }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not switch session mode.");
+      applyAuthResponse({ ...data, token: data.token || authToken }, authEmail, { promptForMode: false });
+      if (targetMode === "admin") {
+        await loadAdminDashboard(true);
+      }
+      if (!silent) setStatus(targetMode === "admin" ? "Admin mode opened." : "User mode opened.");
+    } catch (err) {
+      if (!silent) setError(err.message || "Could not switch session mode.");
+    }
   };
 
   const pushHistoryToServer = async (items) => {
@@ -2351,6 +2622,54 @@ export default function App() {
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Could not load history.");
     return normalizeHistoryItems(data.items || []);
+  };
+
+  const loadAdminDashboard = async (silent = false) => {
+    if (!authToken) return;
+    setIsLoadingAdminDashboard(true);
+    try {
+      const response = await authFetch("/admin/dashboard");
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not load the admin dashboard.");
+      setAdminDashboard(data);
+    } catch (err) {
+      if (!silent) setError(err.message || "Could not load the admin dashboard.");
+      if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
+        setCurrentPage("capture");
+      }
+    } finally {
+      setIsLoadingAdminDashboard(false);
+    }
+  };
+
+  const updateAdminUserStatus = async (email, statusValue) => {
+    try {
+      const response = await authFetch(`/admin/users/${encodeURIComponent(email)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: statusValue }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not update this user.");
+      setStatus(`${email} is now ${statusValue}.`);
+      await loadAdminDashboard(true);
+    } catch (err) {
+      setError(err.message || "Could not update this user.");
+    }
+  };
+
+  const forceLogoutAdminUser = async (email) => {
+    try {
+      const response = await authFetch(`/admin/users/${encodeURIComponent(email)}/force-logout`, {
+        method: "POST",
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not force logout for this user.");
+      setStatus(`${email} was signed out from active sessions.`);
+      await loadAdminDashboard(true);
+    } catch (err) {
+      setError(err.message || "Could not force logout for this user.");
+    }
   };
 
   useEffect(() => {
@@ -2464,6 +2783,17 @@ export default function App() {
   }, [activeRoomId, authToken]);
 
   useEffect(() => {
+    if (!authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
+    loadAdminDashboard(true);
+    const intervalId = window.setInterval(() => {
+      loadAdminDashboard(true);
+    }, 15000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [authSessionMode, authToken, currentPage]);
+
+  useEffect(() => {
     if (!followRoomView || !activeRoom?.active_tab) return;
     setActiveTab(activeRoom.active_tab);
   }, [activeRoom?.active_tab, activeTab, followRoomView]);
@@ -2523,7 +2853,7 @@ export default function App() {
 
   const buildCurrentStudyPackSections = () => [
     { title: "Study Guide", content: formattedGuide || summary },
-    { title: "Study Photos", content: studyImagesToText(studyImages) },
+    { title: "Study Photos", content: studyImagesToText(visualReferences) },
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
@@ -2765,12 +3095,15 @@ export default function App() {
     const skippedNames = [];
     for (const [index, selectedFile] of files.entries()) {
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
+      const isImageFile = selectedFile.type.startsWith("image/");
       onProgress?.(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
       onStatus?.(`Reading ${sourceName} ${index + 1} of ${files.length}: ${selectedFile.name}`);
       if (isTextFile) {
         const text = normalizeStudySourceText(await selectedFile.text());
         if (isLikelyReadableStudySourceText(text)) {
-          extractedEntries.push(createStudySourceEntry(selectedFile.name, text, sourcePrefix));
+          extractedEntries.push(createStudySourceEntry(selectedFile.name, text, sourcePrefix, {
+            fileType: selectedFile.type || "",
+          }));
           addedNames.push(selectedFile.name);
         } else if (text) {
           skippedNames.push(selectedFile.name);
@@ -2788,7 +3121,11 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
       const cleanedText = normalizeStudySourceText(data.text || "");
       if (isLikelyReadableStudySourceText(cleanedText)) {
-        extractedEntries.push(createStudySourceEntry(selectedFile.name, cleanedText, sourcePrefix));
+        extractedEntries.push(createStudySourceEntry(selectedFile.name, cleanedText, sourcePrefix, {
+          previewUrl: isImageFile ? await readFileAsDataUrl(selectedFile) : "",
+          fileType: selectedFile.type || "",
+          visualSource: isImageFile,
+        }));
         addedNames.push(selectedFile.name);
       } else if (cleanedText) {
         skippedNames.push(selectedFile.name);
@@ -3282,6 +3619,7 @@ export default function App() {
           lecture_notes: resolvedLectureNotes,
           lecture_slides: resolvedLectureSlides,
           past_question_papers: resolvedPastQuestionPapers,
+          language: outputLanguage,
         }),
       });
       const data = await parseJsonSafe(response);
@@ -3332,15 +3670,15 @@ export default function App() {
           studyImages: job.study_images || [],
           lectureNotes: resolvedLectureNotes,
           lectureNotesFileName: resolvedLectureNotesFileName,
-          lectureNoteSources: resolvedLectureNoteSources,
+          lectureNoteSources: sanitizeStudySourceEntriesForHistory(resolvedLectureNoteSources),
           lectureNoteFileNames: resolvedLectureNoteFileNames,
           lectureSlides: resolvedLectureSlides,
           lectureSlideFileNames: resolvedLectureSlidesFileNames,
-          lectureSlideSources: resolvedLectureSlideSources,
+          lectureSlideSources: sanitizeStudySourceEntriesForHistory(resolvedLectureSlideSources),
           pastQuestionMemo: resolvedPastQuestionMemo,
           pastQuestionPapers: resolvedPastQuestionPapers,
           pastQuestionPaperFileNames: resolvedPastQuestionPaperFileNames,
-          pastQuestionPaperSources: resolvedPastQuestionPaperSources,
+          pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(resolvedPastQuestionPaperSources),
           presentationData: sanitizePresentationForHistory(createEmptyPresentationData()),
           podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
         });
@@ -3381,6 +3719,7 @@ export default function App() {
           lecture_slides: lectureSlides,
           past_question_papers: pastQuestionPapers,
           design_id: selectedPresentationDesign,
+          language: outputLanguage,
         }),
       });
       const data = await parseJsonSafe(response);
@@ -3419,15 +3758,15 @@ export default function App() {
         studyImages,
         lectureNotes,
         lectureNotesFileName,
-        lectureNoteSources,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
         lectureNoteFileNames,
         lectureSlides,
         lectureSlideFileNames,
-        lectureSlideSources,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
         pastQuestionPapers,
         pastQuestionPaperFileNames,
-        pastQuestionPaperSources,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(nextPresentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
       });
@@ -3502,6 +3841,7 @@ export default function App() {
           past_question_papers: pastQuestionPapers,
           speaker_count: podcastSpeakerCount,
           target_minutes: podcastTargetMinutes,
+          language: outputLanguage,
         }),
       });
       const data = await parseJsonSafe(response);
@@ -3542,15 +3882,15 @@ export default function App() {
         studyImages,
         lectureNotes,
         lectureNotesFileName,
-        lectureNoteSources,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
         lectureNoteFileNames,
         lectureSlides,
         lectureSlideFileNames,
-        lectureSlideSources,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
         pastQuestionPapers,
         pastQuestionPaperFileNames,
-        pastQuestionPaperSources,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(nextPodcastData),
       });
@@ -3625,6 +3965,7 @@ export default function App() {
           past_question_papers: pastQuestionPapers,
           history: chatMessages.slice(-6),
           reference_images: chatReferenceImages.map((item) => item.dataUrl),
+          language: outputLanguage,
         }),
       });
       const data = await parseJsonSafe(response);
@@ -4203,6 +4544,13 @@ export default function App() {
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Access</p>
               <h2 className="mt-3 text-3xl font-semibold text-white">Continue into Mabaso</h2>
               <div className="mt-8 space-y-5">
+                <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                  <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Study material language</label>
+                  <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none">
+                    {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                  <p className="mt-3 text-sm leading-7 text-slate-300">Generated study guides, tests, presentations, podcasts, and study chat answers follow this language, including isiZulu.</p>
+                </div>
                 {authEmailInput ? (
                   <div className="rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">
                     Last used on this device: {authEmailInput}
@@ -4356,6 +4704,39 @@ export default function App() {
     );
   }
 
+  if (authToken && currentPage === "mode-select" && isAdminAccount) {
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="hero-glow hero-glow-left" />
+          <div className="hero-glow hero-glow-right" />
+          <div className="hero-grid" />
+        </div>
+        <main className="relative mx-auto flex min-h-screen max-w-5xl items-center px-4 py-10 sm:px-6 lg:px-8">
+          <section className="w-full rounded-[32px] border border-white/10 bg-slate-950/75 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
+            <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
+            <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Mode selection</p>
+            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">Choose how this account should enter the platform.</h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">This login matches an admin account, but the admin area stays hidden unless you deliberately switch into admin mode.</p>
+            <div className="mt-8 grid gap-5 xl:grid-cols-2">
+              <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the normal student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study guides, and use the platform like a normal user.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("admin")} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the protected admin dashboard</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, and security alerts with server-side checks enforced.</p></button>
+            </div>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <div className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
+              <div className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-200">Selected language: {outputLanguage}</div>
+              <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white">Sign Out</button>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (authToken && currentPage === "admin" && authSessionMode === "admin") {
+    return renderAdminPage();
+  }
+
   return (
     <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -4371,8 +4752,15 @@ export default function App() {
               <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-full px-4 py-2 text-sm ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+              {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
+              <label className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-slate-200">
+                <span className="mr-2 text-xs uppercase tracking-[0.18em] text-slate-400">Language</span>
+                <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="bg-transparent text-sm text-white outline-none">
+                  {outputLanguageOptions.map((option) => <option key={option.value} value={option.value} className="bg-slate-950 text-white">{option.label}</option>)}
+                </select>
+              </label>
               <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
               <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
             </div>
@@ -4528,7 +4916,7 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{studyImages.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Photo guides for concepts students should recognise by sight.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Use these real photos together with the notes below when the lesson includes physical objects, structures, machines, instruments, or clearly named types.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{studyImages.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.query || "Real photo"}</p><p className="text-xs text-slate-400">Open source photo for concept recognition</p></div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{visualReferences.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Visuals taken from your sources and the generated study pack.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Uploaded slide or note images are shown first so the guide can rely on your real lecture material before any external reference images.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{visualReferences.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.query || "Real photo"}</p><p className="text-xs text-slate-400">{image.source_type === "uploaded" ? "Uploaded from your lecture notes or slides" : "Reference image"}</p></div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
