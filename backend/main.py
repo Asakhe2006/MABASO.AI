@@ -1210,20 +1210,24 @@ def verify_smtp_is_configured():
 
 def get_smtp_settings() -> dict[str, Any]:
     verify_smtp_is_configured()
+    port_text = os.getenv("SMTP_PORT", "587").strip() or "587"
+    use_ssl = os.getenv("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes", "on"} or port_text == "465"
     return {
         "host": os.getenv("SMTP_HOST", ""),
-        "port": int(os.getenv("SMTP_PORT", "587")),
+        "port": int(port_text),
         "username": os.getenv("SMTP_USERNAME", ""),
         "password": os.getenv("SMTP_PASSWORD", ""),
         "from_email": os.getenv("SMTP_FROM_EMAIL", ""),
-        "use_tls": os.getenv("SMTP_USE_TLS", "true").lower() != "false",
+        "use_tls": (os.getenv("SMTP_USE_TLS", "true").lower() != "false") and not use_ssl,
+        "use_ssl": use_ssl,
     }
 
 
 def send_smtp_message(message: EmailMessage):
     smtp_settings = get_smtp_settings()
     try:
-        with smtplib.SMTP(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
+        smtp_factory = smtplib.SMTP_SSL if smtp_settings["use_ssl"] else smtplib.SMTP
+        with smtp_factory(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
             if smtp_settings["use_tls"]:
                 server.starttls()
             if smtp_settings["username"]:
@@ -1254,7 +1258,7 @@ def send_smtp_message(message: EmailMessage):
         logger.exception("SMTP network error while sending email")
         raise HTTPException(
             status_code=502,
-            detail="The backend could not reach the SMTP server. Recheck SMTP_HOST, SMTP_PORT, and TLS settings.",
+            detail="The backend could not reach the SMTP server. Recheck SMTP_HOST, SMTP_PORT, SMTP_USE_TLS, and SMTP_USE_SSL.",
         ) from exc
 
 
