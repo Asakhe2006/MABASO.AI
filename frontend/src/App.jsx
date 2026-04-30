@@ -2239,12 +2239,13 @@ export default function App() {
     setCurrentPage("capture");
   };
 
-  const refreshSessionIfNeeded = async () => {
-    if (!authToken) return authToken;
-    const expiryTimestamp = getTokenExpiryTimestamp(authToken);
-    if (!expiryTimestamp || expiryTimestamp - Date.now() > 12 * 60 * 1000) return authToken;
+  const refreshSessionIfNeeded = async (tokenOverride = "") => {
+    const currentToken = tokenOverride || authToken;
+    if (!currentToken) return currentToken;
+    const expiryTimestamp = getTokenExpiryTimestamp(currentToken);
+    if (!expiryTimestamp || expiryTimestamp - Date.now() > 12 * 60 * 1000) return currentToken;
 
-    const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }, 8000);
+    const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${currentToken}` } }, 8000);
     const data = await parseJsonSafe(response);
     if (response.status === 401) {
       clearSession("Your session expired. Please sign in again.");
@@ -2253,7 +2254,7 @@ export default function App() {
     if (!response.ok) {
       throw new Error(data.detail || "Could not refresh your session.");
     }
-    const nextToken = data.token || authToken;
+    const nextToken = data.token || currentToken;
     setAuthToken(nextToken);
     setAuthEmail(data.email || authEmail || "");
     setAuthSessionMode(data.session_mode || authSessionMode || "user");
@@ -2562,9 +2563,10 @@ export default function App() {
   }, [authChecked, authToken]);
 
   const authFetch = async (path, options = {}) => {
-    const { timeoutMs = 30000, ...requestOptions } = options;
-    if (!authToken) throw new Error("Please sign in to continue.");
-    const activeToken = await refreshSessionIfNeeded();
+    const { timeoutMs = 30000, tokenOverride = "", ...requestOptions } = options;
+    const currentToken = tokenOverride || authToken;
+    if (!currentToken) throw new Error("Please sign in to continue.");
+    const activeToken = await refreshSessionIfNeeded(tokenOverride);
     const headers = new Headers(requestOptions.headers || {});
     headers.set("Authorization", `Bearer ${activeToken}`);
     let response;
@@ -2596,9 +2598,10 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not switch session mode.");
-      applyAuthResponse({ ...data, token: data.token || authToken }, authEmail, { promptForMode: false });
+      const nextToken = data.token || authToken;
+      applyAuthResponse({ ...data, token: nextToken }, authEmail, { promptForMode: false });
       if (targetMode === "admin") {
-        await loadAdminDashboard(true);
+        await loadAdminDashboard(true, nextToken);
       }
       if (!silent) setStatus(targetMode === "admin" ? "Admin mode opened." : "User mode opened.");
     } catch (err) {
@@ -2624,11 +2627,11 @@ export default function App() {
     return normalizeHistoryItems(data.items || []);
   };
 
-  const loadAdminDashboard = async (silent = false) => {
-    if (!authToken) return;
+  const loadAdminDashboard = async (silent = false, tokenOverride = "") => {
+    if (!(tokenOverride || authToken)) return;
     setIsLoadingAdminDashboard(true);
     try {
-      const response = await authFetch("/admin/dashboard");
+      const response = await authFetch("/admin/dashboard", { tokenOverride });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load the admin dashboard.");
       setAdminDashboard(data);
