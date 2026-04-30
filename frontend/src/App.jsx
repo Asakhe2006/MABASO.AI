@@ -365,8 +365,12 @@ function normalizeAppleSignInError(error) {
   return error?.message || "Apple sign-in failed.";
 }
 
+function normalizeHistoryOwnerEmail(email = "") {
+  return (email || "").trim().toLowerCase();
+}
+
 function getHistoryStorageKey(email = "") {
-  const normalizedEmail = (email || "").trim().toLowerCase();
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
   return normalizedEmail ? `${HISTORY_STORAGE_KEY}:${normalizedEmail}` : HISTORY_STORAGE_KEY;
 }
 
@@ -777,6 +781,294 @@ function formatBytes(bytes) {
   return mb < 1 ? `${(bytes / 1024).toFixed(0)} KB` : `${mb.toFixed(1)} MB`;
 }
 
+const adminCompactNumberFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const adminIntegerFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+const adminDecimalFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+});
+const ADMIN_CHART_COLORS = ["#4f46e5", "#06b6d4", "#22c55e", "#f59e0b", "#ec4899", "#8b5cf6"];
+
+function toFiniteNumber(value, fallback = 0) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function formatAdminCompactNumber(value) {
+  return adminCompactNumberFormatter.format(toFiniteNumber(value));
+}
+
+function formatAdminInteger(value) {
+  return adminIntegerFormatter.format(Math.round(toFiniteNumber(value)));
+}
+
+function formatAdminDecimal(value) {
+  return adminDecimalFormatter.format(toFiniteNumber(value));
+}
+
+function formatAdminPercent(value) {
+  const amount = toFiniteNumber(value);
+  const hasFraction = Math.abs(amount % 1) > 0.001;
+  return `${hasFraction ? amount.toFixed(1) : Math.round(amount)}%`;
+}
+
+function formatAdminDuration(valueMs) {
+  const ms = Math.max(0, toFiniteNumber(valueMs));
+  if (ms >= 60000) {
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.round((ms % 60000) / 1000);
+    return `${minutes}m ${seconds}s`;
+  }
+  if (ms >= 1000) {
+    return `${formatAdminDecimal(ms / 1000)}s`;
+  }
+  return `${Math.round(ms)} ms`;
+}
+
+function formatAdminDate(value, options = { month: "short", day: "numeric" }) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "--";
+  return parsed.toLocaleDateString(undefined, options);
+}
+
+function formatAdminDateTime(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "--";
+  return parsed.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function titleCaseWords(value = "") {
+  return String(value)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatAdminActionLabel(action = "") {
+  return titleCaseWords(String(action || "").replace(/\./g, " "));
+}
+
+function getAdminHealthTone(value = "") {
+  const normalized = String(value || "").toLowerCase();
+  if (["green", "active", "success", "low", "operational", "completed"].some((item) => normalized.includes(item))) {
+    return "bg-emerald-50 text-emerald-700";
+  }
+  if (["yellow", "processing", "queued", "medium", "warning", "pending"].some((item) => normalized.includes(item))) {
+    return "bg-amber-50 text-amber-700";
+  }
+  return "bg-rose-50 text-rose-700";
+}
+
+function getAdminActionTone(action = "") {
+  const normalized = String(action || "").toLowerCase();
+  if (normalized.includes("auth")) return "bg-violet-50 text-violet-700";
+  if (normalized.includes("upload") || normalized.includes("slide") || normalized.includes("note")) return "bg-sky-50 text-sky-700";
+  if (normalized.includes("study_guide") || normalized.includes("presentation") || normalized.includes("podcast")) return "bg-emerald-50 text-emerald-700";
+  if (normalized.includes("admin")) return "bg-amber-50 text-amber-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function AdminLineChart({
+  items = [],
+  valueKey = "value",
+  labelKey = "label",
+  stroke = ADMIN_CHART_COLORS[0],
+  formatter = formatAdminInteger,
+}) {
+  const normalizedItems = items
+    .map((item) => ({
+      label: item?.[labelKey] ?? "",
+      value: toFiniteNumber(item?.[valueKey]),
+    }))
+    .filter((item) => item.label !== "" || item.value !== 0);
+
+  if (!normalizedItems.length) {
+    return <div className="flex min-h-[220px] items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">No chart data yet.</div>;
+  }
+
+  const width = 560;
+  const height = 220;
+  const paddingX = 18;
+  const paddingTop = 16;
+  const paddingBottom = 26;
+  const chartHeight = height - paddingTop - paddingBottom;
+  const chartWidth = width - paddingX * 2;
+  const values = normalizedItems.map((item) => item.value);
+  const maxValue = Math.max(...values, 1);
+  const minValue = Math.min(...values, 0);
+  const span = Math.max(maxValue - minValue, 1);
+
+  const points = normalizedItems.map((item, index) => {
+    const x = normalizedItems.length === 1
+      ? width / 2
+      : paddingX + (index / (normalizedItems.length - 1)) * chartWidth;
+    const y = paddingTop + (1 - ((item.value - minValue) / span)) * chartHeight;
+    return { ...item, x, y };
+  });
+
+  const linePath = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingBottom} L ${points[0].x} ${height - paddingBottom} Z`;
+  const keyLabelIndexes = Array.from(new Set([0, Math.floor((normalizedItems.length - 1) / 2), normalizedItems.length - 1]));
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px] w-full">
+        {Array.from({ length: 4 }).map((_, index) => {
+          const y = paddingTop + (index / 3) * chartHeight;
+          return <line key={index} x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="#e2e8f0" strokeDasharray="4 8" />;
+        })}
+        <path d={areaPath} fill={stroke} fillOpacity="0.12" />
+        <path d={linePath} fill="none" stroke={stroke} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point, index) => (
+          <g key={`${point.label}-${index}`}>
+            <circle cx={point.x} cy={point.y} r="4.5" fill="white" stroke={stroke} strokeWidth="2" />
+            <circle cx={point.x} cy={point.y} r="2" fill={stroke} />
+          </g>
+        ))}
+      </svg>
+      <div className="mt-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+        {keyLabelIndexes.map((index) => (
+          <span key={`${normalizedItems[index]?.label}-${index}`} className="truncate">
+            {normalizedItems[index]?.label}
+          </span>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-wrap gap-3">
+        {points.slice(-3).map((point) => (
+          <div key={point.label} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600">
+            {point.label}: <span className="font-semibold text-slate-900">{formatter(point.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminDonutChart({
+  items = [],
+  valueKey = "value",
+  labelKey = "label",
+  totalLabel = "Total",
+  formatter = formatAdminCompactNumber,
+}) {
+  const normalizedItems = items
+    .map((item, index) => ({
+      label: item?.[labelKey] ?? "",
+      value: Math.max(0, toFiniteNumber(item?.[valueKey])),
+      color: item?.color || ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+    }))
+    .filter((item) => item.value > 0);
+
+  if (!normalizedItems.length) {
+    return <div className="flex min-h-[220px] items-center justify-center rounded-[24px] border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">Nothing to visualize yet.</div>;
+  }
+
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  const total = normalizedItems.reduce((sum, item) => sum + item.value, 0);
+  const segmentOffsets = [];
+  let runningOffset = 0;
+  normalizedItems.forEach((item) => {
+    segmentOffsets.push(runningOffset);
+    const segmentLength = total ? (item.value / total) * circumference : 0;
+    runningOffset += segmentLength;
+  });
+
+  return (
+    <div className="flex flex-col gap-5 md:flex-row md:items-center">
+      <div className="relative mx-auto h-40 w-40 shrink-0">
+        <svg viewBox="0 0 120 120" className="h-40 w-40 -rotate-90">
+          <circle cx="60" cy="60" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="14" />
+          {normalizedItems.map((item, index) => {
+            const segmentLength = total ? (item.value / total) * circumference : 0;
+            return (
+              <circle
+                key={item.label}
+                cx="60"
+                cy="60"
+                r={radius}
+                fill="none"
+                stroke={item.color}
+                strokeWidth="14"
+                strokeLinecap="round"
+                strokeDasharray={`${segmentLength} ${circumference}`}
+                strokeDashoffset={-segmentOffsets[index]}
+              />
+            );
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <p className="text-2xl font-semibold text-slate-900">{formatter(total)}</p>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">{totalLabel}</p>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {normalizedItems.map((item) => (
+          <div key={item.label} className="flex items-center justify-between gap-5 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
+              <span className="truncate text-sm text-slate-700">{item.label}</span>
+            </div>
+            <div className="text-right">
+              <p className="text-sm font-semibold text-slate-900">{formatter(item.value)}</p>
+              <p className="text-xs text-slate-500">{formatAdminPercent((item.value / total) * 100)}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminBarList({
+  items = [],
+  valueKey = "value",
+  labelKey = "label",
+  formatter = formatAdminCompactNumber,
+  maxItems = 6,
+}) {
+  const normalizedItems = items
+    .slice(0, maxItems)
+    .map((item, index) => ({
+      label: item?.[labelKey] ?? "",
+      value: Math.max(0, toFiniteNumber(item?.[valueKey])),
+      color: item?.color || ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+    }))
+    .filter((item) => item.label);
+
+  if (!normalizedItems.length) {
+    return <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">No breakdown data yet.</div>;
+  }
+
+  const maxValue = Math.max(...normalizedItems.map((item) => item.value), 1);
+
+  return (
+    <div className="space-y-3">
+      {normalizedItems.map((item) => (
+        <div key={item.label}>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-slate-700">{item.label}</p>
+            <p className="text-sm font-semibold text-slate-900">{formatter(item.value)}</p>
+          </div>
+          <div className="mt-2 h-2.5 rounded-full bg-slate-100">
+            <div className="h-2.5 rounded-full" style={{ width: `${Math.max(10, (item.value / maxValue) * 100)}%`, backgroundColor: item.color }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function getErrorHint(message) {
   const text = (message || "").toLowerCase();
   if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
@@ -1175,6 +1467,7 @@ export default function App() {
   const answerSyncTimersRef = useRef({});
   const historyHydratingRef = useRef(false);
   const skipNextHistorySyncRef = useRef(false);
+  const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -1268,12 +1561,14 @@ export default function App() {
   };
 
   const clearHistory = () => {
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     setHistoryItems([]);
     setActiveHistoryId("");
     setStatus("History cleared for this email.");
   };
 
   const removeHistoryItem = (itemId) => {
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     setHistoryItems((current) => current.filter((entry) => entry.id !== itemId));
     if (activeHistoryId === itemId) setActiveHistoryId("");
   };
@@ -2381,6 +2676,852 @@ export default function App() {
 
   const renderAdminPage = () => {
     const sidebarItems = [
+      { id: "overview", label: "Dashboard", group: "Overview" },
+      { id: "users", label: "Users", group: "Users" },
+      { id: "activity", label: "Activity Log", group: "Users" },
+      { id: "content", label: "Content Library", group: "Content & Tools" },
+      { id: "ai", label: "AI Generation", group: "Content & Tools" },
+      { id: "analytics", label: "Analytics", group: "Analytics" },
+      { id: "health", label: "System Health", group: "System" },
+      { id: "security", label: "Security", group: "System" },
+      { id: "billing", label: "Billing", group: "System" },
+      { id: "settings", label: "Settings", group: "System" },
+    ];
+    const sectionCardClass = "rounded-[32px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]";
+    const dashboard = adminDashboard || {};
+    const overview = dashboard.overview || {};
+    const overviewKpis = overview.kpis || {};
+    const overviewCharts = overview.charts || {};
+    const analytics = dashboard.analytics || {};
+    const aiGeneration = dashboard.ai_generation || {};
+    const content = dashboard.content || {};
+    const systemHealth = dashboard.system_health || {};
+    const security = dashboard.security || {};
+    const users = dashboard.users || [];
+    const activityLogs = dashboard.activity_logs || [];
+    const failedJobs = aiGeneration.failed_jobs || [];
+    const failedLoginCount = (security.failed_logins || []).length;
+    const normalizedSearchQuery = adminSearchQuery.toLowerCase();
+    const filteredUsers = users.filter((user) => `${user.email} ${user.role} ${user.status}`.toLowerCase().includes(normalizedSearchQuery));
+    const filteredLogs = activityLogs.filter((log) => `${log.user} ${log.action} ${log.resource}`.toLowerCase().includes(normalizedSearchQuery));
+    const filteredContent = (content.items || []).filter((item) => `${item.file_name} ${item.owner_email} ${item.title}`.toLowerCase().includes(normalizedSearchQuery));
+    const dailyActivitySeries = (overviewCharts.daily_active_users || []).map((item) => ({
+      label: formatAdminDate(item.date),
+      value: item.active_users,
+    }));
+    const realTimeSeries = (overviewCharts.real_time_activity || []).map((item) => ({
+      label: item.label,
+      value: item.count,
+    }));
+    const featureUsageItems = (overviewCharts.feature_usage_breakdown || analytics.most_used_tools || [])
+      .slice(0, 5)
+      .map((item, index) => ({
+        label: item.label,
+        value: item.count,
+        color: ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+      }));
+    const outputMixItems = [
+      { label: "Study Guides", value: aiGeneration.totals?.study_guides ?? 0, color: ADMIN_CHART_COLORS[0] },
+      { label: "Presentations", value: aiGeneration.totals?.presentations ?? 0, color: ADMIN_CHART_COLORS[1] },
+      { label: "Podcasts", value: aiGeneration.totals?.podcasts ?? 0, color: ADMIN_CHART_COLORS[2] },
+      { label: "Tests", value: overviewKpis.tests_generated ?? 0, color: ADMIN_CHART_COLORS[3] },
+    ].filter((item) => item.value > 0);
+    const conversionFunnelItems = (overviewCharts.conversion_funnel || []).map((item, index) => ({
+      label: item.label,
+      value: item.count,
+      color: ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+    }));
+    const topUsers = [...users]
+      .sort((left, right) => ((right.total_generations || 0) + (right.total_uploads || 0) + (right.sessions_count || 0)) - ((left.total_generations || 0) + (left.total_uploads || 0) + (left.sessions_count || 0)))
+      .slice(0, 5);
+    const recentActivityPreview = activityLogs.slice(0, 6);
+    const storageLeaders = content.storage_insights?.top_users || [];
+    const sessionHeatmapPreview = (analytics.session_heatmap || []).slice(0, 24);
+    const maxSessionHeat = Math.max(...sessionHeatmapPreview.map((item) => toFiniteNumber(item.actions)), 1);
+    const retentionItems = [
+      { label: "Day 1", value: analytics.retention?.day_1 ?? 0 },
+      { label: "Day 7", value: analytics.retention?.day_7 ?? 0 },
+      { label: "Day 30", value: analytics.retention?.day_30 ?? 0 },
+    ];
+    const lastWeekTimestamp = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    const newUsersThisWeek = users.filter((user) => {
+      const createdAt = new Date(user.created_at).getTime();
+      return Number.isFinite(createdAt) && createdAt >= lastWeekTimestamp;
+    }).length;
+    const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
+    const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
+      if (!groups[item.group]) groups[item.group] = [];
+      groups[item.group].push(item);
+      return groups;
+    }, {});
+    const overviewCards = [
+      {
+        label: "Total Users",
+        value: formatAdminInteger(overviewKpis.total_users ?? 0),
+        detail: `${formatAdminInteger(newUsersThisWeek)} new this week`,
+        icon: "U",
+        accentClass: "bg-blue-50 text-blue-700",
+      },
+      {
+        label: "Active Users (7D)",
+        value: formatAdminInteger(overviewKpis.active_users_7d ?? 0),
+        detail: `${formatAdminInteger(overviewKpis.active_users_24h ?? 0)} active in 24h`,
+        icon: "A",
+        accentClass: "bg-emerald-50 text-emerald-700",
+      },
+      {
+        label: "Lectures Uploaded",
+        value: formatAdminInteger(overviewKpis.lectures_uploaded_week ?? 0),
+        detail: `${formatAdminInteger(overviewKpis.lectures_uploaded_today ?? 0)} uploads today`,
+        icon: "L",
+        accentClass: "bg-violet-50 text-violet-700",
+      },
+      {
+        label: "Study Guides",
+        value: formatAdminInteger(overviewKpis.study_guides_generated ?? 0),
+        detail: `${formatAdminInteger(overviewKpis.tests_generated ?? 0)} tests generated`,
+        icon: "G",
+        accentClass: "bg-amber-50 text-amber-700",
+      },
+      {
+        label: "AI Success Rate",
+        value: formatAdminPercent(aiGeneration.success_rate_percent ?? 0),
+        detail: `${formatAdminInteger(failedJobs.length)} recent failed jobs`,
+        icon: "AI",
+        accentClass: "bg-pink-50 text-pink-700",
+      },
+      {
+        label: "Response Time",
+        value: formatAdminDuration(systemHealth.api_response_time_ms ?? overviewKpis.avg_processing_time_ms ?? 0),
+        detail: `${formatAdminInteger(systemHealth.queue_length ?? 0)} live jobs in queue`,
+        icon: "R",
+        accentClass: "bg-slate-100 text-slate-700",
+      },
+    ];
+
+    const emptyPanel = (message) => (
+      <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500">
+        {message}
+      </div>
+    );
+
+    const renderTabContent = () => {
+      if (adminSidebarTab === "overview") {
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-5 2xl:grid-cols-[1.45fr_1fr_1fr]">
+              <article className={sectionCardClass}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Activity Overview</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-950">Daily active audience across the last month</h2>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">WAU {formatAdminInteger(overviewCharts.wau ?? 0)}</span>
+                    <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700">MAU {formatAdminInteger(overviewCharts.mau ?? 0)}</span>
+                  </div>
+                </div>
+                <div className="mt-5">
+                  <AdminLineChart items={dailyActivitySeries} stroke={ADMIN_CHART_COLORS[0]} />
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Feature Usage Distribution</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">What administrators and students use most</h2>
+                <div className="mt-5">
+                  <AdminDonutChart items={featureUsageItems} totalLabel="Actions" />
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Session Pulse</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Five-minute request cadence</h2>
+                <div className="mt-5">
+                  <AdminLineChart items={realTimeSeries} stroke={ADMIN_CHART_COLORS[1]} />
+                </div>
+              </article>
+            </div>
+
+            <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+              <article className={sectionCardClass}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Recent User Activity</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-950">Latest events happening in the platform</h2>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{recentActivityPreview.length} visible</span>
+                </div>
+                <div className="mt-5 space-y-3">
+                  {recentActivityPreview.length ? recentActivityPreview.map((log, index) => (
+                    <div key={`${log.timestamp}-${index}`} className="flex flex-col gap-3 rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${getAdminActionTone(log.action)}`}>{formatAdminActionLabel(log.action)}</span>
+                          <span className="text-sm font-semibold text-slate-900">{log.user}</span>
+                        </div>
+                        <p className="mt-2 text-sm text-slate-600">{log.resource || "No resource recorded"} on {log.ip_address || "no IP"}.</p>
+                      </div>
+                      <div className="text-sm text-slate-500 xl:text-right">
+                        <p>{formatAdminDateTime(log.timestamp)}</p>
+                        <p className="mt-1 font-medium text-slate-700">{formatAdminDuration(log.duration_ms || 0)}</p>
+                      </div>
+                    </div>
+                  )) : emptyPanel("Activity will appear here as soon as people start using the app.")}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Top Users By Usage</p>
+                    <h2 className="mt-2 text-2xl font-semibold text-slate-950">Who is driving the most lecture work</h2>
+                  </div>
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Ranked by sessions, uploads, and outputs</span>
+                </div>
+                <div className="mt-5 space-y-3">
+                  {topUsers.length ? topUsers.map((user, index) => (
+                    <div key={user.email} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
+                            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-sm font-semibold text-indigo-700">{index + 1}</span>
+                            <div className="min-w-0">
+                              <p className="phone-safe-copy truncate text-sm font-semibold text-slate-900">{user.email}</p>
+                              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{titleCaseWords(user.role)} account</p>
+                            </div>
+                          </div>
+                        </div>
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl bg-white px-3 py-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Sessions</p>
+                          <p className="mt-2 text-lg font-semibold text-slate-900">{formatAdminInteger(user.sessions_count || 0)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-white px-3 py-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Uploads</p>
+                          <p className="mt-2 text-lg font-semibold text-slate-900">{formatAdminInteger(user.total_uploads || 0)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-white px-3 py-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Generated</p>
+                          <p className="mt-2 text-lg font-semibold text-slate-900">{formatAdminInteger(user.total_generations || 0)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )) : emptyPanel("Top users will show up once saved study packs and sessions exist.")}
+                </div>
+              </article>
+            </div>
+
+            <div className="grid gap-5 xl:grid-cols-[0.95fr_0.95fr_1.1fr]">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">System Health</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Operational status at a glance</h2>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  {[
+                    { label: "System State", value: titleCaseWords(systemHealth.state || "green"), tone: getAdminHealthTone(systemHealth.state || "green") },
+                    { label: "API Response", value: formatAdminDuration(systemHealth.api_response_time_ms ?? 0), tone: "bg-sky-50 text-sky-700" },
+                    { label: "Queue Length", value: formatAdminInteger(systemHealth.queue_length ?? 0), tone: "bg-violet-50 text-violet-700" },
+                    { label: "Error Rate", value: formatAdminPercent(overviewKpis.error_rate_percent ?? 0), tone: "bg-amber-50 text-amber-700" },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                      <p className="mt-3 text-2xl font-semibold text-slate-950">{item.value}</p>
+                      <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${item.tone}`}>Live metric</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Recent Errors</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Latest failures recorded by the platform</h2>
+                <div className="mt-5 space-y-3">
+                  {failedJobs.length ? failedJobs.slice(0, 4).map((job, index) => (
+                    <div key={`${job.timestamp}-${index}`} className="rounded-[24px] border border-rose-100 bg-rose-50 px-4 py-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-rose-900">{formatAdminActionLabel(job.action)}</p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-rose-700">{job.email || "Unknown user"}</p>
+                        </div>
+                        <p className="text-xs text-rose-700">{formatAdminDateTime(job.timestamp)}</p>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-rose-900">{job.message}</p>
+                    </div>
+                  )) : emptyPanel("No failed jobs are recorded right now.")}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Output Mix And Funnel</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">How requests move from upload to finished study tools</h2>
+                <div className="mt-5 space-y-5">
+                  <AdminDonutChart items={outputMixItems} totalLabel="Outputs" />
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Conversion funnel</p>
+                    <div className="mt-3">
+                      <AdminBarList items={conversionFunnelItems} />
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "users") {
+        return (
+          <article className={sectionCardClass}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Users</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Account access, status, and usage</h2>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{filteredUsers.length} visible</span>
+            </div>
+            <div className="mt-5 overflow-x-auto">
+              {filteredUsers.length ? (
+                <table className="min-w-full border-separate border-spacing-y-3">
+                  <thead>
+                    <tr className="text-left text-xs uppercase tracking-[0.2em] text-slate-500">
+                      <th className="px-3 py-2">User</th>
+                      <th className="px-3 py-2">Role</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Last Login</th>
+                      <th className="px-3 py-2">Sessions</th>
+                      <th className="px-3 py-2">Uploads</th>
+                      <th className="px-3 py-2">Generated</th>
+                      <th className="px-3 py-2">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.map((user) => (
+                      <tr key={user.email} className="rounded-[24px] bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
+                        <td className="rounded-l-[24px] px-3 py-4">
+                          <p className="phone-safe-copy text-sm font-semibold text-slate-900">{user.email}</p>
+                          <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">Risk {titleCaseWords(user.risk_score || "low")}</p>
+                        </td>
+                        <td className="px-3 py-4 text-sm text-slate-700">{titleCaseWords(user.role)}</td>
+                        <td className="px-3 py-4">
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span>
+                        </td>
+                        <td className="px-3 py-4 text-sm text-slate-700">{user.last_login_at ? formatAdminDateTime(user.last_login_at) : "Never"}</td>
+                        <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.sessions_count || 0)}</td>
+                        <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.total_uploads || 0)}</td>
+                        <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.total_generations || 0)}</td>
+                        <td className="rounded-r-[24px] px-3 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            {user.status !== "suspended" ? (
+                              <button type="button" onClick={() => updateAdminUserStatus(user.email, "suspended")} className="rounded-full bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100">Suspend</button>
+                            ) : (
+                              <button type="button" onClick={() => updateAdminUserStatus(user.email, "active")} className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100">Activate</button>
+                            )}
+                            <button type="button" onClick={() => forceLogoutAdminUser(user.email)} className="rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-700">Force Logout</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : emptyPanel("No users match the current search.")}
+            </div>
+          </article>
+        );
+      }
+
+      if (adminSidebarTab === "activity") {
+        return (
+          <article className={sectionCardClass}>
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Activity Log</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Recent audit trail and event stream</h2>
+            </div>
+            <div className="mt-5 space-y-3">
+              {filteredLogs.length ? filteredLogs.map((log, index) => (
+                <div key={`${log.timestamp}-${index}`} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${getAdminActionTone(log.action)}`}>{formatAdminActionLabel(log.action)}</span>
+                        <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${getAdminHealthTone(log.status)}`}>{titleCaseWords(log.status || "success")}</span>
+                      </div>
+                      <p className="mt-3 phone-safe-copy text-sm font-semibold text-slate-900">{log.user}</p>
+                      <p className="mt-2 text-sm text-slate-600">{log.resource || "No resource recorded"} from {log.ip_address || "no IP"}.</p>
+                    </div>
+                    <div className="text-sm text-slate-500 xl:text-right">
+                      <p>{formatAdminDateTime(log.timestamp)}</p>
+                      <p className="mt-1 font-medium text-slate-700">{formatAdminDuration(log.duration_ms || 0)}</p>
+                    </div>
+                  </div>
+                </div>
+              )) : emptyPanel("No logs match the current search.")}
+            </div>
+          </article>
+        );
+      }
+
+      if (adminSidebarTab === "content") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
+            <article className={sectionCardClass}>
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Content Library</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Saved lectures and generated study packs</h2>
+              </div>
+              <div className="mt-5 space-y-3">
+                {filteredContent.length ? filteredContent.map((item, index) => (
+                  <div key={`${item.file_name}-${index}`} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.file_name}</p>
+                        <p className="mt-2 text-sm text-slate-600">{item.owner_email}</p>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(item.processing_status)}`}>{titleCaseWords(item.processing_status)}</span>
+                    </div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                      {[
+                        { label: "Title", value: item.title || "Saved lecture" },
+                        { label: "Uploaded", value: item.upload_date ? formatAdminDateTime(item.upload_date) : "Unknown" },
+                        { label: "Output", value: item.output_generated === "Y" ? "Generated" : "Source only" },
+                        { label: "Size", value: item.size_label || "--" },
+                      ].map((detail) => (
+                        <div key={`${item.file_name}-${detail.label}`} className="rounded-2xl bg-white px-3 py-3">
+                          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{detail.label}</p>
+                          <p className="mt-2 text-sm font-semibold text-slate-900">{detail.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )) : emptyPanel("No saved study packs match the current search.")}
+              </div>
+            </article>
+
+            <div className="space-y-5">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Storage Insights</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Tracked content footprint</h2>
+                <div className="mt-5 rounded-[24px] bg-slate-50 px-4 py-5">
+                  <p className="text-sm text-slate-600">Tracked study packs</p>
+                  <p className="mt-2 text-3xl font-semibold text-slate-950">{formatAdminInteger(content.storage_insights?.tracked_study_packs ?? 0)}</p>
+                </div>
+                <div className="mt-4">
+                  <AdminBarList
+                    items={storageLeaders.map((item, index) => ({
+                      label: item.email,
+                      value: item.saved_items,
+                      color: ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+                    }))}
+                    formatter={formatAdminInteger}
+                  />
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Output Mix</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Generated study assets by type</h2>
+                <div className="mt-5">
+                  <AdminDonutChart items={outputMixItems} totalLabel="Outputs" />
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "ai") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">AI Generation</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Output volumes and model-driven activity</h2>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {[
+                  { label: "Study guides", value: formatAdminInteger(aiGeneration.totals?.study_guides ?? 0) },
+                  { label: "Presentations", value: formatAdminInteger(aiGeneration.totals?.presentations ?? 0) },
+                  { label: "Podcasts", value: formatAdminInteger(aiGeneration.totals?.podcasts ?? 0) },
+                  { label: "Success rate", value: formatAdminPercent(aiGeneration.success_rate_percent ?? 0) },
+                  { label: "Average generation time", value: formatAdminDuration(aiGeneration.avg_generation_time_ms ?? 0) },
+                  { label: "Tracked tests", value: formatAdminInteger(overviewKpis.tests_generated ?? 0) },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                    <p className="mt-3 text-2xl font-semibold text-slate-950">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5">
+                <AdminDonutChart items={outputMixItems} totalLabel="Outputs" />
+              </div>
+            </article>
+
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Failed Jobs</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Recent AI failures and user impact</h2>
+              <div className="mt-5 space-y-3">
+                {failedJobs.length ? failedJobs.map((job, index) => (
+                  <div key={`${job.timestamp}-${index}`} className="rounded-[24px] border border-rose-100 bg-rose-50 px-4 py-4">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-rose-900">{formatAdminActionLabel(job.action)}</p>
+                        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-rose-700">{job.email || "Unknown user"}</p>
+                      </div>
+                      <p className="text-xs text-rose-700">{formatAdminDateTime(job.timestamp)}</p>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-rose-900">{job.message}</p>
+                  </div>
+                )) : emptyPanel("No failed AI jobs are recorded right now.")}
+              </div>
+            </article>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "analytics") {
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Growth Trend</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Thirty-day active user movement</h2>
+                <div className="mt-5">
+                  <AdminLineChart items={dailyActivitySeries} stroke={ADMIN_CHART_COLORS[0]} />
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Most Used Tools</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Features taking the biggest share of usage</h2>
+                <div className="mt-5">
+                  <AdminBarList items={featureUsageItems} />
+                </div>
+              </article>
+            </div>
+
+            <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Session Heatmap</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Requests by hour of day</h2>
+                <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-4 xl:grid-cols-6">
+                  {sessionHeatmapPreview.length ? sessionHeatmapPreview.map((item) => (
+                    <div key={item.hour} className="rounded-[24px] border border-slate-200 bg-slate-50 px-3 py-3">
+                      <div className="flex h-24 items-end">
+                        <div className="w-full rounded-2xl bg-gradient-to-t from-indigo-500 to-sky-400" style={{ height: `${Math.max(8, (toFiniteNumber(item.actions) / maxSessionHeat) * 100)}%` }} />
+                      </div>
+                      <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">{item.hour}</p>
+                      <p className="mt-1 text-lg font-semibold text-slate-950">{formatAdminInteger(item.actions)}</p>
+                    </div>
+                  )) : [emptyPanel("Session heat data will appear here soon.")]}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Retention And Drop-off</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">How well users come back and where they stop</h2>
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  {retentionItems.map((item) => (
+                    <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                      <p className="mt-3 text-2xl font-semibold text-slate-950">{formatAdminPercent(item.value)}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-5">
+                  <AdminBarList
+                    items={(analytics.drop_off_points || []).map((item, index) => ({
+                      label: item.label,
+                      value: item.count,
+                      color: ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+                    }))}
+                    formatter={formatAdminInteger}
+                  />
+                </div>
+                <div className="mt-5 rounded-[24px] bg-slate-50 px-4 py-4">
+                  <p className="text-sm text-slate-600">Average response time</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminDuration(analytics.performance?.avg_response_time_ms ?? 0)}</p>
+                  <p className="mt-4 text-sm text-slate-600">Actions per session</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminDecimal(analytics.performance?.actions_per_session ?? 0)}</p>
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "health") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">System Health</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Current platform stability and device spread</h2>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                {[
+                  { label: "State", value: titleCaseWords(systemHealth.state || "green"), tone: getAdminHealthTone(systemHealth.state || "green") },
+                  { label: "API response", value: formatAdminDuration(systemHealth.api_response_time_ms ?? 0), tone: "bg-sky-50 text-sky-700" },
+                  { label: "Queue length", value: formatAdminInteger(systemHealth.queue_length ?? 0), tone: "bg-violet-50 text-violet-700" },
+                  { label: "Active jobs", value: formatAdminInteger((systemHealth.active_jobs || []).length), tone: "bg-emerald-50 text-emerald-700" },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                    <p className="mt-3 text-2xl font-semibold text-slate-950">{item.value}</p>
+                    <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${item.tone}`}>Live signal</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5">
+                <p className="text-sm font-semibold text-slate-900">Device activity</p>
+                <div className="mt-3">
+                  <AdminBarList
+                    items={(security.device_tracking || []).slice(0, 6).map((item, index) => ({
+                      label: item.device,
+                      value: item.actions,
+                      color: ADMIN_CHART_COLORS[index % ADMIN_CHART_COLORS.length],
+                    }))}
+                    formatter={formatAdminInteger}
+                  />
+                </div>
+              </div>
+            </article>
+
+            <div className="space-y-5">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Live Jobs</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">In-flight work happening right now</h2>
+                <div className="mt-5 space-y-3">
+                  {(systemHealth.active_jobs || []).length ? (systemHealth.active_jobs || []).map((job) => (
+                    <div key={job.job_id} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-slate-900">{titleCaseWords(job.job_type || "job")}</p>
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(job.status)}`}>{formatAdminInteger(job.progress || 0)}%</span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-600">{job.stage || "Queued"}</p>
+                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">{job.owner_email || "No owner"} • {titleCaseWords(job.status || "queued")}</p>
+                    </div>
+                  )) : emptyPanel("No queued or processing jobs right now.")}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Recent Failures</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">The latest errors affecting the system</h2>
+                <div className="mt-5 space-y-3">
+                  {(systemHealth.recent_failures || []).length ? (systemHealth.recent_failures || []).map((job, index) => (
+                    <div key={`${job.timestamp}-${index}`} className="rounded-[24px] border border-rose-100 bg-rose-50 px-4 py-4">
+                      <p className="text-sm font-semibold text-rose-900">{formatAdminActionLabel(job.action)}</p>
+                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-rose-700">{job.email || "Unknown user"} • {formatAdminDateTime(job.timestamp)}</p>
+                      <p className="mt-3 text-sm leading-6 text-rose-900">{job.message}</p>
+                    </div>
+                  )) : emptyPanel("No system failures were captured recently.")}
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "security") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Failed Logins</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Authentication failures and lockout signals</h2>
+              <div className="mt-5 space-y-3">
+                {(security.failed_logins || []).length ? (security.failed_logins || []).map((item, index) => (
+                  <div key={`${item.timestamp}-${index}`} className="rounded-[24px] border border-rose-100 bg-rose-50 px-4 py-4">
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <p className="phone-safe-copy text-sm font-semibold text-rose-900">{item.email}</p>
+                        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-rose-700">{item.ip_address || "No IP"} • {titleCaseWords(item.status)}</p>
+                      </div>
+                      <p className="text-xs text-rose-700">{formatAdminDateTime(item.timestamp)}</p>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-rose-900">{item.reason}</p>
+                  </div>
+                )) : emptyPanel("No recent failed logins.")}
+              </div>
+            </article>
+
+            <div className="space-y-5">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Suspicious Activity</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Accounts that need closer review</h2>
+                <div className="mt-5 space-y-3">
+                  {(security.suspicious_activity || []).length ? (security.suspicious_activity || []).map((item, index) => (
+                    <div key={`${item.email}-${index}`} className="rounded-[24px] border border-amber-100 bg-amber-50 px-4 py-4">
+                      <p className="text-sm font-semibold text-amber-900">{item.email}</p>
+                      <p className="mt-3 text-sm leading-6 text-amber-900">{item.reason}</p>
+                    </div>
+                  )) : emptyPanel("No suspicious activity rules are currently triggered.")}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">IP Tracking</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Most active network origins</h2>
+                <div className="mt-5 space-y-3">
+                  {(security.ip_tracking || []).slice(0, 8).length ? (security.ip_tracking || []).slice(0, 8).map((item) => (
+                    <div key={item.ip_address} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-sm font-semibold text-slate-900">{item.ip_address}</p>
+                      <p className="mt-2 text-sm text-slate-600">{formatAdminInteger(item.actions)} actions</p>
+                      <p className="mt-2 text-xs text-slate-500">{(item.users || []).join(", ") || "No mapped user"}</p>
+                    </div>
+                  )) : emptyPanel("No IP activity is available yet.")}
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
+      if (adminSidebarTab === "billing") {
+        return (
+          <article className={sectionCardClass}>
+            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing</p>
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">Subscription and revenue view</h2>
+            <div className="mt-5 rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-sm leading-7 text-slate-500">
+              Billing metrics are still intentionally empty right now, so the dashboard keeps the structure ready without showing fake numbers.
+            </div>
+          </article>
+        );
+      }
+
+      if (adminSidebarTab === "settings") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-2">
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Languages</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Study output languages currently exposed</h2>
+              <div className="mt-5 flex flex-wrap gap-3">
+                {(dashboard.settings?.available_languages || outputLanguageOptions.map((item) => item.value)).map((language) => (
+                  <span key={language} className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700">{language}</span>
+                ))}
+              </div>
+            </article>
+
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Feature Flags</p>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-950">Backend capabilities currently enabled</h2>
+              <div className="mt-5 space-y-3">
+                {Object.entries(dashboard.settings?.feature_flags || {}).map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <span className="text-sm text-slate-700">{titleCaseWords(key)}</span>
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold ${value ? "bg-emerald-50 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>{value ? "Enabled" : "Disabled"}</span>
+                  </div>
+                ))}
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                  <p className="text-sm text-slate-600">Configured admin accounts</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminInteger(dashboard.settings?.admin_email_count ?? 0)}</p>
+                </div>
+              </div>
+            </article>
+          </div>
+        );
+      }
+
+      return null;
+    };
+
+    return (
+      <div className="min-h-screen bg-[linear-gradient(180deg,#eef2ff_0%,#f8fafc_40%,#eef6ff_100%)] text-slate-900">
+        <main className="mx-auto max-w-[1680px] px-3 py-4 sm:px-5 lg:px-7 lg:py-7">
+          <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
+            <aside className="overflow-hidden rounded-[34px] bg-[linear-gradient(180deg,#0f172a_0%,#101f43_52%,#162c5b_100%)] text-white shadow-[0_26px_70px_rgba(15,23,42,0.28)]">
+              <div className="border-b border-white/10 px-6 py-6">
+                <div className="flex items-center gap-3">
+                  <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-white">StudyMate AI</p>
+                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Admin Dashboard</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-6 px-4 py-5">
+                {Object.entries(groupedSidebarItems).map(([group, items]) => (
+                  <div key={group}>
+                    <p className="px-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">{group}</p>
+                    <div className="mt-3 grid gap-2">
+                      {items.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setAdminSidebarTab(item.id)}
+                          className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${adminSidebarTab === item.id ? "bg-[linear-gradient(135deg,#5b6bff,#7c8bff)] text-white shadow-[0_12px_30px_rgba(91,107,255,0.35)]" : "text-slate-200 hover:bg-white/10"}`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                <div className="rounded-[24px] border border-white/10 bg-white/5 p-4">
+                  <p className="text-sm font-semibold text-white">Need help?</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">Admin tools stay in sync with the live audit logs, saved workspaces, and active jobs from your backend.</p>
+                </div>
+              </div>
+            </aside>
+
+            <section className="min-w-0 space-y-6">
+              <header className="rounded-[34px] border border-white/70 bg-white/85 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">{activeSidebarItem.group}</span>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${getAdminHealthTone(systemHealth.state || "green")}`}>{titleCaseWords(systemHealth.state || "green")} system</span>
+                    </div>
+                    <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-4xl">{activeSidebarItem.label}</h1>
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Welcome back, {authEmail || "admin"}. This view turns your audit logs, saved workspaces, and system jobs into the analytics-heavy dashboard layout you asked for.</p>
+                  </div>
+
+                  <div className="flex flex-col gap-3 xl:items-end">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">Last 30 days</div>
+                      <input
+                        value={adminSearchQuery}
+                        onChange={(event) => setAdminSearchQuery(event.target.value)}
+                        className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
+                        placeholder="Search users, files, or logs"
+                      />
+                      <button type="button" onClick={() => loadAdminDashboard()} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-full bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{formatAdminInteger(failedLoginCount)} security alerts</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{authEmail}</span>
+                      <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-full bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100">Student View</button>
+                      <button type="button" onClick={logout} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Sign Out</button>
+                    </div>
+                  </div>
+                </div>
+              </header>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+                {overviewCards.map((card) => (
+                  <article key={card.label} className="rounded-[28px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl text-sm font-semibold ${card.accentClass}`}>{card.icon}</div>
+                      <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Live</span>
+                    </div>
+                    <p className="mt-4 text-xs uppercase tracking-[0.24em] text-slate-500">{card.label}</p>
+                    <p className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-slate-950">{card.value}</p>
+                    <p className="mt-3 text-sm text-slate-500">{card.detail}</p>
+                  </article>
+                ))}
+              </div>
+
+              {renderTabContent()}
+            </section>
+          </div>
+
+          {isLoadingAdminDashboard ? <div className="pointer-events-none fixed bottom-4 right-4 rounded-full border border-slate-200 bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-[0_14px_30px_rgba(15,23,42,0.12)]">Refreshing admin data...</div> : null}
+        </main>
+      </div>
+    );
+  };
+
+  const LegacyAdminPage = () => {
+    const sidebarItems = [
       ["overview", "Overview"],
       ["users", "Users"],
       ["activity", "Activity Logs"],
@@ -2479,6 +3620,7 @@ export default function App() {
   };
 
   const clearSession = (message = "Please sign in again.") => {
+    historyOwnerEmailRef.current = "";
     setAuthToken("");
     setAuthEmail("");
     setAuthSessionMode("user");
@@ -2555,12 +3697,14 @@ export default function App() {
 
   useEffect(() => {
     try {
-      const historyKey = getHistoryStorageKey(authEmail);
+      const ownerEmail = historyOwnerEmailRef.current;
+      if (!ownerEmail) return;
+      const historyKey = getHistoryStorageKey(ownerEmail);
       window.localStorage.setItem(historyKey, JSON.stringify(normalizeHistoryItems(historyItems)));
     } catch {
       // Ignore storage errors.
     }
-  }, [authEmail, historyItems]);
+  }, [historyItems]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -2583,6 +3727,7 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authEmail) return;
     const cachedHistory = loadHistoryItems(authEmail);
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     skipNextHistorySyncRef.current = true;
     setHistoryItems(cachedHistory);
     setActiveHistoryId((current) => (cachedHistory.some((item) => item.id === current) ? current : ""));
@@ -2774,6 +3919,43 @@ export default function App() {
     }
   };
 
+  const createAccountWithEmailPassword = async () => {
+    let email = "";
+    setAuthMessage("");
+    try {
+      email = validateEmailPasswordInputs();
+    } catch (err) {
+      setAuthMessage(err.message || "Enter your email and password.");
+      return;
+    }
+
+    setIsRequestingEmailCode(true);
+    try {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: authPasswordInput,
+          mode: "register",
+        }),
+      }, 20000);
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not create your account.");
+      applyAuthResponse(data, email, { promptForMode: true });
+      setAuthPasswordInput("");
+      setAuthCodeInput("");
+      setPendingEmailAuthEmail("");
+      setPendingEmailAuthMode("");
+      setStatus("Account created successfully.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+    } catch (err) {
+      setAuthMessage(getReadableRequestError(err));
+    } finally {
+      setIsRequestingEmailCode(false);
+    }
+  };
+
   const requestEmailPasswordCode = async () => {
     setAuthMessage("");
     let email = "";
@@ -2786,7 +3968,7 @@ export default function App() {
 
     setIsRequestingEmailCode(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/email-password/request-code`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/request-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2794,7 +3976,7 @@ export default function App() {
           password: authPasswordInput,
           mode: authMode,
         }),
-      });
+      }, 20000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not send a verification code.");
       setAuthEmailInput(email);
@@ -2803,7 +3985,7 @@ export default function App() {
       setAuthCodeInput("");
       setAuthMessage("Verification code sent. Check your email, then enter the code below.");
     } catch (err) {
-      setAuthMessage(err.message || "Could not send a verification code.");
+      setAuthMessage(getReadableRequestError(err));
     } finally {
       setIsRequestingEmailCode(false);
     }
@@ -2827,7 +4009,7 @@ export default function App() {
     setIsVerifyingEmailCode(true);
     setAuthMessage("");
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/email-password/verify-code`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/verify-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2836,7 +4018,7 @@ export default function App() {
           code: authCodeInput.trim(),
           mode: pendingEmailAuthMode || authMode,
         }),
-      });
+      }, 20000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Verification failed.");
       applyAuthResponse(data, email, { promptForMode: true });
@@ -2848,7 +4030,7 @@ export default function App() {
       setStatus((pendingEmailAuthMode || authMode) === "register" ? "Account created successfully." : (pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
       setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
-      setAuthMessage(err.message || "Verification failed.");
+      setAuthMessage(getReadableRequestError(err));
     } finally {
       setIsVerifyingEmailCode(false);
     }
@@ -3131,6 +4313,7 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authToken || !authEmail) return undefined;
     if (historyHydratingRef.current) return undefined;
+    if (historyOwnerEmailRef.current !== normalizeHistoryOwnerEmail(authEmail)) return undefined;
     if (skipNextHistorySyncRef.current) {
       skipNextHistorySyncRef.current = false;
       return undefined;
@@ -3293,6 +4476,7 @@ export default function App() {
       createdAt: item.createdAt || timestamp,
       updatedAt: timestamp,
     };
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     setHistoryItems((current) => mergeHistoryItems([nextItem], current));
     setActiveHistoryId(nextItem.id);
   };
@@ -3300,6 +4484,7 @@ export default function App() {
   const loadHistoryItem = (item) => {
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     startTransition(() => {
       setTranscript(item.transcript || "");
       setSummary(item.summary || "");
@@ -3993,16 +5178,27 @@ export default function App() {
   };
 
   const pollJob = async (jobId, jobType) => {
+    let transientFailureCount = 0;
     while (true) {
-      const response = await authFetch(`/jobs/${jobId}`);
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not read job status.");
-      setCurrentJobType(jobType);
-      setStatus(data.stage || "Processing...");
-      setProgress(Number(data.progress || 0));
-      if (data.status === "failed") throw new Error(data.error || `${jobType} failed.`);
-      if (data.status === "completed") return data;
-      await wait(JOB_POLL_INTERVAL_MS);
+      try {
+        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: 45000 });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not read job status.");
+        transientFailureCount = 0;
+        setCurrentJobType(jobType);
+        setStatus(data.stage || "Processing...");
+        setProgress(Number(data.progress || 0));
+        if (data.status === "failed") throw new Error(data.error || `${jobType} failed.`);
+        if (data.status === "completed") return data;
+        await wait(JOB_POLL_INTERVAL_MS);
+      } catch (err) {
+        const message = String(err?.message || "");
+        const isTransient = /could not reach the mabaso server|took too long to respond|failed to fetch/i.test(message);
+        if (!isTransient || transientFailureCount >= 2) throw err;
+        transientFailureCount += 1;
+        setStatus(`Connection dropped while checking ${jobType.replace(/_/g, " ")}. Retrying...`);
+        await wait(JOB_POLL_INTERVAL_MS * transientFailureCount);
+      }
     }
   };
 
@@ -4041,6 +5237,7 @@ export default function App() {
           past_question_papers: resolvedPastQuestionPapers,
           language: outputLanguage,
         }),
+        timeoutMs: 45000,
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Study guide generation failed.");
@@ -5076,7 +6273,7 @@ export default function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={authMode === "login" ? signInWithEmailPassword : requestEmailPasswordCode}
+                      onClick={authMode === "login" ? signInWithEmailPassword : authMode === "register" ? createAccountWithEmailPassword : requestEmailPasswordCode}
                       disabled={isSigningInWithPassword || isRequestingEmailCode || isVerifyingEmailCode}
                       className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                     >

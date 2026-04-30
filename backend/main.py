@@ -1229,8 +1229,16 @@ def send_smtp_message(message: EmailMessage):
     try:
         smtp_factory = smtplib.SMTP_SSL if smtp_settings["use_ssl"] else smtplib.SMTP
         with smtp_factory(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
+            try:
+                server.ehlo()
+            except smtplib.SMTPException:
+                pass
             if smtp_settings["use_tls"]:
                 server.starttls()
+                try:
+                    server.ehlo()
+                except smtplib.SMTPException:
+                    pass
             if smtp_settings["username"]:
                 server.login(smtp_settings["username"], smtp_settings["password"])
             server.send_message(message)
@@ -1639,6 +1647,16 @@ def verify_login_code(email: str, code: str) -> str:
 
 def login_with_email_password(email: str, password: str) -> str:
     verify_password_credential(email, password)
+    return create_session(email)
+
+
+def register_with_email_password(email: str, password: str) -> str:
+    ensure_user_account_is_active(email)
+    validated_password = validate_password_value(password)
+    if has_password_credential(email):
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Sign in instead.")
+    store_password_credential(email, validated_password)
+    mark_user_verified(email)
     return create_session(email)
 
 
@@ -3181,6 +3199,25 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
         request=request,
         resource_type="auth",
         resource_name="admin-login" if is_admin_email(email) else "user-login",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return build_auth_response(email, session_token)
+
+
+@app.post("/auth/email-password/register")
+async def register_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
+    started_at = utc_now()
+    email = validate_email_address(payload.email)
+    if normalize_email_password_auth_mode(payload.mode) != "register":
+        raise HTTPException(status_code=400, detail="Direct account creation is only available for register mode.")
+
+    session_token = await asyncio.to_thread(register_with_email_password, email, payload.password)
+    record_audit_log(
+        action="auth.email_password.register",
+        email=email,
+        request=request,
+        resource_type="auth",
+        resource_name="user-register",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
     return build_auth_response(email, session_token)
