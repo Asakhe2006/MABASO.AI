@@ -1,0 +1,16 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping frontend
+        run: curl --fail --silent --show-error --max-time 30 --retry 3 https://mabaso-ai-web.onrender.com/ > /dev/null
+
+      - name: Ping API health endpoint
+        run: curl --fail --silent --show-error --max-time 30 --retry 3 https://mabaso-ai-api.onrender.com/health > /dev/null

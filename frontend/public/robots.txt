@@ -1,3 +1,4 @@
 User-agent: *
 Allow: /
+Host: mabaso-ai-web.onrender.com
 Sitemap: https://mabaso-ai-web.onrender.com/sitemap.xml

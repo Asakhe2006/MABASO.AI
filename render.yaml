@@ -78,6 +78,16 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    headers:
+      - path: /*
+        name: X-Robots-Tag
+        value: all
+      - path: /robots.txt
+        name: Cache-Control
+        value: public, max-age=300
+      - path: /sitemap.xml
+        name: Cache-Control
+        value: public, max-age=300
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
