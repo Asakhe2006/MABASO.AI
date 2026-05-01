@@ -17,6 +17,7 @@ import shutil
 import smtplib
 import sqlite3
 import secrets
+import ssl
 import subprocess
 import tempfile
 import textwrap
@@ -357,6 +358,7 @@ class AppleAuthRequest(BaseModel):
 class SupportMessageRequest(BaseModel):
     message: str
     page: str = ""
+    client_request_id: str = ""
 
 
 class HistorySyncRequest(BaseModel):
@@ -642,6 +644,27 @@ def init_db():
                 updated_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL
             )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS support_messages (
+                id TEXT PRIMARY KEY,
+                client_request_id TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                page TEXT NOT NULL,
+                message TEXT NOT NULL,
+                email_delivery_status TEXT NOT NULL,
+                email_error TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_support_messages_created_at
+            ON support_messages (created_at DESC)
             """
         )
 
@@ -1226,66 +1249,184 @@ def verify_smtp_is_configured():
         )
 
 
+def parse_smtp_port(value: str) -> int:
+    try:
+        port = int((value or "").strip() or "587")
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="SMTP_PORT must be a valid port number.") from exc
+    if port <= 0 or port > 65535:
+        raise HTTPException(status_code=500, detail="SMTP_PORT must be between 1 and 65535.")
+    return port
+
+
+def parse_smtp_host(value: str, default_port: int) -> tuple[str, int, bool | None]:
+    raw_value = compact_text(value)
+    parsed = urlparse(raw_value if "://" in raw_value else f"//{raw_value}")
+    host = compact_text(parsed.hostname or parsed.netloc or raw_value)
+    if not host:
+        raise HTTPException(status_code=500, detail="SMTP_HOST is empty or invalid.")
+    try:
+        port = parsed.port or default_port
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="SMTP_HOST contains an invalid port.") from exc
+
+    scheme = compact_text(parsed.scheme).lower()
+    use_ssl_hint = True if scheme == "smtps" else False if scheme == "smtp" else None
+    return host, port, use_ssl_hint
+
+
+def parse_smtp_timeout_seconds(value: str) -> float:
+    try:
+        timeout_seconds = float((value or "").strip() or "15")
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="SMTP_TIMEOUT_SECONDS must be a number.") from exc
+    return min(max(timeout_seconds, 5.0), 60.0)
+
+
 def get_smtp_settings() -> dict[str, Any]:
     verify_smtp_is_configured()
-    port_text = os.getenv("SMTP_PORT", "587").strip() or "587"
-    use_ssl = os.getenv("SMTP_USE_SSL", "").strip().lower() in {"1", "true", "yes", "on"} or port_text == "465"
+    configured_port = parse_smtp_port(os.getenv("SMTP_PORT", "587"))
+    host, port, use_ssl_hint = parse_smtp_host(os.getenv("SMTP_HOST", ""), configured_port)
+    from_email = compact_text(os.getenv("SMTP_FROM_EMAIL", ""))
+    password = compact_text(os.getenv("SMTP_PASSWORD", ""))
+    username = compact_text(os.getenv("SMTP_USERNAME", ""))
+    if not username and password and from_email:
+        username = from_email
+
+    smtp_use_ssl_value = compact_text(os.getenv("SMTP_USE_SSL", "")).lower()
+    if smtp_use_ssl_value:
+        use_ssl = smtp_use_ssl_value in {"1", "true", "yes", "on"}
+    elif use_ssl_hint is not None:
+        use_ssl = use_ssl_hint
+    else:
+        use_ssl = port == 465
+
+    smtp_use_tls_value = compact_text(os.getenv("SMTP_USE_TLS", "")).lower()
+    if use_ssl:
+        use_tls = False
+    elif smtp_use_tls_value:
+        use_tls = smtp_use_tls_value in {"1", "true", "yes", "on"}
+    else:
+        use_tls = port in {25, 587, 2525}
+
     return {
-        "host": os.getenv("SMTP_HOST", ""),
-        "port": int(port_text),
-        "username": os.getenv("SMTP_USERNAME", ""),
-        "password": os.getenv("SMTP_PASSWORD", ""),
-        "from_email": os.getenv("SMTP_FROM_EMAIL", ""),
-        "use_tls": (os.getenv("SMTP_USE_TLS", "true").lower() != "false") and not use_ssl,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "use_tls": use_tls,
         "use_ssl": use_ssl,
+        "timeout_seconds": parse_smtp_timeout_seconds(os.getenv("SMTP_TIMEOUT_SECONDS", "15")),
     }
+
+
+def build_smtp_connection_plans(smtp_settings: dict[str, Any]) -> list[dict[str, Any]]:
+    shared = {
+        "host": smtp_settings["host"],
+        "username": smtp_settings["username"],
+        "password": smtp_settings["password"],
+        "from_email": smtp_settings["from_email"],
+        "timeout_seconds": smtp_settings["timeout_seconds"],
+    }
+    candidates = [
+        {**shared, "port": smtp_settings["port"], "use_ssl": smtp_settings["use_ssl"], "use_tls": smtp_settings["use_tls"]},
+        {**shared, "port": 465, "use_ssl": True, "use_tls": False},
+        {**shared, "port": 587, "use_ssl": False, "use_tls": True},
+    ]
+    plans: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, bool, bool]] = set()
+    for candidate in candidates:
+        plan_key = (
+            candidate["host"],
+            int(candidate["port"]),
+            bool(candidate["use_ssl"]),
+            bool(candidate["use_tls"]),
+        )
+        if plan_key in seen:
+            continue
+        seen.add(plan_key)
+        plans.append(candidate)
+    return plans
 
 
 def send_smtp_message(message: EmailMessage):
     smtp_settings = get_smtp_settings()
-    try:
-        smtp_factory = smtplib.SMTP_SSL if smtp_settings["use_ssl"] else smtplib.SMTP
-        with smtp_factory(smtp_settings["host"], smtp_settings["port"], timeout=30) as server:
-            try:
-                server.ehlo()
-            except smtplib.SMTPException:
-                pass
-            if smtp_settings["use_tls"]:
-                server.starttls()
+    connection_plans = build_smtp_connection_plans(smtp_settings)
+    last_exc: Exception | None = None
+
+    for attempt_index, plan in enumerate(connection_plans, start=1):
+        try:
+            smtp_factory = smtplib.SMTP_SSL if plan["use_ssl"] else smtplib.SMTP
+            with smtp_factory(plan["host"], plan["port"], timeout=plan["timeout_seconds"]) as server:
                 try:
                     server.ehlo()
                 except smtplib.SMTPException:
                     pass
-            if smtp_settings["username"]:
-                server.login(smtp_settings["username"], smtp_settings["password"])
-            server.send_message(message)
-    except smtplib.SMTPAuthenticationError as exc:
-        logger.exception("SMTP authentication failed for host %s", smtp_settings["host"])
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "SMTP login failed. Recheck SMTP_USERNAME, SMTP_PASSWORD, "
-                "and your Gmail app password."
-            ),
-        ) from exc
-    except smtplib.SMTPConnectError as exc:
+                if plan["use_tls"]:
+                    server.starttls(context=ssl.create_default_context())
+                    try:
+                        server.ehlo()
+                    except smtplib.SMTPException:
+                        pass
+                if plan["username"]:
+                    server.login(plan["username"], plan["password"])
+                server.send_message(message)
+            return
+        except smtplib.SMTPAuthenticationError as exc:
+            logger.exception("SMTP authentication failed for host %s", plan["host"])
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "SMTP login failed. Recheck SMTP_USERNAME, SMTP_PASSWORD, "
+                    "and your Gmail app password."
+                ),
+            ) from exc
+        except (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, smtplib.SMTPNotSupportedError, OSError) as exc:
+            last_exc = exc
+            logger.warning(
+                "SMTP delivery attempt %s failed for %s:%s (ssl=%s tls=%s): %s",
+                attempt_index,
+                plan["host"],
+                plan["port"],
+                plan["use_ssl"],
+                plan["use_tls"],
+                exc,
+            )
+            continue
+        except smtplib.SMTPException as exc:
+            logger.exception("SMTP error while sending email")
+            raise HTTPException(
+                status_code=502,
+                detail=f"SMTP error while sending email ({exc.__class__.__name__}).",
+            ) from exc
+
+    if isinstance(last_exc, smtplib.SMTPConnectError):
         logger.exception("SMTP connection failed for host %s", smtp_settings["host"])
         raise HTTPException(
             status_code=502,
             detail="The backend could not connect to the SMTP server. Recheck SMTP_HOST and SMTP_PORT.",
-        ) from exc
-    except smtplib.SMTPException as exc:
-        logger.exception("SMTP error while sending email")
+        ) from last_exc
+    if isinstance(last_exc, smtplib.SMTPNotSupportedError):
+        logger.exception("SMTP TLS mode was rejected for host %s", smtp_settings["host"])
         raise HTTPException(
             status_code=502,
-            detail=f"SMTP error while sending email ({exc.__class__.__name__}).",
-        ) from exc
-    except OSError as exc:
+            detail="The SMTP server rejected the current TLS mode. Recheck SMTP_USE_TLS and SMTP_USE_SSL.",
+        ) from last_exc
+    if isinstance(last_exc, OSError):
         logger.exception("SMTP network error while sending email")
         raise HTTPException(
             status_code=502,
             detail="The backend could not reach the SMTP server. Recheck SMTP_HOST, SMTP_PORT, SMTP_USE_TLS, and SMTP_USE_SSL.",
-        ) from exc
+        ) from last_exc
+    if last_exc is not None:
+        logger.exception("SMTP error while sending email")
+        raise HTTPException(
+            status_code=502,
+            detail=f"SMTP error while sending email ({last_exc.__class__.__name__}).",
+        ) from last_exc
+
+    raise HTTPException(status_code=502, detail="SMTP delivery failed for an unknown reason.")
 
 
 def send_verification_email(email: str, code: str):
@@ -1306,11 +1447,11 @@ def send_verification_email(email: str, code: str):
 
 
 def send_support_email(reply_email: str, message_text: str, page: str = ""):
-    smtp_settings = get_smtp_settings()
     cleaned_message = compact_text(message_text)
     if not cleaned_message:
         raise HTTPException(status_code=400, detail="Support message cannot be empty.")
 
+    smtp_settings = get_smtp_settings()
     support_email = SUPPORT_EMAIL or smtp_settings["from_email"]
     message = EmailMessage()
     message["Subject"] = f"MABASO support request from {reply_email}"
@@ -1328,6 +1469,108 @@ def send_support_email(reply_email: str, message_text: str, page: str = ""):
         )
     )
     send_smtp_message(message)
+
+
+def normalize_client_request_id(value: Any) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._:-]+", "-", compact_text(value)).strip("-._:")
+    return cleaned[:120] or uuid4().hex
+
+
+def serialize_support_message_row(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    return {
+        "id": row["id"],
+        "client_request_id": row["client_request_id"],
+        "email": row["email"],
+        "page": row["page"],
+        "message": row["message"],
+        "email_delivery_status": row["email_delivery_status"],
+        "email_error": row["email_error"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_or_load_support_message(
+    reply_email: str,
+    message_text: str,
+    page: str = "",
+    client_request_id: str = "",
+) -> dict[str, Any]:
+    normalized_email = validate_email_address(reply_email)
+    cleaned_message = compact_text(message_text)
+    if not cleaned_message:
+        raise HTTPException(status_code=400, detail="Support message cannot be empty.")
+
+    normalized_request_id = normalize_client_request_id(client_request_id)
+    cleaned_page = compact_text(page, "unknown-page")[:120]
+
+    with get_db_connection() as connection:
+        existing_row = connection.execute(
+            "SELECT * FROM support_messages WHERE client_request_id = ?",
+            (normalized_request_id,),
+        ).fetchone()
+        if existing_row:
+            return serialize_support_message_row(existing_row)
+
+        created_at = utc_now().isoformat()
+        message_id = uuid4().hex
+        connection.execute(
+            """
+            INSERT INTO support_messages (
+                id, client_request_id, email, page, message, email_delivery_status,
+                email_error, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                normalized_request_id,
+                normalized_email,
+                cleaned_page,
+                cleaned_message,
+                "queued",
+                "",
+                created_at,
+                created_at,
+            ),
+        )
+        created_row = connection.execute(
+            "SELECT * FROM support_messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    return serialize_support_message_row(created_row)
+
+
+def update_support_message_delivery(message_id: str, status: str, email_error: str = ""):
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE support_messages
+            SET email_delivery_status = ?, email_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (compact_text(status, "queued")[:40], compact_text(email_error)[:600], utc_now().isoformat(), message_id),
+        )
+
+
+async def deliver_support_message_email(
+    message_id: str,
+    reply_email: str,
+    message_text: str,
+    page: str,
+):
+    try:
+        await asyncio.to_thread(send_support_email, reply_email, message_text, page)
+    except HTTPException as exc:
+        logger.warning("Support email delivery failed for %s: %s", message_id, exc.detail)
+        await asyncio.to_thread(update_support_message_delivery, message_id, "email_failed", str(exc.detail))
+    except Exception as exc:
+        logger.exception("Unexpected support email delivery failure for %s", message_id)
+        await asyncio.to_thread(update_support_message_delivery, message_id, "email_failed", str(exc))
+    else:
+        await asyncio.to_thread(update_support_message_delivery, message_id, "sent", "")
 
 
 def create_login_code(email: str) -> str:
@@ -3862,18 +4105,54 @@ async def submit_support_request(
 ):
     started_at = utc_now()
     message = (payload.message or "").strip()
+    page = compact_text(payload.page, "unknown-page")[:120]
     if not message:
         raise HTTPException(status_code=400, detail="Support message cannot be empty.")
-    await asyncio.to_thread(send_support_email, current_user, message, (payload.page or "").strip())
+
+    support_message = await asyncio.to_thread(
+        create_or_load_support_message,
+        current_user,
+        message,
+        page,
+        payload.client_request_id,
+    )
+    saved_message = compact_text(support_message.get("message"), message)
+    saved_page = compact_text(support_message.get("page"), page)[:120]
+    delivery_status = compact_text(support_message.get("email_delivery_status"), "queued")
+    if delivery_status != "sent":
+        asyncio.create_task(
+            deliver_support_message_email(
+                support_message["id"],
+                current_user,
+                saved_message,
+                saved_page,
+            )
+        )
+
+    response_message = (
+        "Support message sent."
+        if delivery_status == "sent"
+        else "Support message saved. The support inbox email will keep retrying if the mail server is unavailable."
+    )
     record_audit_log(
         action="support.contact",
+        status="success" if delivery_status == "sent" else "queued",
         email=current_user,
         request=request,
         resource_type="support",
-        resource_name=(payload.page or "").strip() or "unknown-page",
+        resource_name=page or "unknown-page",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "support_message_id": support_message.get("id", ""),
+            "client_request_id": support_message.get("client_request_id", ""),
+            "delivery_status": delivery_status,
+        },
     )
-    return {"message": "Support request sent."}
+    return {
+        "message": response_message,
+        "delivery_status": delivery_status,
+        "support_message_id": support_message.get("id", ""),
+    }
 
 
 @app.get("/history")
@@ -4599,6 +4878,164 @@ def fetch_youtube_watch_page_captions(video_url: str, job_id: str) -> str | None
                 transcript_text = subtitle_body_to_text(caption_response.text)
                 if transcript_text:
                     update_job(job_id, status="processing", stage="YouTube watch-page captions found. Preparing transcript", progress=15)
+                    return transcript_text
+    return None
+
+
+def timedtext_body_to_text(raw_text: str) -> str:
+    cleaned = compact_text(raw_text)
+    if not cleaned:
+        return ""
+    if cleaned.lstrip().startswith("WEBVTT"):
+        return subtitle_body_to_text(cleaned)
+
+    try:
+        root = ET.fromstring(cleaned)
+    except ET.ParseError:
+        return ""
+
+    lines: list[str] = []
+    for node in root.findall(".//text"):
+        text = html.unescape("".join(node.itertext()).replace("\xa0", " "))
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized and (not lines or normalized != lines[-1]):
+            lines.append(normalized)
+    return "\n".join(lines).strip()
+
+
+def extract_youtube_timedtext_tracks(raw_text: str) -> list[dict[str, str]]:
+    cleaned = compact_text(raw_text)
+    if not cleaned:
+        return []
+    try:
+        root = ET.fromstring(cleaned)
+    except ET.ParseError:
+        return []
+
+    tracks: list[dict[str, str]] = []
+    for node in root.findall(".//track"):
+        language_code = compact_text(node.get("lang_code") or node.get("lang-code"))
+        if not language_code:
+            continue
+        tracks.append(
+            {
+                "lang_code": language_code,
+                "kind": compact_text(node.get("kind")),
+                "name": compact_text(node.get("name")),
+            }
+        )
+    return tracks
+
+
+def choose_youtube_timedtext_track(tracks: list[dict[str, str]]) -> dict[str, str] | None:
+    if not tracks:
+        return None
+
+    preferred_languages = {language.lower(): index for index, language in enumerate(YOUTUBE_LANGUAGE_PREFERENCES)}
+
+    def track_priority(track: dict[str, str]) -> tuple[int, int, str]:
+        language_code = compact_text(track.get("lang_code")).lower()
+        kind = compact_text(track.get("kind")).lower()
+        language_score = preferred_languages.get(language_code, 10)
+        if language_score == 10 and language_code.startswith("en"):
+            language_score = 3
+        kind_score = 1 if kind == "asr" else 0
+        return (language_score, kind_score, language_code)
+
+    return sorted(tracks, key=track_priority)[0]
+
+
+def build_youtube_timedtext_urls(video_id: str, track: dict[str, str] | None = None) -> list[str]:
+    endpoints = (
+        "https://www.youtube.com/api/timedtext",
+        "https://video.google.com/timedtext",
+    )
+    candidate_params: list[dict[str, str]] = []
+
+    if track:
+        candidate_params.append(
+            {
+                "lang": compact_text(track.get("lang_code")),
+                "kind": compact_text(track.get("kind")),
+                "name": compact_text(track.get("name")),
+            }
+        )
+
+    for language_code in dict.fromkeys(["en", *YOUTUBE_LANGUAGE_PREFERENCES]):
+        candidate_params.append({"lang": language_code, "kind": "", "name": ""})
+        candidate_params.append({"lang": language_code, "kind": "asr", "name": ""})
+
+    urls: list[str] = []
+    seen: set[str] = set()
+    for endpoint in endpoints:
+        for params in candidate_params:
+            language_code = compact_text(params.get("lang"))
+            if not language_code:
+                continue
+            pieces = [f"v={quote(video_id)}", f"lang={quote(language_code)}", "fmt=vtt"]
+            if params.get("kind"):
+                pieces.append(f"kind={quote(params['kind'])}")
+            if params.get("name"):
+                pieces.append(f"name={quote(params['name'])}")
+            url = f"{endpoint}?{'&'.join(pieces)}"
+            if url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def fetch_youtube_timedtext_captions(video_url: str, job_id: str) -> str | None:
+    video_id = extract_youtube_video_id(video_url)
+    if not video_id:
+        return None
+
+    update_job(job_id, status="processing", stage="Checking direct YouTube caption endpoints", progress=10)
+    track_list_urls = [
+        f"https://www.youtube.com/api/timedtext?v={quote(video_id)}&type=list",
+        f"https://video.google.com/timedtext?v={quote(video_id)}&type=list",
+    ]
+
+    for use_proxy in iter_youtube_proxy_attempts():
+        if not use_proxy:
+            update_job(job_id, status="processing", stage="Retrying direct YouTube captions without proxy", progress=11)
+        with create_youtube_requests_session(use_proxy=use_proxy) as session:
+            tracks: list[dict[str, str]] = []
+            for track_list_url in track_list_urls:
+                try:
+                    response = session.get(track_list_url, timeout=20)
+                    response.raise_for_status()
+                except Exception as exc:
+                    logger.info(
+                        "Could not fetch YouTube timedtext track list for %s via %s (use_proxy=%s): %s",
+                        video_url,
+                        track_list_url,
+                        use_proxy,
+                        exc,
+                    )
+                    continue
+                tracks = extract_youtube_timedtext_tracks(response.text)
+                if tracks:
+                    break
+
+            selected_track = choose_youtube_timedtext_track(tracks)
+            for caption_url in build_youtube_timedtext_urls(video_id, selected_track):
+                try:
+                    response = session.get(caption_url, timeout=20)
+                    response.raise_for_status()
+                except Exception as exc:
+                    logger.info(
+                        "Could not fetch YouTube timedtext captions for %s via %s (use_proxy=%s): %s",
+                        video_url,
+                        caption_url,
+                        use_proxy,
+                        exc,
+                    )
+                    continue
+
+                transcript_text = timedtext_body_to_text(response.text)
+                if transcript_text:
+                    update_job(job_id, status="processing", stage="Direct YouTube captions found. Preparing transcript", progress=16)
                     return transcript_text
     return None
 
@@ -8032,6 +8469,27 @@ async def run_video_transcription_job(job_id: str, video_url: str):
                     resource_name=video_url,
                     duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
                     metadata={"job_id": job_id, "source": "watch_page"},
+                )
+                return
+
+            transcript = await asyncio.to_thread(fetch_youtube_timedtext_captions, video_url, job_id)
+            if transcript:
+                update_job(
+                    job_id,
+                    status="completed",
+                    stage="Video transcription completed",
+                    progress=100,
+                    transcript=transcript,
+                )
+                job = jobs.get(job_id, {})
+                started_at = parse_history_datetime(job.get("created_at"), utc_now())
+                record_audit_log(
+                    action="transcription.completed",
+                    email=job.get("owner_email", ""),
+                    resource_type="transcription",
+                    resource_name=video_url,
+                    duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                    metadata={"job_id": job_id, "source": "timedtext"},
                 )
                 return
 

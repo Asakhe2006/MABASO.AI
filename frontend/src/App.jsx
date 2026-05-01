@@ -1265,6 +1265,13 @@ async function fetchJsonWithTransientRetries(resource, options = {}, { timeoutMs
   }
 }
 
+function buildClientRequestId(prefix = "req") {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function decodeJwtPayload(token) {
   try {
     const [, payload = ""] = String(token || "").split(".");
@@ -2159,7 +2166,7 @@ export default function App() {
               Back to Capture Page
             </button>
           </div>
-          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${supportFeedback.startsWith("Support message sent") ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
+          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${/^Support message (sent|saved)/i.test(supportFeedback.trim()) ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
         </div>
 
         <div className="space-y-5">
@@ -5470,6 +5477,30 @@ export default function App() {
     return response;
   };
 
+  const authJsonWithTransientRetries = async (path, options = {}, { timeoutMs = 30000, retries = 0, tokenOverride = "" } = {}) => {
+    let attempt = 0;
+    while (true) {
+      try {
+        const response = await authFetch(path, { ...options, timeoutMs, tokenOverride });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) {
+          const requestError = new Error(data.detail || "Request failed.");
+          requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
+          requestError.response = response;
+          requestError.data = data;
+          throw requestError;
+        }
+        return { response, data };
+      } catch (err) {
+        const message = String(err?.message || "");
+        const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+        if (!isTransient || attempt >= retries) throw err;
+        attempt += 1;
+        await wait(1200 * attempt);
+      }
+    }
+  };
+
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
     if (targetMode === "user" && authSessionMode === "user") {
@@ -5879,18 +5910,17 @@ export default function App() {
     setIsSendingSupport(true);
     setSupportFeedback("");
     try {
-      const response = await authFetch("/support/contact", {
+      const { data } = await authJsonWithTransientRetries("/support/contact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message,
           page: currentPage,
+          client_request_id: buildClientRequestId("support"),
         }),
-      });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Your support message could not be sent.");
+      }, { timeoutMs: 90000, retries: 2 });
       setSupportMessageDraft("");
-      setSupportFeedback("Support message sent.");
+      setSupportFeedback(data.message || "Support message sent.");
     } catch (err) {
       setSupportFeedback(err.message || "Your support message could not be sent.");
     } finally {
