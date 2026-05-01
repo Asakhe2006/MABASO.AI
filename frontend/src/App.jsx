@@ -191,10 +191,12 @@ function getPresentationVisualTypeLabel(value) {
   if (normalized === "timeline") return "Timeline";
   if (normalized === "cycle") return "Cycle";
   if (normalized === "formula") return "Formula";
+  if (normalized === "components") return "Components";
   if (normalized === "table") return "Table";
   if (normalized === "chart") return "Chart";
   if (normalized === "graph") return "Graph";
   if (normalized === "photo") return "Photo";
+  if (normalized === "closing") return "Closing";
   return "Cluster";
 }
 const helpAboutSections = [
@@ -1455,7 +1457,9 @@ function normalizePresentationData(value) {
         visualType: slide.visual_type || slide.visualType || "cluster",
         visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
         flowNote: slide.flow_note || slide.flowNote || "",
-        referenceImageIndex: Number(slide.reference_image_index ?? slide.referenceImageIndex ?? 0) || 0,
+        referenceImageIndex: Number.isFinite(Number(slide.reference_image_index ?? slide.referenceImageIndex))
+          ? Number(slide.reference_image_index ?? slide.referenceImageIndex)
+          : -1,
       }))
       .filter((slide) => slide.title || slide.bullets.length),
   };
@@ -2522,7 +2526,8 @@ export default function App() {
   const renderPresentationVisualPreview = (slide, { compact = false } = {}) => {
     const visualType = (slide?.visualType || "cluster").toLowerCase();
     const visualItems = (slide?.visualItems || []).filter(Boolean);
-    const referenceImage = visualReferences[slide?.referenceImageIndex || 0]?.image_url || visualReferences[0]?.image_url || "";
+    const referenceImageIndex = Number.isFinite(Number(slide?.referenceImageIndex)) ? Number(slide.referenceImageIndex) : -1;
+    const referenceImage = referenceImageIndex >= 0 ? (visualReferences[referenceImageIndex]?.image_url || "") : "";
     const shellClassName = activePresentationDesignFamily === "dark"
       ? "border-white/10 bg-slate-950/45 text-white"
       : activePresentationDesignFamily === "light"
@@ -2593,6 +2598,31 @@ export default function App() {
           </div>
           <div className={`rounded-2xl border p-3 ${cardClassName}`}>
             {(rightItems.length ? rightItems : leftItems).map((item, index) => <div key={`${item}-${index}`} className="rounded-xl border border-current/10 px-3 py-2 text-xs">{item}</div>)}
+          </div>
+        </div>
+      );
+    }
+
+    if (visualType === "components") {
+      const componentItems = (visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 4 : 5);
+      const coreLabel = componentItems[0] || "Core unit";
+      const outerItems = componentItems.slice(1, compact ? 4 : 5);
+      const nodeClassName = activePresentationDesignFamily === "light"
+        ? "border-slate-200 bg-slate-50/95 text-slate-700"
+        : "border-white/10 bg-white/10 text-slate-100";
+      return (
+        <div className={`relative h-full rounded-[22px] border p-4 ${shellClassName}`}>
+          <div className="absolute left-1/2 top-1/2 h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-current/10 bg-current/10" />
+          <div className="absolute left-1/2 top-[26%] h-8 w-px -translate-x-1/2 bg-current/20" />
+          <div className="absolute left-[28%] top-1/2 h-px w-12 -translate-y-1/2 bg-current/20" />
+          <div className="absolute right-[28%] top-1/2 h-px w-12 -translate-y-1/2 bg-current/20" />
+          <div className="absolute left-1/2 bottom-[24%] h-8 w-px -translate-x-1/2 bg-current/20" />
+          <div className="relative grid h-full grid-cols-3 grid-rows-3 items-center justify-items-center gap-2">
+            <span className={`col-start-2 row-start-2 flex min-h-[64px] w-full items-center justify-center rounded-[22px] border px-3 text-center text-xs font-semibold ${nodeClassName}`}>{coreLabel}</span>
+            {outerItems[0] ? <span className={`col-start-2 row-start-1 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[0]}</span> : null}
+            {outerItems[1] ? <span className={`col-start-1 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[1]}</span> : null}
+            {outerItems[2] ? <span className={`col-start-3 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[2]}</span> : null}
+            {outerItems[3] ? <span className={`col-start-2 row-start-3 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[3]}</span> : null}
           </div>
         </div>
       );
@@ -2674,6 +2704,33 @@ export default function App() {
     const bulletCardClassName = activePresentationDesignFamily === "light"
       ? "border-slate-200/90 bg-white/90 text-slate-700"
       : "border-white/10 bg-slate-950/35 text-slate-100";
+    const visualType = (slide?.visualType || "cluster").toLowerCase();
+
+    if (visualType === "closing") {
+      return (
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
+          <div className="absolute inset-0 opacity-80">
+            <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
+            <div className="absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full bg-current/10 blur-3xl" />
+          </div>
+          <div className="relative flex h-full flex-col">
+            <div className="flex items-center justify-between gap-3">
+              <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Slide {index + 1}</span>
+              {!thumbnail ? <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Closing</span> : null}
+            </div>
+            <div className={`flex flex-1 flex-col items-center justify-center text-center ${thumbnail ? "gap-2 py-5" : "gap-4 py-12"}`}>
+              <p className={`uppercase tracking-[0.28em] ${thumbnail ? "text-[9px]" : "text-xs"} ${mutedClassName}`}>{slide?.visualTitle || "Closing message"}</p>
+              <h5 className={`${thumbnail ? "text-xl" : "text-[3.2rem]"} font-semibold leading-none`}>{slide?.title || "THANK YOU!"}</h5>
+              {!thumbnail ? <p className={`max-w-2xl text-base leading-7 ${mutedClassName}`}>{slide?.bullets?.[1] || slide?.bullets?.[0] || "Questions and discussion."}</p> : null}
+            </div>
+            <div className="mt-auto flex items-center justify-between gap-2">
+              <p className={`line-clamp-2 text-[10px] leading-5 ${mutedClassName}`}>{slide?.flowNote || "Close the presentation and invite questions."}</p>
+              <span className={`text-[9px] font-semibold uppercase tracking-[0.24em] ${mutedClassName}`}>mabaso</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>

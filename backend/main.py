@@ -7227,6 +7227,8 @@ def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
         return "graph"
     if any(marker in combined for marker in ["chart", "distribution", "breakdown", "percentage", "share"]):
         return "chart"
+    if any(marker in combined for marker in ["component", "components", "input", "output", "module", "subsystem", "architecture", "framework", "pins", "signal path"]):
+        return "components"
     if any(marker in combined for marker in ["photo", "photograph", "microscope", "specimen", "machine", "device", "organ", "appearance", "recognise"]):
         return "photo"
     if any(marker in combined for marker in ["compare", "difference", "advantage", "disadvantage", "versus"]):
@@ -7240,6 +7242,69 @@ def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
     if any(marker in combined for marker in ["formula", "equation", "rule"]):
         return "formula"
     return "cluster"
+
+
+PRESENTATION_EXCLUDED_PATTERNS = (
+    "common mistake",
+    "common mistakes",
+    "exam tip",
+    "exam tips",
+    "revision plan",
+    "revision focus",
+    "quick revision",
+    "study tip",
+    "test strategy",
+    "exam strategy",
+    "exam trap",
+    "exam traps",
+    "before the test",
+    "how to pass",
+)
+
+PRESENTATION_CLOSING_PATTERNS = (
+    "thank you",
+    "thanks",
+    "q&a",
+)
+
+PRESENTATION_VISUAL_TYPES = {
+    "flow",
+    "comparison",
+    "timeline",
+    "cycle",
+    "formula",
+    "cluster",
+    "components",
+    "table",
+    "chart",
+    "graph",
+    "photo",
+    "closing",
+}
+
+
+def contains_presentation_excluded_text(value: str) -> bool:
+    normalized = compact_text(value).lower()
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in PRESENTATION_EXCLUDED_PATTERNS)
+
+
+def is_presentation_closing_text(value: str) -> bool:
+    normalized = compact_text(value).lower()
+    if not normalized:
+        return False
+    return any(pattern in normalized for pattern in PRESENTATION_CLOSING_PATTERNS)
+
+
+def sanitize_presentation_text_items(values: list[str]) -> list[str]:
+    return [
+        compact_text(value)
+        for value in values
+        if compact_text(value)
+        and not contains_presentation_excluded_text(compact_text(value))
+        and not is_presentation_closing_text(compact_text(value))
+    ]
 
 
 def normalize_visual_items(raw_items: Any, fallback_items: list[str]) -> list[str]:
@@ -7262,32 +7327,44 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_slide, dict):
             continue
         title = compact_text(raw_slide.get("title"))
-        bullets = [
+        if not title or contains_presentation_excluded_text(title) or is_presentation_closing_text(title):
+            continue
+        bullets = sanitize_presentation_text_items([
             compact_text(item)
             for item in (raw_slide.get("bullets") or [])
             if compact_text(item)
-        ]
+        ])
         if not title or len(bullets) < 2:
             continue
         visual_title = compact_text(raw_slide.get("visual_title"), compact_text(raw_slide.get("note"), "Visual summary"))
-        visual_items = normalize_visual_items(raw_slide.get("visual_items"), bullets[:4])
+        if contains_presentation_excluded_text(visual_title) or is_presentation_closing_text(visual_title):
+            visual_title = "Visual summary"
+        visual_items = sanitize_presentation_text_items(normalize_visual_items(raw_slide.get("visual_items"), bullets[:4]))
         visual_type = compact_text(raw_slide.get("visual_type"), infer_presentation_visual_type(title, bullets)).lower()
+        if visual_type not in PRESENTATION_VISUAL_TYPES:
+            visual_type = infer_presentation_visual_type(title, bullets)
         flow_note = compact_text(
             raw_slide.get("flow_note"),
             f"This slide moves the deck from {title.lower()} into the next teachable idea.",
         )
+        if contains_presentation_excluded_text(flow_note) or is_presentation_closing_text(flow_note):
+            flow_note = f"This slide teaches {title.lower()} through a clearer classroom explanation."
         reference_image_index = -1
         try:
             reference_image_index = max(-1, int(raw_slide.get("reference_image_index")))
         except (TypeError, ValueError):
             if visual_type == "photo":
                 reference_image_index = 0
+        if visual_type == "photo" and reference_image_index < 0:
+            visual_type = infer_presentation_visual_type(title, bullets)
+            if visual_type == "photo":
+                visual_type = "components"
         normalized.append(
             {
                 "title": title,
                 "bullets": bullets[:5],
                 "visual_title": visual_title or "Visual summary",
-                "visual_items": visual_items or bullets[:3],
+                "visual_items": (visual_items or bullets[:3])[:4],
                 "visual_type": visual_type,
                 "flow_note": flow_note,
                 "reference_image_index": reference_image_index,
@@ -7306,9 +7383,8 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
     definition_points = extract_bullet_points(extract_section(summary, "IMPORTANT DEFINITIONS"))[:6]
     formula_points = [line.strip() for line in extract_section(summary, "IMPORTANT FORMULAS").splitlines() if compact_text(line)][:4]
     example_points = [line.strip() for line in extract_section(summary, "WORKED EXAMPLES").splitlines() if compact_text(line)][:4]
-    mistake_points = extract_bullet_points(extract_section(summary, "COMMON MISTAKES TO AVOID"))[:4]
-    revision_points = extract_bullet_points(extract_section(summary, "QUICK REVISION PLAN"))[:4]
-    exam_points = extract_bullet_points(extract_section(summary, "EXAM TIPS"))[:4]
+    component_points = definition_points[:4] or concept_points[2:6]
+    relationship_points = concept_points[3:8] or definition_points[1:5] or example_points[:4]
 
     slides = [
         {
@@ -7333,11 +7409,19 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
         },
         {
             "title": "Definitions and Terms",
-            "bullets": definition_points[:5] or concept_points[3:8] or [short_summary, "Define the most exam-relevant terminology."],
+            "bullets": definition_points[:5] or concept_points[3:8] or [short_summary, "Define the most important terminology clearly."],
             "visual_title": "Key terms",
             "visual_type": "comparison",
             "visual_items": definition_points[:4] or concept_points[:4],
             "flow_note": "Clarify vocabulary and distinctions so the rest of the deck uses the same language consistently.",
+        },
+        {
+            "title": "System Components",
+            "bullets": component_points[:4] or ["Show the main parts or inputs of the topic.", "Explain how the parts connect inside the overall system."],
+            "visual_title": "Component diagram",
+            "visual_type": "components",
+            "visual_items": component_points[:4] or ["Core unit", "Input", "Output", "Control path"],
+            "flow_note": "Map the important parts, inputs, or layers before moving into rules or calculations.",
         },
         {
             "title": "Formulas and Rules",
@@ -7353,23 +7437,15 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
             "visual_title": "Method steps",
             "visual_type": "flow",
             "visual_items": example_points[:4],
-            "flow_note": "Turn the theory into action with one clear example students can imitate in classwork or exams.",
+            "flow_note": "Turn the theory into action with one clear example students can follow step by step.",
         },
         {
-            "title": "Common Mistakes",
-            "bullets": mistake_points[:4] or ["Explain the most common confusion point.", "Show how to avoid careless errors."],
-            "visual_title": "Compare correct vs wrong",
+            "title": "Key Relationships",
+            "bullets": relationship_points[:4] or ["Summarize how the main ideas connect to each other.", "Highlight the relationship between the concepts and the worked example."],
+            "visual_title": "Compare or connect ideas",
             "visual_type": "comparison",
-            "visual_items": mistake_points[:4],
-            "flow_note": "Pause after the example to point out errors, misconceptions, and checks that improve accuracy.",
-        },
-        {
-            "title": "Revision Focus",
-            "bullets": revision_points[:4] or exam_points[:4] or ["End with a short revision sequence students can follow."],
-            "visual_title": "Revision sequence",
-            "visual_type": "timeline",
-            "visual_items": revision_points[:4] or exam_points[:4],
-            "flow_note": "Close the learning journey with a short revision route that tells students what to revisit first.",
+            "visual_items": relationship_points[:4] or component_points[:4],
+            "flow_note": "Close the teaching sequence by connecting the main concepts into one final explanatory view.",
         },
     ]
 
@@ -7384,6 +7460,19 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
         "title": topic,
         "subtitle": short_summary or "Lecture summary prepared for classroom presentation.",
         "slides": normalized_slides[:7],
+    }
+
+
+def build_presentation_closing_slide_content(title: str) -> dict[str, Any]:
+    cleaned_title = compact_text(title, "Lecture Presentation")
+    return {
+        "title": "THANK YOU!",
+        "bullets": [cleaned_title, "Questions and discussion."],
+        "visual_title": "Closing message",
+        "visual_items": ["THANK YOU!", "Questions?", "Discussion"],
+        "visual_type": "closing",
+        "flow_note": "Close the presentation with a simple thank-you message and invite questions.",
+        "reference_image_index": -1,
     }
 
 
@@ -7683,6 +7772,54 @@ def draw_presentation_visual_panel(
             font_size=12,
             bold=True,
         )
+    elif visual_type == "components":
+        core_label = visual_items[0] if visual_items else "Core unit"
+        center_card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left + 1.0), Inches(panel_top + 1.76), Inches(1.62), Inches(0.82))
+        style_shape(center_card, primary_fill)
+        add_textbox(
+            slide,
+            left=panel_left + 1.12,
+            top=panel_top + 2.02,
+            width=1.36,
+            height=0.22,
+            text=core_label,
+            font_size=12,
+            color_hex=primary_text,
+            bold=True,
+            align=PP_ALIGN.CENTER,
+        )
+        component_positions = [
+            (panel_left + 0.2, panel_top + 0.88),
+            (panel_left + 2.14, panel_top + 0.88),
+            (panel_left + 0.2, panel_top + 3.0),
+            (panel_left + 2.14, panel_top + 3.0),
+        ]
+        connector_positions = [
+            (panel_left + 1.01, panel_top + 1.28, 0.24, 0.52),
+            (panel_left + 2.42, panel_top + 1.28, 0.24, 0.52),
+            (panel_left + 1.01, panel_top + 2.58, 0.24, 0.52),
+            (panel_left + 2.42, panel_top + 2.58, 0.24, 0.52),
+        ]
+        for (x, y), item, (line_x, line_y, line_width, line_height) in zip(
+            component_positions,
+            (visual_items[1:5] or slide_content.get("bullets", [])[:4] or ["Input", "Output", "Stage", "Feedback"]),
+            connector_positions,
+            strict=False,
+        ):
+            connector = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(line_x), Inches(line_y), Inches(line_width), Inches(line_height))
+            style_shape(connector, theme["surface"])
+            add_visual_card(
+                slide,
+                left=x,
+                top=y,
+                width=1.28,
+                height=0.64,
+                fill_hex=secondary_fill,
+                text=item,
+                text_hex=primary_text,
+                font_size=10,
+                bold=True,
+            )
     elif visual_type == "timeline":
         line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(panel_left + 0.46), Inches(panel_top + 0.86), Inches(0.08), Inches(3.2))
         style_shape(line, primary_fill)
@@ -8018,45 +8155,62 @@ def add_presentation_content_slide(
     )
 
 
-def add_presentation_closing_slide(presentation: Any, title: str, theme: dict[str, str]):
+def add_presentation_closing_slide(presentation: Any, slide_content: dict[str, Any], theme: dict[str, str]):
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     decorate_presentation_slide(slide, theme, len(presentation.slides))
+    closing_title = compact_text(slide_content.get("title"), "THANK YOU!")
+    closing_lines = sanitize_presentation_text_items([
+        compact_text(item)
+        for item in (slide_content.get("bullets") or [])
+        if compact_text(item)
+    ])
+    closing_subtitle = closing_lines[1] if len(closing_lines) > 1 else (closing_lines[0] if closing_lines else "Questions and discussion.")
     add_textbox(
         slide,
-        left=1.0,
+        left=0.95,
         top=1.45,
-        width=8.8,
-        height=0.9,
-        text=f"Closing Review: {title}",
-        font_size=26,
+        width=11.2,
+        height=0.5,
+        text=compact_text(slide_content.get("visual_title"), "Closing message"),
+        font_size=16,
+        color_hex=theme["muted"],
+        bold=True,
+        align=PP_ALIGN.CENTER,
+    )
+    add_textbox(
+        slide,
+        left=0.75,
+        top=2.35,
+        width=11.7,
+        height=1.4,
+        text=closing_title,
+        font_size=34,
         color_hex=theme["text"],
         bold=True,
         font_name="Aptos Display",
+        align=PP_ALIGN.CENTER,
     )
     add_textbox(
         slide,
-        left=1.02,
-        top=2.7,
-        width=7.6,
-        height=2.6,
-        text=(
-            "1. Revisit the major concepts.\n"
-            "2. Repeat the worked example in your own words.\n"
-            "3. Finish with the common mistakes before the test."
-        ),
-        font_size=19,
+        left=1.3,
+        top=4.06,
+        width=10.6,
+        height=0.55,
+        text=closing_subtitle,
+        font_size=18,
         color_hex=theme["muted"],
+        align=PP_ALIGN.CENTER,
     )
     add_visual_card(
         slide,
-        left=8.75,
-        top=2.2,
-        width=3.38,
-        height=3.2,
+        left=4.08,
+        top=5.1,
+        width=5.1,
+        height=0.84,
         fill_hex=theme["surface"],
-        text="Final check\n\nKey ideas\nExamples\nExam traps\nRevision order",
+        text=compact_text(closing_lines[0], "Presentation complete"),
         text_hex=theme["text"],
-        font_size=16,
+        font_size=15,
         bold=True,
     )
 
@@ -8083,8 +8237,10 @@ def build_presentation_file(
 
     add_presentation_title_slide(presentation, title, subtitle, theme)
     for slide_index, slide_content in enumerate(slides, start=1):
-        add_presentation_content_slide(presentation, slide_index, slide_content, theme, reference_images)
-    add_presentation_closing_slide(presentation, title, theme)
+        if compact_text(slide_content.get("visual_type")).lower() == "closing":
+            add_presentation_closing_slide(presentation, slide_content, theme)
+        else:
+            add_presentation_content_slide(presentation, slide_index, slide_content, theme, reference_images)
 
     file_path = output_dir / "lecture-presentation.pptx"
     presentation.save(str(file_path))
@@ -8134,22 +8290,26 @@ async def generate_presentation_package(
                         "You create concise academic PowerPoint structures for students. "
                         "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
                         "Rules:\n"
-                        "- `slides` must be an array of 6 to 8 objects.\n"
+                        "- `slides` must be an array of 5 to 7 content slides.\n"
                         "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, `visual_items`, `flow_note`, and `reference_image_index`.\n"
                         "- `bullets` must contain 3 to 5 short bullet strings with useful teaching value, not copied fragments.\n"
                         "- `visual_items` must contain 2 to 4 short labels for a diagram panel on the slide.\n"
-                        "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster, table, chart, graph, photo.\n"
+                        "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster, components, table, chart, graph, photo.\n"
                         "- `flow_note` must explain how the slide advances the lesson flow in one sentence.\n"
                         f"- `reference_image_index` must be -1 when no uploaded image clearly matches, otherwise an integer from 0 to {max(len(reference_images) - 1, 0)}.\n"
                         "- This is a formal PowerPoint deck, not speaker notes. Do not write what the presenter should say.\n"
                         "- Keep bullet lines concise, readable, and presentation-ready.\n"
                         f"- Write the slide text in {output_language}.\n"
                         "- When the lecture material covers multiple topics, keep those topics separate instead of mixing them into one slide.\n"
-                        "- Cover overview, core concepts, formulas or rules when present, worked examples, mistakes, and revision or exam focus.\n"
-                        "- Use tables, graphs, charts, and photos when they help students understand the material quickly.\n"
+                        "- Cover overview, core concepts, definitions or structure, formulas or rules when present, and worked examples or applications.\n"
+                        "- Do not create slides about common mistakes, exam tips, revision plans, study advice, exam traps, or test strategy.\n"
+                        "- Do not use phrases like 'common mistakes', 'exam tips', 'revision focus', 'exam traps', or 'before the test' in titles, bullets, flow notes, or visual panels.\n"
+                        "- Use tables, graphs, charts, component diagrams, process flows, and photos when they help students understand the material quickly.\n"
                         "- Only use `photo` when the uploaded lecture images clearly match the topic on that slide.\n"
                         "- If the reference image catalog does not clearly match a slide, use a non-photo visual instead of forcing an image.\n"
-                        "- Make the slide sequence feel like a high-grade classroom deck: clear concepts first, then supporting detail, then revision focus.\n"
+                        "- When no real photo fits, create a designed diagram panel using components, graphs, charts, formulas, or process visuals instead of a generic placeholder.\n"
+                        "- Do not create a thank-you slide or closing slide in JSON. The app adds the final closing slide automatically.\n"
+                        "- Make the slide sequence feel like a high-grade classroom deck: clear concepts first, then structure, then worked explanation or interpretation.\n"
                         "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
                         "- Do not return markdown, numbering, or commentary outside JSON."
                     ),
@@ -8189,6 +8349,8 @@ async def generate_presentation_package(
 
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     subtitle = compact_text(generated_package.get("subtitle"), fallback_package["subtitle"])
+    closing_slide = build_presentation_closing_slide_content(title)
+    slides_with_closing = [*normalized_slides, closing_slide]
 
     update_job(job_id, status="processing", stage="Building PowerPoint file", progress=56)
     download_file = await asyncio.to_thread(
@@ -8196,7 +8358,7 @@ async def generate_presentation_package(
         job_id,
         title=title,
         subtitle=subtitle,
-        slides=normalized_slides,
+        slides=slides_with_closing,
         design_id=normalized_design_id,
         reference_images=reference_images,
     )
@@ -8205,7 +8367,7 @@ async def generate_presentation_package(
         "presentation_title": title,
         "presentation_subtitle": subtitle,
         "presentation_design_id": normalized_design_id,
-        "presentation_slides": normalized_slides,
+        "presentation_slides": slides_with_closing,
         "_presentation_download_file": download_file,
     }
 
