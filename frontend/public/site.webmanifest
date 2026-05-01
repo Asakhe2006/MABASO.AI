@@ -1,0 +1,17 @@
+{
+  "name": "MABASO AI",
+  "short_name": "MABASO AI",
+  "description": "Lecture transcription, study guides, flashcards, quizzes, presentations, podcasts, and revision tools.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04110a",
+  "theme_color": "#04110a",
+  "icons": [
+    {
+      "src": "/mabaso-social.svg",
+      "sizes": "1024x1024",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
