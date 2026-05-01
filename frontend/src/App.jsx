@@ -41,6 +41,7 @@ const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const BULK_LECTURE_ACCEPT = "audio/*,video/*,image/*,.txt,.md,.text,.pdf,.pptx,.docx";
+const PRESENTATION_TEMPLATE_ACCEPT = ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const outputLanguageOptions = [
   { value: "English", label: "English" },
   { value: "isiZulu", label: "isiZulu" },
@@ -1396,6 +1397,7 @@ function createEmptyPresentationData() {
     title: "",
     subtitle: "",
     designId: presentationDesigns[0].id,
+    templateName: "",
     slides: [],
   };
 }
@@ -1448,6 +1450,7 @@ function normalizePresentationData(value) {
     title: raw.title || raw.presentation_title || "",
     subtitle: raw.subtitle || raw.presentation_subtitle || "",
     designId: raw.designId || raw.design_id || raw.presentation_design_id || presentationDesigns[0].id,
+    templateName: raw.templateName || raw.template_name || raw.presentation_template_name || "",
     slides: rawSlides
       .filter((slide) => slide && typeof slide === "object")
       .map((slide) => ({
@@ -1572,6 +1575,7 @@ export default function App() {
   const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
   const [selectedPresentationDesign, setSelectedPresentationDesign] = useState(presentationDesigns[0].id);
   const [selectedPresentationSlideIndex, setSelectedPresentationSlideIndex] = useState(0);
+  const [presentationTemplateFile, setPresentationTemplateFile] = useState(null);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -1637,6 +1641,7 @@ export default function App() {
   const pastQuestionPaperFileInputRef = useRef(null);
   const bulkLectureFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
+  const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
   const podcastAudioUrlRef = useRef("");
@@ -1700,7 +1705,23 @@ export default function App() {
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activePresentationDesign = presentationDesigns.find((design) => design.id === (presentationData.designId || selectedPresentationDesign)) || presentationDesigns[0];
   const activePresentationDesignFamily = getPresentationDesignFamily(activePresentationDesign?.id);
-  const activePresentationSlide = presentationData.slides[selectedPresentationSlideIndex] || presentationData.slides[0] || null;
+  const selectedPresentationTemplateName = presentationTemplateFile?.name || "";
+  const generatedPresentationTemplateName = presentationData.templateName || "";
+  const presentationViewerSlides = presentationData.slides.length
+    ? [
+      {
+        title: presentationData.title || "Lecture Presentation",
+        bullets: presentationData.subtitle ? [presentationData.subtitle] : [],
+        visualTitle: "Topic",
+        visualType: "title",
+        visualItems: [],
+        flowNote: "",
+        referenceImageIndex: -1,
+      },
+      ...presentationData.slides,
+    ]
+    : [];
+  const activePresentationSlide = presentationViewerSlides[selectedPresentationSlideIndex] || presentationViewerSlides[0] || null;
   const isPresentationJobActive = currentJobType === "presentation" && (isGeneratingPresentation || progress < 100 || !presentationData.slides.length);
   const presentationProgressValue = Math.max(0, Math.min(100, Number(isPresentationJobActive ? progress : presentationData.slides.length ? 100 : 0) || 0));
   const canOpenPresentationViewer = Boolean(presentationData.slides.length) && !isPresentationJobActive && presentationProgressValue >= 100;
@@ -1759,10 +1780,10 @@ export default function App() {
       setSelectedPresentationSlideIndex(0);
       return;
     }
-    if (selectedPresentationSlideIndex >= presentationData.slides.length && presentationData.slides.length) {
+    if (selectedPresentationSlideIndex >= presentationViewerSlides.length && presentationData.slides.length) {
       setSelectedPresentationSlideIndex(0);
     }
-  }, [presentationData.slides.length, selectedPresentationSlideIndex]);
+  }, [presentationData.slides.length, presentationViewerSlides.length, selectedPresentationSlideIndex]);
 
   const focusPresentationViewer = () => {
     if (!canOpenPresentationViewer) return;
@@ -2706,6 +2727,21 @@ export default function App() {
       : "border-white/10 bg-slate-950/35 text-slate-100";
     const visualType = (slide?.visualType || "cluster").toLowerCase();
 
+    if (visualType === "title") {
+      return (
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
+          <div className="absolute inset-0 opacity-80">
+            <div className="absolute left-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
+            <div className="absolute bottom-0 right-0 h-40 w-72 rounded-full bg-current/10 blur-3xl" />
+          </div>
+          <div className={`relative flex h-full flex-col justify-center ${thumbnail ? "gap-2 py-6" : "gap-4 py-14"}`}>
+            <h5 className={`${thumbnail ? "text-xl" : "text-[3.2rem]"} font-semibold leading-tight`}>{slide?.title || "Lecture Presentation"}</h5>
+            {slide?.bullets?.[0] ? <p className={`max-w-3xl ${thumbnail ? "text-[10px] leading-5" : "text-base leading-7"} ${mutedClassName}`}>{slide.bullets[0]}</p> : null}
+          </div>
+        </div>
+      );
+    }
+
     if (visualType === "closing") {
       return (
         <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
@@ -2713,20 +2749,8 @@ export default function App() {
             <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
             <div className="absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full bg-current/10 blur-3xl" />
           </div>
-          <div className="relative flex h-full flex-col">
-            <div className="flex items-center justify-between gap-3">
-              <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Slide {index + 1}</span>
-              {!thumbnail ? <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Closing</span> : null}
-            </div>
-            <div className={`flex flex-1 flex-col items-center justify-center text-center ${thumbnail ? "gap-2 py-5" : "gap-4 py-12"}`}>
-              <p className={`uppercase tracking-[0.28em] ${thumbnail ? "text-[9px]" : "text-xs"} ${mutedClassName}`}>{slide?.visualTitle || "Closing message"}</p>
-              <h5 className={`${thumbnail ? "text-xl" : "text-[3.2rem]"} font-semibold leading-none`}>{slide?.title || "THANK YOU!"}</h5>
-              {!thumbnail ? <p className={`max-w-2xl text-base leading-7 ${mutedClassName}`}>{slide?.bullets?.[1] || slide?.bullets?.[0] || "Questions and discussion."}</p> : null}
-            </div>
-            <div className="mt-auto flex items-center justify-between gap-2">
-              <p className={`line-clamp-2 text-[10px] leading-5 ${mutedClassName}`}>{slide?.flowNote || "Close the presentation and invite questions."}</p>
-              <span className={`text-[9px] font-semibold uppercase tracking-[0.24em] ${mutedClassName}`}>mabaso</span>
-            </div>
+          <div className="relative flex h-full items-center justify-center text-center">
+            <h5 className={`${thumbnail ? "text-xl" : "text-[3.4rem]"} font-semibold leading-none`}>{slide?.title || "THANK YOU"}</h5>
           </div>
         </div>
       );
@@ -2958,6 +2982,13 @@ export default function App() {
 
     return (
       <div className="space-y-5">
+        <input
+          ref={presentationTemplateInputRef}
+          type="file"
+          accept={PRESENTATION_TEMPLATE_ACCEPT}
+          className="hidden"
+          onChange={(event) => handlePresentationTemplateFileChange(event.target.files)}
+        />
         {showSetupView ? (
           <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(2,8,23,0.35)]">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -3006,8 +3037,23 @@ export default function App() {
                   );
                 })}
               </div>
+              <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Custom Template</p>
+                    <h6 className="mt-2 text-xl font-semibold text-white">Upload your own PowerPoint template.</h6>
+                    <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">MABASO will keep the slides already inside your template unchanged and append the generated slides after them.</p>
+                    {selectedPresentationTemplateName ? <p className="mt-3 text-sm font-semibold text-sky-100">{selectedPresentationTemplateName}</p> : null}
+                    {!selectedPresentationTemplateName && generatedPresentationTemplateName ? <p className="mt-3 text-sm text-slate-300">The current deck was generated with <span className="font-semibold text-white">{generatedPresentationTemplateName}</span>. Re-upload it if you want to generate on the same template again.</p> : null}
+                  </div>
+                  <div className="force-mobile-stack flex flex-wrap gap-3">
+                    <button type="button" onClick={() => presentationTemplateInputRef.current?.click()} disabled={loading} className="rounded-full border border-sky-300/30 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">{selectedPresentationTemplateName ? "Replace Template" : "Upload Template"}</button>
+                    {selectedPresentationTemplateName ? <button type="button" onClick={clearPresentationTemplateSelection} className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Clear</button> : null}
+                  </div>
+                </div>
+              </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
-                <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</p>
+                <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> and keep the existing template slides unchanged.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
                 <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
               </div>
             </div>
@@ -3040,8 +3086,9 @@ export default function App() {
                   </div>
                   <div className="mt-5 flex flex-wrap gap-2">
                     <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</span>
+                    {generatedPresentationTemplateName ? <span className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-xs text-sky-50">Template: {generatedPresentationTemplateName}</span> : null}
                     <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{visualReferences.length} lecture visual reference{visualReferences.length === 1 ? "" : "s"}</span>
-                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length || 0} slide{presentationData.slides.length === 1 ? "" : "s"}</span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{presentationViewerSlides.length || 0} slide{presentationViewerSlides.length === 1 ? "" : "s"}</span>
                   </div>
                 </div>
               </div>
@@ -3057,6 +3104,7 @@ export default function App() {
                   <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Presentation Viewer</p>
                   <h4 className="phone-safe-copy mt-2 text-2xl font-semibold text-white">{presentationData.title || "Lecture presentation"}</h4>
                   <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{presentationData.subtitle || "A concise lecture deck is ready for download."}</p>
+                  {generatedPresentationTemplateName ? <p className="mt-3 text-xs uppercase tracking-[0.22em] text-sky-100/80">Download uses template: {generatedPresentationTemplateName}</p> : null}
                 </div>
                 <div className="force-mobile-stack flex flex-wrap gap-3">
                   <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Download PowerPoint</button>
@@ -3068,7 +3116,7 @@ export default function App() {
             <div className="grid gap-5 lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start">
               <div className="rounded-[28px] border border-white/10 bg-slate-950/80 p-3 lg:max-h-[760px] lg:overflow-y-auto">
                 <div className="space-y-3">
-                  {presentationData.slides.map((slide, index) => (
+                  {presentationViewerSlides.map((slide, index) => (
                     <button
                       key={`${slide.title}-${index}`}
                       type="button"
@@ -3079,7 +3127,7 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-4 text-center text-xs uppercase tracking-[0.22em] text-slate-400">Slide {selectedPresentationSlideIndex + 1}/{presentationData.slides.length}</p>
+                <p className="mt-4 text-center text-xs uppercase tracking-[0.22em] text-slate-400">Slide {selectedPresentationSlideIndex + 1}/{presentationViewerSlides.length}</p>
               </div>
 
               <div className="min-w-0">
@@ -6192,6 +6240,8 @@ export default function App() {
   const loadHistoryItem = (item) => {
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
+    setPresentationTemplateFile(null);
+    if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     startTransition(() => {
       setTranscript(item.transcript || "");
@@ -7159,17 +7209,21 @@ export default function App() {
     try {
       const response = await authFetch("/generate-presentation/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
-          design_id: selectedPresentationDesign,
-          language: outputLanguage,
-          reference_images: visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6),
-        }),
+        body: (() => {
+          const formData = new FormData();
+          formData.append("transcript", transcript);
+          formData.append("summary", summary);
+          formData.append("lecture_notes", lectureNotes);
+          formData.append("lecture_slides", lectureSlides);
+          formData.append("past_question_papers", pastQuestionPapers);
+          formData.append("design_id", selectedPresentationDesign);
+          formData.append("language", outputLanguage);
+          visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6).forEach((imageUrl) => {
+            formData.append("reference_images", imageUrl);
+          });
+          if (presentationTemplateFile) formData.append("template_file", presentationTemplateFile);
+          return formData;
+        })(),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "PowerPoint generation failed.");
@@ -7179,6 +7233,7 @@ export default function App() {
         title: job.presentation_title,
         subtitle: job.presentation_subtitle,
         designId: job.presentation_design_id,
+        templateName: job.presentation_template_name,
         slides: job.presentation_slides,
       });
       setPresentationData(nextPresentationData);
@@ -7229,6 +7284,26 @@ export default function App() {
       setIsGeneratingPresentation(false);
       setCurrentJobType("");
     }
+  };
+
+  const handlePresentationTemplateFileChange = (selectedFiles) => {
+    const selectedFile = Array.from(selectedFiles || [])[0];
+    if (!selectedFile) return;
+    if (!String(selectedFile.name || "").toLowerCase().endsWith(".pptx")) {
+      setPresentationTemplateFile(null);
+      if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
+      setError("Upload a PowerPoint template in .pptx format.");
+      return;
+    }
+    setError("");
+    setPresentationTemplateFile(selectedFile);
+    setStatus(`${selectedFile.name} will be used as the presentation template. Existing template slides will stay unchanged.`);
+  };
+
+  const clearPresentationTemplateSelection = () => {
+    setPresentationTemplateFile(null);
+    if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
+    setStatus("Custom presentation template cleared.");
   };
 
   const loadPodcastAudioTrack = async (jobId, segments = []) => {

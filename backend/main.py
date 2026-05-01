@@ -2215,6 +2215,7 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "presentation_title": "",
         "presentation_subtitle": "",
         "presentation_design_id": "",
+        "presentation_template_name": "",
         "presentation_slides": [],
         "study_images": [],
         "_podcast_audio_files": [],
@@ -7464,14 +7465,13 @@ def build_presentation_fallback(summary: str, transcript: str) -> dict[str, Any]
 
 
 def build_presentation_closing_slide_content(title: str) -> dict[str, Any]:
-    cleaned_title = compact_text(title, "Lecture Presentation")
     return {
-        "title": "THANK YOU!",
-        "bullets": [cleaned_title, "Questions and discussion."],
-        "visual_title": "Closing message",
-        "visual_items": ["THANK YOU!", "Questions?", "Discussion"],
+        "title": "THANK YOU",
+        "bullets": [],
+        "visual_title": "",
+        "visual_items": [],
         "visual_type": "closing",
-        "flow_note": "Close the presentation with a simple thank-you message and invite questions.",
+        "flow_note": "",
         "reference_image_index": -1,
     }
 
@@ -7504,6 +7504,22 @@ def rgb_from_hex(value: str) -> RGBColor:
 
 def get_presentation_style_family(theme: dict[str, str]) -> str:
     return compact_text(theme.get("style_family"), compact_text(theme.get("id"), "midnight-grid"))
+
+
+def get_presentation_slide_layout(presentation: Any, *preferred_names: str, fallback_index: int = 6):
+    layouts = list(getattr(presentation, "slide_layouts", []) or [])
+    if not layouts:
+        raise RuntimeError("The PowerPoint template has no slide layouts available.")
+
+    lowered_names = [name.strip().lower() for name in preferred_names if name.strip()]
+    for preferred_name in lowered_names:
+        for layout in layouts:
+            layout_name = compact_text(getattr(layout, "name", "")).lower()
+            if preferred_name in layout_name:
+                return layout
+
+    safe_index = min(max(fallback_index, 0), len(layouts) - 1)
+    return layouts[safe_index]
 
 
 def style_shape(shape: Any, fill_hex: str, *, transparency: float = 0.0):
@@ -8059,44 +8075,43 @@ def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: 
     )
 
 
-def add_presentation_title_slide(presentation: Any, title: str, subtitle: str, theme: dict[str, str]):
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    decorate_presentation_slide(slide, theme, 0, is_title=True)
-    style_family = get_presentation_style_family(theme)
+def add_presentation_title_slide(
+    presentation: Any,
+    title: str,
+    subtitle: str,
+    theme: dict[str, str],
+    *,
+    use_custom_template: bool = False,
+):
+    slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
+    if not use_custom_template:
+        decorate_presentation_slide(slide, theme, 0, is_title=True)
+    else:
+        title_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.82), Inches(0.94), Inches(9.22), Inches(3.18))
+        style_shape(title_panel, "0F172A", transparency=0.16)
+    title_color = "FFFFFF" if use_custom_template else theme["text"]
+    subtitle_color = "E2E8F0" if use_custom_template else theme["muted"]
     add_textbox(
         slide,
         left=0.95,
-        top=1.12,
+        top=1.24,
         width=8.8,
-        height=1.8,
+        height=1.55,
         text=title,
-        font_size=28,
-        color_hex=theme["text"],
+        font_size=32 if use_custom_template else 30,
+        color_hex=title_color,
         bold=True,
         font_name="Aptos Display",
     )
     add_textbox(
         slide,
         left=0.98,
-        top=3.02,
+        top=2.92,
         width=8.2,
-        height=1.45,
+        height=1.2,
         text=subtitle,
         font_size=18,
-        color_hex=theme["muted"],
-    )
-    badge = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.98), Inches(5.95), Inches(3.3), Inches(0.58))
-    style_shape(badge, theme["surface"])
-    add_textbox(
-        slide,
-        left=1.15,
-        top=6.08,
-        width=2.95,
-        height=0.22,
-        text="Prepared in Mabaso AI",
-        font_size=12,
-        color_hex=theme["accent_soft"] if style_family != "sunset-classroom" else "FFF7ED",
-        bold=True,
+        color_hex=subtitle_color,
     )
 
 
@@ -8106,14 +8121,21 @@ def add_presentation_content_slide(
     slide_content: dict[str, Any],
     theme: dict[str, str],
     reference_images: list[str],
+    *,
+    use_custom_template: bool = False,
 ):
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    decorate_presentation_slide(slide, theme, slide_index)
+    slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
+    if not use_custom_template:
+        decorate_presentation_slide(slide, theme, slide_index)
     style_family = get_presentation_style_family(theme)
-    uses_dark_text = style_family == "sunset-classroom"
+    uses_dark_text = style_family == "sunset-classroom" and not use_custom_template
+    title_fill = "0F172A" if use_custom_template else theme["surface"]
+    body_fill = "111827" if use_custom_template else (theme["surface_alt"] if uses_dark_text else theme["surface"])
+    title_color = "FFFFFF" if use_custom_template else (theme["text"] if not uses_dark_text else theme["dark_text"])
+    body_text_color = "F8FAFC" if use_custom_template else (theme["text"] if not uses_dark_text else theme["dark_text"])
 
     title_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.82), Inches(1.18), Inches(7.7), Inches(0.95))
-    style_shape(title_box, theme["surface"])
+    style_shape(title_box, title_fill, transparency=0.16 if use_custom_template else 0.0)
     add_textbox(
         slide,
         left=1.05,
@@ -8122,13 +8144,13 @@ def add_presentation_content_slide(
         height=0.3,
         text=slide_content["title"],
         font_size=23,
-        color_hex=theme["text"] if not uses_dark_text else theme["dark_text"],
+        color_hex=title_color,
         bold=True,
         font_name="Aptos Display",
     )
 
     body_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.85), Inches(2.35), Inches(7.5), Inches(4.35))
-    style_shape(body_panel, theme["surface_alt"] if uses_dark_text else theme["surface"])
+    style_shape(body_panel, body_fill, transparency=0.14 if use_custom_template else 0.0)
     add_bullet_list(
         slide,
         left=1.14,
@@ -8136,82 +8158,52 @@ def add_presentation_content_slide(
         width=6.85,
         height=3.7,
         bullets=slide_content.get("bullets", []),
-        color_hex=theme["text"] if not uses_dark_text else theme["dark_text"],
+        color_hex=body_text_color,
     )
     draw_presentation_visual_panel(slide, slide_content, theme, reference_images)
 
-    footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(6.06), Inches(3.65), Inches(0.62))
-    style_shape(footer, theme["surface_alt"] if not uses_dark_text else theme["surface"])
-    add_textbox(
-        slide,
-        left=8.98,
-        top=6.24,
-        width=3.05,
-        height=0.22,
-        text=theme["name"],
-        font_size=11,
-        color_hex=theme["muted"] if not uses_dark_text else theme["dark_text"],
-        bold=True,
-    )
+    if not use_custom_template:
+        footer = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.72), Inches(6.06), Inches(3.65), Inches(0.62))
+        style_shape(footer, theme["surface_alt"] if not uses_dark_text else theme["surface"])
+        add_textbox(
+            slide,
+            left=8.98,
+            top=6.24,
+            width=3.05,
+            height=0.22,
+            text=theme["name"],
+            font_size=11,
+            color_hex=theme["muted"] if not uses_dark_text else theme["dark_text"],
+            bold=True,
+        )
 
 
-def add_presentation_closing_slide(presentation: Any, slide_content: dict[str, Any], theme: dict[str, str]):
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    decorate_presentation_slide(slide, theme, len(presentation.slides))
-    closing_title = compact_text(slide_content.get("title"), "THANK YOU!")
-    closing_lines = sanitize_presentation_text_items([
-        compact_text(item)
-        for item in (slide_content.get("bullets") or [])
-        if compact_text(item)
-    ])
-    closing_subtitle = closing_lines[1] if len(closing_lines) > 1 else (closing_lines[0] if closing_lines else "Questions and discussion.")
+def add_presentation_closing_slide(
+    presentation: Any,
+    slide_content: dict[str, Any],
+    theme: dict[str, str],
+    *,
+    use_custom_template: bool = False,
+):
+    slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
+    if not use_custom_template:
+        decorate_presentation_slide(slide, theme, len(presentation.slides))
+    else:
+        closing_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(3.05), Inches(2.35), Inches(7.2), Inches(1.95))
+        style_shape(closing_panel, "0F172A", transparency=0.18)
+    closing_title = compact_text(slide_content.get("title"), "THANK YOU")
     add_textbox(
         slide,
-        left=0.95,
-        top=1.45,
-        width=11.2,
-        height=0.5,
-        text=compact_text(slide_content.get("visual_title"), "Closing message"),
-        font_size=16,
-        color_hex=theme["muted"],
-        bold=True,
-        align=PP_ALIGN.CENTER,
-    )
-    add_textbox(
-        slide,
-        left=0.75,
-        top=2.35,
-        width=11.7,
-        height=1.4,
+        left=1.1,
+        top=2.58,
+        width=11.1,
+        height=1.1,
         text=closing_title,
-        font_size=34,
-        color_hex=theme["text"],
+        font_size=36,
+        color_hex="FFFFFF" if use_custom_template else theme["text"],
         bold=True,
         font_name="Aptos Display",
         align=PP_ALIGN.CENTER,
-    )
-    add_textbox(
-        slide,
-        left=1.3,
-        top=4.06,
-        width=10.6,
-        height=0.55,
-        text=closing_subtitle,
-        font_size=18,
-        color_hex=theme["muted"],
-        align=PP_ALIGN.CENTER,
-    )
-    add_visual_card(
-        slide,
-        left=4.08,
-        top=5.1,
-        width=5.1,
-        height=0.84,
-        fill_hex=theme["surface"],
-        text=compact_text(closing_lines[0], "Presentation complete"),
-        text_hex=theme["text"],
-        font_size=15,
-        bold=True,
     )
 
 
@@ -8223,6 +8215,7 @@ def build_presentation_file(
     slides: list[dict[str, Any]],
     design_id: str,
     reference_images: list[str],
+    template_file_bytes: bytes | None = None,
 ) -> str:
     ensure_presentation_support()
     output_dir = PRESENTATION_OUTPUT_DIR / job_id
@@ -8230,17 +8223,31 @@ def build_presentation_file(
         shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    presentation = Presentation()
-    presentation.slide_width = Inches(13.333)
-    presentation.slide_height = Inches(7.5)
+    use_custom_template = bool(template_file_bytes)
+    if use_custom_template:
+        try:
+            presentation = Presentation(BytesIO(template_file_bytes))
+        except Exception as exc:
+            raise RuntimeError("Could not read the uploaded PowerPoint template. Upload a valid .pptx file.") from exc
+    else:
+        presentation = Presentation()
+        presentation.slide_width = Inches(13.333)
+        presentation.slide_height = Inches(7.5)
     theme = PRESENTATION_THEMES[normalize_presentation_design_id(design_id)]
 
-    add_presentation_title_slide(presentation, title, subtitle, theme)
+    add_presentation_title_slide(presentation, title, subtitle, theme, use_custom_template=use_custom_template)
     for slide_index, slide_content in enumerate(slides, start=1):
         if compact_text(slide_content.get("visual_type")).lower() == "closing":
-            add_presentation_closing_slide(presentation, slide_content, theme)
+            add_presentation_closing_slide(presentation, slide_content, theme, use_custom_template=use_custom_template)
         else:
-            add_presentation_content_slide(presentation, slide_index, slide_content, theme, reference_images)
+            add_presentation_content_slide(
+                presentation,
+                slide_index,
+                slide_content,
+                theme,
+                reference_images,
+                use_custom_template=use_custom_template,
+            )
 
     file_path = output_dir / "lecture-presentation.pptx"
     presentation.save(str(file_path))
@@ -8257,6 +8264,8 @@ async def generate_presentation_package(
     job_id: str,
     output_language: str,
     reference_images: list[str],
+    template_file_bytes: bytes | None = None,
+    template_file_name: str = "",
 ) -> dict[str, Any]:
     normalized_design_id = normalize_presentation_design_id(design_id)
     fallback_package = build_presentation_fallback(summary, transcript)
@@ -8290,6 +8299,8 @@ async def generate_presentation_package(
                         "You create concise academic PowerPoint structures for students. "
                         "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
                         "Rules:\n"
+                        "- `title` must be the lecture topic only.\n"
+                        "- `subtitle` must be one short description sentence for the topic slide.\n"
                         "- `slides` must be an array of 5 to 7 content slides.\n"
                         "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, `visual_items`, `flow_note`, and `reference_image_index`.\n"
                         "- `bullets` must contain 3 to 5 short bullet strings with useful teaching value, not copied fragments.\n"
@@ -8352,7 +8363,12 @@ async def generate_presentation_package(
     closing_slide = build_presentation_closing_slide_content(title)
     slides_with_closing = [*normalized_slides, closing_slide]
 
-    update_job(job_id, status="processing", stage="Building PowerPoint file", progress=56)
+    update_job(
+        job_id,
+        status="processing",
+        stage="Applying your PowerPoint template and building slides" if template_file_bytes else "Building PowerPoint file",
+        progress=56,
+    )
     download_file = await asyncio.to_thread(
         build_presentation_file,
         job_id,
@@ -8361,12 +8377,14 @@ async def generate_presentation_package(
         slides=slides_with_closing,
         design_id=normalized_design_id,
         reference_images=reference_images,
+        template_file_bytes=template_file_bytes,
     )
 
     return {
         "presentation_title": title,
         "presentation_subtitle": subtitle,
         "presentation_design_id": normalized_design_id,
+        "presentation_template_name": compact_text(template_file_name),
         "presentation_slides": slides_with_closing,
         "_presentation_download_file": download_file,
     }
@@ -9275,6 +9293,8 @@ async def run_presentation_job(
     design_id: str,
     output_language: str,
     reference_images: list[str],
+    template_file_bytes: bytes | None = None,
+    template_file_name: str = "",
 ):
     try:
         update_job(job_id, status="processing", stage="Starting PowerPoint generation", progress=8)
@@ -9288,6 +9308,8 @@ async def run_presentation_job(
             job_id,
             output_language,
             reference_images,
+            template_file_bytes,
+            template_file_name,
         )
         update_job(
             job_id,
@@ -9636,11 +9658,39 @@ async def create_podcast(
 
 @app.post("/generate-presentation/")
 async def create_presentation(
-    payload: PresentationGenerationRequest,
     request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    template_file_bytes: bytes | None = None
+    template_file_name = ""
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        template_upload = form.get("template_file")
+        if isinstance(template_upload, UploadFile) and compact_text(template_upload.filename):
+            if not is_pptx_upload(template_upload.filename, template_upload.content_type):
+                raise HTTPException(status_code=400, detail="Upload a PowerPoint template in .pptx format.")
+            template_file_bytes = await template_upload.read()
+            if not template_file_bytes:
+                raise HTTPException(status_code=400, detail="The selected PowerPoint template is empty.")
+            template_file_name = compact_text(template_upload.filename)
+        payload = PresentationGenerationRequest(
+            transcript=compact_text(form.get("transcript")),
+            summary=compact_text(form.get("summary")),
+            lecture_notes=compact_text(form.get("lecture_notes")),
+            lecture_slides=compact_text(form.get("lecture_slides")),
+            past_question_papers=compact_text(form.get("past_question_papers")),
+            design_id=compact_text(form.get("design_id"), "emerald-scholar"),
+            language=compact_text(form.get("language"), "English"),
+            reference_images=[
+                compact_text(item)
+                for item in form.getlist("reference_images")
+                if compact_text(item)
+            ][:6],
+        )
+    else:
+        payload = PresentationGenerationRequest(**(await request.json()))
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -9659,7 +9709,11 @@ async def create_presentation(
     ensure_presentation_support()
     design_id = normalize_presentation_design_id(payload.design_id)
     job_id = create_job("presentation", owner_email=current_user)
-    update_job(job_id, _output_language=output_language)
+    update_job(
+        job_id,
+        _output_language=output_language,
+        presentation_template_name=template_file_name,
+    )
     asyncio.create_task(
         run_presentation_job(
             job_id,
@@ -9671,6 +9725,8 @@ async def create_presentation(
             design_id,
             output_language,
             reference_images,
+            template_file_bytes,
+            template_file_name,
         )
     )
     record_audit_log(
@@ -9680,7 +9736,14 @@ async def create_presentation(
         resource_type="presentation",
         resource_name=design_id,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"job_id": job_id, "design_id": design_id, "language": output_language, "reference_images": len(reference_images)},
+        metadata={
+            "job_id": job_id,
+            "design_id": design_id,
+            "language": output_language,
+            "reference_images": len(reference_images),
+            "custom_template": bool(template_file_name),
+            "template_name": template_file_name,
+        },
     )
     return {"job_id": job_id}
 
