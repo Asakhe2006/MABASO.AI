@@ -286,6 +286,7 @@ class StudyGuideRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     language: str = "English"
+    reference_images: list[str] = []
 
 
 class PodcastGenerationRequest(BaseModel):
@@ -8972,7 +8973,11 @@ async def create_study_guide(
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
-    reference_images = [compact_text(item) for item in (payload.reference_images or []) if compact_text(item)][:6]
+    reference_images = [
+        compact_text(item)
+        for item in (getattr(payload, "reference_images", []) or [])
+        if compact_text(item)
+    ][:6]
     if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
