@@ -556,6 +556,7 @@ function createStudySourceEntry(name, text, prefix, extra = {}) {
     text: normalizeStudySourceText(text),
     prefix: prefix || "STUDY SOURCE",
     previewUrl: typeof extra.previewUrl === "string" ? extra.previewUrl : "",
+    visualReferences: Array.isArray(extra.visualReferences) ? extra.visualReferences.filter((item) => typeof item === "string" && item.trim()) : [],
     fileType: typeof extra.fileType === "string" ? extra.fileType : "",
     visualSource: Boolean(extra.visualSource),
   };
@@ -600,6 +601,7 @@ function normalizeStudySourceEntries(entries, fallbackText = "", fallbackNames =
         text: (entry?.text || "").trim(),
         prefix: entry?.prefix || defaultPrefix,
         previewUrl: typeof entry?.previewUrl === "string" ? entry.previewUrl : "",
+        visualReferences: Array.isArray(entry?.visualReferences) ? entry.visualReferences.filter((item) => typeof item === "string" && item.trim()) : [],
         fileType: typeof entry?.fileType === "string" ? entry.fileType : "",
         visualSource: Boolean(entry?.visualSource),
       }))
@@ -644,16 +646,20 @@ function sanitizeStudySourceEntriesForHistory(entries) {
 function buildUploadedVisualReferences(...sourceGroups) {
   return sourceGroups
     .flat()
-    .filter((entry) => entry?.previewUrl)
-    .slice(0, 6)
-    .map((entry, index) => ({
-      id: entry.id || `${entry.name}-${index}`,
-      title: entry.name || "Uploaded source visual",
-      image_url: entry.previewUrl,
-      source_url: entry.previewUrl,
-      query: entry.prefix || "Uploaded source",
-      source_type: "uploaded",
-    }));
+    .flatMap((entry) => {
+      const sources = Array.isArray(entry?.visualReferences) && entry.visualReferences.length
+        ? entry.visualReferences
+        : entry?.previewUrl ? [entry.previewUrl] : [];
+      return sources.map((imageUrl, index) => ({
+        id: entry?.id ? `${entry.id}-${index}` : `${entry?.name || "uploaded-source"}-${index}`,
+        title: sources.length > 1 ? `${entry?.name || "Uploaded source visual"} ${index + 1}` : (entry?.name || "Uploaded source visual"),
+        image_url: imageUrl,
+        source_url: imageUrl,
+        query: entry?.prefix || "Uploaded source",
+        source_type: "uploaded",
+      }));
+    })
+    .slice(0, 6);
 }
 
 function studySourceEntriesToText(entries, defaultPrefix = "STUDY SOURCE") {
@@ -695,6 +701,13 @@ function studyImagesToText(images) {
   return (images || [])
     .map((image, index) => `${index + 1}. ${image.title || image.query || "Reference photo"}\nSource: ${image.source_type === "uploaded" ? "Uploaded from lecture notes or slides" : image.source_url || image.image_url || ""}`)
     .join("\n\n");
+}
+
+function summarizePresentationSlidePoints(slide) {
+  return (slide?.bullets || [])
+    .map((item) => String(item || "").replace(/^[\s\-•]+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
 }
 
 function readFileAsDataUrl(file) {
@@ -2613,11 +2626,7 @@ export default function App() {
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.28em] text-sky-100/75">AI Presentation Maker</p>
             <h4 className="mt-2 text-3xl font-semibold text-white">Build lecture slides with real structure, visuals, and flow.</h4>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose a template first. MABASO will generate slide titles, bullet points, visual panels, and a cleaner teaching sequence from your lecture guide, notes, slides, and past papers.</p>
-          </div>
-          <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
-            <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose a template first. Then click generate below and let MABASO turn your lecture guide, notes, slides, and past papers into a cleaner classroom deck with extracted visuals from your uploaded slide files.</p>
           </div>
         </div>
 
@@ -2686,6 +2695,13 @@ export default function App() {
               );
             })}
           </div>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
+            <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Generate below, then review the deck view as soon as the progress reaches 100%.</p>
+            <div className="force-mobile-stack flex flex-wrap gap-3">
+              <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+              <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2732,9 +2748,9 @@ export default function App() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Slide Flow</p>
-                <h4 className="mt-2 text-2xl font-semibold text-white">How the presentation moves from one idea to the next.</h4>
+                <h4 className="mt-2 text-2xl font-semibold text-white">Clean summary of how the presentation moves from one idea to the next.</h4>
               </div>
-              <p className="max-w-2xl text-sm leading-7 text-slate-300">Each slide keeps a short teaching note so students can understand why it appears in that order, not just what is written on it.</p>
+              <p className="max-w-2xl text-sm leading-7 text-slate-300">Each section below keeps the flow note short and adds a few clean bullet points so the user can quickly understand the presentation sequence before explaining or downloading it.</p>
             </div>
             <div className="mt-5 space-y-3">
               {presentationData.slides.map((slide, index) => (
@@ -2752,6 +2768,16 @@ export default function App() {
                       </div>
                       <p className="mt-3 text-lg font-semibold text-white">{slide.title || `Slide ${index + 1}`}</p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">{slide.flowNote || slide.visualTitle || "This slide supports the lecture flow."}</p>
+                      {summarizePresentationSlidePoints(slide).length ? (
+                        <ul className="mt-3 space-y-2 text-sm text-slate-200">
+                          {summarizePresentationSlidePoints(slide).map((point) => (
+                            <li key={`${slide.title || index}-${point}`} className="flex items-start gap-2">
+                              <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-300" />
+                              <span className="min-w-0">{point}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </div>
                     <span className="rounded-full border border-white/10 bg-slate-950/70 px-3 py-2 text-xs text-slate-200">{(slide.bullets || []).length} points</span>
                   </div>
@@ -6078,11 +6104,19 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
       const cleanedText = normalizeStudySourceText(data.text || "");
+      const extractedVisualReferences = Array.isArray(data.image_urls)
+        ? data.image_urls.filter((item) => typeof item === "string" && item.trim()).slice(0, 6)
+        : [];
       if (isLikelyReadableStudySourceText(cleanedText)) {
         extractedEntries.push(createStudySourceEntry(selectedFile.name, cleanedText, sourcePrefix, {
-          previewUrl: isImageFile ? await readFileAsDataUrl(selectedFile) : "",
+          previewUrl: isImageFile
+            ? await readFileAsDataUrl(selectedFile)
+            : extractedVisualReferences[0] || "",
+          visualReferences: isImageFile
+            ? [await readFileAsDataUrl(selectedFile)]
+            : extractedVisualReferences,
           fileType: selectedFile.type || "",
-          visualSource: isImageFile,
+          visualSource: isImageFile || extractedVisualReferences.length > 0,
         }));
         addedNames.push(selectedFile.name);
       } else if (cleanedText) {
@@ -6700,6 +6734,10 @@ export default function App() {
 
     setIsGeneratingPresentation(true);
     setError("");
+    setCurrentPage("workspace");
+    setActiveTab("presentation");
+    setSelectedPresentationSlideIndex(0);
+    setPresentationData(createEmptyPresentationData());
     setStatus("Designing the PowerPoint presentation...");
     setProgress(0);
     setCurrentJobType("presentation");

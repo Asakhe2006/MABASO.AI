@@ -3528,6 +3528,78 @@ def extract_slide_image_text_blocks(image_items: list[tuple[str, bytes]], *, lim
     return text_blocks
 
 
+def build_reference_image_data_url(image_bytes: bytes, filename: str = "") -> str:
+    content_type = mimetypes.guess_type(filename or "")[0] or "image/png"
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
+def extract_reference_images_from_items(image_items: list[tuple[str, bytes]], *, limit: int = 6) -> list[str]:
+    if limit <= 0:
+        return []
+
+    extracted: list[str] = []
+    seen_hashes: set[str] = set()
+    for file_name, image_bytes in sorted(image_items, key=lambda item: len(item[1]), reverse=True):
+        if len(extracted) >= limit:
+            break
+        if len(image_bytes) < 4096:
+            continue
+        fingerprint = hashlib.sha256(image_bytes).hexdigest()
+        if fingerprint in seen_hashes:
+            continue
+        seen_hashes.add(fingerprint)
+        extracted.append(build_reference_image_data_url(image_bytes, file_name))
+    return extracted
+
+
+def extract_reference_images_from_pdf(file_bytes: bytes, *, limit: int = 6) -> list[str]:
+    if PdfReader is None:
+        return []
+
+    reader = PdfReader(BytesIO(file_bytes))
+    image_items: list[tuple[str, bytes]] = []
+    for page in reader.pages:
+        image_items.extend(iter_pdf_page_images(page))
+        if len(image_items) >= limit * 3:
+            break
+    return extract_reference_images_from_items(image_items, limit=limit)
+
+
+def extract_reference_images_from_pptx(file_bytes: bytes, *, limit: int = 6) -> list[str]:
+    namespaces = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "rels": "http://schemas.openxmlformats.org/package/2006/relationships",
+    }
+
+    with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+        slide_names = sorted(
+            [name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)],
+            key=lambda value: int(re.search(r"slide(\d+)\.xml", value).group(1)),
+        )
+        image_items: list[tuple[str, bytes]] = []
+        for slide_name in slide_names:
+            if len(image_items) >= limit * 3:
+                break
+            root = ET.fromstring(archive.read(slide_name))
+            rels_name = normalize_zip_member_path(slide_name, f"_rels/{PurePosixPath(slide_name).name}.rels")
+            if rels_name not in archive.namelist():
+                continue
+            rels_root = ET.fromstring(archive.read(rels_name))
+            relationship_targets = {
+                relation.attrib.get("Id", ""): normalize_zip_member_path(rels_name, relation.attrib.get("Target", ""))
+                for relation in rels_root.findall("rels:Relationship", namespaces)
+                if relation.attrib.get("Type", "").endswith("/image")
+            }
+            slide_image_targets: list[str] = []
+            for blip in root.findall(".//a:blip", namespaces):
+                target = relationship_targets.get(blip.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed", ""))
+                if target and target in archive.namelist() and target not in slide_image_targets:
+                    slide_image_targets.append(target)
+            image_items.extend((target, archive.read(target)) for target in slide_image_targets)
+        return extract_reference_images_from_items(image_items, limit=limit)
+
+
 def extract_slide_text_from_pdf(file_bytes: bytes) -> str:
     if PdfReader is None:
         raise HTTPException(
@@ -8890,6 +8962,7 @@ async def extract_slide_text(
 
     ensure_openai_key()
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
+    reference_images: list[str] = []
 
     try:
         file_bytes = await file.read()
@@ -8910,23 +8983,25 @@ async def extract_slide_text(
             text = file_bytes.decode("utf-8", errors="ignore").strip()
             if not text:
                 raise HTTPException(status_code=400, detail="The slide text file does not contain readable text.")
-            return {"text": text}
+            return {"text": text, "image_urls": []}
 
         if is_pdf_upload(file.filename, content_type):
             text = await asyncio.to_thread(extract_slide_text_from_pdf, file_bytes)
+            reference_images = await asyncio.to_thread(extract_reference_images_from_pdf, file_bytes, limit=6)
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that PDF.")
-            return {"text": text}
+            return {"text": text, "image_urls": reference_images}
 
         if is_pptx_upload(file.filename, content_type):
             try:
                 text = await asyncio.to_thread(extract_slide_text_from_pptx, file_bytes)
+                reference_images = await asyncio.to_thread(extract_reference_images_from_pptx, file_bytes, limit=6)
             except zipfile.BadZipFile as exc:
                 raise HTTPException(status_code=400, detail="That PowerPoint file could not be opened. Use a .pptx file.") from exc
 
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that PowerPoint file.")
-            return {"text": text}
+            return {"text": text, "image_urls": reference_images}
 
         if is_docx_upload(file.filename, content_type):
             try:
@@ -8936,7 +9011,7 @@ async def extract_slide_text(
 
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that Word document.")
-            return {"text": text}
+            return {"text": text, "image_urls": []}
 
         if not content_type.startswith("image/"):
             raise HTTPException(
@@ -8956,7 +9031,7 @@ async def extract_slide_text(
             resource_name=file.filename,
             duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         )
-        return {"text": text}
+        return {"text": text, "image_urls": [image_data_url]}
     finally:
         await file.close()
 
@@ -9072,6 +9147,7 @@ async def create_presentation(
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
+    reference_images = [compact_text(item) for item in (getattr(payload, "reference_images", []) or []) if compact_text(item)][:6]
 
     if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
