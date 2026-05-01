@@ -6441,6 +6441,154 @@ async def generate_study_images(
     return images
 
 
+def parse_visual_analysis_items(content: str) -> list[dict[str, str]]:
+    parsed = parse_json_object(content)
+    items = parsed.get("items") if isinstance(parsed.get("items"), list) else parsed if isinstance(parsed, list) else []
+    normalized: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "title": compact_text(item.get("title"), "Lecture visual"),
+                "visual_type": compact_text(item.get("visual_type"), "diagram"),
+                "matched_section": compact_text(item.get("matched_section"), "Key concept"),
+                "key_highlight": compact_text(item.get("key_highlight"), "Useful visual from the uploaded lecture material."),
+                "diagram_label": compact_text(item.get("diagram_label"), compact_text(item.get("title"), "Lecture visual")),
+            }
+        )
+    return normalized
+
+
+async def analyze_reference_images_for_study_guide(
+    reference_images: list[str],
+    summary: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    output_language: str,
+) -> list[dict[str, str]]:
+    valid_images = [compact_text(item) for item in reference_images if compact_text(item)][:4]
+    if not valid_images:
+        return []
+
+    context_parts = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, 2400),
+        trimmed_context_block("LECTURER NOTES", lecture_notes, 1800),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, 1800),
+    ]
+    context_text = "\n\n".join(part for part in context_parts if part).strip()
+
+    user_parts: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                "Review the uploaded lecture visuals and return JSON only.\n\n"
+                f"Academic context:\n{context_text or 'No extra text context was supplied.'}\n\n"
+                f"Write all labels in {output_language}.\n"
+                "Match each visual to the most relevant study-guide section or concept.\n"
+                "Detect whether the visual is a table, chart, diagram, process flow, equation snapshot, photo, or mixed slide visual.\n"
+                "Give each visual a short clear classroom label and one highlight explaining what a student should notice.\n"
+                "Return strict JSON in this shape only:\n"
+                '{"items":[{"title":"...","visual_type":"...","matched_section":"...","key_highlight":"...","diagram_label":"..."}]}'
+            ),
+        }
+    ]
+    for image in valid_images:
+        user_parts.append({"type": "image_url", "image_url": {"url": image}})
+
+    def _analyze() -> list[dict[str, str]]:
+        response = client.with_options(timeout=VISION_REQUEST_TIMEOUT).chat.completions.create(
+            model=VISION_MODEL,
+            max_completion_tokens=900,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are labeling lecture visuals for a university study guide. "
+                        "Be concise, accurate, and practical. "
+                        "Return strict JSON only."
+                    ),
+                },
+                {"role": "user", "content": user_parts},
+            ],
+        )
+        return parse_visual_analysis_items(response.choices[0].message.content or "")
+
+    try:
+        return await asyncio.to_thread(_analyze)
+    except Exception as exc:
+        logger.warning("Reference image analysis failed for study guide: %s", exc)
+        fallback_items: list[dict[str, str]] = []
+        for index, _ in enumerate(valid_images, start=1):
+            fallback_items.append(
+                {
+                    "title": f"Lecture visual {index}",
+                    "visual_type": "diagram",
+                    "matched_section": "Key concept",
+                    "key_highlight": "Review this uploaded lecture visual alongside the matching section in the study guide.",
+                    "diagram_label": f"Visual {index}",
+                }
+            )
+        return fallback_items
+
+
+def build_study_guide_visual_notes(visual_items: list[dict[str, str]]) -> str:
+    if not visual_items:
+        return ""
+    lines = ["REFERENCE VISUALS"]
+    for index, item in enumerate(visual_items, start=1):
+        lines.append(
+            (
+                f"{index}. Title: {compact_text(item.get('title'), f'Lecture visual {index}')}\n"
+                f"   Type: {compact_text(item.get('visual_type'), 'diagram')}\n"
+                f"   Matched section: {compact_text(item.get('matched_section'), 'Key concept')}\n"
+                f"   Diagram label: {compact_text(item.get('diagram_label'), f'Visual {index}')}\n"
+                f"   Key highlight: {compact_text(item.get('key_highlight'), 'Review this visual carefully.')}"
+            )
+        )
+    return "\n".join(lines).strip()
+
+
+def build_uploaded_study_visuals(
+    reference_images: list[str],
+    visual_items: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    uploaded_visuals: list[dict[str, str]] = []
+    for index, image_url in enumerate(reference_images[: len(visual_items) or len(reference_images)], start=0):
+        if not compact_text(image_url):
+            continue
+        visual = visual_items[index] if index < len(visual_items) else {}
+        uploaded_visuals.append(
+            {
+                "query": compact_text(visual.get("matched_section"), "Uploaded lecture visual"),
+                "title": compact_text(visual.get("title"), f"Lecture visual {index + 1}"),
+                "image_url": image_url,
+                "source_url": image_url,
+                "source_type": "uploaded",
+                "visual_type": compact_text(visual.get("visual_type"), "diagram"),
+                "matched_section": compact_text(visual.get("matched_section"), "Key concept"),
+                "key_highlight": compact_text(visual.get("key_highlight"), "Useful lecture visual for this section."),
+                "diagram_label": compact_text(visual.get("diagram_label"), f"Visual {index + 1}"),
+            }
+        )
+    return uploaded_visuals[:MAX_STUDY_IMAGES]
+
+
+def merge_study_image_results(*image_groups: list[dict[str, str]]) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for group in image_groups:
+        for item in group or []:
+            image_url = compact_text(item.get("image_url"))
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            merged.append(item)
+            if len(merged) >= MAX_STUDY_IMAGES:
+                return merged
+    return merged
+
+
 def tidy_study_guide_layout(summary: str) -> str:
     cleaned = (summary or "").replace("\r\n", "\n").strip()
     quiz_section = extract_section(cleaned, "PRACTICE QUESTIONS AND ANSWERS")
@@ -8370,6 +8518,7 @@ async def generate_study_guide(
     past_question_papers: str,
     job_id: str,
     output_language: str,
+    visual_notes: str = "",
 ) -> tuple[str, bool]:
     trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
@@ -8406,13 +8555,18 @@ async def generate_study_guide(
         user_content_parts.append(f"PAST QUESTION PAPERS\n{trimmed_past_papers}")
     if trimmed_transcript:
         user_content_parts.append(f"LECTURE TRANSCRIPT\n{trimmed_transcript}")
+    if visual_notes.strip():
+        user_content_parts.append(visual_notes.strip())
     user_content_parts.append(
         (
             "OUTPUT INSTRUCTIONS\n"
             f"- Write the full study pack in {output_language}.\n"
             "- Detect when the sources cover multiple distinct topics, chapters, or subtopics.\n"
             "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
-            "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic."
+            "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic.\n"
+            "- When reference visuals are supplied, match them to the relevant section naturally in the explanation.\n"
+            "- Label diagrams, tables, charts, and process visuals clearly inside the guide.\n"
+            "- Highlight the key visual takeaway in the section where that visual matters most."
         )
     )
     combined_user_content = "\n\n".join(user_content_parts)
@@ -8673,9 +8827,18 @@ async def run_summary_job(
     lecture_slides: str,
     past_question_papers: str,
     output_language: str,
+    reference_images: list[str],
 ):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
+        visual_items = await analyze_reference_images_for_study_guide(
+            reference_images,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            output_language,
+        )
+        visual_notes = build_study_guide_visual_notes(visual_items)
         summary, used_fallback = await generate_study_guide(
             transcript,
             lecture_notes,
@@ -8683,6 +8846,7 @@ async def run_summary_job(
             past_question_papers,
             job_id,
             output_language,
+            visual_notes,
         )
         assets = await generate_structured_study_assets(
             summary,
@@ -8694,7 +8858,7 @@ async def run_summary_job(
             output_language,
         )
         try:
-            study_images = await generate_study_images(
+            external_study_images = await generate_study_images(
                 summary,
                 transcript,
                 lecture_notes,
@@ -8703,7 +8867,9 @@ async def run_summary_job(
             )
         except Exception as exc:
             logger.warning("Study image generation failed: %s", exc)
-            study_images = []
+            external_study_images = []
+        uploaded_study_images = build_uploaded_study_visuals(reference_images, visual_items)
+        study_images = merge_study_image_results(uploaded_study_images, external_study_images)
         update_job(
             job_id,
             status="completed",
@@ -9070,6 +9236,7 @@ async def create_study_guide(
             lecture_slides,
             past_question_papers,
             output_language,
+            reference_images,
         )
     )
     record_audit_log(
@@ -9079,7 +9246,7 @@ async def create_study_guide(
         resource_type="study_guide",
         resource_name=output_language,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"job_id": job_id, "language": output_language},
+        metadata={"job_id": job_id, "language": output_language, "reference_images": len(reference_images)},
     )
     return {"job_id": job_id}
 

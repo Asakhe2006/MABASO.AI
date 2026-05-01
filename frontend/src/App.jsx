@@ -640,6 +640,8 @@ function sanitizeStudySourceEntriesForHistory(entries) {
     prefix: entry?.prefix || "STUDY SOURCE",
     fileType: entry?.fileType || "",
     visualSource: Boolean(entry?.visualSource),
+    previewUrl: entry?.previewUrl || "",
+    visualReferences: Array.isArray(entry?.visualReferences) ? entry.visualReferences.filter(Boolean).slice(0, 6) : [],
   }));
 }
 
@@ -660,6 +662,19 @@ function buildUploadedVisualReferences(...sourceGroups) {
       }));
     })
     .slice(0, 6);
+}
+
+function mergeStudyVisualReferences(primaryImages, fallbackImages, limit = 6) {
+  const merged = [];
+  const seen = new Set();
+  for (const image of [...(primaryImages || []), ...(fallbackImages || [])]) {
+    const imageUrl = image?.image_url || "";
+    if (!imageUrl || seen.has(imageUrl)) continue;
+    seen.add(imageUrl);
+    merged.push(image);
+    if (merged.length >= limit) break;
+  }
+  return merged;
 }
 
 function studySourceEntriesToText(entries, defaultPrefix = "STUDY SOURCE") {
@@ -699,7 +714,16 @@ function chatToText(messages) {
 
 function studyImagesToText(images) {
   return (images || [])
-    .map((image, index) => `${index + 1}. ${image.title || image.query || "Reference photo"}\nSource: ${image.source_type === "uploaded" ? "Uploaded from lecture notes or slides" : image.source_url || image.image_url || ""}`)
+    .map((image, index) => {
+      const lines = [
+        `${index + 1}. ${image.diagram_label || image.title || image.query || "Reference photo"}`,
+        `Source: ${image.source_type === "uploaded" ? "Uploaded from lecture notes or slides" : image.source_url || image.image_url || ""}`,
+      ];
+      if (image.matched_section) lines.push(`Matched section: ${image.matched_section}`);
+      if (image.visual_type) lines.push(`Visual type: ${image.visual_type}`);
+      if (image.key_highlight) lines.push(`Key visual: ${image.key_highlight}`);
+      return lines.join("\n");
+    })
     .join("\n\n");
 }
 
@@ -1668,7 +1692,7 @@ export default function App() {
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
-  const visualReferences = [...uploadedVisualReferences, ...studyImages.filter((image) => image?.image_url)].slice(0, 6);
+  const visualReferences = mergeStudyVisualReferences(studyImages.filter((image) => image?.image_url), uploadedVisualReferences, 6);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
@@ -6608,6 +6632,10 @@ export default function App() {
         studySourceEntriesToText(resolvedPastQuestionPaperSources, "PAST QUESTION PAPER"),
         resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
       ].filter(Boolean).join("\n\n");
+    const uploadedGuideReferenceImages = buildUploadedVisualReferences(resolvedLectureNoteSources, resolvedLectureSlideSources)
+      .map((image) => image?.image_url)
+      .filter(Boolean)
+      .slice(0, 6);
     if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
@@ -6632,6 +6660,7 @@ export default function App() {
               lecture_slides: resolvedLectureSlides,
               past_question_papers: resolvedPastQuestionPapers,
               language: outputLanguage,
+              reference_images: uploadedGuideReferenceImages,
             }),
             timeoutMs: 120000,
           });
@@ -8062,7 +8091,7 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{visualReferences.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Visuals taken from your sources and the generated study pack.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Uploaded slide or note images are shown first so the guide can rely on your real lecture material before any external reference images.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{visualReferences.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.query || "Real photo"}</p><p className="text-xs text-slate-400">{image.source_type === "uploaded" ? "Uploaded from your lecture notes or slides" : "Reference image"}</p></div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{visualReferences.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Visuals matched to the study-guide sections they support.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Uploaded slide or note visuals are shown first, with automatic labels for diagrams, tables, charts, and other key lecture visuals.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{visualReferences.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.diagram_label || image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.diagram_label || image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.matched_section || image.query || "Key concept"}</p><p className="text-xs text-slate-400">{image.visual_type ? `${image.visual_type} visual` : "Reference image"} {image.source_type === "uploaded" ? "from your lecture notes or slides" : "for this study section"}</p>{image.key_highlight ? <p className="text-sm leading-6 text-slate-300">{image.key_highlight}</p> : null}</div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
