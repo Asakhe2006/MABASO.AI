@@ -1217,20 +1217,35 @@ function isAbortError(error) {
   return error?.name === "AbortError";
 }
 
+function getBackendConnectionTroubleshootingMessage(context = "") {
+  const area = String(context || "").trim().toLowerCase();
+  if (area === "study-guide") {
+    return (
+      "Study source ready, but the backend could not finish the study guide request. "
+      + "This usually means the Render backend is sleeping, timed out, restarted during AI processing, or the network dropped. "
+      + "If it keeps happening, check the backend service status and logs on Render."
+    );
+  }
+  return (
+    "The app could not reach the Mabaso server. This usually means the backend is sleeping, timed out, restarted while processing, "
+    + "the API URL is wrong, or there is a network issue. If it keeps happening, check the backend service status and logs on Render."
+  );
+}
+
 function getReadableRequestError(error) {
   if (isAbortError(error)) {
-    return "The Mabaso server took too long to respond. The backend may be waking up or temporarily unavailable. Please try again in a few seconds.";
+    return (
+      "The Mabaso server took too long to respond. "
+      + "The backend may be sleeping on Render, timing out, or restarting while processing. Please try again in a few seconds."
+    );
   }
 
   const message = String(error?.message || "").trim();
   if (/failed to fetch/i.test(message)) {
-    return (
-      "The app could not reach the Mabaso server. The backend may be waking up, temporarily unavailable, or there may be a network issue. " +
-      "If this keeps happening, check the backend server status on Render and review backend logs for details."
-    );
+    return getBackendConnectionTroubleshootingMessage();
   }
 
-  return message || "The app could not reach the Mabaso server right now. Please check the backend status.";
+  return message || `${getBackendConnectionTroubleshootingMessage()} Please check the backend status.`;
 }
 
 function isTransientServerConnectionMessage(message) {
@@ -1270,6 +1285,15 @@ function buildClientRequestId(prefix = "req") {
     return `${prefix}-${window.crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function warmBackendServer() {
+  try {
+    await fetchJsonWithTransientRetries(`${API_BASE_URL}/health`, {}, { timeoutMs: 70000, retries: 1 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function decodeJwtPayload(token) {
@@ -6530,6 +6554,7 @@ export default function App() {
         if (!isTransient || transientFailureCount >= 5) throw err;
         transientFailureCount += 1;
         setStatus(`Connection dropped while checking ${jobType.replace(/_/g, " ")}. Retrying...`);
+        await warmBackendServer();
         await wait(JOB_POLL_INTERVAL_MS * transientFailureCount);
       }
     }
@@ -6589,6 +6614,7 @@ export default function App() {
           if (!isTransient || submitAttempt >= 3) throw err;
           submitAttempt += 1;
           setStatus("The Mabaso server is reconnecting. Retrying the study guide request...");
+          await warmBackendServer();
           await wait(1400 * submitAttempt);
         }
       }
@@ -6657,7 +6683,9 @@ export default function App() {
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
     } catch (err) {
-      setError(err.message || "Study guide generation failed.");
+      const message = String(err?.message || "").trim();
+      const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+      setError(isTransient ? getBackendConnectionTroubleshootingMessage("study-guide") : (err.message || "Study guide generation failed."));
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
       setIsGeneratingSummary(false);
