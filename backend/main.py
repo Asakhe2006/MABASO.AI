@@ -217,7 +217,6 @@ Return clean Markdown with these sections:
 - QUICK REVISION PLAN
 - VISUAL AIDS
 - REAL-WORLD EXAMPLES
-- PRACTICE QUESTIONS AND ANSWERS
 - FLASHCARDS
 - EXAM TIPS
 
@@ -254,14 +253,6 @@ Rules:
 - In VISUAL AIDS, explicitly mention concrete objects or subtype names that would benefit from a real photo reference.
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
 - Use simple text layouts that students can read easily in plain Markdown.
-- In PRACTICE QUESTIONS AND ANSWERS, create 10 numbered question-and-answer pairs using this exact style:
-  1. Question: ...
-
-  Answer: ...
-- Put the Answer on its own line.
-- Leave a blank line between each question and its answer, and a blank line between each numbered question block.
-- Make question 1 the most straightforward and let the difficulty rise steadily until question 10 is the most demanding.
-- Do not label questions with difficulty names, levels, or tags.
 - In FLASHCARDS, use this exact style for every card:
   Q: ...
 
@@ -309,6 +300,15 @@ class PresentationGenerationRequest(BaseModel):
     design_id: str = "emerald-scholar"
     language: str = "English"
     reference_images: list[str] = []
+
+
+class QuizGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -2614,6 +2614,8 @@ def classify_audit_feature(log: dict[str, Any]) -> str:
     resource_type = (log.get("resource_type") or "").lower()
     if "study_guide" in action or resource_type == "study_guide":
         return "Study Guides"
+    if "quiz" in action or resource_type == "quiz":
+        return "Tests"
     if "presentation" in action or resource_type == "presentation":
         return "Presentations"
     if "podcast" in action or resource_type == "podcast":
@@ -2933,6 +2935,8 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
     generation_actions = {
         "study_guide.request",
         "study_guide.completed",
+        "quiz.request",
+        "quiz.completed",
         "presentation.request",
         "presentation.completed",
         "podcast.request",
@@ -5952,15 +5956,6 @@ def build_fallback_study_guide(transcript: str) -> str:
             "**REAL-WORLD EXAMPLES**",
             "- Link each key concept to one practical situation from your course or field.",
             "",
-            "**PRACTICE QUESTIONS AND ANSWERS**",
-            *[
-                (
-                    f"{index}. Question: {question_prompts[index - 1]} {question_topics[(index - 1) % len(question_topics)]}.\n\n"
-                    f"Answer: Build from the lecture context, explain the method clearly, and show why it matters."
-                )
-                for index in range(1, 11)
-            ],
-            "",
             "**FLASHCARDS**",
             *[
                 (
@@ -6467,7 +6462,7 @@ async def analyze_reference_images_for_study_guide(
     lecture_slides: str,
     output_language: str,
 ) -> list[dict[str, str]]:
-    valid_images = [compact_text(item) for item in reference_images if compact_text(item)][:4]
+    valid_images = [compact_text(item) for item in reference_images if compact_text(item)][:6]
     if not valid_images:
         return []
 
@@ -6544,6 +6539,23 @@ def build_study_guide_visual_notes(visual_items: list[dict[str, str]]) -> str:
                 f"   Matched section: {compact_text(item.get('matched_section'), 'Key concept')}\n"
                 f"   Diagram label: {compact_text(item.get('diagram_label'), f'Visual {index}')}\n"
                 f"   Key highlight: {compact_text(item.get('key_highlight'), 'Review this visual carefully.')}"
+            )
+        )
+    return "\n".join(lines).strip()
+
+
+def build_reference_image_catalog(visual_items: list[dict[str, str]]) -> str:
+    if not visual_items:
+        return ""
+    lines = ["REFERENCE IMAGE CATALOG"]
+    for index, item in enumerate(visual_items):
+        lines.append(
+            (
+                f"{index}. Title: {compact_text(item.get('title'), f'Lecture visual {index + 1}')}\n"
+                f"   Type: {compact_text(item.get('visual_type'), 'diagram')}\n"
+                f"   Best match: {compact_text(item.get('matched_section'), 'Key concept')}\n"
+                f"   Classroom label: {compact_text(item.get('diagram_label'), f'Visual {index + 1}')}\n"
+                f"   Key detail: {compact_text(item.get('key_highlight'), 'Review the important visual clue before using this image on a slide.')}"
             )
         )
     return "\n".join(lines).strip()
@@ -7215,7 +7227,7 @@ def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
         return "graph"
     if any(marker in combined for marker in ["chart", "distribution", "breakdown", "percentage", "share"]):
         return "chart"
-    if any(marker in combined for marker in ["photo", "image", "diagram", "structure", "appearance", "recognise"]):
+    if any(marker in combined for marker in ["photo", "photograph", "microscope", "specimen", "machine", "device", "organ", "appearance", "recognise"]):
         return "photo"
     if any(marker in combined for marker in ["compare", "difference", "advantage", "disadvantage", "versus"]):
         return "comparison"
@@ -7264,11 +7276,12 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
             raw_slide.get("flow_note"),
             f"This slide moves the deck from {title.lower()} into the next teachable idea.",
         )
-        reference_image_index = 0
+        reference_image_index = -1
         try:
-            reference_image_index = max(0, int(raw_slide.get("reference_image_index") or 0))
+            reference_image_index = max(-1, int(raw_slide.get("reference_image_index")))
         except (TypeError, ValueError):
-            reference_image_index = 0
+            if visual_type == "photo":
+                reference_image_index = 0
         normalized.append(
             {
                 "title": title,
@@ -7531,12 +7544,14 @@ def resolve_reference_image_source(reference_images: list[str], slide_content: d
         return ""
 
     try:
-        requested_index = max(0, int(slide_content.get("reference_image_index") or 0))
+        requested_index = int(slide_content.get("reference_image_index"))
     except (TypeError, ValueError):
-        requested_index = 0
+        requested_index = -1
 
     valid_sources = [compact_text(item) for item in reference_images if compact_text(item)]
     if not valid_sources:
+        return ""
+    if requested_index < 0:
         return ""
     if requested_index >= len(valid_sources):
         requested_index = 0
@@ -8089,6 +8104,14 @@ async def generate_presentation_package(
 ) -> dict[str, Any]:
     normalized_design_id = normalize_presentation_design_id(design_id)
     fallback_package = build_presentation_fallback(summary, transcript)
+    reference_catalog_items = await analyze_reference_images_for_study_guide(
+        reference_images,
+        summary,
+        lecture_notes,
+        lecture_slides,
+        output_language,
+    )
+    reference_catalog = build_reference_image_catalog(reference_catalog_items)
     context_blocks = [
         trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
         trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
@@ -8096,6 +8119,8 @@ async def generate_presentation_package(
         trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
     ]
+    if reference_catalog:
+        context_blocks.append(reference_catalog)
     combined_source = "\n\n".join(block for block in context_blocks if block)
 
     def _generate_plan() -> dict[str, Any]:
@@ -8111,17 +8136,20 @@ async def generate_presentation_package(
                         "Rules:\n"
                         "- `slides` must be an array of 6 to 8 objects.\n"
                         "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, `visual_items`, `flow_note`, and `reference_image_index`.\n"
-                        "- `bullets` must contain 3 to 5 short bullet strings.\n"
+                        "- `bullets` must contain 3 to 5 short bullet strings with useful teaching value, not copied fragments.\n"
                         "- `visual_items` must contain 2 to 4 short labels for a diagram panel on the slide.\n"
                         "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster, table, chart, graph, photo.\n"
                         "- `flow_note` must explain how the slide advances the lesson flow in one sentence.\n"
-                        f"- `reference_image_index` must be an integer from 0 to {max(len(reference_images) - 1, 0)} and only point to a real lecture image when a photo or diagram would help.\n"
+                        f"- `reference_image_index` must be -1 when no uploaded image clearly matches, otherwise an integer from 0 to {max(len(reference_images) - 1, 0)}.\n"
                         "- This is a formal PowerPoint deck, not speaker notes. Do not write what the presenter should say.\n"
                         "- Keep bullet lines concise, readable, and presentation-ready.\n"
                         f"- Write the slide text in {output_language}.\n"
                         "- When the lecture material covers multiple topics, keep those topics separate instead of mixing them into one slide.\n"
                         "- Cover overview, core concepts, formulas or rules when present, worked examples, mistakes, and revision or exam focus.\n"
                         "- Use tables, graphs, charts, and photos when they help students understand the material quickly.\n"
+                        "- Only use `photo` when the uploaded lecture images clearly match the topic on that slide.\n"
+                        "- If the reference image catalog does not clearly match a slide, use a non-photo visual instead of forcing an image.\n"
+                        "- Make the slide sequence feel like a high-grade classroom deck: clear concepts first, then supporting detail, then revision focus.\n"
                         "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
                         "- Do not return markdown, numbering, or commentary outside JSON."
                     ),
@@ -8131,7 +8159,8 @@ async def generate_presentation_package(
                     "content": (
                         (
                             f"REFERENCE IMAGES AVAILABLE: {len(reference_images)}\n"
-                            "When a real lecture image exists, prefer matching that image with a `photo` slide instead of inventing an unrelated visual.\n\n"
+                            "Match uploaded lecture images only when the catalog and slide topic clearly fit.\n"
+                            "If there is no clear fit, set `reference_image_index` to -1.\n\n"
                         )
                         if reference_images
                         else ""
@@ -8435,50 +8464,32 @@ async def generate_structured_study_assets(
     output_language: str,
 ) -> dict[str, Any]:
     fallback_assets = extract_study_assets(summary)
-    total_marks = determine_quiz_total_marks(
-        summary,
-        transcript,
-        lecture_notes,
-        lecture_slides,
-        past_question_papers,
-    )
-    blueprint = build_quiz_blueprint(total_marks)
-
     source_blocks = [
         trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
         trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
-        f"QUIZ BLUEPRINT\n{json.dumps(blueprint, ensure_ascii=False, indent=2)}",
     ]
     combined_source = "\n\n".join(block for block in source_blocks if block)
 
     def _generate_assets() -> dict[str, Any]:
         response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
             model=ASSET_GENERATION_MODEL,
-            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5000),
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3400),
             messages=[
                 {
                     "role": "system",
                     "content": (
                         "You build structured study assets for a university revision app. "
-                        "Return only valid JSON with the keys formula, worked_example, flashcards, and quiz_questions.\n\n"
+                        "Return only valid JSON with the keys formula, worked_example, and flashcards.\n\n"
                         "Rules:\n"
-                        "- Keep the test rising in difficulty from the first question to the last question, but do not label difficulty levels.\n"
                         "- Do not mention how a student should feel.\n"
                         "- Use plain readable formulas, never LaTeX.\n"
                         "- `formula` should be a compact markdown study sheet or a short note when no formula is relevant.\n"
                         "- `worked_example` should be a clear step-by-step example in markdown.\n"
                         "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
-                        "- `quiz_questions` must follow the blueprint exactly for question number, question type, and marks.\n"
                         "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
-                        "- Short-answer questions need `question`, `answer`, and `answer_points` for partial-credit marking.\n"
-                        "- Multiple-choice group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
-                        "- True/false group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
-                        "- For true/false questions, the options must be exactly [\"True\", \"False\"].\n"
-                        "- Keep each option-based subpart worth 1 mark.\n"
-                        f"- The total test must add up to {total_marks} marks.\n"
                         f"- Write every returned field in {output_language}.\n"
                         "- Return JSON only, with no markdown code fence."
                     ),
@@ -8489,10 +8500,98 @@ async def generate_structured_study_assets(
         return parse_json_object(response.choices[0].message.content or "")
 
     try:
-        update_job(job_id, status="processing", stage="Building flashcards and test", progress=82)
+        update_job(job_id, status="processing", stage="Building flashcards and worked examples", progress=82)
         generated_assets = await asyncio.to_thread(_generate_assets)
     except Exception as exc:
         logger.warning("Structured asset generation failed, using extracted fallback assets: %s", exc)
+        generated_assets = {}
+
+    return {
+        "formula": compact_text(generated_assets.get("formula"), fallback_assets["formula"]),
+        "worked_example": compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
+        "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
+    }
+
+
+def build_quiz_generation_source_text(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    fallback_assets = extract_study_assets(summary)
+    total_marks = determine_quiz_total_marks(
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+    )
+    blueprint = build_quiz_blueprint(total_marks)
+    source_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+        f"QUIZ BLUEPRINT\n{json.dumps(blueprint, ensure_ascii=False, indent=2)}",
+    ]
+    return fallback_assets, blueprint, "\n\n".join(block for block in source_blocks if block)
+
+
+async def generate_quiz_questions(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    job_id: str,
+    output_language: str,
+) -> list[dict[str, Any]]:
+    fallback_assets, blueprint, combined_source = build_quiz_generation_source_text(
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+    )
+    total_marks = sum(int(item.get("marks", 0)) for item in blueprint)
+
+    def _generate_quiz() -> dict[str, Any]:
+        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3200),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You build structured university tests for a revision app. "
+                        "Return only valid JSON with the key quiz_questions.\n\n"
+                        "Rules:\n"
+                        "- Keep the test rising in difficulty from the first question to the last question, but do not label difficulty levels.\n"
+                        "- `quiz_questions` must follow the blueprint exactly for question number, question type, and marks.\n"
+                        "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
+                        "- Short-answer questions need `question`, `answer`, and `answer_points` for partial-credit marking.\n"
+                        "- Multiple-choice group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
+                        "- True/false group questions need `question` and `subparts`. Each subpart needs `label`, `question`, `marks`, `options`, `answer`, and `explanation`.\n"
+                        "- For true/false questions, the options must be exactly [\"True\", \"False\"].\n"
+                        "- Keep each option-based subpart worth 1 mark.\n"
+                        f"- The full test must add up to {total_marks} marks.\n"
+                        f"- Write every returned field in {output_language}.\n"
+                        "- Return JSON only, with no markdown code fence."
+                    ),
+                },
+                {"role": "user", "content": combined_source},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    try:
+        update_job(job_id, status="processing", stage="Planning test structure", progress=34)
+        generated_assets = await asyncio.to_thread(_generate_quiz)
+    except Exception as exc:
+        logger.warning("Structured quiz generation failed, using fallback quiz: %s", exc)
         generated_assets = {}
 
     quiz_questions = normalize_generated_quiz_questions(
@@ -8500,15 +8599,9 @@ async def generate_structured_study_assets(
         blueprint,
         fallback_assets["quiz_questions"],
     )
-    if not quiz_questions:
-        quiz_questions = build_structured_quiz_fallback(fallback_assets["quiz_questions"], blueprint)
-
-    return {
-        "formula": compact_text(generated_assets.get("formula"), fallback_assets["formula"]),
-        "worked_example": compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
-        "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
-        "quiz_questions": quiz_questions,
-    }
+    if quiz_questions:
+        return quiz_questions
+    return build_structured_quiz_fallback(fallback_assets["quiz_questions"], blueprint)
 
 
 async def generate_study_guide(
@@ -8518,7 +8611,6 @@ async def generate_study_guide(
     past_question_papers: str,
     job_id: str,
     output_language: str,
-    visual_notes: str = "",
 ) -> tuple[str, bool]:
     trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
     trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
@@ -8555,8 +8647,6 @@ async def generate_study_guide(
         user_content_parts.append(f"PAST QUESTION PAPERS\n{trimmed_past_papers}")
     if trimmed_transcript:
         user_content_parts.append(f"LECTURE TRANSCRIPT\n{trimmed_transcript}")
-    if visual_notes.strip():
-        user_content_parts.append(visual_notes.strip())
     user_content_parts.append(
         (
             "OUTPUT INSTRUCTIONS\n"
@@ -8564,9 +8654,7 @@ async def generate_study_guide(
             "- Detect when the sources cover multiple distinct topics, chapters, or subtopics.\n"
             "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
             "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic.\n"
-            "- When reference visuals are supplied, match them to the relevant section naturally in the explanation.\n"
-            "- Label diagrams, tables, charts, and process visuals clearly inside the guide.\n"
-            "- Highlight the key visual takeaway in the section where that visual matters most."
+            "- Label diagrams, tables, charts, and process visuals clearly inside the guide."
         )
     )
     combined_user_content = "\n\n".join(user_content_parts)
@@ -8831,14 +8919,6 @@ async def run_summary_job(
 ):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
-        visual_items = await analyze_reference_images_for_study_guide(
-            reference_images,
-            transcript,
-            lecture_notes,
-            lecture_slides,
-            output_language,
-        )
-        visual_notes = build_study_guide_visual_notes(visual_items)
         summary, used_fallback = await generate_study_guide(
             transcript,
             lecture_notes,
@@ -8846,7 +8926,6 @@ async def run_summary_job(
             past_question_papers,
             job_id,
             output_language,
-            visual_notes,
         )
         assets = await generate_structured_study_assets(
             summary,
@@ -8857,19 +8936,6 @@ async def run_summary_job(
             job_id,
             output_language,
         )
-        try:
-            external_study_images = await generate_study_images(
-                summary,
-                transcript,
-                lecture_notes,
-                lecture_slides,
-                job_id,
-            )
-        except Exception as exc:
-            logger.warning("Study image generation failed: %s", exc)
-            external_study_images = []
-        uploaded_study_images = build_uploaded_study_visuals(reference_images, visual_items)
-        study_images = merge_study_image_results(uploaded_study_images, external_study_images)
         update_job(
             job_id,
             status="completed",
@@ -8879,8 +8945,8 @@ async def run_summary_job(
             formula=assets["formula"],
             worked_example=assets["worked_example"],
             flashcards=assets["flashcards"],
-            quiz_questions=assets["quiz_questions"],
-            study_images=study_images,
+            quiz_questions=[],
+            study_images=[],
             used_fallback=used_fallback,
         )
         job = jobs.get(job_id, {})
@@ -8909,6 +8975,65 @@ async def run_summary_job(
             status="failed",
             email=job.get("owner_email", ""),
             resource_type="study_guide",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc)},
+        )
+
+
+async def run_quiz_job(
+    job_id: str,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    output_language: str,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting test generation", progress=8)
+        quiz_questions = await generate_quiz_questions(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            job_id,
+            output_language,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="Test ready",
+            progress=100,
+            quiz_questions=quiz_questions,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="quiz.completed",
+            email=job.get("owner_email", ""),
+            resource_type="quiz",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "question_count": len(quiz_questions)},
+        )
+    except Exception as exc:
+        logger.exception("Quiz generation failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Test generation failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="quiz.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="quiz",
             resource_name=output_language,
             duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
             metadata={"job_id": job_id, "error": format_job_error(exc)},
@@ -9247,6 +9372,52 @@ async def create_study_guide(
         resource_name=output_language,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         metadata={"job_id": job_id, "language": output_language, "reference_images": len(reference_images)},
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-quiz/")
+async def create_quiz(
+    payload: QuizGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate a study guide or add lecture material before creating the test.",
+        )
+
+    ensure_openai_key()
+    job_id = create_job("quiz", owner_email=current_user)
+    update_job(job_id, _output_language=output_language)
+    asyncio.create_task(
+        run_quiz_job(
+            job_id,
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            output_language,
+        )
+    )
+    record_audit_log(
+        action="quiz.request",
+        email=current_user,
+        request=request,
+        resource_type="quiz",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language},
     )
     return {"job_id": job_id}
 

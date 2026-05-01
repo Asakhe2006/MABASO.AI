@@ -664,19 +664,6 @@ function buildUploadedVisualReferences(...sourceGroups) {
     .slice(0, 6);
 }
 
-function mergeStudyVisualReferences(primaryImages, fallbackImages, limit = 6) {
-  const merged = [];
-  const seen = new Set();
-  for (const image of [...(primaryImages || []), ...(fallbackImages || [])]) {
-    const imageUrl = image?.image_url || "";
-    if (!imageUrl || seen.has(imageUrl)) continue;
-    seen.add(imageUrl);
-    merged.push(image);
-    if (merged.length >= limit) break;
-  }
-  return merged;
-}
-
 function studySourceEntriesToText(entries, defaultPrefix = "STUDY SOURCE") {
   return (entries || [])
     .map((entry) => {
@@ -710,21 +697,6 @@ function quizToText(questions) {
 
 function chatToText(messages) {
   return (messages || []).map((item) => `${item.role === "assistant" ? "MABASO" : "Student"}: ${item.content}`).join("\n\n");
-}
-
-function studyImagesToText(images) {
-  return (images || [])
-    .map((image, index) => {
-      const lines = [
-        `${index + 1}. ${image.diagram_label || image.title || image.query || "Reference photo"}`,
-        `Source: ${image.source_type === "uploaded" ? "Uploaded from lecture notes or slides" : image.source_url || image.image_url || ""}`,
-      ];
-      if (image.matched_section) lines.push(`Matched section: ${image.matched_section}`);
-      if (image.visual_type) lines.push(`Visual type: ${image.visual_type}`);
-      if (image.key_highlight) lines.push(`Key visual: ${image.key_highlight}`);
-      return lines.join("\n");
-    })
-    .join("\n\n");
 }
 
 function summarizePresentationSlidePoints(slide) {
@@ -1619,6 +1591,7 @@ export default function App() {
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizAnswerImages, setQuizAnswerImages] = useState({});
   const [quizResults, setQuizResults] = useState({});
+  const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [isMarkingQuiz, setIsMarkingQuiz] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
@@ -1649,6 +1622,7 @@ export default function App() {
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
+  const [presentationView, setPresentationView] = useState("setup");
   const [adminDashboard, setAdminDashboard] = useState(null);
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
@@ -1692,9 +1666,10 @@ export default function App() {
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
-  const visualReferences = mergeStudyVisualReferences(studyImages.filter((image) => image?.image_url), uploadedVisualReferences, 6);
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
+  const visualReferences = uploadedVisualReferences;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
+  const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Slides are still being read. Please wait before generating the study guide."
@@ -1724,6 +1699,7 @@ export default function App() {
   const activePresentationSlide = presentationData.slides[selectedPresentationSlideIndex] || presentationData.slides[0] || null;
   const isPresentationJobActive = currentJobType === "presentation" && (isGeneratingPresentation || progress < 100 || !presentationData.slides.length);
   const presentationProgressValue = Math.max(0, Math.min(100, Number(isPresentationJobActive ? progress : presentationData.slides.length ? 100 : 0) || 0));
+  const canOpenPresentationViewer = Boolean(presentationData.slides.length) && !isPresentationJobActive && presentationProgressValue >= 100;
   const presentationStageLine = isPresentationJobActive
     ? (status || "Generating slides, please wait...")
     : presentationData.slides.length
@@ -1755,7 +1731,9 @@ export default function App() {
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
-  const canExportCurrent = hasResults || activeTab === "chat";
+  const canExportCurrent = activeTab === "quiz"
+    ? Boolean(selectedQuizQuestions.length)
+    : hasResults || activeTab === "chat";
   const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
@@ -1768,6 +1746,11 @@ export default function App() {
   }, [presentationData.jobId, presentationData.title]);
 
   useEffect(() => {
+    if (presentationData.slides.length || isGeneratingPresentation) return;
+    setPresentationView((current) => (current === "setup" ? current : "setup"));
+  }, [isGeneratingPresentation, presentationData.slides.length]);
+
+  useEffect(() => {
     if (!presentationData.slides.length && selectedPresentationSlideIndex !== 0) {
       setSelectedPresentationSlideIndex(0);
       return;
@@ -1778,8 +1761,12 @@ export default function App() {
   }, [presentationData.slides.length, selectedPresentationSlideIndex]);
 
   const focusPresentationViewer = () => {
+    if (!canOpenPresentationViewer) return;
+    setPresentationView("viewer");
     setSelectedPresentationSlideIndex(0);
-    presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.requestAnimationFrame(() => {
+      presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const clearHistory = () => {
@@ -1918,7 +1905,9 @@ export default function App() {
       return {
         eyebrow: "Workspace ready",
         badge: "Open",
-        detail: `${flashcards.length} flashcards and ${quizQuestions.length} test questions are ready in the study workspace.`,
+        detail: quizQuestions.length
+          ? `${flashcards.length} flashcards and ${quizQuestions.length} test questions are ready in the study workspace.`
+          : `${flashcards.length} flashcards are ready, and the test can be generated later only when you need it.`,
         showProgress: false,
         progressValue: 0,
         statusLine: "",
@@ -2022,7 +2011,7 @@ export default function App() {
     scopeId = "workspace",
     ownerControls = null,
     ownerNotice = "",
-    emptyMessage = "Test questions will appear here after study guide generation.",
+    emptyMessage = "Generate a test from the Test tab when you need one.",
   }) => {
     const totalMarks = getTotalQuizMarks(questions);
     const hasRoomVisibility = Boolean(visibilityMode);
@@ -2048,10 +2037,10 @@ export default function App() {
             <div className="force-mobile-stack flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p>
-                <p className="mt-2 text-sm leading-7 text-slate-200">Add past papers and a memo if you want the next guide and test to follow that style.</p>
+                <p className="mt-2 text-sm leading-7 text-slate-200">Add past papers and a memo if you want the next study guide and test to follow that style.</p>
               </div>
               {pastQuestionPaperSources.length || pastQuestionMemo.trim() ? (
-                <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Notes + Test"}</button>
+                <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">{isGeneratingSummary ? "Refreshing..." : "Refresh Study Guide"}</button>
               ) : null}
             </div>
             {pastQuestionPaperSources.length ? (
@@ -2069,7 +2058,7 @@ export default function App() {
             )}
             <div className="mt-4">
               <label className="block text-xs uppercase tracking-[0.22em] text-emerald-200/70">Memo / Marking Guide Reference</label>
-              <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, marking guide, or model answers here. MABASO will use it as a reference when refreshing the study guide and the test." />
+              <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, marking guide, or model answers here. MABASO will use it as a reference when refreshing the study guide and generating the test." />
               <p className="mt-3 text-xs leading-6 text-slate-300">This memo stays with the current workspace.</p>
             </div>
           </div>
@@ -2109,6 +2098,74 @@ export default function App() {
               </div>
             );
           }) : <div className="text-sm text-slate-300">{emptyMessage}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  const renderQuizGenerationPanel = () => {
+    const quizProgressValue = currentJobType === "quiz" ? Math.max(0, Math.min(100, Number(progress || 0))) : 0;
+    return (
+      <div className="space-y-5">
+        <div className="rounded-[26px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(34,197,94,0.12),rgba(15,23,42,0.78))] p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Optional Test</p>
+              <h4 className="mt-2 text-2xl font-semibold text-white">Generate the test only when you need it.</h4>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Your study guide, formulas, worked examples, and flashcards are already saved. Press the button below only when you want MABASO to spend tokens building a full test.</p>
+            </div>
+            <button type="button" onClick={generateQuiz} disabled={isGeneratingQuiz || !hasQuizGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              {isGeneratingQuiz ? "Generating Test..." : "Generate Test"}
+            </button>
+          </div>
+          {isGeneratingQuiz ? (
+            <div className="mt-5">
+              <div className="flex items-center gap-4">
+                <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                  <div className="h-full rounded-full bg-[linear-gradient(90deg,#4ade80,#22c55e)] transition-all duration-500" style={{ width: `${quizProgressValue}%` }} />
+                </div>
+                <span className="text-sm font-semibold text-emerald-50">{quizProgressValue}%</span>
+              </div>
+              <p className="mt-3 text-sm leading-7 text-slate-200">{status || "Generating the test..."}</p>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
+          <div className="force-mobile-stack flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Past Question Paper Reference</p>
+              <p className="mt-2 text-sm leading-7 text-slate-200">Use past papers and a memo if you want the next generated test to follow that style more closely.</p>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap gap-3">
+              <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Past Paper</button>
+              {(pastQuestionPaperSources.length || pastQuestionMemo.trim()) ? (
+                <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm font-semibold text-amber-50 disabled:opacity-50">
+                  {isGeneratingSummary ? "Refreshing..." : "Refresh Study Guide"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {pastQuestionPaperSources.length ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {pastQuestionPaperSources.map((source) => (
+                <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200">
+                  <button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button>
+                  <p className="phone-safe-copy font-semibold text-white">{source.name}</p>
+                  <p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "PAST QUESTION PAPER"}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-slate-300">No past question paper added yet.</p>
+          )}
+
+          <div className="mt-4">
+            <label className="block text-xs uppercase tracking-[0.22em] text-emerald-200/70">Memo / Marking Guide Reference</label>
+            <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, marking guide, or model answers here. MABASO will use it as a reference when generating the test." />
+            <p className="mt-3 text-xs leading-6 text-slate-300">Refresh the study guide after changing the memo if you want the rest of the workspace to follow the same style too.</p>
+          </div>
         </div>
       </div>
     );
@@ -2601,7 +2658,7 @@ export default function App() {
       : "border-white/10 bg-slate-950/35 text-slate-100";
 
     return (
-      <div className={`relative overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "p-6"} ${frameClassName}`}>
+      <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
         <div className="absolute inset-0 opacity-80">
           <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
           <div className="absolute bottom-0 right-0 h-28 w-56 rounded-[999px] bg-current/5" />
@@ -2643,7 +2700,8 @@ export default function App() {
     );
   };
 
-  const renderPresentationPanel = () => (
+  /* Legacy presentation panel kept temporarily for reference during the refactor.
+  const renderPresentationPanelLegacy = () => (
     <div className="space-y-5">
       <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(2,8,23,0.35)]">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -2815,6 +2873,151 @@ export default function App() {
       )}
     </div>
   );
+
+  */
+
+  const renderPresentationPanel = () => {
+    const showSetupView = presentationView === "setup";
+    const showStatusView = presentationView === "status";
+    const showViewerView = presentationView === "viewer" && presentationData.slides.length;
+
+    return (
+      <div className="space-y-5">
+        {showSetupView ? (
+          <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(2,8,23,0.35)]">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.28em] text-sky-100/75">AI Presentation Maker</p>
+                <h4 className="mt-2 text-3xl font-semibold text-white">Build lecture slides with real structure, useful visuals, and stronger teaching flow.</h4>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose a template first. After you generate, the template page disappears and the presentation moves to its own progress page. Uploaded slide and note images are matched first when they truly fit the slide topic.</p>
+              </div>
+              {presentationData.slides.length ? <button type="button" onClick={focusPresentationViewer} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-4 py-2 text-sm font-semibold text-sky-50">Open current deck</button> : null}
+            </div>
+
+            <div className="mt-6">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Template Gallery</p>
+                  <h5 className="mt-2 text-2xl font-semibold text-white">Pick the deck style before you generate.</h5>
+                </div>
+                <p className="max-w-2xl text-sm leading-7 text-slate-300">The generated slides now aim for clearer classroom quality: stronger headings, better supporting points, and cleaner visual panels instead of loose extraction.</p>
+              </div>
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                {presentationDesigns.map((design) => {
+                  const isSelected = selectedPresentationDesign === design.id;
+                  return (
+                    <button
+                      key={design.id}
+                      type="button"
+                      onClick={() => setSelectedPresentationDesign(design.id)}
+                      className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10"}`}
+                    >
+                      <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName} ${design.previewDecorationClassName}`}>
+                        <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent,rgba(15,23,42,0.06))]" />
+                        <div className="relative flex h-full flex-col justify-between p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.accent}</span>
+                            {isSelected ? <span className="rounded-full border border-white/15 bg-white/30 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-white">Selected</span> : null}
+                          </div>
+                          <div>
+                            <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${design.previewTitleClassName}`}>Presentation</p>
+                            <p className={`mt-1 text-xl font-semibold ${design.previewTitleClassName}`}>Title</p>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
+                <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</p>
+                <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showStatusView ? (
+          <div className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.92))] p-5 shadow-[0_18px_50px_rgba(2,8,23,0.35)]">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-5">
+              <div className="grid gap-5 lg:grid-cols-[140px_minmax(0,1fr)]">
+                <div className="flex items-center justify-center rounded-[28px] bg-[linear-gradient(135deg,#fff7ed,#fed7aa)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-[24px] bg-[linear-gradient(135deg,#fb923c,#fdba74)] text-4xl font-black text-white shadow-[0_18px_40px_rgba(251,146,60,0.35)]">P</div>
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-lg font-semibold text-white">{isPresentationJobActive ? "Presentation is being generated." : "Presentation is ready to view and explain."}</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">{presentationStageLine}</p>
+                    </div>
+                    <div className="force-mobile-stack flex flex-wrap gap-3">
+                      <button type="button" onClick={() => setPresentationView("setup")} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Templates</button>
+                      <button type="button" onClick={focusPresentationViewer} disabled={!canOpenPresentationViewer} className="rounded-2xl border border-sky-300/30 bg-white px-4 py-3 text-sm font-semibold text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">View now</button>
+                    </div>
+                  </div>
+                  <div className="mt-5 flex items-center gap-4">
+                    <div className="h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                      <div className="h-full rounded-full bg-[linear-gradient(90deg,#60a5fa,#2563eb)] transition-all duration-500" style={{ width: `${presentationProgressValue}%` }} />
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200">{presentationProgressValue}%</span>
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{visualReferences.length} lecture visual reference{visualReferences.length === 1 ? "" : "s"}</span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length || 0} slide{presentationData.slides.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showViewerView ? (
+          <div ref={presentationViewerRef} className="space-y-5">
+            <div className="rounded-[30px] border border-white/10 bg-slate-950/75 p-5 shadow-[0_20px_55px_rgba(2,8,23,0.35)]">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Presentation Viewer</p>
+                  <h4 className="phone-safe-copy mt-2 text-2xl font-semibold text-white">{presentationData.title || "Lecture presentation"}</h4>
+                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{presentationData.subtitle || "A concise lecture deck is ready for download."}</p>
+                </div>
+                <div className="force-mobile-stack flex flex-wrap gap-3">
+                  <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Download PowerPoint</button>
+                  <button type="button" onClick={() => setPresentationView("status")} className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Back to status</button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-[190px_minmax(0,1fr)] lg:items-start">
+              <div className="rounded-[28px] border border-white/10 bg-slate-950/80 p-3 lg:max-h-[760px] lg:overflow-y-auto">
+                <div className="space-y-3">
+                  {presentationData.slides.map((slide, index) => (
+                    <button
+                      key={`${slide.title}-${index}`}
+                      type="button"
+                      onClick={() => setSelectedPresentationSlideIndex(index)}
+                      className={`w-full rounded-[24px] border p-1.5 text-left transition ${selectedPresentationSlideIndex === index ? "border-sky-300/40 bg-sky-300/10" : "border-white/10 bg-white/[0.03] hover:bg-white/10"}`}
+                    >
+                      {renderPresentationSlideCanvas(slide, index, { thumbnail: true })}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-4 text-center text-xs uppercase tracking-[0.22em] text-slate-400">Slide {selectedPresentationSlideIndex + 1}/{presentationData.slides.length}</p>
+              </div>
+
+              <div className="min-w-0">
+                {activePresentationSlide ? renderPresentationSlideCanvas(activePresentationSlide, selectedPresentationSlideIndex) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {!showSetupView && !showStatusView && !showViewerView ? <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Choose a template first, generate the presentation, then open the viewer when the counter reaches 100%.</div> : null}
+      </div>
+    );
+  };
 
   const renderPodcastPanel = () => (
     <div className="space-y-5">
@@ -5390,6 +5593,33 @@ export default function App() {
     }
   };
 
+  const handleAuthFormSubmit = async (event) => {
+    event.preventDefault();
+    if (isRegistrationVerificationStep) {
+      await verifyRegistrationCode();
+      return;
+    }
+    if (showResetVerificationCard) {
+      await verifyEmailPasswordCode();
+      return;
+    }
+    if (authMode === "login") {
+      await signInWithEmailPassword();
+      return;
+    }
+    if (isRegistrationEmailStep) {
+      await requestRegistrationCode();
+      return;
+    }
+    if (isRegistrationPasswordStep) {
+      await completeRegistrationWithPassword();
+      return;
+    }
+    if (isResetMode) {
+      await requestEmailPasswordCode();
+    }
+  };
+
   const startForgotPassword = () => {
     setAuthMode("reset");
     setRegisterStep("email");
@@ -5860,7 +6090,6 @@ export default function App() {
 
   const buildCurrentStudyPackSections = () => [
     { title: "Study Guide", content: formattedGuide || summary },
-    { title: "Study Photos", content: studyImagesToText(visualReferences) },
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
@@ -5915,8 +6144,10 @@ export default function App() {
           "PAST QUESTION PAPER",
         ),
       );
-      setPresentationData(normalizePresentationData(item.presentationData));
-      setSelectedPresentationDesign(normalizePresentationData(item.presentationData).designId || presentationDesigns[0].id);
+      const nextPresentationData = normalizePresentationData(item.presentationData);
+      setPresentationData(nextPresentationData);
+      setPresentationView(nextPresentationData.slides.length ? "viewer" : "setup");
+      setSelectedPresentationDesign(nextPresentationData.designId || presentationDesigns[0].id);
       setPodcastData(normalizePodcastData(item.podcastData));
       setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
       setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
@@ -5944,6 +6175,7 @@ export default function App() {
     setQuizQuestions([]);
     setStudyImages([]);
     setPresentationData(createEmptyPresentationData());
+    setPresentationView("setup");
     setSelectedPresentationDesign(presentationDesigns[0].id);
     setPodcastData(createEmptyPodcastData());
     setPodcastSpeakerCount(2);
@@ -6632,10 +6864,6 @@ export default function App() {
         studySourceEntriesToText(resolvedPastQuestionPaperSources, "PAST QUESTION PAPER"),
         resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
       ].filter(Boolean).join("\n\n");
-    const uploadedGuideReferenceImages = buildUploadedVisualReferences(resolvedLectureNoteSources, resolvedLectureSlideSources)
-      .map((image) => image?.image_url)
-      .filter(Boolean)
-      .slice(0, 6);
     if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
@@ -6660,7 +6888,6 @@ export default function App() {
               lecture_slides: resolvedLectureSlides,
               past_question_papers: resolvedPastQuestionPapers,
               language: outputLanguage,
-              reference_images: uploadedGuideReferenceImages,
             }),
             timeoutMs: 120000,
           });
@@ -6700,13 +6927,14 @@ export default function App() {
         setFormula(job.formula || "");
         setExample(job.worked_example || "");
         setFlashcards(job.flashcards || []);
-        setQuizQuestions(job.quiz_questions || []);
-        setStudyImages(job.study_images || []);
+        setQuizQuestions([]);
+        setStudyImages([]);
         setQuizAnswers({});
         setQuizAnswerImages({});
         setQuizResults({});
         setQuizSubmitted(false);
         setPresentationData(createEmptyPresentationData());
+        setPresentationView("setup");
         setSelectedPresentationDesign(presentationDesigns[0].id);
         setPodcastData(createEmptyPodcastData());
         setPodcastSpeakerCount(2);
@@ -6723,8 +6951,8 @@ export default function App() {
           formula: job.formula || "",
           example: job.worked_example || "",
           flashcards: job.flashcards || [],
-          quizQuestions: job.quiz_questions || [],
-          studyImages: job.study_images || [],
+          quizQuestions: [],
+          studyImages: [],
           lectureNotes: resolvedLectureNotes,
           lectureNotesFileName: resolvedLectureNotesFileName,
           lectureNoteSources: sanitizeStudySourceEntriesForHistory(resolvedLectureNoteSources),
@@ -6756,6 +6984,87 @@ export default function App() {
     }
   };
 
+  const generateQuiz = async () => {
+    if (!hasQuizGenerationInputs) {
+      return setError("Generate a study guide or add lecture material before creating the test.");
+    }
+
+    setIsGeneratingQuiz(true);
+    setError("");
+    setCurrentPage("workspace");
+    setActiveTab("quiz");
+    setStatus("Generating the test...");
+    setProgress(0);
+    setCurrentJobType("quiz");
+
+    try {
+      const response = await authFetch("/generate-quiz/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Test generation failed.");
+      const job = await pollJob(data.job_id, "quiz");
+      const nextQuizQuestions = job.quiz_questions || [];
+      startTransition(() => {
+        setQuizQuestions(nextQuizQuestions);
+        setQuizAnswers({});
+        setQuizAnswerImages({});
+        setQuizResults({});
+        setQuizSubmitted(false);
+      });
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
+      addHistoryItem({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+        title: extractHistoryTitle(summary || "", sourceLabel),
+        fileName: sourceLabel,
+        summary,
+        transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions: nextQuizQuestions,
+        studyImages,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+      });
+      setStatus("Test ready.");
+      setProgress(100);
+    } catch (err) {
+      setError(err.message || "Test generation failed.");
+      setStatus("Test generation failed.");
+    } finally {
+      setIsGeneratingQuiz(false);
+      setCurrentJobType("");
+    }
+  };
+
   const generatePresentation = async () => {
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
@@ -6765,6 +7074,7 @@ export default function App() {
     setError("");
     setCurrentPage("workspace");
     setActiveTab("presentation");
+    setPresentationView("status");
     setSelectedPresentationSlideIndex(0);
     setPresentationData(createEmptyPresentationData());
     setStatus("Designing the PowerPoint presentation...");
@@ -6801,6 +7111,7 @@ export default function App() {
       setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
       setActiveTab("presentation");
       setCurrentPage("workspace");
+      setPresentationView("status");
       setProgress(100);
       const sourceLabel = getPrimarySourceLabel({
         fileName: file?.name || "",
@@ -7362,7 +7673,6 @@ export default function App() {
     try {
       await exportPdf(item.title || item.fileName || "Saved lecture", [
         { title: "Study Guide", content: item.summary || "" },
-        { title: "Study Photos", content: studyImagesToText(item.studyImages || []) },
         { title: "Transcript", content: item.transcript || "" },
         { title: "Past Question Paper References", content: item.pastQuestionPapers || "" },
         { title: "Formulas", content: item.formula || "" },
@@ -7379,6 +7689,10 @@ export default function App() {
   };
 
   const downloadHistoryQuizPdf = async (item) => {
+    if (!(item.quizQuestions || []).length) {
+      setError("This saved workspace does not have a generated test yet.");
+      return;
+    }
     try {
       await exportPdf(`${item.title || item.fileName || "Saved lecture"} test`, [
         { title: "Test", content: buildQuizExportText(item.quizQuestions || []) },
@@ -7636,7 +7950,7 @@ export default function App() {
                     <span>{isAppleSigningIn ? "Connecting iPhone..." : "Continue with iPhone"}</span>
                   </button>
                 ) : null}
-                <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                <form onSubmit={handleAuthFormSubmit} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                   <div className="flex flex-wrap gap-3">
                     <button
                       type="button"
@@ -7655,18 +7969,23 @@ export default function App() {
                   </div>
                   <div className="mt-4 space-y-4">
                     <div>
-                      <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Email</label>
+                      <label htmlFor="auth-email" className="block text-xs uppercase tracking-[0.24em] text-slate-400">Email</label>
                       <input
+                        id="auth-email"
+                        name="username"
                         type="email"
                         value={authEmailInput}
                         onChange={(event) => {
                           setAuthEmailInput(event.target.value);
                           if (authPasswordIsIncorrect) setAuthMessage("");
                         }}
-                        disabled={isRegistrationVerificationStep || isRegistrationPasswordStep}
-                        className={`mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none disabled:cursor-not-allowed disabled:opacity-75`}
+                        readOnly={isRegistrationVerificationStep || isRegistrationPasswordStep}
+                        className={`mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none ${isRegistrationVerificationStep || isRegistrationPasswordStep ? "cursor-not-allowed opacity-75" : ""}`}
                         placeholder="you@example.com"
-                        autoComplete="email"
+                        autoComplete="username"
+                        inputMode="email"
+                        autoCapitalize="none"
+                        spellCheck={false}
                       />
                       {isRegistrationEmailStep ? <p className="mt-2 text-xs leading-6 text-slate-400">Enter your email and we will verify it first, then let you create your password.</p> : null}
                       {isRegistrationVerificationStep ? <p className="mt-2 text-xs leading-6 text-emerald-200">Step 2 of 3. We sent a verification code to {pendingEmailAuthEmail || authEmailInput}.</p> : null}
@@ -7675,9 +7994,11 @@ export default function App() {
 
                     {(authMode === "login" || isResetMode || isRegistrationPasswordStep) ? (
                       <div>
-                        <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">{isResetMode ? "New Password" : "Password"}</label>
+                        <label htmlFor="auth-password" className="block text-xs uppercase tracking-[0.24em] text-slate-400">{isResetMode ? "New Password" : "Password"}</label>
                         <div className="relative mt-2">
                           <input
+                            id="auth-password"
+                            name={authMode === "login" ? "current-password" : "new-password"}
                             type={showAuthPassword ? "text" : "password"}
                             value={authPasswordInput}
                             onChange={(event) => {
@@ -7715,8 +8036,10 @@ export default function App() {
 
                     {(isResetMode || isRegistrationPasswordStep) ? (
                       <div>
-                        <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Confirm Password</label>
+                        <label htmlFor="auth-confirm-password" className="block text-xs uppercase tracking-[0.24em] text-slate-400">Confirm Password</label>
                         <input
+                          id="auth-confirm-password"
+                          name="confirm-password"
                           type={showAuthPassword ? "text" : "password"}
                           value={authConfirmPasswordInput}
                           onChange={(event) => setAuthConfirmPasswordInput(event.target.value)}
@@ -7729,8 +8052,7 @@ export default function App() {
 
                     {authMode === "login" ? (
                       <button
-                        type="button"
-                        onClick={signInWithEmailPassword}
+                        type="submit"
                         disabled={isSigningInWithPassword || isRequestingEmailCode || isVerifyingEmailCode}
                         className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                       >
@@ -7741,8 +8063,7 @@ export default function App() {
                     {isRegistrationEmailStep ? (
                       <div className="space-y-3">
                         <button
-                          type="button"
-                          onClick={requestRegistrationCode}
+                          type="submit"
                           disabled={isRequestingEmailCode || isVerifyingEmailCode}
                           className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                         >
@@ -7801,8 +8122,7 @@ export default function App() {
                         <p className="text-xs leading-6 text-slate-400">This account will remember your work with {pendingEmailAuthEmail} and sync study history after sign-in on any device.</p>
                         <div className="flex flex-wrap gap-3">
                           <button
-                            type="button"
-                            onClick={completeRegistrationWithPassword}
+                            type="submit"
                             disabled={isSigningInWithPassword}
                             className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                           >
@@ -7824,8 +8144,7 @@ export default function App() {
 
                     {isResetMode ? (
                       <button
-                        type="button"
-                        onClick={requestEmailPasswordCode}
+                        type="submit"
                         disabled={isRequestingEmailCode || isVerifyingEmailCode}
                         className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50"
                       >
@@ -7866,7 +8185,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : null}
-                </div>
+                </form>
                 {showAuthMessageBanner ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
@@ -8091,12 +8410,12 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="min-w-0 space-y-4">{visualReferences.length ? <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Visual references</p><h4 className="mt-2 text-xl font-semibold text-white">Visuals matched to the study-guide sections they support.</h4><p className="mt-2 text-sm leading-7 text-slate-300">Uploaded slide or note visuals are shown first, with automatic labels for diagrams, tables, charts, and other key lecture visuals.</p></div><div className="mt-4 grid gap-4 md:grid-cols-2">{visualReferences.map((image, index) => <a key={`${image.image_url}-${index}`} href={image.source_url || image.image_url} target="_blank" rel="noreferrer" className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 transition hover:border-emerald-300/30"><div className="aspect-[4/3] overflow-hidden bg-black/40"><img src={image.image_url} alt={image.diagram_label || image.title || image.query || "Study reference"} className="h-full w-full object-cover" loading="lazy" /></div><div className="space-y-2 p-4"><p className="phone-safe-copy text-sm font-semibold text-white">{image.diagram_label || image.title || image.query || "Reference photo"}</p><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{image.matched_section || image.query || "Key concept"}</p><p className="text-xs text-slate-400">{image.visual_type ? `${image.visual_type} visual` : "Reference image"} {image.source_type === "uploaded" ? "from your lecture notes or slides" : "for this study section"}</p>{image.key_highlight ? <p className="text-sm leading-6 text-slate-300">{image.key_highlight}</p> : null}</div></a>)}</div></div> : null}<div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? <div className="min-w-0 space-y-4"><div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
-                {activeTab === "quiz" ? renderQuizSection({
+                {activeTab === "quiz" ? (selectedQuizQuestions.length ? renderQuizSection({
                   questions: selectedQuizQuestions,
                   answers: quizAnswers,
                   results: quizResults,
@@ -8111,7 +8430,7 @@ export default function App() {
                   visibilityMode: activeRoom ? activeRoom.test_visibility : "",
                   scoreValue: score,
                   scopeId: "workspace",
-                }) : null}
+                }) : renderQuizGenerationPanel()) : null}
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
