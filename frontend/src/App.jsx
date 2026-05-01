@@ -3042,9 +3042,9 @@ export default function App() {
                   <div className="min-w-0">
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Custom Template</p>
                     <h6 className="mt-2 text-xl font-semibold text-white">Upload your own PowerPoint template.</h6>
-                    <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">MABASO will keep the slides already inside your template unchanged and append the generated slides after them.</p>
+                    <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">MABASO will reuse your template design and rebuild the deck with the same generated slide order shown on the website.</p>
                     {selectedPresentationTemplateName ? <p className="mt-3 text-sm font-semibold text-sky-100">{selectedPresentationTemplateName}</p> : null}
-                    {!selectedPresentationTemplateName && generatedPresentationTemplateName ? <p className="mt-3 text-sm text-slate-300">The current deck was generated with <span className="font-semibold text-white">{generatedPresentationTemplateName}</span>. Re-upload it if you want to generate on the same template again.</p> : null}
+                    {!selectedPresentationTemplateName && generatedPresentationTemplateName ? <p className="mt-3 text-sm text-slate-300">The current deck was generated with <span className="font-semibold text-white">{generatedPresentationTemplateName}</span>. Re-upload it if you want to use the same template design again.</p> : null}
                   </div>
                   <div className="force-mobile-stack flex flex-wrap gap-3">
                     <button type="button" onClick={() => presentationTemplateInputRef.current?.click()} disabled={loading} className="rounded-full border border-sky-300/30 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">{selectedPresentationTemplateName ? "Replace Template" : "Upload Template"}</button>
@@ -3053,7 +3053,7 @@ export default function App() {
                 </div>
               </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
-                <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> and keep the existing template slides unchanged.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
+                <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> while matching the generated slide order shown here.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
                 <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
               </div>
             </div>
@@ -3107,7 +3107,10 @@ export default function App() {
                   {generatedPresentationTemplateName ? <p className="mt-3 text-xs uppercase tracking-[0.22em] text-sky-100/80">Download uses template: {generatedPresentationTemplateName}</p> : null}
                 </div>
                 <div className="force-mobile-stack flex flex-wrap gap-3">
-                  <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Download PowerPoint</button>
+                  <div className="flex flex-col items-start gap-2">
+                    <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Download PowerPoint</button>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100/80">RECOMMENDED: download for better view</p>
+                  </div>
                   <button type="button" onClick={() => setPresentationView("status")} className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Back to status</button>
                 </div>
               </div>
@@ -7297,7 +7300,7 @@ export default function App() {
     }
     setError("");
     setPresentationTemplateFile(selectedFile);
-    setStatus(`${selectedFile.name} will be used as the presentation template. Existing template slides will stay unchanged.`);
+    setStatus(`${selectedFile.name} will be used as the presentation template. The download will follow the same generated slide order shown on the website.`);
   };
 
   const clearPresentationTemplateSelection = () => {

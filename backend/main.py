@@ -7522,6 +7522,19 @@ def get_presentation_slide_layout(presentation: Any, *preferred_names: str, fall
     return layouts[safe_index]
 
 
+def clear_presentation_slides(presentation: Any):
+    slide_id_list = getattr(presentation.slides, "_sldIdLst", None)
+    if slide_id_list is None:
+        return
+
+    # Keep the template's masters/layouts, but rebuild the visible deck so the
+    # downloaded PowerPoint matches the generated slide sequence shown in the app.
+    for slide_id in list(slide_id_list):
+        rel_id = slide_id.rId
+        presentation.part.drop_rel(rel_id)
+        slide_id_list.remove(slide_id)
+
+
 def style_shape(shape: Any, fill_hex: str, *, transparency: float = 0.0):
     shape.fill.solid()
     shape.fill.fore_color.rgb = rgb_from_hex(fill_hex)
@@ -8229,6 +8242,7 @@ def build_presentation_file(
             presentation = Presentation(BytesIO(template_file_bytes))
         except Exception as exc:
             raise RuntimeError("Could not read the uploaded PowerPoint template. Upload a valid .pptx file.") from exc
+        clear_presentation_slides(presentation)
     else:
         presentation = Presentation()
         presentation.slide_width = Inches(13.333)
