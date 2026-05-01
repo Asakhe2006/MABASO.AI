@@ -1219,18 +1219,18 @@ function isAbortError(error) {
 
 function getReadableRequestError(error) {
   if (isAbortError(error)) {
-    return "The Mabaso server took too long to respond. Render may still be waking up, so try again in a few seconds.";
+    return "The Mabaso server took too long to respond. The backend may be waking up or temporarily unavailable. Please try again in a few seconds.";
   }
 
   const message = String(error?.message || "").trim();
   if (/failed to fetch/i.test(message)) {
     return (
-      "The app could not reach the Mabaso server. Render may still be waking up, so refresh the page and try again. "
-      + `If it keeps happening, check that Render web env VITE_API_BASE_URL is set to ${API_BASE_URL}.`
+      "The app could not reach the Mabaso server. The backend may be waking up, temporarily unavailable, or there may be a network issue. " +
+      "If this keeps happening, check the backend server status on Render and review backend logs for details."
     );
   }
 
-  return message || "The app could not reach the Mabaso server right now.";
+  return message || "The app could not reach the Mabaso server right now. Please check the backend status.";
 }
 
 function isTransientServerConnectionMessage(message) {
