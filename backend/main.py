@@ -1610,17 +1610,20 @@ async def deliver_support_message_email(
     reply_email: str,
     message_text: str,
     page: str,
-):
+) -> dict[str, str]:
     try:
         await asyncio.to_thread(send_support_email, reply_email, message_text, page)
     except HTTPException as exc:
         logger.warning("Support email delivery failed for %s: %s", message_id, exc.detail)
         await asyncio.to_thread(update_support_message_delivery, message_id, "email_failed", str(exc.detail))
+        return {"status": "email_failed", "error": str(exc.detail)}
     except Exception as exc:
         logger.exception("Unexpected support email delivery failure for %s", message_id)
         await asyncio.to_thread(update_support_message_delivery, message_id, "email_failed", str(exc))
+        return {"status": "email_failed", "error": str(exc)}
     else:
         await asyncio.to_thread(update_support_message_delivery, message_id, "sent", "")
+        return {"status": "sent", "error": ""}
 
 
 def create_login_code(email: str) -> str:
@@ -4249,24 +4252,25 @@ async def submit_support_request(
     saved_message = compact_text(support_message.get("message"), message)
     saved_page = compact_text(support_message.get("page"), page)[:120]
     delivery_status = compact_text(support_message.get("email_delivery_status"), "queued")
+    email_error = compact_text(support_message.get("email_error"))
     if delivery_status != "sent":
-        asyncio.create_task(
-            deliver_support_message_email(
-                support_message["id"],
-                current_user,
-                saved_message,
-                saved_page,
-            )
+        delivery_result = await deliver_support_message_email(
+            support_message["id"],
+            current_user,
+            saved_message,
+            saved_page,
         )
+        delivery_status = compact_text(delivery_result.get("status"), delivery_status)
+        email_error = compact_text(delivery_result.get("error"), email_error)
 
     response_message = (
         "Support message sent."
         if delivery_status == "sent"
-        else "Support message saved. The support inbox email will keep retrying if the mail server is unavailable."
+        else "Support message was saved, but the support inbox email could not be sent right now."
     )
     record_audit_log(
         action="support.contact",
-        status="success" if delivery_status == "sent" else "queued",
+        status="success" if delivery_status == "sent" else "error",
         email=current_user,
         request=request,
         resource_type="support",
@@ -4276,12 +4280,14 @@ async def submit_support_request(
             "support_message_id": support_message.get("id", ""),
             "client_request_id": support_message.get("client_request_id", ""),
             "delivery_status": delivery_status,
+            "email_error": email_error,
         },
     )
     return {
         "message": response_message,
         "delivery_status": delivery_status,
         "support_message_id": support_message.get("id", ""),
+        "email_error": email_error,
     }
 
 
