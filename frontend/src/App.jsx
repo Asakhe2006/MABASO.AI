@@ -1358,7 +1358,7 @@ function getErrorHint(message) {
   if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
     return "Try another public video link, or upload the lecture file directly. YouTube links may also need public captions or working backend cookies.";
   }
-  if (text.includes("smtp")) return "Configure SMTP variables so verification codes can be sent.";
+  if (text.includes("smtp")) return "Configure SMTP or MAIL variables on Render so verification codes can be sent.";
   if (text.includes("timed out")) return "Try again or split a very long lecture into smaller sections.";
   return "Check the backend logs for the exact failing stage.";
 }
@@ -1717,6 +1717,10 @@ function teacherLessonToText(lesson) {
   return blocks.join("\n").trim();
 }
 
+function normalizeGuideHeading(value) {
+  return (value || "").trim().toLowerCase();
+}
+
 function extractGuideSections(markdown) {
   const text = (markdown || "").replace(/\r\n/g, "\n").trim();
   if (!text) return [];
@@ -1724,13 +1728,27 @@ function extractGuideSections(markdown) {
   if (!matches.length) {
     return [{ heading: "Study Guide", normalizedHeading: "study guide", content: text }];
   }
-  return matches
+  const introText = text.slice(0, matches[0]?.index || 0).trim();
+  const sections = matches
     .map((match) => ({
       heading: (match[1] || "").trim(),
-      normalizedHeading: (match[1] || "").trim().toLowerCase(),
+      normalizedHeading: normalizeGuideHeading(match[1]),
       content: (match[2] || "").trim(),
     }))
     .filter((section) => section.heading && section.content);
+  if (introText) {
+    sections.unshift({
+      heading: "Guide Overview",
+      normalizedHeading: "guide overview",
+      content: introText,
+    });
+  }
+  return sections;
+}
+
+function getGuideSectionByHeading(sections, heading) {
+  const normalizedHeading = normalizeGuideHeading(heading);
+  return (sections || []).find((section) => section.normalizedHeading === normalizedHeading) || null;
 }
 
 function getPodcastEstimatedMinutes(podcast) {
@@ -1738,6 +1756,15 @@ function getPodcastEstimatedMinutes(podcast) {
   if (total > 0) return total.toFixed(total >= 10 ? 0 : 1);
   if (podcast?.targetMinutes) return String(podcast.targetMinutes);
   return "0";
+}
+
+function getTeacherEstimatedMinutes(lesson) {
+  const total = (lesson?.segments || []).reduce(
+    (sum, segment) => sum + Number(segment?.estimatedMinutes || segment?.estimated_minutes || 0),
+    0,
+  );
+  if (total > 0) return total.toFixed(total >= 10 ? 0 : 1);
+  return "15";
 }
 
 function truncatePreviewText(value, limit = 1200) {
@@ -2010,6 +2037,16 @@ export default function App() {
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
+  const guideTitleSection = getGuideSectionByHeading(guideSections, "LECTURE TITLE");
+  const guideSummarySection = getGuideSectionByHeading(guideSections, "SHORT SUMMARY");
+  const visibleGuideSections = guideSections.filter(
+    (section) => !["lecture title", "short summary"].includes(section.normalizedHeading),
+  );
+  const guideTopic = ((guideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
+    || extractHistoryTitle(formattedGuide || summary, workspaceFileLabel)
+    || workspaceFileLabel
+    || "Study Guide";
+  const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
   const isAdminAccount = authAvailableModes.includes("admin");
 
@@ -9660,15 +9697,48 @@ export default function App() {
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
                   <div className="min-w-0 space-y-5">
+                    <div
+                      ref={(node) => {
+                        if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
+                        else if (guideTitleSection) delete teacherSectionRefs.current[guideTitleSection.normalizedHeading];
+                        if (node && guideSummarySection) teacherSectionRefs.current[guideSummarySection.normalizedHeading] = node;
+                        else if (guideSummarySection) delete teacherSectionRefs.current[guideSummarySection.normalizedHeading];
+                      }}
+                      className="rounded-[24px] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.16),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.92))] p-5"
+                    >
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Topic</p>
+                          <h4 className="mt-2 text-3xl font-semibold text-white">{guideTopic}</h4>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
+                            {visibleGuideSections.length} guide section{visibleGuideSections.length === 1 ? "" : "s"}
+                          </div>
+                          <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-emerald-50">
+                            Q&amp;A stays in the guide
+                          </div>
+                        </div>
+                      </div>
+                      {guideSummarySection?.content ? (
+                        <div className="notes-markdown phone-safe-copy mt-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                          <ReactMarkdown>{guideSummarySection.content}</ReactMarkdown>
+                        </div>
+                      ) : null}
+                    </div>
+
                     <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-4">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Teacher Mode</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-white">Friendly lesson walkthrough on top of the guide.</h4>
-                          <p className="mt-3 text-sm leading-7 text-slate-200">This explains the guide section by section, asks reflective questions, keeps the tone warm, and follows the guide while it speaks.</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-white">Friendly lesson walkthrough that stays with the guide.</h4>
+                          <p className="mt-3 text-sm leading-7 text-slate-200">This gives a longer 15+ minute explanation, spends extra time on worked examples, skips flashcards and Q&amp;A, and follows the guide while it speaks.</p>
                         </div>
                         <div className="force-mobile-stack flex flex-wrap gap-3">
-                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Teacher Button"}</button>
+                          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-200">
+                            {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min lesson` : "15+ min target"}
+                          </div>
+                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Build Teacher Lesson"}</button>
                           <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Play</button>
                           <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
                           <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Resume</button>
@@ -9677,8 +9747,8 @@ export default function App() {
                       </div>
                       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
                         <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-200">
-                          {teacherLessonData.overview || "Generate teacher mode to hear a softer explanation that teaches the guide instead of reading it line by line."}
-                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-50">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` • ${activeTeacherSegment.prompt}` : ""}</p> : null}
+                          {teacherLessonData.overview || "Generate teacher mode to hear a softer 15+ minute explanation that teaches the guide instead of reading it line by line."}
+                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-50">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
                         </div>
                         <div>
                           <label className="block text-xs uppercase tracking-[0.22em] text-slate-300">Voice</label>
@@ -9710,9 +9780,9 @@ export default function App() {
                       </div>
                     ) : null}
 
-                    {guideSections.length ? (
+                    {visibleGuideSections.length ? (
                       <div className="space-y-4">
-                        {guideSections.map((section, index) => {
+                        {visibleGuideSections.map((section, index) => {
                           const isActiveSection = activeTeacherSegment?.sectionHeading
                             ? (activeTeacherSegment.sectionHeading || "").trim().toLowerCase() === section.normalizedHeading
                               || (activeTeacherSegment.sectionHeading || "").trim().toLowerCase().includes(section.normalizedHeading)

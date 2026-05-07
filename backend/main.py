@@ -219,6 +219,7 @@ Return clean Markdown with these sections:
 - QUICK REVISION PLAN
 - VISUAL AIDS
 - REAL-WORLD EXAMPLES
+- PRACTICE QUESTIONS AND ANSWERS
 - FLASHCARDS
 - EXAM TIPS
 
@@ -230,6 +231,7 @@ Rules:
 - Use bullet points where useful, especially for summaries, concepts, definitions, exam tips, and revision steps.
 - Prefer short readable bullets over long dense paragraphs.
 - Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
+- In LECTURE TITLE, write one clean topic line only so the student can see the lecture topic immediately at the top.
 - If formulas appear, rewrite them in readable human style.
 - Never use LaTeX syntax or math delimiters such as \\, \\, $$, \\frac, \\int, \\mathcal, or \\begin.
 - Do not write exponents with caret notation like s^2, t^n, or e^(-at) in the final answer.
@@ -255,6 +257,8 @@ Rules:
 - In VISUAL AIDS, explicitly mention concrete objects or subtype names that would benefit from a real photo reference.
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
 - Use simple text layouts that students can read easily in plain Markdown.
+- In PRACTICE QUESTIONS AND ANSWERS, include 4 to 8 short exam-style revision questions with brief model answers.
+- Keep PRACTICE QUESTIONS AND ANSWERS clearly separate from FLASHCARDS.
 - In FLASHCARDS, use this exact style for every card:
   Q: ...
 
@@ -1248,9 +1252,43 @@ def verify_apple_identity_token(identity_token: str, nonce: str = "") -> dict[st
     return claims
 
 
+SMTP_ENV_ALIASES = {
+    "host": ("SMTP_HOST", "MAIL_HOST", "EMAIL_HOST", "SMTP_SERVER"),
+    "port": ("SMTP_PORT", "MAIL_PORT", "EMAIL_PORT"),
+    "username": ("SMTP_USERNAME", "SMTP_USER", "MAIL_USERNAME", "MAIL_USER", "EMAIL_USERNAME"),
+    "password": ("SMTP_PASSWORD", "SMTP_PASS", "MAIL_PASSWORD", "MAIL_PASS", "EMAIL_PASSWORD"),
+    "from_email": ("SMTP_FROM_EMAIL", "FROM_EMAIL", "MAIL_FROM", "MAIL_FROM_EMAIL", "EMAIL_FROM"),
+    "use_ssl": ("SMTP_USE_SSL", "MAIL_USE_SSL", "EMAIL_USE_SSL"),
+    "use_tls": ("SMTP_USE_TLS", "MAIL_USE_TLS", "EMAIL_USE_TLS"),
+    "timeout_seconds": ("SMTP_TIMEOUT_SECONDS", "MAIL_TIMEOUT_SECONDS", "EMAIL_TIMEOUT_SECONDS"),
+}
+
+
+def get_first_configured_env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        cleaned = str(value).strip()
+        if cleaned:
+            return cleaned
+    return default
+
+
+def format_env_aliases(*names: str) -> str:
+    return " or ".join(names)
+
+
 def verify_smtp_is_configured():
-    required = ["SMTP_HOST", "SMTP_FROM_EMAIL"]
-    missing = [name for name in required if not os.getenv(name)]
+    required = {
+        "SMTP host": SMTP_ENV_ALIASES["host"],
+        "sender email": SMTP_ENV_ALIASES["from_email"],
+    }
+    missing = [
+        f"{label} ({format_env_aliases(*names)})"
+        for label, names in required.items()
+        if not get_first_configured_env(*names)
+    ]
     if missing:
         raise HTTPException(
             status_code=500,
@@ -1297,15 +1335,15 @@ def parse_smtp_timeout_seconds(value: str) -> float:
 
 def get_smtp_settings() -> dict[str, Any]:
     verify_smtp_is_configured()
-    configured_port = parse_smtp_port(os.getenv("SMTP_PORT", "587"))
-    host, port, use_ssl_hint = parse_smtp_host(os.getenv("SMTP_HOST", ""), configured_port)
-    from_email = compact_text(os.getenv("SMTP_FROM_EMAIL", ""))
-    password = compact_text(os.getenv("SMTP_PASSWORD", ""))
-    username = compact_text(os.getenv("SMTP_USERNAME", ""))
+    configured_port = parse_smtp_port(get_first_configured_env(*SMTP_ENV_ALIASES["port"], default="587"))
+    host, port, use_ssl_hint = parse_smtp_host(get_first_configured_env(*SMTP_ENV_ALIASES["host"]), configured_port)
+    from_email = compact_text(get_first_configured_env(*SMTP_ENV_ALIASES["from_email"]))
+    password = compact_text(get_first_configured_env(*SMTP_ENV_ALIASES["password"]))
+    username = compact_text(get_first_configured_env(*SMTP_ENV_ALIASES["username"]))
     if not username and password and from_email:
         username = from_email
 
-    smtp_use_ssl_value = compact_text(os.getenv("SMTP_USE_SSL", "")).lower()
+    smtp_use_ssl_value = compact_text(get_first_configured_env(*SMTP_ENV_ALIASES["use_ssl"])).lower()
     if smtp_use_ssl_value:
         use_ssl = smtp_use_ssl_value in {"1", "true", "yes", "on"}
     elif use_ssl_hint is not None:
@@ -1313,7 +1351,7 @@ def get_smtp_settings() -> dict[str, Any]:
     else:
         use_ssl = port == 465
 
-    smtp_use_tls_value = compact_text(os.getenv("SMTP_USE_TLS", "")).lower()
+    smtp_use_tls_value = compact_text(get_first_configured_env(*SMTP_ENV_ALIASES["use_tls"])).lower()
     if use_ssl:
         use_tls = False
     elif smtp_use_tls_value:
@@ -1329,7 +1367,7 @@ def get_smtp_settings() -> dict[str, Any]:
         "from_email": from_email,
         "use_tls": use_tls,
         "use_ssl": use_ssl,
-        "timeout_seconds": parse_smtp_timeout_seconds(os.getenv("SMTP_TIMEOUT_SECONDS", "15")),
+        "timeout_seconds": parse_smtp_timeout_seconds(get_first_configured_env(*SMTP_ENV_ALIASES["timeout_seconds"], default="15")),
     }
 
 
@@ -6691,6 +6729,7 @@ def build_podcast_speaker_profiles(speaker_count: int) -> list[dict[str, str]]:
 
 
 TEACHER_GUIDE_SECTION_HEADINGS = [
+    "LECTURE TITLE",
     "SHORT SUMMARY",
     "KEY CONCEPTS",
     "IMPORTANT DEFINITIONS",
@@ -6704,6 +6743,25 @@ TEACHER_GUIDE_SECTION_HEADINGS = [
     "REAL-WORLD EXAMPLES",
     "EXAM TIPS",
 ]
+TEACHER_TARGET_MINUTES = 15
+TEACHER_MINIMUM_MINUTES = 14.5
+TEACHER_TARGET_WORDS = 2200
+TEACHER_SEGMENT_LIMIT = 30
+TEACHER_SECTION_TARGET_SEGMENTS = {
+    "LECTURE TITLE": 1,
+    "SHORT SUMMARY": 2,
+    "KEY CONCEPTS": 2,
+    "IMPORTANT DEFINITIONS": 2,
+    "IMPORTANT FORMULAS": 3,
+    "WORKED EXAMPLES": 5,
+    "STEP-BY-STEP EXPLANATIONS": 5,
+    "ADVANTAGES AND DISADVANTAGES": 1,
+    "COMMON MISTAKES TO AVOID": 2,
+    "QUICK REVISION PLAN": 1,
+    "VISUAL AIDS": 1,
+    "REAL-WORLD EXAMPLES": 2,
+    "EXAM TIPS": 2,
+}
 
 
 def build_teacher_section_outline(summary: str) -> list[dict[str, str]]:
@@ -6715,7 +6773,7 @@ def build_teacher_section_outline(summary: str) -> list[dict[str, str]]:
             continue
         seen_headings.add(heading)
         sections.append({"section_heading": heading, "content": content})
-    return sections[:10]
+    return sections
 
 
 def normalize_teacher_segments(
@@ -6737,7 +6795,7 @@ def normalize_teacher_segments(
         text = compact_text(raw_segment.get("text"))
         if not text:
             continue
-        for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=580, max_words=95), start=1):
+        for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=760, max_words=125), start=1):
             normalized_segments.append(
                 {
                     "index": len(normalized_segments) + 1,
@@ -6747,12 +6805,12 @@ def normalize_teacher_segments(
                     "estimated_minutes": estimate_spoken_minutes(chunk),
                 }
             )
-            if len(normalized_segments) >= 16:
-                return normalized_segments
+            if len(normalized_segments) >= TEACHER_SEGMENT_LIMIT:
+                return normalized_segments[:TEACHER_SEGMENT_LIMIT]
 
     if normalized_segments:
         return normalized_segments
-    return fallback_segments[:16]
+    return fallback_segments[:TEACHER_SEGMENT_LIMIT]
 
 
 def build_teacher_lesson_fallback(
@@ -6763,10 +6821,12 @@ def build_teacher_lesson_fallback(
     title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
     topic = title_lines[0] if title_lines else "This Lecture Topic"
     short_summary = compact_text(extract_section(summary, "SHORT SUMMARY"))
-    transcript_chunks = split_podcast_text(transcript, max_chars=440, max_words=72)
+    transcript_chunks = split_podcast_text(transcript, max_chars=430, max_words=70)
     segments: list[dict[str, Any]] = []
+    transcript_index = 0
 
     section_openers = {
+        "LECTURE TITLE": "Let us anchor the topic properly before the details start running around like they pay rent here.",
         "SHORT SUMMARY": "Let us start with the big picture before this topic starts acting dramatic.",
         "KEY CONCEPTS": "These are the ideas doing the real work behind the scenes.",
         "IMPORTANT DEFINITIONS": "This is one of those parts where one word can save or lose marks.",
@@ -6779,6 +6839,7 @@ def build_teacher_lesson_fallback(
     }
 
     section_prompts = {
+        "LECTURE TITLE": "Before we even calculate anything, what kind of problem is this topic really helping you solve?",
         "SHORT SUMMARY": "What do you think the lecturer was really trying to make you notice here?",
         "KEY CONCEPTS": "If one of these concepts disappeared, what would stop making sense first?",
         "IMPORTANT DEFINITIONS": "Which word in this definition would you not want to misread in a test?",
@@ -6790,42 +6851,128 @@ def build_teacher_lesson_fallback(
         "EXAM TIPS": "If this appeared for marks tomorrow, what would you write first?",
     }
 
+    section_focus = {
+        "LECTURE TITLE": "I want you to connect the topic name to the kind of reasoning, calculation, or comparison that normally appears with it.",
+        "SHORT SUMMARY": "Stay with the high-level meaning first so the later details have somewhere sensible to live.",
+        "KEY CONCEPTS": "Notice how the ideas connect instead of memorizing them like random cousins at a family reunion.",
+        "IMPORTANT DEFINITIONS": "Definitions become easier when you spot which words are doing the precise technical work.",
+        "IMPORTANT FORMULAS": "The goal is not to worship the formula. The goal is to know when it applies and what each part is telling you.",
+        "WORKED EXAMPLES": "This is the part to slow down properly because the method matters more than pretending the final answer arrived by magic.",
+        "STEP-BY-STEP EXPLANATIONS": "Think of this as the careful road map that stops you from skipping hidden steps.",
+        "ADVANTAGES AND DISADVANTAGES": "This helps you judge when the idea is useful and when it starts causing confusion.",
+        "COMMON MISTAKES TO AVOID": "If you can spot the trap early, you save both marks and stress.",
+        "QUICK REVISION PLAN": "A short plan is useful because panic is not a study strategy, even if it keeps trying to volunteer.",
+        "VISUAL AIDS": "Try to picture the structure, motion, or pattern so the concept feels visible rather than abstract only.",
+        "REAL-WORLD EXAMPLES": "Real examples make the topic feel less like a page of symbols and more like something you can actually recognise.",
+        "EXAM TIPS": "This is where understanding gets converted into marks under time pressure.",
+    }
+
+    def next_transcript_chunk() -> str:
+        nonlocal transcript_index
+        if transcript_index >= len(transcript_chunks):
+            return ""
+        chunk = transcript_chunks[transcript_index]
+        transcript_index += 1
+        return chunk
+
     for section in outline:
         heading = section["section_heading"]
-        content = section["content"]
-        base_text = content
-        if heading == "SHORT SUMMARY" and short_summary:
-            base_text = short_summary
-        base_text = compact_text(base_text[:520])
-        if not base_text:
+        section_content = short_summary if heading == "SHORT SUMMARY" and short_summary else section["content"]
+        content_chunks = split_podcast_text(section_content, max_chars=360, max_words=58)
+        if not content_chunks:
+            content_chunks = [compact_text(section_content[:900])]
+        content_chunks = [chunk for chunk in content_chunks if chunk]
+        if not content_chunks:
             continue
-        spoken_text = (
-            f"{section_openers.get(heading, 'Let us unpack this carefully.')} "
-            f"{base_text} "
-            "Keep the idea simple first, then build the detail."
-        )
-        for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=560, max_words=92), start=1):
-            segments.append(
-                {
-                    "index": len(segments) + 1,
-                    "section_heading": heading,
-                    "prompt": section_prompts.get(heading, "What do you think is the key idea here?") if chunk_index == 1 else "",
-                    "text": chunk,
-                    "estimated_minutes": estimate_spoken_minutes(chunk),
-                }
+        target_segments = TEACHER_SECTION_TARGET_SEGMENTS.get(heading, 2)
+        for segment_number in range(target_segments):
+            primary_detail = content_chunks[segment_number % len(content_chunks)]
+            transcript_detail = ""
+            if heading in {"WORKED EXAMPLES", "STEP-BY-STEP EXPLANATIONS", "IMPORTANT FORMULAS", "KEY CONCEPTS"}:
+                transcript_detail = next_transcript_chunk()
+            elif segment_number == target_segments - 1:
+                transcript_detail = next_transcript_chunk()
+
+            spoken_text = (
+                f"{section_openers.get(heading, 'Let us unpack this carefully.')} "
+                f"{section_focus.get(heading, 'Keep the idea simple first, then build the detail.')} "
+                f"{primary_detail} "
             )
-            if len(segments) >= 12:
+            if heading in {"WORKED EXAMPLES", "STEP-BY-STEP EXPLANATIONS"}:
+                spoken_text += (
+                    "Let us slow this down carefully: identify what the question is asking, choose the rule or principle, "
+                    "check why that choice fits, and only then move to the next line. "
+                )
+            if heading == "IMPORTANT FORMULAS":
+                spoken_text += (
+                    "As you revise, keep asking what each term is doing, what changes when one quantity increases, "
+                    "and what assumption the formula quietly depends on. "
+                )
+            if transcript_detail:
+                spoken_text += f"{transcript_detail} "
+            spoken_text += (
+                f"{section_prompts.get(heading, 'What do you think is the key idea here?')} "
+                "If the answer still feels fuzzy, that is fine. We are building understanding one clear step at a time."
+            )
+
+            for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=760, max_words=125), start=1):
+                prompt = section_prompts.get(heading, "What do you think is the key idea here?") if chunk_index == 1 and segment_number == 0 else ""
+                segments.append(
+                    {
+                        "index": len(segments) + 1,
+                        "section_heading": heading,
+                        "prompt": prompt,
+                        "text": chunk,
+                        "estimated_minutes": estimate_spoken_minutes(chunk),
+                    }
+                )
+                if len(segments) >= TEACHER_SEGMENT_LIMIT:
+                    break
+            if len(segments) >= TEACHER_SEGMENT_LIMIT:
                 break
-        if len(segments) >= 12:
+        if len(segments) >= TEACHER_SEGMENT_LIMIT:
             break
 
+    if estimate_podcast_total_minutes(segments) < TEACHER_MINIMUM_MINUTES:
+        recap_sections = outline or [{"section_heading": "SHORT SUMMARY", "content": short_summary or compact_text(transcript[:700])}]
+        recap_round = 0
+        while estimate_podcast_total_minutes(segments) < TEACHER_MINIMUM_MINUTES and len(segments) < TEACHER_SEGMENT_LIMIT:
+            section = recap_sections[recap_round % len(recap_sections)]
+            heading = section["section_heading"]
+            recap_content = compact_text(section["content"])
+            transcript_detail = next_transcript_chunk()
+            spoken_text = (
+                f"Let us circle back to {heading.lower()} because understanding usually becomes stronger on the second pass. "
+                f"{recap_content[:360]} "
+            )
+            if heading in {"WORKED EXAMPLES", "STEP-BY-STEP EXPLANATIONS"}:
+                spoken_text += (
+                    "Say the next move to yourself before I say it, because that habit is what turns an example into a skill. "
+                )
+            if transcript_detail:
+                spoken_text += f"{transcript_detail} "
+            spoken_text += "Ask yourself what changed in your understanding compared with a few minutes ago."
+            for chunk in split_podcast_text(spoken_text, max_chars=760, max_words=125):
+                segments.append(
+                    {
+                        "index": len(segments) + 1,
+                        "section_heading": heading,
+                        "prompt": "",
+                        "text": chunk,
+                        "estimated_minutes": estimate_spoken_minutes(chunk),
+                    }
+                )
+                if estimate_podcast_total_minutes(segments) >= TEACHER_MINIMUM_MINUTES or len(segments) >= TEACHER_SEGMENT_LIMIT:
+                    break
+            recap_round += 1
+
     if not segments:
-        fallback_points = transcript_chunks[:8] or [compact_text(transcript[:700], "Let us revise the most important lecture ideas clearly and calmly.")]
+        fallback_points = transcript_chunks[:12] or [compact_text(transcript[:700], "Let us revise the most important lecture ideas clearly and calmly.")]
         for point in fallback_points:
             spoken_text = (
                 "Let us work through this like a real revision class. "
                 f"{point} "
-                "Pause for a second and ask yourself what should happen next."
+                "Pause for a second, ask yourself what should happen next, and then check whether your reasoning still fits the topic."
             )
             segments.append(
                 {
@@ -6836,15 +6983,54 @@ def build_teacher_lesson_fallback(
                     "estimated_minutes": estimate_spoken_minutes(spoken_text),
                 }
             )
+            if len(segments) >= TEACHER_SEGMENT_LIMIT:
+                break
 
     return {
         "title": f"{topic} Teacher Lesson",
         "overview": (
-            f"A warm teacher-style walkthrough of {topic}, with reflective questions, gentle humor, "
-            "and section-by-section explanation instead of a line-by-line reading."
+            f"A warm teacher-style walkthrough of {topic} designed to run for about {TEACHER_TARGET_MINUTES} minutes or more, "
+            "with reflective questions, gentle humor, extra attention on worked examples, and no flashcard or Q&A reading."
         ),
-        "segments": segments[:12],
+        "segments": segments[:TEACHER_SEGMENT_LIMIT],
     }
+
+
+def extend_teacher_segments_to_target(
+    segments: list[dict[str, Any]],
+    fallback_segments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if estimate_podcast_total_minutes(segments) >= TEACHER_MINIMUM_MINUTES:
+        return segments[:TEACHER_SEGMENT_LIMIT]
+
+    extended_segments = list(segments)
+    seen = {
+        (
+            compact_text(segment.get("section_heading")),
+            compact_text(segment.get("text")),
+        )
+        for segment in extended_segments
+        if compact_text(segment.get("text"))
+    }
+
+    for fallback_segment in fallback_segments:
+        key = (
+            compact_text(fallback_segment.get("section_heading")),
+            compact_text(fallback_segment.get("text")),
+        )
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        extended_segments.append(
+            {
+                **fallback_segment,
+                "index": len(extended_segments) + 1,
+            }
+        )
+        if estimate_podcast_total_minutes(extended_segments) >= TEACHER_MINIMUM_MINUTES or len(extended_segments) >= TEACHER_SEGMENT_LIMIT:
+            break
+
+    return extended_segments[:TEACHER_SEGMENT_LIMIT]
 
 
 def estimate_spoken_minutes(text: str) -> float:
@@ -7258,10 +7444,10 @@ async def generate_teacher_lesson_package(
     ]
     combined_source = "\n\n".join(block for block in context_blocks if block)
 
-    def _generate_teacher_script() -> dict[str, Any]:
+    def _generate_teacher_script(revision_note: str = "") -> dict[str, Any]:
         response = client.with_options(timeout=TEACHER_REQUEST_TIMEOUT).chat.completions.create(
             model=TEACHER_SCRIPT_MODEL,
-            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3200),
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5200),
             messages=[
                 {
                     "role": "system",
@@ -7274,8 +7460,13 @@ async def generate_teacher_lesson_package(
                         "- Sound like one friendly lecturer teaching a real class, not reading notes line by line.\n"
                         "- Use a warm, calm, supportive tone with occasional light humor.\n"
                         "- Ask reflective questions such as 'what do you think will happen next' when it fits naturally.\n"
+                        f"- The full lesson must land at roughly {TEACHER_TARGET_MINUTES} to 18 minutes and about {TEACHER_TARGET_WORDS} spoken words in total.\n"
+                        "- Aim for about 18 to 28 teaching segments before any automatic chunk splitting.\n"
                         "- Explain the idea, why it matters, and how to think about it in an exam or problem-solving situation.\n"
-                        "- Keep each segment between about 60 and 120 spoken words.\n"
+                        "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
+                        "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing and when the formula applies.\n"
+                        "- Do not create spoken segments for FLASHCARDS or PRACTICE QUESTIONS AND ANSWERS.\n"
+                        "- Keep each segment between about 85 and 150 spoken words.\n"
                         "- Do not use bullet points, markdown, stage directions, or sound-effect text.\n"
                         "- Do not output fake dialogue or multiple speakers.\n"
                         f"- Write everything in {output_language}."
@@ -7286,8 +7477,11 @@ async def generate_teacher_lesson_package(
                     "content": (
                         "Build a teacher-mode lesson that follows the guide section by section.\n"
                         "The student should feel like a warm teacher is teaching the topic, pausing to ask questions, "
-                        "making one or two gentle jokes, and helping them reason through the content.\n\n"
-                        f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
+                        "making one or two gentle jokes, and helping them reason through the content.\n"
+                        "Do not explain flashcards. Do not explain practice questions and answers.\n"
+                        "Spend extra time making worked examples and method steps very clear.\n\n"
+                        + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
+                        + f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
                         + combined_source
                     ),
                 },
@@ -7307,6 +7501,30 @@ async def generate_teacher_lesson_package(
         fallback_package["segments"],
         allowed_headings,
     )
+    estimated_minutes = estimate_podcast_total_minutes(normalized_segments)
+    if normalized_segments and estimated_minutes < TEACHER_MINIMUM_MINUTES:
+        update_job(job_id, status="processing", stage="Extending teacher lesson depth", progress=24)
+        try:
+            generated_package = await asyncio.to_thread(
+                _generate_teacher_script,
+                (
+                    f"The first teacher draft landed at about {estimated_minutes:.1f} minutes, which is too short. "
+                    f"Rewrite the whole lesson so it lands around {TEACHER_TARGET_MINUTES} to 18 minutes, "
+                    "spend much more time on worked examples and step-by-step reasoning, "
+                    "and keep the explanation warm, natural, and non-repetitive."
+                ),
+            )
+            normalized_segments = normalize_teacher_segments(
+                generated_package.get("segments"),
+                fallback_package["segments"],
+                allowed_headings,
+            )
+        except Exception as exc:
+            logger.warning("Teacher lesson rewrite for target length failed: %s", exc)
+
+    if not normalized_segments:
+        normalized_segments = fallback_package["segments"]
+    normalized_segments = extend_teacher_segments_to_target(normalized_segments, fallback_package["segments"])
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
 

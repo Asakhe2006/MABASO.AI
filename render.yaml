@@ -45,12 +45,30 @@ services:
         sync: false
       - key: SMTP_FROM_EMAIL
         sync: false
+      - key: SMTP_TIMEOUT_SECONDS
+        value: "20"
+      - key: MAIL_HOST
+        sync: false
+      - key: MAIL_PORT
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: FROM_EMAIL
+        sync: false
       - key: SUPPORT_EMAIL
         value: "mabasoasakhe@gmail.com"
       - key: SMTP_USE_TLS
         value: "true"
       - key: SMTP_USE_SSL
         value: "false"
+      - key: MAIL_USE_TLS
+        sync: false
+      - key: MAIL_USE_SSL
+        sync: false
       - key: YOUTUBE_COOKIES_TXT
         sync: false
       - key: YOUTUBE_COOKIES_FILE
