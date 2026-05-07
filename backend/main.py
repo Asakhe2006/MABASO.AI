@@ -114,6 +114,7 @@ STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
 ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
+TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
@@ -152,6 +153,7 @@ ADMIN_LOGIN_MAX_ATTEMPTS = int(os.getenv("ADMIN_LOGIN_MAX_ATTEMPTS", "3"))
 ADMIN_LOGIN_LOCKOUT_MINUTES = int(os.getenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
 PODCAST_TTS_TIMEOUT = float(os.getenv("PODCAST_TTS_TIMEOUT", "120"))
+TEACHER_REQUEST_TIMEOUT = float(os.getenv("TEACHER_REQUEST_TIMEOUT", "120"))
 PRESENTATION_REQUEST_TIMEOUT = float(os.getenv("PRESENTATION_REQUEST_TIMEOUT", "150"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
 STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
@@ -303,6 +305,15 @@ class PresentationGenerationRequest(BaseModel):
 
 
 class QuizGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
+
+
+class TeacherLessonRequest(BaseModel):
     transcript: str = ""
     summary: str = ""
     lecture_notes: str = ""
@@ -2212,6 +2223,9 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "podcast_overview": "",
         "podcast_script": "",
         "podcast_segments": [],
+        "teacher_title": "",
+        "teacher_overview": "",
+        "teacher_segments": [],
         "presentation_title": "",
         "presentation_subtitle": "",
         "presentation_design_id": "",
@@ -6676,6 +6690,163 @@ def build_podcast_speaker_profiles(speaker_count: int) -> list[dict[str, str]]:
     return profiles[: clamp_podcast_speaker_count(speaker_count)]
 
 
+TEACHER_GUIDE_SECTION_HEADINGS = [
+    "SHORT SUMMARY",
+    "KEY CONCEPTS",
+    "IMPORTANT DEFINITIONS",
+    "IMPORTANT FORMULAS",
+    "WORKED EXAMPLES",
+    "STEP-BY-STEP EXPLANATIONS",
+    "ADVANTAGES AND DISADVANTAGES",
+    "COMMON MISTAKES TO AVOID",
+    "QUICK REVISION PLAN",
+    "VISUAL AIDS",
+    "REAL-WORLD EXAMPLES",
+    "EXAM TIPS",
+]
+
+
+def build_teacher_section_outline(summary: str) -> list[dict[str, str]]:
+    sections: list[dict[str, str]] = []
+    seen_headings: set[str] = set()
+    for heading in TEACHER_GUIDE_SECTION_HEADINGS:
+        content = compact_text(extract_section(summary, heading))
+        if not content or heading in seen_headings:
+            continue
+        seen_headings.add(heading)
+        sections.append({"section_heading": heading, "content": content})
+    return sections[:10]
+
+
+def normalize_teacher_segments(
+    raw_segments: Any,
+    fallback_segments: list[dict[str, Any]],
+    allowed_headings: list[str],
+) -> list[dict[str, Any]]:
+    allowed = set(allowed_headings)
+    source_segments = raw_segments if isinstance(raw_segments, list) else []
+    normalized_segments: list[dict[str, Any]] = []
+
+    for raw_segment in source_segments:
+        if not isinstance(raw_segment, dict):
+            continue
+        section_heading = compact_text(raw_segment.get("section_heading"))
+        if section_heading not in allowed:
+            continue
+        prompt = compact_text(raw_segment.get("prompt"))
+        text = compact_text(raw_segment.get("text"))
+        if not text:
+            continue
+        for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=580, max_words=95), start=1):
+            normalized_segments.append(
+                {
+                    "index": len(normalized_segments) + 1,
+                    "section_heading": section_heading,
+                    "prompt": prompt if chunk_index == 1 else "",
+                    "text": chunk,
+                    "estimated_minutes": estimate_spoken_minutes(chunk),
+                }
+            )
+            if len(normalized_segments) >= 16:
+                return normalized_segments
+
+    if normalized_segments:
+        return normalized_segments
+    return fallback_segments[:16]
+
+
+def build_teacher_lesson_fallback(
+    summary: str,
+    transcript: str,
+) -> dict[str, Any]:
+    outline = build_teacher_section_outline(summary)
+    title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
+    topic = title_lines[0] if title_lines else "This Lecture Topic"
+    short_summary = compact_text(extract_section(summary, "SHORT SUMMARY"))
+    transcript_chunks = split_podcast_text(transcript, max_chars=440, max_words=72)
+    segments: list[dict[str, Any]] = []
+
+    section_openers = {
+        "SHORT SUMMARY": "Let us start with the big picture before this topic starts acting dramatic.",
+        "KEY CONCEPTS": "These are the ideas doing the real work behind the scenes.",
+        "IMPORTANT DEFINITIONS": "This is one of those parts where one word can save or lose marks.",
+        "IMPORTANT FORMULAS": "This formula looks serious, but let us make it behave.",
+        "WORKED EXAMPLES": "Examples are where the theory stops hiding and starts talking clearly.",
+        "STEP-BY-STEP EXPLANATIONS": "Let us slow the whole process down like a patient lecturer would.",
+        "COMMON MISTAKES TO AVOID": "This is the trap section, and exam questions love these traps.",
+        "REAL-WORLD EXAMPLES": "Here is where the topic leaves the page and becomes something you can picture.",
+        "EXAM TIPS": "Now let us turn understanding into marks.",
+    }
+
+    section_prompts = {
+        "SHORT SUMMARY": "What do you think the lecturer was really trying to make you notice here?",
+        "KEY CONCEPTS": "If one of these concepts disappeared, what would stop making sense first?",
+        "IMPORTANT DEFINITIONS": "Which word in this definition would you not want to misread in a test?",
+        "IMPORTANT FORMULAS": "What do you think happens when one term in the formula changes?",
+        "WORKED EXAMPLES": "Before I reveal the next move, what do you think the next step should be?",
+        "STEP-BY-STEP EXPLANATIONS": "Can you already see which step students usually rush too quickly?",
+        "COMMON MISTAKES TO AVOID": "Which mistake feels the easiest to make when you are under pressure?",
+        "REAL-WORLD EXAMPLES": "Where would you actually see this outside the classroom?",
+        "EXAM TIPS": "If this appeared for marks tomorrow, what would you write first?",
+    }
+
+    for section in outline:
+        heading = section["section_heading"]
+        content = section["content"]
+        base_text = content
+        if heading == "SHORT SUMMARY" and short_summary:
+            base_text = short_summary
+        base_text = compact_text(base_text[:520])
+        if not base_text:
+            continue
+        spoken_text = (
+            f"{section_openers.get(heading, 'Let us unpack this carefully.')} "
+            f"{base_text} "
+            "Keep the idea simple first, then build the detail."
+        )
+        for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=560, max_words=92), start=1):
+            segments.append(
+                {
+                    "index": len(segments) + 1,
+                    "section_heading": heading,
+                    "prompt": section_prompts.get(heading, "What do you think is the key idea here?") if chunk_index == 1 else "",
+                    "text": chunk,
+                    "estimated_minutes": estimate_spoken_minutes(chunk),
+                }
+            )
+            if len(segments) >= 12:
+                break
+        if len(segments) >= 12:
+            break
+
+    if not segments:
+        fallback_points = transcript_chunks[:8] or [compact_text(transcript[:700], "Let us revise the most important lecture ideas clearly and calmly.")]
+        for point in fallback_points:
+            spoken_text = (
+                "Let us work through this like a real revision class. "
+                f"{point} "
+                "Pause for a second and ask yourself what should happen next."
+            )
+            segments.append(
+                {
+                    "index": len(segments) + 1,
+                    "section_heading": "SHORT SUMMARY",
+                    "prompt": "What do you think will happen next?",
+                    "text": spoken_text,
+                    "estimated_minutes": estimate_spoken_minutes(spoken_text),
+                }
+            )
+
+    return {
+        "title": f"{topic} Teacher Lesson",
+        "overview": (
+            f"A warm teacher-style walkthrough of {topic}, with reflective questions, gentle humor, "
+            "and section-by-section explanation instead of a line-by-line reading."
+        ),
+        "segments": segments[:12],
+    }
+
+
 def estimate_spoken_minutes(text: str) -> float:
     words = len(re.findall(r"\b\w+\b", text or ""))
     if not words:
@@ -7057,6 +7228,92 @@ async def generate_podcast_package(
         "podcast_segments": normalized_segments,
         "_podcast_audio_files": audio_files,
         "_podcast_download_file": download_file,
+    }
+
+
+async def generate_teacher_lesson_package(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    job_id: str,
+    output_language: str,
+) -> dict[str, Any]:
+    outline = build_teacher_section_outline(summary)
+    fallback_package = build_teacher_lesson_fallback(summary, transcript)
+    allowed_headings = [item["section_heading"] for item in outline] or ["SHORT SUMMARY"]
+    outline_block = "\n".join(
+        f"- {item['section_heading']}: {compact_text(item['content'])[:260]}"
+        for item in outline
+    ) or "- SHORT SUMMARY: Explain the main lecture idea clearly."
+
+    context_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+        f"AVAILABLE GUIDE HEADINGS\n{outline_block}",
+    ]
+    combined_source = "\n\n".join(block for block in context_blocks if block)
+
+    def _generate_teacher_script() -> dict[str, Any]:
+        response = client.with_options(timeout=TEACHER_REQUEST_TIMEOUT).chat.completions.create(
+            model=TEACHER_SCRIPT_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3200),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are writing a spoken teacher-mode lesson for a study app. "
+                        "Return strict JSON only with the keys title, overview, and segments.\n\n"
+                        "Rules:\n"
+                        "- `segments` must be an array of objects with `section_heading`, `prompt`, and `text` only.\n"
+                        "- `section_heading` must be one of the provided guide headings.\n"
+                        "- Sound like one friendly lecturer teaching a real class, not reading notes line by line.\n"
+                        "- Use a warm, calm, supportive tone with occasional light humor.\n"
+                        "- Ask reflective questions such as 'what do you think will happen next' when it fits naturally.\n"
+                        "- Explain the idea, why it matters, and how to think about it in an exam or problem-solving situation.\n"
+                        "- Keep each segment between about 60 and 120 spoken words.\n"
+                        "- Do not use bullet points, markdown, stage directions, or sound-effect text.\n"
+                        "- Do not output fake dialogue or multiple speakers.\n"
+                        f"- Write everything in {output_language}."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Build a teacher-mode lesson that follows the guide section by section.\n"
+                        "The student should feel like a warm teacher is teaching the topic, pausing to ask questions, "
+                        "making one or two gentle jokes, and helping them reason through the content.\n\n"
+                        f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
+                        + combined_source
+                    ),
+                },
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    update_job(job_id, status="processing", stage="Planning teacher lesson", progress=16)
+    try:
+        generated_package = await asyncio.to_thread(_generate_teacher_script)
+    except Exception as exc:
+        logger.warning("Teacher lesson generation failed, using fallback script: %s", exc)
+        generated_package = {}
+
+    normalized_segments = normalize_teacher_segments(
+        generated_package.get("segments"),
+        fallback_package["segments"],
+        allowed_headings,
+    )
+    title = compact_text(generated_package.get("title"), fallback_package["title"])
+    overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
+
+    return {
+        "teacher_title": title,
+        "teacher_overview": overview,
+        "teacher_segments": normalized_segments,
     }
 
 
@@ -9121,6 +9378,14 @@ async def run_summary_job(
             job_id,
             output_language,
         )
+        visual_analysis = await analyze_reference_images_for_study_guide(
+            reference_images,
+            summary,
+            lecture_notes,
+            lecture_slides,
+            output_language,
+        )
+        uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)
         assets = await generate_structured_study_assets(
             summary,
             transcript,
@@ -9130,6 +9395,14 @@ async def run_summary_job(
             job_id,
             output_language,
         )
+        generated_study_images = await generate_study_images(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            job_id,
+        )
+        study_images = merge_study_image_results(uploaded_visuals, generated_study_images)
         update_job(
             job_id,
             status="completed",
@@ -9140,7 +9413,7 @@ async def run_summary_job(
             worked_example=assets["worked_example"],
             flashcards=assets["flashcards"],
             quiz_questions=[],
-            study_images=[],
+            study_images=study_images,
             used_fallback=used_fallback,
         )
         job = jobs.get(job_id, {})
@@ -9169,6 +9442,65 @@ async def run_summary_job(
             status="failed",
             email=job.get("owner_email", ""),
             resource_type="study_guide",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "error": format_job_error(exc)},
+        )
+
+
+async def run_teacher_lesson_job(
+    job_id: str,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    output_language: str,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting teacher lesson", progress=8)
+        teacher_package = await generate_teacher_lesson_package(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            job_id,
+            output_language,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="Teacher lesson ready",
+            progress=100,
+            **teacher_package,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="teacher_lesson.completed",
+            email=job.get("owner_email", ""),
+            resource_type="teacher_lesson",
+            resource_name=output_language,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id},
+        )
+    except Exception as exc:
+        logger.exception("Teacher lesson job failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Teacher lesson failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="teacher_lesson.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="teacher_lesson",
             resource_name=output_language,
             duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
             metadata={"job_id": job_id, "error": format_job_error(exc)},
@@ -9613,6 +9945,52 @@ async def create_quiz(
         email=current_user,
         request=request,
         resource_type="quiz",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language},
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-teacher-lesson/")
+async def create_teacher_lesson(
+    payload: TeacherLessonRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate a study guide or add lecture material before opening teacher mode.",
+        )
+
+    ensure_openai_key()
+    job_id = create_job("teacher_lesson", owner_email=current_user)
+    update_job(job_id, _output_language=output_language)
+    asyncio.create_task(
+        run_teacher_lesson_job(
+            job_id,
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            output_language,
+        )
+    )
+    record_audit_log(
+        action="teacher_lesson.request",
+        email=current_user,
+        request=request,
+        resource_type="teacher_lesson",
         resource_name=output_language,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         metadata={"job_id": job_id, "language": output_language},

@@ -23,12 +23,16 @@ const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
+const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
+const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
+const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
+const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
@@ -42,6 +46,9 @@ const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const BULK_LECTURE_ACCEPT = "audio/*,video/*,image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PRESENTATION_TEMPLATE_ACCEPT = ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const RUNTIME_DB_NAME = "mabaso-runtime";
+const RUNTIME_DB_VERSION = 1;
+const RUNTIME_DB_RECORDING_STORE = "recordings";
 const outputLanguageOptions = [
   { value: "English", label: "English" },
   { value: "isiZulu", label: "isiZulu" },
@@ -378,6 +385,21 @@ function getHistoryStorageKey(email = "") {
   return normalizedEmail ? `${HISTORY_STORAGE_KEY}:${normalizedEmail}` : HISTORY_STORAGE_KEY;
 }
 
+function getWorkspaceDraftStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${WORKSPACE_DRAFT_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_DRAFT_STORAGE_KEY;
+}
+
+function getPendingJobStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${PENDING_JOB_STORAGE_KEY}:${normalizedEmail}` : PENDING_JOB_STORAGE_KEY;
+}
+
+function getRecoveredRecordingStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${RECOVERED_RECORDING_STORE_KEY}:${normalizedEmail}` : RECOVERED_RECORDING_STORE_KEY;
+}
+
 function parseHistoryTimestamp(value) {
   const text = (value || "").trim();
   if (!text) return 0;
@@ -423,6 +445,142 @@ function loadHistoryItems(email = "") {
     return normalizeHistoryItems(JSON.parse(legacyValue));
   } catch {
     return [];
+  }
+}
+
+function loadWorkspaceDraft(email = "") {
+  try {
+    const value = window.localStorage.getItem(getWorkspaceDraftStorageKey(email)) || "";
+    if (!value) return null;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveWorkspaceDraft(email = "", snapshot = null) {
+  const storageKey = getWorkspaceDraftStorageKey(email);
+  if (!snapshot || typeof snapshot !== "object") {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+}
+
+function loadPendingJobSnapshot(email = "") {
+  try {
+    const value = window.localStorage.getItem(getPendingJobStorageKey(email)) || "";
+    if (!value) return null;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingJobSnapshot(email = "", snapshot = null) {
+  const storageKey = getPendingJobStorageKey(email);
+  if (!snapshot || typeof snapshot !== "object") {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+}
+
+function loadAdminDashboardCache() {
+  try {
+    const value = window.localStorage.getItem(ADMIN_DASHBOARD_CACHE_KEY) || "";
+    if (!value) return null;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAdminDashboardCache(snapshot = null) {
+  if (!snapshot || typeof snapshot !== "object") {
+    window.localStorage.removeItem(ADMIN_DASHBOARD_CACHE_KEY);
+    return;
+  }
+  window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(snapshot));
+}
+
+function openRuntimeDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined" || !window.indexedDB) {
+      reject(new Error("IndexedDB is not available in this browser."));
+      return;
+    }
+    const request = window.indexedDB.open(RUNTIME_DB_NAME, RUNTIME_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(RUNTIME_DB_RECORDING_STORE)) {
+        database.createObjectStore(RUNTIME_DB_RECORDING_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open the runtime database."));
+  });
+}
+
+async function saveRecoveredRecordingToDb(email = "", payload = null) {
+  if (!normalizeHistoryOwnerEmail(email) || !payload?.blob) return;
+  try {
+    const database = await openRuntimeDb();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(RUNTIME_DB_RECORDING_STORE, "readwrite");
+      const store = transaction.objectStore(RUNTIME_DB_RECORDING_STORE);
+      store.put({
+        id: getRecoveredRecordingStorageKey(email),
+        email: normalizeHistoryOwnerEmail(email),
+        fileName: payload.fileName || "mabaso-lecture.wav",
+        type: payload.type || payload.blob?.type || "audio/wav",
+        updatedAt: new Date().toISOString(),
+        blob: payload.blob,
+      });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error("Could not save the recovered recording."));
+    });
+    database.close();
+  } catch {
+    // Ignore storage failures for recording recovery.
+  }
+}
+
+async function loadRecoveredRecordingFromDb(email = "") {
+  if (!normalizeHistoryOwnerEmail(email)) return null;
+  try {
+    const database = await openRuntimeDb();
+    const result = await new Promise((resolve, reject) => {
+      const transaction = database.transaction(RUNTIME_DB_RECORDING_STORE, "readonly");
+      const store = transaction.objectStore(RUNTIME_DB_RECORDING_STORE);
+      const request = store.get(getRecoveredRecordingStorageKey(email));
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("Could not load the recovered recording."));
+    });
+    database.close();
+    return result && typeof result === "object" ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+async function clearRecoveredRecordingFromDb(email = "") {
+  if (!normalizeHistoryOwnerEmail(email)) return;
+  try {
+    const database = await openRuntimeDb();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(RUNTIME_DB_RECORDING_STORE, "readwrite");
+      const store = transaction.objectStore(RUNTIME_DB_RECORDING_STORE);
+      store.delete(getRecoveredRecordingStorageKey(email));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error("Could not clear the recovered recording."));
+    });
+    database.close();
+  } catch {
+    // Ignore storage failures for recording recovery cleanup.
   }
 }
 
@@ -702,7 +860,7 @@ function chatToText(messages) {
   return (messages || []).map((item) => `${item.role === "assistant" ? "MABASO" : "Student"}: ${item.content}`).join("\n\n");
 }
 
-function summarizePresentationSlidePoints(slide) {
+function _summarizePresentationSlidePoints(slide) {
   return (slide?.bullets || [])
     .map((item) => String(item || "").replace(/^[\s\-•]+/, "").trim())
     .filter(Boolean)
@@ -1391,6 +1549,15 @@ function createEmptyPodcastData() {
   };
 }
 
+function createEmptyTeacherLessonData() {
+  return {
+    jobId: "",
+    title: "",
+    overview: "",
+    segments: [],
+  };
+}
+
 function createEmptyPresentationData() {
   return {
     jobId: "",
@@ -1425,6 +1592,26 @@ function normalizePodcastData(value) {
   };
 }
 
+function normalizeTeacherLessonData(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const rawSegments = Array.isArray(raw.segments) ? raw.segments : Array.isArray(raw.teacher_segments) ? raw.teacher_segments : [];
+  return {
+    jobId: raw.jobId || raw.job_id || "",
+    title: raw.title || raw.teacher_title || "",
+    overview: raw.overview || raw.teacher_overview || "",
+    segments: rawSegments
+      .filter((segment) => segment && typeof segment === "object")
+      .map((segment, index) => ({
+        index: Number(segment?.index || index + 1),
+        sectionHeading: segment?.sectionHeading || segment?.section_heading || "SHORT SUMMARY",
+        prompt: segment?.prompt || "",
+        text: segment?.text || "",
+        estimatedMinutes: Number(segment?.estimatedMinutes || segment?.estimated_minutes || 0),
+      }))
+      .filter((segment) => segment.text),
+  };
+}
+
 function sanitizePodcastForHistory(value) {
   const podcast = normalizePodcastData(value);
   return {
@@ -1439,6 +1626,14 @@ function sanitizePodcastForHistory(value) {
       text: segment?.text || "",
       estimated_minutes: Number(segment?.estimated_minutes || 0),
     })),
+  };
+}
+
+function sanitizeTeacherLessonForHistory(value) {
+  const lesson = normalizeTeacherLessonData(value);
+  return {
+    ...lesson,
+    jobId: "",
   };
 }
 
@@ -1498,6 +1693,44 @@ function presentationToText(presentation) {
     blocks.push("");
   });
   return blocks.join("\n").trim();
+}
+
+function teacherLessonToText(lesson) {
+  const normalized = normalizeTeacherLessonData(lesson);
+  const blocks = [];
+  if (normalized.title) {
+    blocks.push("TEACHER MODE TITLE");
+    blocks.push(normalized.title);
+    blocks.push("");
+  }
+  if (normalized.overview) {
+    blocks.push("TEACHER MODE OVERVIEW");
+    blocks.push(normalized.overview);
+    blocks.push("");
+  }
+  normalized.segments.forEach((segment, index) => {
+    blocks.push(`SEGMENT ${index + 1}: ${segment.sectionHeading}`);
+    if (segment.prompt) blocks.push(`Prompt: ${segment.prompt}`);
+    blocks.push(segment.text);
+    blocks.push("");
+  });
+  return blocks.join("\n").trim();
+}
+
+function extractGuideSections(markdown) {
+  const text = (markdown || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return [];
+  const matches = Array.from(text.matchAll(/\*\*([^*]+)\*\*\s*\n+([\s\S]*?)(?=\n\*\*[^*]+\*\*\s*\n|$)/g));
+  if (!matches.length) {
+    return [{ heading: "Study Guide", normalizedHeading: "study guide", content: text }];
+  }
+  return matches
+    .map((match) => ({
+      heading: (match[1] || "").trim(),
+      normalizedHeading: (match[1] || "").trim().toLowerCase(),
+      content: (match[2] || "").trim(),
+    }))
+    .filter((section) => section.heading && section.content);
 }
 
 function getPodcastEstimatedMinutes(podcast) {
@@ -1577,6 +1810,7 @@ export default function App() {
   const [selectedPresentationSlideIndex, setSelectedPresentationSlideIndex] = useState(0);
   const [presentationTemplateFile, setPresentationTemplateFile] = useState(null);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
+  const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
   const [status, setStatus] = useState("");
@@ -1591,6 +1825,7 @@ export default function App() {
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [isGeneratingPresentation, setIsGeneratingPresentation] = useState(false);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
+  const [isGeneratingTeacherLesson, setIsGeneratingTeacherLesson] = useState(false);
   const [isLoadingPodcastAudio, setIsLoadingPodcastAudio] = useState(false);
   const [isExtractingNotes, setIsExtractingNotes] = useState(false);
   const [isExtractingSlides, setIsExtractingSlides] = useState(false);
@@ -1631,7 +1866,7 @@ export default function App() {
   const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [presentationView, setPresentationView] = useState("setup");
-  const [adminDashboard, setAdminDashboard] = useState(null);
+  const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache());
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
@@ -1662,10 +1897,20 @@ export default function App() {
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
+  const hasRestoredWorkspaceDraftRef = useRef(false);
+  const hasRestoredRecoveredRecordingRef = useRef(false);
+  const hasResumedPendingJobRef = useRef(false);
+  const teacherSectionRefs = useRef({});
+  const teacherPlaybackRunRef = useRef(0);
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
   const [isPodcastAutoPlaying, setIsPodcastAutoPlaying] = useState(false);
+  const [teacherVoiceOptions, setTeacherVoiceOptions] = useState([]);
+  const [selectedTeacherVoiceName, setSelectedTeacherVoiceName] = useState("");
+  const [activeTeacherSegmentIndex, setActiveTeacherSegmentIndex] = useState(-1);
+  const [isTeacherPlaying, setIsTeacherPlaying] = useState(false);
+  const [isTeacherPaused, setIsTeacherPaused] = useState(false);
 
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
@@ -1676,7 +1921,7 @@ export default function App() {
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
   const visualReferences = uploadedVisualReferences;
-  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
+  const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
@@ -1764,7 +2009,136 @@ export default function App() {
   const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
+  const guideSections = extractGuideSections(formattedGuide || summary);
+  const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
   const isAdminAccount = authAvailableModes.includes("admin");
+
+  const getActiveWorkspaceOwnerEmail = () => normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || authEmailInput || "");
+
+  const buildWorkspaceSnapshot = (overrides = {}) => ({
+    version: 1,
+    savedAt: new Date().toISOString(),
+    activeHistoryId: overrides.activeHistoryId ?? activeHistoryId ?? "",
+    currentPage: overrides.currentPage ?? (currentPage === "admin" ? "capture" : currentPage),
+    activeTab: overrides.activeTab ?? activeTab,
+    videoUrl: overrides.videoUrl ?? videoUrl,
+    transcript: overrides.transcript ?? transcript,
+    summary: overrides.summary ?? summary,
+    formula: overrides.formula ?? formula,
+    example: overrides.example ?? example,
+    flashcards: overrides.flashcards ?? flashcards,
+    quizQuestions: overrides.quizQuestions ?? quizQuestions,
+    studyImages: overrides.studyImages ?? studyImages,
+    lectureNoteSources: overrides.lectureNoteSources ?? sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+    lectureSlideSources: overrides.lectureSlideSources ?? sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+    pastQuestionPaperSources: overrides.pastQuestionPaperSources ?? sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+    pastQuestionMemo: overrides.pastQuestionMemo ?? pastQuestionMemo,
+    presentationData: overrides.presentationData ?? normalizePresentationData(presentationData),
+    selectedPresentationDesign: overrides.selectedPresentationDesign ?? selectedPresentationDesign,
+    presentationView: overrides.presentationView ?? presentationView,
+    podcastData: overrides.podcastData ?? normalizePodcastData(podcastData),
+    podcastSpeakerCount: overrides.podcastSpeakerCount ?? podcastSpeakerCount,
+    podcastTargetMinutes: overrides.podcastTargetMinutes ?? podcastTargetMinutes,
+    teacherLessonData: overrides.teacherLessonData ?? normalizeTeacherLessonData(teacherLessonData),
+    outputLanguage: overrides.outputLanguage ?? outputLanguage,
+    workspaceFileName: overrides.workspaceFileName ?? file?.name ?? "",
+  });
+
+  const persistWorkspaceDraft = (overrides = {}) => {
+    const ownerEmail = getActiveWorkspaceOwnerEmail();
+    if (!ownerEmail) return;
+    saveWorkspaceDraft(ownerEmail, buildWorkspaceSnapshot(overrides));
+  };
+
+  const applyWorkspaceSnapshot = (snapshot = {}, { preserveStatus = false } = {}) => {
+    if (!snapshot || typeof snapshot !== "object") return;
+    replacePodcastAudioUrl("");
+    replacePodcastAudioSegments([]);
+    stopTeacherPlayback({ resetIndex: true });
+    startTransition(() => {
+      setFile(null);
+      setTranscript(snapshot.transcript || "");
+      setSummary(snapshot.summary || "");
+      setFormula(snapshot.formula || "");
+      setExample(snapshot.example || "");
+      setFlashcards(Array.isArray(snapshot.flashcards) ? snapshot.flashcards : []);
+      setQuizQuestions(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
+      setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
+      setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
+      setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
+      setPastQuestionPaperSources(normalizeStudySourceEntries(snapshot.pastQuestionPaperSources, "", [], "PAST QUESTION PAPER"));
+      setPastQuestionMemo(snapshot.pastQuestionMemo || "");
+      setPresentationData(normalizePresentationData(snapshot.presentationData));
+      setSelectedPresentationDesign(snapshot.selectedPresentationDesign || presentationDesigns[0].id);
+      setPresentationView(snapshot.presentationView || "setup");
+      setPodcastData(normalizePodcastData(snapshot.podcastData));
+      setPodcastSpeakerCount(Number(snapshot.podcastSpeakerCount || 2) >= 3 ? 3 : 2);
+      setPodcastTargetMinutes(Number(snapshot.podcastTargetMinutes || 10) || 10);
+      setTeacherLessonData(normalizeTeacherLessonData(snapshot.teacherLessonData));
+      setOutputLanguage(snapshot.outputLanguage || outputLanguage);
+      setVideoUrl(snapshot.videoUrl || "");
+      setActiveHistoryId(snapshot.activeHistoryId || "");
+      setActiveTab(snapshot.activeTab || "guide");
+      setCurrentPage(snapshot.currentPage || "workspace");
+      setActivePodcastSegmentIndex(0);
+      setIsPodcastAutoPlaying(false);
+      setActiveTeacherSegmentIndex(-1);
+      setIsTeacherPlaying(false);
+      setIsTeacherPaused(false);
+    });
+    if (!preserveStatus) {
+      setStatus("Restored your saved workspace.");
+    }
+  };
+
+  const persistPendingJob = (snapshot = null) => {
+    const ownerEmail = getActiveWorkspaceOwnerEmail();
+    if (!ownerEmail) return;
+    savePendingJobSnapshot(ownerEmail, snapshot);
+  };
+
+  const clearPendingJob = () => {
+    persistPendingJob(null);
+  };
+
+  const upsertWorkspaceHistoryItem = (item) => {
+    const timestamp = new Date().toISOString();
+    const existingId = item?.id || activeHistoryId || "";
+    const existingItem = existingId ? historyItems.find((entry) => entry.id === existingId) : null;
+    const nextItem = {
+      ...(existingItem || {}),
+      ...(item || {}),
+      id: existingId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: existingItem?.createdAt || item?.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    setHistoryItems((current) => mergeHistoryItems([nextItem], current));
+    setActiveHistoryId(nextItem.id);
+    return nextItem;
+  };
+
+  const scrollTeacherToSection = (sectionHeading = "") => {
+    const normalizedHeading = String(sectionHeading || "").trim().toLowerCase();
+    if (!normalizedHeading) return;
+    const matchingSection = guideSections.find((section) => section.normalizedHeading === normalizedHeading)
+      || guideSections.find((section) => normalizedHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(normalizedHeading));
+    const targetKey = matchingSection?.normalizedHeading || normalizedHeading;
+    const targetNode = teacherSectionRefs.current[targetKey];
+    if (targetNode?.scrollIntoView) {
+      targetNode.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
+    teacherPlaybackRunRef.current += 1;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsTeacherPlaying(false);
+    setIsTeacherPaused(false);
+    if (resetIndex) setActiveTeacherSegmentIndex(-1);
+  };
 
   useEffect(() => {
     setSelectedPresentationSlideIndex(0);
@@ -2213,7 +2587,6 @@ export default function App() {
     </section>
   ) : null;
 
-  const isPresentationWorkspaceTab = currentPage === "workspace" && activeTab === "presentation";
   const workspaceSnapshotPanel = (
     <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
       <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Workspace Snapshot</p>
@@ -2223,9 +2596,11 @@ export default function App() {
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Slide sources: {lectureSlideFileNames.length || 0}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Past papers: {pastQuestionPaperFileNames.length || 0}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Memo reference: {pastQuestionMemo.trim() ? "Added" : "Not added"}</div>
+        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Study photos: {studyImages.length || 0}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Presentation ready: {presentationData.slides.length ? "Yes" : "Not yet"}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Podcast ready: {podcastData.script ? "Yes" : "Not yet"}</div>
+        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Teacher mode ready: {teacherLessonData.segments.length ? "Yes" : "Not yet"}</div>
         <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces for this email: {historyItems.length}</div>
       </div>
     </div>
@@ -5144,6 +5519,7 @@ export default function App() {
   };
 
   const clearSession = (message = "Please sign in again.") => {
+    stopTeacherPlayback({ resetIndex: true });
     historyOwnerEmailRef.current = "";
     hasLoadedAdminDashboardRef.current = false;
     setAuthToken("");
@@ -5177,6 +5553,8 @@ export default function App() {
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
+    setTeacherLessonData(createEmptyTeacherLessonData());
+    setSelectedTeacherVoiceName("");
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
     window.localStorage.removeItem(AUTH_MODE_KEY);
@@ -5255,6 +5633,11 @@ export default function App() {
   }, [outputLanguage]);
 
   useEffect(() => {
+    if (!adminDashboard) return;
+    saveAdminDashboardCache(adminDashboard);
+  }, [adminDashboard]);
+
+  useEffect(() => {
     if (!authChecked || !authEmail) return;
     const cachedHistory = loadHistoryItems(authEmail);
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
@@ -5262,6 +5645,154 @@ export default function App() {
     setHistoryItems(cachedHistory);
     setActiveHistoryId((current) => (cachedHistory.some((item) => item.id === current) ? current : ""));
   }, [authChecked, authEmail]);
+
+  useEffect(() => {
+    hasRestoredWorkspaceDraftRef.current = false;
+    hasRestoredRecoveredRecordingRef.current = false;
+    hasResumedPendingJobRef.current = false;
+  }, [authEmail]);
+
+  useEffect(() => {
+    const loadVoices = () => {
+      const nextVoices = typeof window !== "undefined" && window.speechSynthesis
+        ? window.speechSynthesis.getVoices().filter((voice) => voice.lang?.toLowerCase().startsWith("en") || outputLanguage.toLowerCase() !== "english")
+        : [];
+      setTeacherVoiceOptions(nextVoices);
+      if (!selectedTeacherVoiceName && nextVoices.length) {
+        const preferredVoice = nextVoices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
+          || nextVoices.find((voice) => /google|microsoft|natural|english/i.test(voice.name))
+          || nextVoices[0];
+        if (preferredVoice?.name) setSelectedTeacherVoiceName(preferredVoice.name);
+      }
+    };
+
+    loadVoices();
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, [outputLanguage, selectedTeacherVoiceName]);
+
+  useEffect(() => {
+    if (!authChecked) return;
+    const ownerEmail = getActiveWorkspaceOwnerEmail();
+    if (!ownerEmail) return;
+
+    const hasWorkspaceContent = Boolean(
+      activeHistoryId
+      || videoUrl.trim()
+      || file?.name
+      || transcript.trim()
+      || summary.trim()
+      || formula.trim()
+      || example.trim()
+      || flashcards.length
+      || quizQuestions.length
+      || studyImages.length
+      || lectureNoteSources.length
+      || lectureSlideSources.length
+      || pastQuestionPaperSources.length
+      || pastQuestionMemo.trim()
+      || presentationData.slides.length
+      || podcastData.script
+      || teacherLessonData.segments.length
+      || recording
+    );
+
+    if (!hasWorkspaceContent) {
+      saveWorkspaceDraft(ownerEmail, null);
+      return;
+    }
+
+    persistWorkspaceDraft();
+  }, [
+    activeHistoryId,
+    activeTab,
+    authChecked,
+    authEmail,
+    authEmailInput,
+    currentPage,
+    example,
+    file,
+    flashcards,
+    formula,
+    lectureNoteSources,
+    lectureSlideSources,
+    outputLanguage,
+    pastQuestionMemo,
+    pastQuestionPaperSources,
+    podcastData,
+    podcastSpeakerCount,
+    podcastTargetMinutes,
+    presentationData,
+    presentationView,
+    quizQuestions,
+    recording,
+    selectedPresentationDesign,
+    studyImages,
+    summary,
+    teacherLessonData,
+    transcript,
+    videoUrl,
+  ]);
+
+  useEffect(() => {
+    if (!authChecked || !authEmail || hasRestoredWorkspaceDraftRef.current) return;
+    hasRestoredWorkspaceDraftRef.current = true;
+    const snapshot = loadWorkspaceDraft(authEmail);
+    if (!snapshot) return;
+    const hasLiveWorkspace = Boolean(
+      transcript.trim()
+      || summary.trim()
+      || formula.trim()
+      || example.trim()
+      || flashcards.length
+      || quizQuestions.length
+      || studyImages.length
+      || lectureNoteSources.length
+      || lectureSlideSources.length
+      || pastQuestionPaperSources.length
+      || podcastData.script
+      || teacherLessonData.segments.length
+    );
+    if (hasLiveWorkspace) return;
+    applyWorkspaceSnapshot(snapshot, { preserveStatus: true });
+  }, [
+    authChecked,
+    authEmail,
+    example,
+    flashcards.length,
+    formula,
+    lectureNoteSources.length,
+    lectureSlideSources.length,
+    pastQuestionPaperSources.length,
+    podcastData.script,
+    quizQuestions.length,
+    studyImages.length,
+    summary,
+    teacherLessonData.segments.length,
+    transcript,
+  ]);
+
+  useEffect(() => {
+    if (!authChecked || !authEmail || hasRestoredRecoveredRecordingRef.current) return;
+    hasRestoredRecoveredRecordingRef.current = true;
+    loadRecoveredRecordingFromDb(authEmail).then((record) => {
+      if (!record?.blob || file?.name) return;
+      const recoveredFile = new File([record.blob], record.fileName || "mabaso-lecture.wav", { type: record.type || "audio/wav" });
+      startTransition(() => {
+        setFile(recoveredFile);
+        setVideoUrl("");
+      });
+      setStatus("Recovered your saved recording after refresh. You can transcribe it now.");
+    }).catch(() => {
+      // Ignore recovered recording load failures.
+    });
+  }, [authChecked, authEmail, file]);
 
   useEffect(() => {
     if (!authToken) return undefined;
@@ -5290,6 +5821,75 @@ export default function App() {
   useEffect(() => () => {
     cleanupRecordingMonitoring({ stopStream: true });
   }, []);
+
+  useEffect(() => () => {
+    stopTeacherPlayback({ resetIndex: true });
+  }, []);
+
+  useEffect(() => {
+    if (!recording) return undefined;
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [recording]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return undefined;
+
+    const clearHandlers = () => {
+      ["play", "pause", "stop"].forEach((action) => {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch {
+          // Some browsers do not support clearing every action handler.
+        }
+      });
+    };
+
+    try {
+      if (recording) {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: "Live Lecture Recording",
+          artist: authEmail || "MABASO",
+          album: "Lecture Capture",
+        });
+        navigator.mediaSession.setActionHandler("pause", () => stopRecording());
+        navigator.mediaSession.setActionHandler("stop", () => stopRecording());
+      } else if (isTeacherPlaying || isTeacherPaused) {
+        const activeSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: teacherLessonData.title || "Teacher Mode",
+          artist: activeSegment?.sectionHeading || "Study Guide",
+          album: "MABASO Teacher Lesson",
+        });
+        navigator.mediaSession.setActionHandler("pause", () => pauseTeacherLesson());
+        navigator.mediaSession.setActionHandler("play", () => resumeTeacherLesson());
+        navigator.mediaSession.setActionHandler("stop", () => stopTeacherPlayback({ resetIndex: true }));
+      } else {
+        navigator.mediaSession.metadata = null;
+        clearHandlers();
+      }
+    } catch {
+      // Media Session support differs across browsers.
+    }
+
+    return () => {
+      try {
+        if (!recording && !isTeacherPlaying && !isTeacherPaused) {
+          navigator.mediaSession.metadata = null;
+        }
+      } catch {
+        // Ignore Media Session cleanup failures.
+      }
+      clearHandlers();
+    };
+  }, [activeTeacherSegmentIndex, authEmail, isTeacherPaused, isTeacherPlaying, recording, teacherLessonData]);
 
   useEffect(() => {
     if (!authToken) return undefined;
@@ -6224,25 +6824,20 @@ export default function App() {
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
     { title: "Podcast Debate Script", content: podcastData.script || "" },
+    { title: "Teacher Mode Lesson", content: teacherLessonToText(teacherLessonData) },
     { title: "Study Chat", content: chatToText(chatMessages) },
   ].filter((section) => (section.content || "").trim());
 
   const addHistoryItem = (item) => {
-    const timestamp = new Date().toISOString();
-    const nextItem = {
-      ...item,
-      id: item.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: item.createdAt || timestamp,
-      updatedAt: timestamp,
-    };
-    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
-    setHistoryItems((current) => mergeHistoryItems([nextItem], current));
-    setActiveHistoryId(nextItem.id);
+    const nextItem = upsertWorkspaceHistoryItem(item);
+    persistWorkspaceDraft({ activeHistoryId: nextItem.id });
+    return nextItem;
   };
 
   const loadHistoryItem = (item) => {
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
+    stopTeacherPlayback({ resetIndex: true });
     setPresentationTemplateFile(null);
     if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
@@ -6277,10 +6872,14 @@ export default function App() {
       setPresentationView(nextPresentationData.slides.length ? "viewer" : "setup");
       setSelectedPresentationDesign(nextPresentationData.designId || presentationDesigns[0].id);
       setPodcastData(normalizePodcastData(item.podcastData));
+      setTeacherLessonData(normalizeTeacherLessonData(item.teacherLessonData));
       setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
       setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
+      setActiveTeacherSegmentIndex(-1);
+      setIsTeacherPlaying(false);
+      setIsTeacherPaused(false);
       setQuizAnswers({});
       setQuizAnswerImages({});
       setQuizResults({});
@@ -6295,6 +6894,7 @@ export default function App() {
   };
 
   const resetGeneratedOutputs = () => {
+    stopTeacherPlayback({ resetIndex: true });
     setTranscript("");
     setSummary("");
     setFormula("");
@@ -6306,12 +6906,16 @@ export default function App() {
     setPresentationView("setup");
     setSelectedPresentationDesign(presentationDesigns[0].id);
     setPodcastData(createEmptyPodcastData());
+    setTeacherLessonData(createEmptyTeacherLessonData());
     setPodcastSpeakerCount(2);
     setPodcastTargetMinutes(10);
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
+    setActiveTeacherSegmentIndex(-1);
+    setIsTeacherPlaying(false);
+    setIsTeacherPaused(false);
     setQuizAnswers({});
     setQuizAnswerImages({});
     setQuizResults({});
@@ -6364,6 +6968,7 @@ export default function App() {
 
   const handleFileChange = (selectedFile) => {
     if (!selectedFile) return;
+    clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
     startTransition(() => {
       setFile(selectedFile);
       setVideoUrl("");
@@ -6613,11 +7218,19 @@ export default function App() {
       const response = await authFetch("/upload-audio/", { method: "POST", body: formData });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || failureStatus);
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "transcription",
+        autoGenerateGuide,
+        savedAt: new Date().toISOString(),
+      });
       const job = await pollJob(data.job_id, "transcription");
       const transcriptText = job.transcript || "";
       startTransition(() => {
         setTranscript(transcriptText);
       });
+      clearPendingJob();
+      clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
 
       if (autoGenerateGuide) {
         setStatus("Transcript ready. Generating study guide...");
@@ -6630,6 +7243,7 @@ export default function App() {
 
       return transcriptText;
     } catch (err) {
+      clearPendingJob();
       if (surfaceError) {
         setError(err.message || failureStatus);
         setStatus(failureStatus);
@@ -6897,6 +7511,7 @@ export default function App() {
 
   const startRecording = async () => {
     setError("");
+    clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordingStreamRef.current = stream;
@@ -6912,6 +7527,11 @@ export default function App() {
         audioChunksRef.current = [];
         cleanupRecordingMonitoring({ stopStream: true });
         const recordedFile = new File([blob], "mabaso-lecture.wav", { type: "audio/wav" });
+        await saveRecoveredRecordingToDb(getActiveWorkspaceOwnerEmail(), {
+          blob,
+          fileName: recordedFile.name,
+          type: recordedFile.type,
+        });
         startTransition(() => {
           setFile(recordedFile);
           setVideoUrl("");
@@ -6927,11 +7547,11 @@ export default function App() {
             // transcribeLectureFile already updates the UI error state when auto-processing fails.
           }
         } else {
-          setStatus("Recording saved. Transcribe it when you are ready.");
+          setStatus("Recording saved. It will still be here after refresh.");
         }
       };
       beginRecordingSilenceMonitoring(stream);
-      mediaRecorderRef.current.start();
+      mediaRecorderRef.current.start(1000);
       setRecording(true);
       setStatus("Recording started. MABASO will stop automatically after 10 minutes of silence.");
     } catch {
@@ -7016,6 +7636,7 @@ export default function App() {
               lecture_slides: resolvedLectureSlides,
               past_question_papers: resolvedPastQuestionPapers,
               language: outputLanguage,
+              reference_images: visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6),
             }),
             timeoutMs: 120000,
           });
@@ -7026,6 +7647,11 @@ export default function App() {
             throw requestError;
           }
           jobRequest = data;
+          persistPendingJob({
+            jobId: data.job_id,
+            jobType: "study_guide",
+            savedAt: new Date().toISOString(),
+          });
         } catch (err) {
           const message = String(err?.message || "");
           const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
@@ -7056,7 +7682,7 @@ export default function App() {
         setExample(job.worked_example || "");
         setFlashcards(job.flashcards || []);
         setQuizQuestions([]);
-        setStudyImages([]);
+        setStudyImages(Array.isArray(job.study_images) ? job.study_images : []);
         setQuizAnswers({});
         setQuizAnswerImages({});
         setQuizResults({});
@@ -7065,13 +7691,16 @@ export default function App() {
         setPresentationView("setup");
         setSelectedPresentationDesign(presentationDesigns[0].id);
         setPodcastData(createEmptyPodcastData());
+        setTeacherLessonData(createEmptyTeacherLessonData());
         setPodcastSpeakerCount(2);
         setPodcastTargetMinutes(10);
         setActivePodcastSegmentIndex(0);
         setIsPodcastAutoPlaying(false);
+        setActiveTeacherSegmentIndex(-1);
+        setIsTeacherPlaying(false);
+        setIsTeacherPaused(false);
         addHistoryItem({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          createdAt: new Date().toISOString(),
+          id: activeHistoryId || "",
           title: extractHistoryTitle(job.summary || "", sourceLabel),
           fileName: sourceLabel,
           summary: job.summary || "",
@@ -7080,7 +7709,7 @@ export default function App() {
           example: job.worked_example || "",
           flashcards: job.flashcards || [],
           quizQuestions: [],
-          studyImages: [],
+          studyImages: Array.isArray(job.study_images) ? job.study_images : [],
           lectureNotes: resolvedLectureNotes,
           lectureNotesFileName: resolvedLectureNotesFileName,
           lectureNoteSources: sanitizeStudySourceEntriesForHistory(resolvedLectureNoteSources),
@@ -7094,8 +7723,10 @@ export default function App() {
           pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(resolvedPastQuestionPaperSources),
           presentationData: sanitizePresentationForHistory(createEmptyPresentationData()),
           podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
+          teacherLessonData: sanitizeTeacherLessonForHistory(createEmptyTeacherLessonData()),
         });
       });
+      clearPendingJob();
       setUsedFallbackSummary(Boolean(job.used_fallback));
       setActiveTab("guide");
       setCurrentPage("workspace");
@@ -7104,6 +7735,7 @@ export default function App() {
     } catch (err) {
       const message = String(err?.message || "").trim();
       const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+      clearPendingJob();
       setError(isTransient ? getBackendConnectionTroubleshootingMessage("study-guide") : (err.message || "Study guide generation failed."));
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
@@ -7140,6 +7772,11 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Test generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "quiz",
+        savedAt: new Date().toISOString(),
+      });
       const job = await pollJob(data.job_id, "quiz");
       const nextQuizQuestions = job.quiz_questions || [];
       startTransition(() => {
@@ -7157,8 +7794,7 @@ export default function App() {
         pastQuestionPaperFileNames,
       });
       addHistoryItem({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
+        id: activeHistoryId || "",
         title: extractHistoryTitle(summary || "", sourceLabel),
         fileName: sourceLabel,
         summary,
@@ -7181,10 +7817,13 @@ export default function App() {
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
       });
+      clearPendingJob();
       setStatus("Test ready.");
       setProgress(100);
     } catch (err) {
+      clearPendingJob();
       setError(err.message || "Test generation failed.");
       setStatus("Test generation failed.");
     } finally {
@@ -7230,6 +7869,11 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "PowerPoint generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "presentation",
+        savedAt: new Date().toISOString(),
+      });
       const job = await pollJob(data.job_id, "presentation");
       const nextPresentationData = normalizePresentationData({
         jobId: data.job_id,
@@ -7254,8 +7898,7 @@ export default function App() {
         pastQuestionPaperFileNames,
       });
       addHistoryItem({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
+        id: activeHistoryId || "",
         title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
         fileName: sourceLabel,
         summary,
@@ -7278,9 +7921,12 @@ export default function App() {
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(nextPresentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
       });
+      clearPendingJob();
       setStatus("PowerPoint presentation ready.");
     } catch (err) {
+      clearPendingJob();
       setError(err.message || "PowerPoint generation failed.");
       setStatus("PowerPoint generation failed.");
     } finally {
@@ -7375,6 +8021,11 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Podcast generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "podcast",
+        savedAt: new Date().toISOString(),
+      });
       const job = await pollJob(data.job_id, "podcast");
       const nextPodcastData = normalizePodcastData({
         jobId: data.job_id,
@@ -7398,8 +8049,7 @@ export default function App() {
         pastQuestionPaperFileNames,
       });
       addHistoryItem({
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: new Date().toISOString(),
+        id: activeHistoryId || "",
         title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
         fileName: sourceLabel,
         summary,
@@ -7422,12 +8072,191 @@ export default function App() {
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(nextPodcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
       });
+      clearPendingJob();
     } catch (err) {
+      clearPendingJob();
       setError(err.message || "Podcast generation failed.");
       setStatus("Podcast generation failed.");
     } finally {
       setIsGeneratingPodcast(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0 } = {}) => {
+    const normalizedLesson = normalizeTeacherLessonData(lesson);
+    if (!normalizedLesson.segments.length) {
+      setError("Generate teacher mode first so the lesson has something to explain.");
+      return;
+    }
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setError("Teacher audio is not supported in this browser.");
+      return;
+    }
+
+    const runId = teacherPlaybackRunRef.current + 1;
+    teacherPlaybackRunRef.current = runId;
+    window.speechSynthesis.cancel();
+
+    const voices = window.speechSynthesis.getVoices();
+    const selectedVoice = voices.find((voice) => voice.name === selectedTeacherVoiceName)
+      || voices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
+      || voices[0]
+      || null;
+
+    const speakSegment = (segmentIndex) => {
+      if (teacherPlaybackRunRef.current !== runId) return;
+      if (segmentIndex >= normalizedLesson.segments.length) {
+        setIsTeacherPlaying(false);
+        setIsTeacherPaused(false);
+        setActiveTeacherSegmentIndex(-1);
+        setStatus("Teacher mode finished the lesson.");
+        return;
+      }
+
+      const segment = normalizedLesson.segments[segmentIndex];
+      const utterance = new window.SpeechSynthesisUtterance([segment.prompt, segment.text].filter(Boolean).join(" "));
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice?.lang || "en-US";
+      utterance.rate = 0.94;
+      utterance.pitch = 0.92;
+      utterance.onstart = () => {
+        if (teacherPlaybackRunRef.current !== runId) return;
+        setActiveTeacherSegmentIndex(segmentIndex);
+        setIsTeacherPlaying(true);
+        setIsTeacherPaused(false);
+        scrollTeacherToSection(segment.sectionHeading);
+      };
+      utterance.onend = () => {
+        if (teacherPlaybackRunRef.current !== runId) return;
+        speakSegment(segmentIndex + 1);
+      };
+      utterance.onerror = () => {
+        if (teacherPlaybackRunRef.current !== runId) return;
+        speakSegment(segmentIndex + 1);
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+
+    setCurrentPage("workspace");
+    setActiveTab("guide");
+    setStatus("Teacher mode is explaining the study guide.");
+    speakSegment(Math.max(0, Number(startIndex || 0)));
+  };
+
+  const pauseTeacherLesson = () => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    if (!window.speechSynthesis.speaking || window.speechSynthesis.paused) return;
+    window.speechSynthesis.pause();
+    setIsTeacherPlaying(false);
+    setIsTeacherPaused(true);
+    setStatus("Teacher mode paused.");
+  };
+
+  const resumeTeacherLesson = () => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setIsTeacherPlaying(true);
+      setIsTeacherPaused(false);
+      setStatus("Teacher mode resumed.");
+      return;
+    }
+    playTeacherLesson(teacherLessonData, { startIndex: Math.max(0, activeTeacherSegmentIndex) });
+  };
+
+  const generateTeacherLesson = async ({ autoplay = true } = {}) => {
+    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Generate a study guide or add lecture material before opening teacher mode.");
+    }
+
+    stopTeacherPlayback({ resetIndex: true });
+    setIsGeneratingTeacherLesson(true);
+    setError("");
+    setCurrentPage("workspace");
+    setActiveTab("guide");
+    setStatus("Preparing teacher mode...");
+    setProgress(0);
+    setCurrentJobType("teacher_lesson");
+
+    try {
+      const response = await authFetch("/generate-teacher-lesson/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Teacher mode generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "teacher_lesson",
+        autoplay,
+        savedAt: new Date().toISOString(),
+      });
+      const job = await pollJob(data.job_id, "teacher_lesson");
+      const nextTeacherLessonData = normalizeTeacherLessonData({
+        jobId: data.job_id,
+        title: job.teacher_title,
+        overview: job.teacher_overview,
+        segments: job.teacher_segments,
+      });
+      setTeacherLessonData(nextTeacherLessonData);
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
+      addHistoryItem({
+        id: activeHistoryId || "",
+        title: extractHistoryTitle(summary || nextTeacherLessonData.title || "", sourceLabel),
+        fileName: sourceLabel,
+        summary,
+        transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
+      });
+      clearPendingJob();
+      setStatus("Teacher mode is ready.");
+      setProgress(100);
+      if (autoplay) {
+        window.setTimeout(() => {
+          playTeacherLesson(nextTeacherLessonData);
+        }, 0);
+      }
+    } catch (err) {
+      clearPendingJob();
+      setError(err.message || "Teacher mode generation failed.");
+      setStatus("Teacher mode generation failed.");
+    } finally {
+      setIsGeneratingTeacherLesson(false);
       setCurrentJobType("");
     }
   };
@@ -7459,14 +8288,22 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Video-link transcription failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "video",
+        autoGenerateGuide: true,
+        savedAt: new Date().toISOString(),
+      });
       const job = await pollJob(data.job_id, "video");
       startTransition(() => {
         setTranscript(job.transcript || "");
       });
+      clearPendingJob();
       setStatus("Video transcript ready. Generating study guide...");
       setProgress(100);
       await generateStudyGuide(job.transcript || "");
     } catch (err) {
+      clearPendingJob();
       setError(err.message || "Video-link transcription failed.");
       setStatus("Video-link transcription failed.");
     } finally {
@@ -7474,6 +8311,280 @@ export default function App() {
       setCurrentJobType("");
     }
   };
+
+  useEffect(() => {
+    if (!authChecked || !authToken || !authEmail || hasResumedPendingJobRef.current !== false) return;
+    const pendingJob = loadPendingJobSnapshot(authEmail);
+    hasResumedPendingJobRef.current = true;
+    if (!pendingJob?.jobId) return undefined;
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setStatus("Restoring your last in-progress task...");
+        const resumedJob = await pollJob(
+          pendingJob.jobId,
+          pendingJob.jobType === "video" ? "video" : pendingJob.jobType,
+        );
+        if (cancelled) return;
+
+        if (pendingJob.jobType === "transcription" || pendingJob.jobType === "video") {
+          const recoveredTranscript = resumedJob.transcript || "";
+          if (recoveredTranscript) {
+            startTransition(() => {
+              setTranscript(recoveredTranscript);
+            });
+          }
+          clearPendingJob();
+          clearRecoveredRecordingFromDb(authEmail);
+          if (pendingJob.autoGenerateGuide && recoveredTranscript) {
+            setStatus("Recovered the transcript. Rebuilding the study guide...");
+            await generateStudyGuide(recoveredTranscript);
+          } else {
+            setStatus("Recovered the completed transcript after refresh.");
+          }
+          return;
+        }
+
+        const sourceLabel = getPrimarySourceLabel({
+          fileName: file?.name || "",
+          videoUrl,
+          lectureNotesFileName,
+          lectureSlideFileNames,
+          pastQuestionPaperFileNames,
+        });
+
+        if (pendingJob.jobType === "study_guide") {
+          startTransition(() => {
+            setSummary(resumedJob.summary || "");
+            setFormula(resumedJob.formula || "");
+            setExample(resumedJob.worked_example || "");
+            setFlashcards(resumedJob.flashcards || []);
+            setStudyImages(Array.isArray(resumedJob.study_images) ? resumedJob.study_images : []);
+            setTeacherLessonData(createEmptyTeacherLessonData());
+            setActiveTab("guide");
+            setCurrentPage("workspace");
+          });
+          addHistoryItem({
+            id: activeHistoryId || "",
+            title: extractHistoryTitle(resumedJob.summary || "", sourceLabel),
+            fileName: sourceLabel,
+            summary: resumedJob.summary || "",
+            transcript: resumedJob.transcript || transcript,
+            formula: resumedJob.formula || "",
+            example: resumedJob.worked_example || "",
+            flashcards: resumedJob.flashcards || [],
+            quizQuestions,
+            studyImages: Array.isArray(resumedJob.study_images) ? resumedJob.study_images : [],
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(createEmptyTeacherLessonData()),
+          });
+          clearPendingJob();
+          setStatus("Recovered the study guide after refresh.");
+          return;
+        }
+
+        if (pendingJob.jobType === "quiz") {
+          const nextQuizQuestions = resumedJob.quiz_questions || [];
+          startTransition(() => {
+            setQuizQuestions(nextQuizQuestions);
+            setQuizAnswers({});
+            setQuizAnswerImages({});
+            setQuizResults({});
+            setQuizSubmitted(false);
+            setActiveTab("quiz");
+            setCurrentPage("workspace");
+          });
+          addHistoryItem({
+            id: activeHistoryId || "",
+            title: extractHistoryTitle(summary || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions: nextQuizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered the generated test after refresh.");
+          return;
+        }
+
+        if (pendingJob.jobType === "presentation") {
+          const nextPresentationData = normalizePresentationData({
+            jobId: pendingJob.jobId,
+            title: resumedJob.presentation_title,
+            subtitle: resumedJob.presentation_subtitle,
+            designId: resumedJob.presentation_design_id,
+            templateName: resumedJob.presentation_template_name,
+            slides: resumedJob.presentation_slides,
+          });
+          startTransition(() => {
+            setPresentationData(nextPresentationData);
+            setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
+            setPresentationView("status");
+            setCurrentPage("workspace");
+            setActiveTab("presentation");
+          });
+          addHistoryItem({
+            id: activeHistoryId || "",
+            title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(nextPresentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered the PowerPoint presentation after refresh.");
+          return;
+        }
+
+        if (pendingJob.jobType === "podcast") {
+          const nextPodcastData = normalizePodcastData({
+            jobId: pendingJob.jobId,
+            title: resumedJob.podcast_title,
+            overview: resumedJob.podcast_overview,
+            script: resumedJob.podcast_script,
+            segments: resumedJob.podcast_segments,
+            speakerCount: podcastSpeakerCount,
+            targetMinutes: podcastTargetMinutes,
+          });
+          setPodcastData(nextPodcastData);
+          await loadPodcastAudioTrack(pendingJob.jobId, resumedJob.podcast_segments || []);
+          setCurrentPage("workspace");
+          setActiveTab("podcast");
+          addHistoryItem({
+            id: activeHistoryId || "",
+            title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(nextPodcastData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered the podcast after refresh.");
+          return;
+        }
+
+        if (pendingJob.jobType === "teacher_lesson") {
+          const nextTeacherLessonData = normalizeTeacherLessonData({
+            jobId: pendingJob.jobId,
+            title: resumedJob.teacher_title,
+            overview: resumedJob.teacher_overview,
+            segments: resumedJob.teacher_segments,
+          });
+          setTeacherLessonData(nextTeacherLessonData);
+          addHistoryItem({
+            id: activeHistoryId || "",
+            title: extractHistoryTitle(summary || nextTeacherLessonData.title || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered teacher mode after refresh.");
+          if (pendingJob.autoplay) {
+            window.setTimeout(() => {
+              playTeacherLesson(nextTeacherLessonData);
+            }, 0);
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          clearPendingJob();
+          setAuthMessage((current) => current || (err.message || "Could not restore your in-progress task."));
+        }
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [authChecked, authEmail, authToken]);
 
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
@@ -7834,6 +8945,7 @@ export default function App() {
         { title: "Test", content: quizToText(item.quizQuestions || []) },
         { title: "PowerPoint Presentation", content: presentationToText(item.presentationData) },
         { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
+        { title: "Teacher Mode Lesson", content: teacherLessonToText(item.teacherLessonData) },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
     } catch (err) {
@@ -8509,7 +9621,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing teacher" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
 
               <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
@@ -8529,13 +9641,7 @@ export default function App() {
             <div className="overflow-x-auto pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
           </div>
 
-          <div className={`mt-6 grid gap-5 ${isPresentationWorkspaceTab ? "" : "xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start"}`}>
-            {!isPresentationWorkspaceTab ? (
-              <aside className="min-w-0 space-y-4 xl:sticky xl:top-6">
-                {workspaceSnapshotPanel}
-              </aside>
-            ) : null}
-
+          <div className="mt-6 space-y-5">
             <div className="min-w-0 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
               <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
                 <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
@@ -8552,7 +9658,89 @@ export default function App() {
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
-                {activeTab === "guide" ? <div className="min-w-0 space-y-4"><div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown></div></div> : null}
+                {activeTab === "guide" ? (
+                  <div className="min-w-0 space-y-5">
+                    <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-4">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Teacher Mode</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-white">Friendly lesson walkthrough on top of the guide.</h4>
+                          <p className="mt-3 text-sm leading-7 text-slate-200">This explains the guide section by section, asks reflective questions, keeps the tone warm, and follows the guide while it speaks.</p>
+                        </div>
+                        <div className="force-mobile-stack flex flex-wrap gap-3">
+                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Teacher Button"}</button>
+                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Play</button>
+                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
+                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Resume</button>
+                          <button type="button" onClick={() => stopTeacherPlayback({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Stop</button>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-200">
+                          {teacherLessonData.overview || "Generate teacher mode to hear a softer explanation that teaches the guide instead of reading it line by line."}
+                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-50">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` • ${activeTeacherSegment.prompt}` : ""}</p> : null}
+                        </div>
+                        <div>
+                          <label className="block text-xs uppercase tracking-[0.22em] text-slate-300">Voice</label>
+                          <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                            {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Browser default voice</option>}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {studyImages.length ? (
+                      <div className="space-y-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Study Photos</p>
+                          <p className="mt-2 text-sm leading-7 text-slate-300">Visual references matched to the guide so the notes can feel closer to the lecture material.</p>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                          {studyImages.map((image, index) => (
+                            <article key={`${image.image_url || image.source_url || image.title}-${index}`} className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/75">
+                              <img src={image.image_url} alt={image.title || image.query || `Study photo ${index + 1}`} className="h-48 w-full object-cover" loading="lazy" />
+                              <div className="space-y-2 p-4">
+                                <p className="text-sm font-semibold text-white">{image.title || image.query || `Study photo ${index + 1}`}</p>
+                                <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Study reference"}</p>
+                                <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor while revising this section."}</p>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {guideSections.length ? (
+                      <div className="space-y-4">
+                        {guideSections.map((section, index) => {
+                          const isActiveSection = activeTeacherSegment?.sectionHeading
+                            ? (activeTeacherSegment.sectionHeading || "").trim().toLowerCase() === section.normalizedHeading
+                              || (activeTeacherSegment.sectionHeading || "").trim().toLowerCase().includes(section.normalizedHeading)
+                            : false;
+                          return (
+                            <article
+                              key={`${section.heading}-${index}`}
+                              ref={(node) => {
+                                if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
+                                else delete teacherSectionRefs.current[section.normalizedHeading];
+                              }}
+                              className={`rounded-[24px] border p-4 transition ${isActiveSection ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/75"}`}
+                            >
+                              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{section.heading}</p>
+                              <div className="notes-markdown phone-safe-copy mt-3 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                                <ReactMarkdown>{section.content}</ReactMarkdown>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                        <ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
@@ -8580,7 +9768,7 @@ export default function App() {
               </div>
             </div>
 
-            {isPresentationWorkspaceTab ? workspaceSnapshotPanel : null}
+            {workspaceSnapshotPanel}
           </div>
         </section> : null}
 
