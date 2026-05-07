@@ -37,6 +37,13 @@ const BRAND_ART_URL = "/mabaso-social.svg";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
+const MAX_STORAGE_TRANSCRIPT_CHARS = 120000;
+const MAX_STORAGE_SUMMARY_CHARS = 90000;
+const MAX_STORAGE_SECTION_TEXT_CHARS = 50000;
+const MAX_STORAGE_SOURCE_TEXT_CHARS = 18000;
+const MAX_STORAGE_IMAGE_URL_LENGTH = 2400;
+const MAX_AI_REFERENCE_IMAGES = 4;
+const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
 const RECORDING_SILENCE_THRESHOLD = 0.02;
@@ -380,6 +387,40 @@ function normalizeHistoryOwnerEmail(email = "") {
   return (email || "").trim().toLowerCase();
 }
 
+function isInlineDataUrl(value = "") {
+  return /^data:/i.test((value || "").trim());
+}
+
+function truncateStoredText(value = "", limit = MAX_STORAGE_SECTION_TEXT_CHARS) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit)).trimEnd()}\n\n[Stored copy shortened to keep this workspace stable on the device.]`;
+}
+
+function sanitizeStoredImageUrl(value = "", { allowInlineDataUrl = false } = {}) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "";
+  if (isInlineDataUrl(cleaned)) {
+    return allowInlineDataUrl && cleaned.length <= MAX_INLINE_REFERENCE_IMAGE_CHARS ? cleaned : "";
+  }
+  return cleaned.length <= MAX_STORAGE_IMAGE_URL_LENGTH ? cleaned : "";
+}
+
+function sanitizeStoredImageUrlList(values = [], options = {}) {
+  return (values || [])
+    .map((value) => sanitizeStoredImageUrl(value, options))
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function getSafeAiReferenceImageUrls(references = [], { allowInlineDataUrl = false, maxItems = MAX_AI_REFERENCE_IMAGES } = {}) {
+  return (references || [])
+    .map((item) => sanitizeStoredImageUrl(item?.image_url || item?.source_url || "", { allowInlineDataUrl }))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
 function getHistoryStorageKey(email = "") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email);
   return normalizedEmail ? `${HISTORY_STORAGE_KEY}:${normalizedEmail}` : HISTORY_STORAGE_KEY;
@@ -461,11 +502,19 @@ function loadWorkspaceDraft(email = "") {
 
 function saveWorkspaceDraft(email = "", snapshot = null) {
   const storageKey = getWorkspaceDraftStorageKey(email);
-  if (!snapshot || typeof snapshot !== "object") {
-    window.localStorage.removeItem(storageKey);
-    return;
+  try {
+    if (!snapshot || typeof snapshot !== "object") {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitizeWorkspaceSnapshotForStorage(snapshot)));
+  } catch {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // Ignore cleanup failures.
+    }
   }
-  window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
 }
 
 function loadPendingJobSnapshot(email = "") {
@@ -481,11 +530,19 @@ function loadPendingJobSnapshot(email = "") {
 
 function savePendingJobSnapshot(email = "", snapshot = null) {
   const storageKey = getPendingJobStorageKey(email);
-  if (!snapshot || typeof snapshot !== "object") {
-    window.localStorage.removeItem(storageKey);
-    return;
+  try {
+    if (!snapshot || typeof snapshot !== "object") {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+  } catch {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // Ignore cleanup failures.
+    }
   }
-  window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
 }
 
 function loadAdminDashboardCache() {
@@ -500,11 +557,15 @@ function loadAdminDashboardCache() {
 }
 
 function saveAdminDashboardCache(snapshot = null) {
-  if (!snapshot || typeof snapshot !== "object") {
-    window.localStorage.removeItem(ADMIN_DASHBOARD_CACHE_KEY);
-    return;
+  try {
+    if (!snapshot || typeof snapshot !== "object") {
+      window.localStorage.removeItem(ADMIN_DASHBOARD_CACHE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Ignore cache write failures.
   }
-  window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(snapshot));
 }
 
 function openRuntimeDb() {
@@ -797,13 +858,71 @@ function sanitizeStudySourceEntriesForHistory(entries) {
   return (entries || []).map((entry) => ({
     id: entry?.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: entry?.name || "Study source",
-    text: entry?.text || "",
+    text: truncateStoredText(entry?.text || "", MAX_STORAGE_SOURCE_TEXT_CHARS),
     prefix: entry?.prefix || "STUDY SOURCE",
     fileType: entry?.fileType || "",
     visualSource: Boolean(entry?.visualSource),
-    previewUrl: entry?.previewUrl || "",
-    visualReferences: Array.isArray(entry?.visualReferences) ? entry.visualReferences.filter(Boolean).slice(0, 6) : [],
+    previewUrl: sanitizeStoredImageUrl(entry?.previewUrl || ""),
+    visualReferences: sanitizeStoredImageUrlList(entry?.visualReferences || []),
   }));
+}
+
+function sanitizeStudyImagesForStorage(images) {
+  return (images || [])
+    .map((image) => ({
+      title: image?.title || "",
+      query: image?.query || "",
+      image_url: sanitizeStoredImageUrl(image?.image_url || ""),
+      source_url: sanitizeStoredImageUrl(image?.source_url || ""),
+      source_type: image?.source_type || "",
+      visual_type: image?.visual_type || "",
+      matched_section: image?.matched_section || "",
+      key_highlight: truncateStoredText(image?.key_highlight || "", 260),
+      diagram_label: image?.diagram_label || "",
+    }))
+    .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
+    .slice(0, 6);
+}
+
+function sanitizeHistoryItemForStorage(item = {}) {
+  return {
+    ...item,
+    transcript: truncateStoredText(item?.transcript || "", MAX_STORAGE_TRANSCRIPT_CHARS),
+    summary: truncateStoredText(item?.summary || "", MAX_STORAGE_SUMMARY_CHARS),
+    formula: truncateStoredText(item?.formula || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    example: truncateStoredText(item?.example || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    lectureNotes: truncateStoredText(item?.lectureNotes || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    lectureSlides: truncateStoredText(item?.lectureSlides || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    pastQuestionPapers: truncateStoredText(item?.pastQuestionPapers || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    studyImages: sanitizeStudyImagesForStorage(item?.studyImages),
+    lectureNoteSources: sanitizeStudySourceEntriesForHistory(item?.lectureNoteSources),
+    lectureSlideSources: sanitizeStudySourceEntriesForHistory(item?.lectureSlideSources),
+    pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(item?.pastQuestionPaperSources),
+    podcastData: sanitizePodcastForHistory(item?.podcastData),
+    teacherLessonData: sanitizeTeacherLessonForHistory(item?.teacherLessonData),
+    presentationData: sanitizePresentationForHistory(item?.presentationData),
+  };
+}
+
+function sanitizeWorkspaceSnapshotForStorage(snapshot = {}) {
+  return {
+    ...snapshot,
+    transcript: truncateStoredText(snapshot?.transcript || "", MAX_STORAGE_TRANSCRIPT_CHARS),
+    summary: truncateStoredText(snapshot?.summary || "", MAX_STORAGE_SUMMARY_CHARS),
+    formula: truncateStoredText(snapshot?.formula || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    example: truncateStoredText(snapshot?.example || "", MAX_STORAGE_SECTION_TEXT_CHARS),
+    studyImages: sanitizeStudyImagesForStorage(snapshot?.studyImages),
+    lectureNoteSources: sanitizeStudySourceEntriesForHistory(snapshot?.lectureNoteSources),
+    lectureSlideSources: sanitizeStudySourceEntriesForHistory(snapshot?.lectureSlideSources),
+    pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(snapshot?.pastQuestionPaperSources),
+    podcastData: normalizePodcastData(snapshot?.podcastData),
+    teacherLessonData: normalizeTeacherLessonData(snapshot?.teacherLessonData),
+    presentationData: normalizePresentationData(snapshot?.presentationData),
+  };
+}
+
+function sanitizeHistoryItemsForStorage(items = []) {
+  return normalizeHistoryItems((items || []).map((item) => sanitizeHistoryItemForStorage(item)));
 }
 
 function buildUploadedVisualReferences(...sourceGroups) {
@@ -5746,7 +5865,7 @@ export default function App() {
       const ownerEmail = historyOwnerEmailRef.current;
       if (!ownerEmail) return;
       const historyKey = getHistoryStorageKey(ownerEmail);
-      window.localStorage.setItem(historyKey, JSON.stringify(normalizeHistoryItems(historyItems)));
+      window.localStorage.setItem(historyKey, JSON.stringify(sanitizeHistoryItemsForStorage(historyItems)));
     } catch {
       // Ignore storage errors.
     }
@@ -6700,7 +6819,7 @@ export default function App() {
     const response = await authFetch("/history", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: normalizeHistoryItems(items) }),
+      body: JSON.stringify({ items: sanitizeHistoryItemsForStorage(items) }),
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Could not save history.");
@@ -7774,7 +7893,7 @@ export default function App() {
               lecture_slides: resolvedLectureSlides,
               past_question_papers: resolvedPastQuestionPapers,
               language: outputLanguage,
-              reference_images: visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6),
+              reference_images: getSafeAiReferenceImageUrls(visualReferences),
             }),
             timeoutMs: 120000,
           });
@@ -7998,7 +8117,7 @@ export default function App() {
           formData.append("past_question_papers", pastQuestionPapers);
           formData.append("design_id", selectedPresentationDesign);
           formData.append("language", outputLanguage);
-          visualReferences.map((image) => image?.image_url).filter(Boolean).slice(0, 6).forEach((imageUrl) => {
+          getSafeAiReferenceImageUrls(visualReferences).forEach((imageUrl) => {
             formData.append("reference_images", imageUrl);
           });
           if (presentationTemplateFile) formData.append("template_file", presentationTemplateFile);
