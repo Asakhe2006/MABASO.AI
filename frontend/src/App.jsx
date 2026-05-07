@@ -1717,31 +1717,132 @@ function teacherLessonToText(lesson) {
   return blocks.join("\n").trim();
 }
 
+const GUIDE_SECTION_HEADINGS = [
+  "LECTURE TITLE",
+  "SHORT SUMMARY",
+  "KEY CONCEPTS",
+  "IMPORTANT DEFINITIONS",
+  "IMPORTANT FORMULAS",
+  "WORKED EXAMPLES",
+  "STEP-BY-STEP EXPLANATIONS",
+  "ADVANTAGES AND DISADVANTAGES",
+  "COMMON MISTAKES TO AVOID",
+  "QUICK REVISION PLAN",
+  "VISUAL AIDS",
+  "REAL-WORLD EXAMPLES",
+  "PRACTICE QUESTIONS AND ANSWERS",
+  "FLASHCARDS",
+  "EXAM TIPS",
+];
+const GUIDE_SECTION_LOOKUP = new Map(
+  GUIDE_SECTION_HEADINGS.map((heading) => [heading.toLowerCase(), heading]),
+);
+
 function normalizeGuideHeading(value) {
   return (value || "").trim().toLowerCase();
+}
+
+function getGuideCanonicalHeading(value) {
+  return GUIDE_SECTION_LOOKUP.get(normalizeGuideHeading(String(value || "").replace(/\*\*/g, "").replace(/:+$/, ""))) || "";
+}
+
+function parseGuideHeadingLine(line) {
+  const trimmedLine = (line || "").trim();
+  if (!trimmedLine) return null;
+
+  const candidates = [
+    trimmedLine.replace(/^[-*+]\s+/, ""),
+    trimmedLine.replace(/^#{1,6}\s+/, ""),
+  ];
+
+  for (const candidateLine of candidates) {
+    const boldMatch = candidateLine.match(/^\*\*(.+?)\*\*\s*:?\s*(.*)$/);
+    if (boldMatch) {
+      const heading = getGuideCanonicalHeading(boldMatch[1]);
+      if (heading) {
+        return { heading, inlineContent: (boldMatch[2] || "").trim() };
+      }
+    }
+
+    const colonMatch = candidateLine.match(/^(.+?)\s*:\s*(.*)$/);
+    if (colonMatch) {
+      const heading = getGuideCanonicalHeading(colonMatch[1]);
+      if (heading) {
+        return { heading, inlineContent: (colonMatch[2] || "").trim() };
+      }
+    }
+
+    const plainHeading = getGuideCanonicalHeading(candidateLine.replace(/\*\*/g, ""));
+    if (plainHeading) {
+      return { heading: plainHeading, inlineContent: "" };
+    }
+  }
+
+  return null;
 }
 
 function extractGuideSections(markdown) {
   const text = (markdown || "").replace(/\r\n/g, "\n").trim();
   if (!text) return [];
-  const matches = Array.from(text.matchAll(/\*\*([^*]+)\*\*\s*\n+([\s\S]*?)(?=\n\*\*[^*]+\*\*\s*\n|$)/g));
-  if (!matches.length) {
-    return [{ heading: "Study Guide", normalizedHeading: "study guide", content: text }];
+
+  const lines = text.split("\n");
+  const sections = [];
+  const introLines = [];
+  let currentSection = null;
+
+  const flushCurrentSection = () => {
+    if (!currentSection) return;
+    const content = currentSection.contentLines.join("\n").trim();
+    if (currentSection.heading && content) {
+      sections.push({
+        heading: currentSection.heading,
+        normalizedHeading: normalizeGuideHeading(currentSection.heading),
+        content,
+      });
+    }
+    currentSection = null;
+  };
+
+  for (const line of lines) {
+    const parsedHeading = parseGuideHeadingLine(line);
+    if (parsedHeading) {
+      flushCurrentSection();
+      currentSection = {
+        heading: parsedHeading.heading,
+        contentLines: parsedHeading.inlineContent ? [parsedHeading.inlineContent] : [],
+      };
+      continue;
+    }
+    if (currentSection) currentSection.contentLines.push(line);
+    else introLines.push(line);
   }
-  const introText = text.slice(0, matches[0]?.index || 0).trim();
-  const sections = matches
-    .map((match) => ({
-      heading: (match[1] || "").trim(),
-      normalizedHeading: normalizeGuideHeading(match[1]),
-      content: (match[2] || "").trim(),
-    }))
-    .filter((section) => section.heading && section.content);
+
+  flushCurrentSection();
+
+  const introText = introLines.join("\n").trim();
   if (introText) {
-    sections.unshift({
-      heading: "Guide Overview",
-      normalizedHeading: "guide overview",
-      content: introText,
-    });
+    const hasLectureTitle = sections.some((section) => section.normalizedHeading === "lecture title");
+    const hasShortSummary = sections.some((section) => section.normalizedHeading === "short summary");
+    if (!hasLectureTitle) {
+      sections.unshift({
+        heading: "LECTURE TITLE",
+        normalizedHeading: "lecture title",
+        content: introText,
+      });
+    } else if (!hasShortSummary) {
+      const titleIndex = sections.findIndex((section) => section.normalizedHeading === "lecture title");
+      const summarySection = {
+        heading: "SHORT SUMMARY",
+        normalizedHeading: "short summary",
+        content: introText,
+      };
+      if (titleIndex >= 0) sections.splice(titleIndex + 1, 0, summarySection);
+      else sections.unshift(summarySection);
+    }
+  }
+
+  if (!sections.length) {
+    return [{ heading: "Study Guide", normalizedHeading: "study guide", content: text }];
   }
   return sections;
 }
@@ -9710,14 +9811,6 @@ export default function App() {
                         <div className="min-w-0">
                           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Topic</p>
                           <h4 className="mt-2 text-3xl font-semibold text-white">{guideTopic}</h4>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
-                            {visibleGuideSections.length} guide section{visibleGuideSections.length === 1 ? "" : "s"}
-                          </div>
-                          <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-emerald-50">
-                            Q&amp;A stays in the guide
-                          </div>
                         </div>
                       </div>
                       {guideSummarySection?.content ? (
