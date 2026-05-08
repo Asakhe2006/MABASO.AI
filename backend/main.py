@@ -2333,6 +2333,11 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
                 "Answer only from the provided lecture context. "
                 "If the material does not support an answer, say that it was not clearly covered. "
                 "Be helpful, concise, and use bullets when they make the answer easier to study. "
+                "After every answer, end with exactly one short follow-up question that is tailored to the exact concept, "
+                "formula, worked example, or confusion the student just asked about. "
+                "The follow-up should feel like a real tutor guiding the next step, not a generic closing line. "
+                "For calculations or derivations, prefer offering to show the next step or the full step-by-step method. "
+                "Put that follow-up question in its own final paragraph. "
                 f"Reply in {output_language}."
             ),
         }
@@ -2362,6 +2367,31 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     else:
         messages.append({"role": "user", "content": question_text})
     return messages
+
+
+def ensure_study_chat_follow_up(answer: str, question: str) -> str:
+    cleaned = (answer or "").strip()
+    if not cleaned:
+        return "I could not form a clear answer from the lecture context.\n\nWould you like me to narrow it down and walk through that exact part step by step?"
+
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", cleaned) if part.strip()]
+    if paragraphs:
+        last_paragraph = paragraphs[-1]
+        if last_paragraph.endswith("?") or "?" in last_paragraph:
+            return cleaned
+
+    focus = compact_text(question).replace('"', "'")
+    if len(focus) > 140:
+        focus = (focus[:137].rsplit(" ", 1)[0].strip() or focus[:137].strip()) + "..."
+
+    if focus:
+        follow_up = (
+            f'Would you like me to unpack "{focus}" step by step and show how each part connects to the lecture method?'
+        )
+    else:
+        follow_up = "Would you like me to unpack that step by step and show how each part connects to the lecture method?"
+
+    return f"{cleaned}\n\n{follow_up}"
 
 
 def sanitize_download_filename(value: str) -> str:
@@ -10502,7 +10532,8 @@ async def ask_study_assistant(
         return (response.choices[0].message.content or "").strip()
 
     answer = await asyncio.to_thread(_ask)
-    return {"answer": make_formulas_human_readable(answer)}
+    answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question)
+    return {"answer": make_formulas_human_readable(answer_with_follow_up)}
 
 
 @app.get("/collaboration/rooms")
