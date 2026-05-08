@@ -10085,6 +10085,30 @@ export default function App() {
                         <ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown>
                       </div>
                     )}
+
+                    <div className="rounded-[22px] border border-white/10 bg-slate-950/80 p-3 sm:p-4">
+                      <div className="force-mobile-stack flex items-end gap-3">
+                        <textarea
+                          value={chatQuestion}
+                          onChange={(event) => setChatQuestion(event.target.value)}
+                          onKeyDown={handleStudyChatKeyDown}
+                          rows={1}
+                          className="min-h-[48px] flex-1 resize-none rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500"
+                          placeholder="Ask anything from this lecture..."
+                        />
+                        <button
+                          type="button"
+                          onClick={askStudyAssistant}
+                          disabled={isAskingChat}
+                          className="flex h-10 w-10 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
+                          aria-label="Send study question"
+                        >
+                          <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                            <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
