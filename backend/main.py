@@ -6813,10 +6813,30 @@ TEACHER_GUIDE_SECTION_HEADINGS = [
     "REAL-WORLD EXAMPLES",
     "EXAM TIPS",
 ]
-TEACHER_TARGET_MINUTES = 15
-TEACHER_MINIMUM_MINUTES = 14.5
-TEACHER_TARGET_WORDS = 2200
-TEACHER_SEGMENT_LIMIT = 30
+TEACHER_TARGET_MINUTES = 22
+TEACHER_MINIMUM_MINUTES = 20.0
+TEACHER_TARGET_WORDS = 3200
+TEACHER_SEGMENT_LIMIT = 42
+TEACHER_REQUIRED_SECTION_COUNTS = {
+    "SHORT SUMMARY": 1,
+    "KEY CONCEPTS": 1,
+    "IMPORTANT DEFINITIONS": 1,
+    "IMPORTANT FORMULAS": 1,
+    "WORKED EXAMPLES": 2,
+    "STEP-BY-STEP EXPLANATIONS": 2,
+}
+TEACHER_SOURCE_HEADING_HINTS = {
+    "SHORT SUMMARY": ("summary", "overview", "introduction", "objective", "topic"),
+    "KEY CONCEPTS": ("concept", "principle", "main idea", "key point", "important"),
+    "IMPORTANT DEFINITIONS": ("definition", "defined", "means", "refers to", "is called"),
+    "IMPORTANT FORMULAS": ("formula", "equation", "law", "rule", "="),
+    "WORKED EXAMPLES": ("worked example", "example", "sample problem", "illustration", "calculate"),
+    "STEP-BY-STEP EXPLANATIONS": ("step", "steps", "procedure", "method", "process", "how to"),
+    "COMMON MISTAKES TO AVOID": ("mistake", "avoid", "common error", "trap"),
+}
+TEACHER_CONTEXT_PRIORITY_TERMS = tuple(
+    dict.fromkeys(term for terms in TEACHER_SOURCE_HEADING_HINTS.values() for term in terms)
+)
 TEACHER_SECTION_TARGET_SEGMENTS = {
     "LECTURE TITLE": 1,
     "SHORT SUMMARY": 2,
@@ -6834,7 +6854,191 @@ TEACHER_SECTION_TARGET_SEGMENTS = {
 }
 
 
-def build_teacher_section_outline(summary: str) -> list[dict[str, str]]:
+def teacher_heading_rank(heading: str) -> int:
+    cleaned = compact_text(heading)
+    try:
+        return TEACHER_GUIDE_SECTION_HEADINGS.index(cleaned)
+    except ValueError:
+        return len(TEACHER_GUIDE_SECTION_HEADINGS)
+
+
+def split_teacher_source_passages(text: str) -> list[str]:
+    cleaned = compact_text(text)
+    if not cleaned:
+        return []
+
+    paragraphs = [compact_text(item) for item in re.split(r"\n\s*\n+", cleaned) if compact_text(item)]
+    if len(paragraphs) >= 4:
+        return paragraphs
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if not lines:
+        return paragraphs or [cleaned]
+
+    grouped: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        current.append(line)
+        joined = " ".join(current).strip()
+        if len(joined) >= 320 or (line.endswith((".", ":", ";", "?", "!")) and len(joined) >= 160):
+            grouped.append(joined)
+            current = []
+
+    if current:
+        grouped.append(" ".join(current).strip())
+
+    return grouped or paragraphs or [cleaned]
+
+
+def score_teacher_source_passage(passage: str, heading: str) -> int:
+    lowered = (passage or "").lower()
+    if not lowered:
+        return 0
+
+    score = 0
+    for keyword in TEACHER_SOURCE_HEADING_HINTS.get(heading, ()):
+        if keyword in lowered:
+            score += 2 if " " in keyword else 1
+
+    if heading == "IMPORTANT FORMULAS":
+        score += lowered.count("=")
+        score += lowered.count("therefore")
+    elif heading == "WORKED EXAMPLES":
+        score += len(re.findall(r"\bexample\b", lowered))
+        score += len(re.findall(r"\bsolve\b|\bcalculate\b|\bfind\b", lowered))
+    elif heading == "STEP-BY-STEP EXPLANATIONS":
+        score += len(re.findall(r"\bstep\s*\d+\b", lowered)) * 2
+        score += len(re.findall(r"\bfirst\b|\bthen\b|\bnext\b|\bfinally\b", lowered))
+    elif heading == "IMPORTANT DEFINITIONS":
+        score += len(re.findall(r"\bdefined as\b|\bmeans\b|\brefers to\b", lowered))
+
+    return score
+
+
+def extract_teacher_source_excerpt(source_text: str, heading: str, limit: int = 900) -> str:
+    passages = split_teacher_source_passages(source_text)
+    if not passages:
+        return ""
+
+    matches: list[tuple[int, int, str]] = []
+    for index, passage in enumerate(passages):
+        score = score_teacher_source_passage(passage, heading)
+        if score > 0:
+            matches.append((score, index, compact_text(passage)))
+
+    if not matches:
+        if heading == "SHORT SUMMARY":
+            return compact_text(passages[0][:limit])
+        if heading == "KEY CONCEPTS":
+            return compact_text("\n\n".join(passages[:2])[:limit])
+        return ""
+
+    selected: list[tuple[int, str]] = []
+    used_indexes: set[int] = set()
+    budget = 0
+    for score, index, passage in sorted(matches, key=lambda item: (-item[0], item[1])):
+        if not passage or index in used_indexes:
+            continue
+        addition = len(passage) + (2 if selected else 0)
+        if selected and budget + addition > limit:
+            continue
+        selected.append((index, passage))
+        used_indexes.add(index)
+        budget += addition
+        if budget >= limit or len(selected) >= 3:
+            break
+
+    if not selected:
+        top_passage = matches[0][2]
+        return compact_text(top_passage[:limit])
+
+    selected.sort(key=lambda item: item[0])
+    excerpt = "\n\n".join(passage for _, passage in selected).strip()
+    return compact_text(excerpt[:limit])
+
+
+def extract_teacher_priority_excerpt(
+    source_text: str,
+    limit: int,
+    excluded_passages: list[str] | None = None,
+) -> str:
+    passages = split_teacher_source_passages(source_text)
+    if not passages:
+        return ""
+
+    excluded = [compact_text(item) for item in (excluded_passages or []) if compact_text(item)]
+    candidates: list[tuple[int, int, str]] = []
+    for index, passage in enumerate(passages):
+        normalized = compact_text(passage)
+        if not normalized:
+            continue
+        if any(normalized in blocked or blocked in normalized for blocked in excluded):
+            continue
+        lowered = normalized.lower()
+        score = sum(1 for term in TEACHER_CONTEXT_PRIORITY_TERMS if term in lowered)
+        score += len(re.findall(r"\bstep\s*\d+\b", lowered)) * 2
+        if "=" in normalized:
+            score += 2
+        if score > 0:
+            candidates.append((score, index, normalized))
+
+    if not candidates:
+        return ""
+
+    selected: list[tuple[int, str]] = []
+    budget = 0
+    for score, index, passage in sorted(candidates, key=lambda item: (-item[0], item[1])):
+        addition = len(passage) + (2 if selected else 0)
+        if selected and budget + addition > limit:
+            continue
+        selected.append((index, passage))
+        budget += addition
+        if budget >= limit or len(selected) >= 4:
+            break
+
+    selected.sort(key=lambda item: item[0])
+    excerpt = "\n\n".join(passage for _, passage in selected).strip()
+    return compact_text(excerpt[:limit])
+
+
+def build_teacher_context_block(label: str, value: str, limit: int) -> str:
+    cleaned = compact_text(value)
+    if not cleaned:
+        return ""
+    if len(cleaned) <= limit:
+        return f"{label}\n{cleaned}"
+
+    head_budget = min(max(limit // 3, 1200), 2200)
+    tail_budget = min(max(limit // 6, 700), 1400)
+    priority_budget = max(650, limit - head_budget - tail_budget - 260)
+    if head_budget + tail_budget + priority_budget > limit:
+        priority_budget = max(500, limit - head_budget - tail_budget - 120)
+
+    opening_excerpt = cleaned[:head_budget].rstrip()
+    later_excerpt = cleaned[-tail_budget:].lstrip()
+    priority_excerpt = extract_teacher_priority_excerpt(
+        cleaned,
+        priority_budget,
+        excluded_passages=[opening_excerpt, later_excerpt],
+    )
+
+    parts = [f"OPENING NOTES\n{opening_excerpt}"]
+    if priority_excerpt:
+        parts.append(f"PRIORITY EXCERPTS\n{priority_excerpt}")
+    parts.append(f"LATER NOTES\n{later_excerpt}")
+    parts.append(
+        "NOTE: This source was condensed to preserve the opening lesson flow together with later definitions, formulas, worked examples, and method steps."
+    )
+    return f"{label}\n" + "\n\n".join(part for part in parts if part)
+
+
+def build_teacher_section_outline(
+    summary: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    past_question_papers: str = "",
+    transcript: str = "",
+) -> list[dict[str, str]]:
     sections: list[dict[str, str]] = []
     seen_headings: set[str] = set()
     for heading in TEACHER_GUIDE_SECTION_HEADINGS:
@@ -6843,7 +7047,19 @@ def build_teacher_section_outline(summary: str) -> list[dict[str, str]]:
             continue
         seen_headings.add(heading)
         sections.append({"section_heading": heading, "content": content})
-    return sections
+
+    source_texts = [lecture_notes, lecture_slides, past_question_papers, transcript]
+    for heading in TEACHER_REQUIRED_SECTION_COUNTS:
+        if heading in seen_headings:
+            continue
+        for source_text in source_texts:
+            content = extract_teacher_source_excerpt(source_text, heading)
+            if not content:
+                continue
+            seen_headings.add(heading)
+            sections.append({"section_heading": heading, "content": content})
+            break
+    return sorted(sections, key=lambda item: teacher_heading_rank(item["section_heading"]))
 
 
 def normalize_teacher_segments(
@@ -6865,7 +7081,7 @@ def normalize_teacher_segments(
         text = compact_text(raw_segment.get("text"))
         if not text:
             continue
-        for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=760, max_words=125), start=1):
+        for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=920, max_words=145), start=1):
             normalized_segments.append(
                 {
                     "index": len(normalized_segments) + 1,
@@ -6886,12 +7102,26 @@ def normalize_teacher_segments(
 def build_teacher_lesson_fallback(
     summary: str,
     transcript: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    past_question_papers: str = "",
 ) -> dict[str, Any]:
-    outline = build_teacher_section_outline(summary)
+    outline = build_teacher_section_outline(
+        summary,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+        transcript,
+    )
     title_lines = [line.strip() for line in extract_section(summary, "LECTURE TITLE").splitlines() if line.strip()]
     topic = title_lines[0] if title_lines else "This Lecture Topic"
     short_summary = compact_text(extract_section(summary, "SHORT SUMMARY"))
-    transcript_chunks = split_podcast_text(transcript, max_chars=430, max_words=70)
+    fallback_source_text = "\n\n".join(
+        part.strip()
+        for part in [transcript, lecture_notes, lecture_slides, past_question_papers]
+        if compact_text(part)
+    )
+    transcript_chunks = split_podcast_text(fallback_source_text, max_chars=430, max_words=70)
     segments: list[dict[str, Any]] = []
     transcript_index = 0
 
@@ -6985,7 +7215,7 @@ def build_teacher_lesson_fallback(
                 "If the answer still feels fuzzy, that is fine. We are building understanding one clear step at a time."
             )
 
-            for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=760, max_words=125), start=1):
+            for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=920, max_words=145), start=1):
                 prompt = section_prompts.get(heading, "What do you think is the key idea here?") if chunk_index == 1 and segment_number == 0 else ""
                 segments.append(
                     {
@@ -7022,7 +7252,7 @@ def build_teacher_lesson_fallback(
             if transcript_detail:
                 spoken_text += f"{transcript_detail} "
             spoken_text += "Ask yourself what changed in your understanding compared with a few minutes ago."
-            for chunk in split_podcast_text(spoken_text, max_chars=760, max_words=125):
+            for chunk in split_podcast_text(spoken_text, max_chars=920, max_words=145):
                 segments.append(
                     {
                         "index": len(segments) + 1,
@@ -7064,6 +7294,92 @@ def build_teacher_lesson_fallback(
         ),
         "segments": segments[:TEACHER_SEGMENT_LIMIT],
     }
+
+
+def sort_teacher_segments_by_heading_order(
+    segments: list[dict[str, Any]],
+    allowed_headings: list[str],
+) -> list[dict[str, Any]]:
+    heading_rank = {
+        heading: teacher_heading_rank(heading)
+        for heading in allowed_headings
+    }
+    ordered = sorted(
+        enumerate(segments),
+        key=lambda item: (
+            heading_rank.get(
+                compact_text(item[1].get("section_heading")),
+                teacher_heading_rank(compact_text(item[1].get("section_heading"))),
+            ),
+            item[0],
+        ),
+    )
+    return [
+        {
+            **segment,
+            "index": index,
+        }
+        for index, (_, segment) in enumerate(ordered[:TEACHER_SEGMENT_LIMIT], start=1)
+    ]
+
+
+def ensure_teacher_section_coverage(
+    segments: list[dict[str, Any]],
+    fallback_segments: list[dict[str, Any]],
+    allowed_headings: list[str],
+) -> list[dict[str, Any]]:
+    if not segments:
+        return fallback_segments[:TEACHER_SEGMENT_LIMIT]
+
+    allowed_set = set(allowed_headings)
+    heading_counts: dict[str, int] = {}
+    for segment in segments:
+        heading = compact_text(segment.get("section_heading"))
+        if heading:
+            heading_counts[heading] = heading_counts.get(heading, 0) + 1
+
+    needed_headings = {
+        heading: count
+        for heading, count in TEACHER_REQUIRED_SECTION_COUNTS.items()
+        if heading in allowed_set and heading_counts.get(heading, 0) < count
+    }
+    if not needed_headings:
+        return sort_teacher_segments_by_heading_order(segments, allowed_headings)
+
+    extended_segments = list(segments)
+    seen = {
+        (
+            compact_text(segment.get("section_heading")),
+            compact_text(segment.get("text")),
+        )
+        for segment in extended_segments
+        if compact_text(segment.get("text"))
+    }
+
+    for fallback_segment in fallback_segments:
+        heading = compact_text(fallback_segment.get("section_heading"))
+        if heading not in needed_headings:
+            continue
+        key = (
+            heading,
+            compact_text(fallback_segment.get("text")),
+        )
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        extended_segments.append(
+            {
+                **fallback_segment,
+                "index": len(extended_segments) + 1,
+            }
+        )
+        heading_counts[heading] = heading_counts.get(heading, 0) + 1
+        if heading_counts[heading] >= needed_headings[heading]:
+            del needed_headings[heading]
+        if not needed_headings or len(extended_segments) >= TEACHER_SEGMENT_LIMIT:
+            break
+
+    return sort_teacher_segments_by_heading_order(extended_segments[:TEACHER_SEGMENT_LIMIT], allowed_headings)
 
 
 def extend_teacher_segments_to_target(
@@ -7496,8 +7812,20 @@ async def generate_teacher_lesson_package(
     job_id: str,
     output_language: str,
 ) -> dict[str, Any]:
-    outline = build_teacher_section_outline(summary)
-    fallback_package = build_teacher_lesson_fallback(summary, transcript)
+    outline = build_teacher_section_outline(
+        summary,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+        transcript,
+    )
+    fallback_package = build_teacher_lesson_fallback(
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+    )
     allowed_headings = [item["section_heading"] for item in outline] or ["SHORT SUMMARY"]
     outline_block = "\n".join(
         f"- {item['section_heading']}: {compact_text(item['content'])[:260]}"
@@ -7505,11 +7833,11 @@ async def generate_teacher_lesson_package(
     ) or "- SHORT SUMMARY: Explain the main lecture idea clearly."
 
     context_blocks = [
-        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
-        trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
-        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
-        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
-        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+        build_teacher_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        build_teacher_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        build_teacher_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        build_teacher_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        build_teacher_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
         f"AVAILABLE GUIDE HEADINGS\n{outline_block}",
     ]
     combined_source = "\n\n".join(block for block in context_blocks if block)
@@ -7517,7 +7845,7 @@ async def generate_teacher_lesson_package(
     def _generate_teacher_script(revision_note: str = "") -> dict[str, Any]:
         response = client.with_options(timeout=TEACHER_REQUEST_TIMEOUT).chat.completions.create(
             model=TEACHER_SCRIPT_MODEL,
-            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 5200),
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 6800),
             messages=[
                 {
                     "role": "system",
@@ -7530,13 +7858,14 @@ async def generate_teacher_lesson_package(
                         "- Sound like one friendly lecturer teaching a real class, not reading notes line by line.\n"
                         "- Use a warm, calm, supportive tone with occasional light humor.\n"
                         "- Ask reflective questions such as 'what do you think will happen next' when it fits naturally.\n"
-                        f"- The full lesson must land at roughly {TEACHER_TARGET_MINUTES} to 18 minutes and about {TEACHER_TARGET_WORDS} spoken words in total.\n"
-                        "- Aim for about 18 to 28 teaching segments before any automatic chunk splitting.\n"
+                        f"- The full lesson must land at roughly {TEACHER_MINIMUM_MINUTES:.0f} to {TEACHER_TARGET_MINUTES + 2} minutes and about {TEACHER_TARGET_WORDS} spoken words in total.\n"
+                        "- Aim for about 24 to 36 teaching segments before any automatic chunk splitting.\n"
                         "- Explain the idea, why it matters, and how to think about it in an exam or problem-solving situation.\n"
                         "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
+                        "- Do not skip the opening lesson flow, top notes, or early definitions when the source starts with foundational explanations.\n"
                         "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing and when the formula applies.\n"
                         "- Do not create spoken segments for FLASHCARDS or PRACTICE QUESTIONS AND ANSWERS.\n"
-                        "- Keep each segment between about 85 and 150 spoken words.\n"
+                        "- Keep each segment between about 95 and 160 spoken words.\n"
                         "- Do not use bullet points, markdown, stage directions, or sound-effect text.\n"
                         "- Do not output fake dialogue or multiple speakers.\n"
                         f"- Write everything in {output_language}."
@@ -7549,7 +7878,8 @@ async def generate_teacher_lesson_package(
                         "The student should feel like a warm teacher is teaching the topic, pausing to ask questions, "
                         "making one or two gentle jokes, and helping them reason through the content.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
-                        "Spend extra time making worked examples and method steps very clear.\n\n"
+                        "Spend extra time making worked examples, definitions, and method steps very clear.\n"
+                        "Cover the beginning of the notes properly before moving deeper into the lesson.\n\n"
                         + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
                         + f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
                         + combined_source
@@ -7571,6 +7901,11 @@ async def generate_teacher_lesson_package(
         fallback_package["segments"],
         allowed_headings,
     )
+    normalized_segments = ensure_teacher_section_coverage(
+        normalized_segments,
+        fallback_package["segments"],
+        allowed_headings,
+    )
     estimated_minutes = estimate_podcast_total_minutes(normalized_segments)
     if normalized_segments and estimated_minutes < TEACHER_MINIMUM_MINUTES:
         update_job(job_id, status="processing", stage="Extending teacher lesson depth", progress=24)
@@ -7579,13 +7914,19 @@ async def generate_teacher_lesson_package(
                 _generate_teacher_script,
                 (
                     f"The first teacher draft landed at about {estimated_minutes:.1f} minutes, which is too short. "
-                    f"Rewrite the whole lesson so it lands around {TEACHER_TARGET_MINUTES} to 18 minutes, "
-                    "spend much more time on worked examples and step-by-step reasoning, "
+                    f"Rewrite the whole lesson so it lands around {TEACHER_MINIMUM_MINUTES:.0f} to {TEACHER_TARGET_MINUTES + 2} minutes, "
+                    "spend much more time on worked examples, definitions, and step-by-step reasoning, "
+                    "do not skip the beginning of the lesson or the top lecturer notes, "
                     "and keep the explanation warm, natural, and non-repetitive."
                 ),
             )
             normalized_segments = normalize_teacher_segments(
                 generated_package.get("segments"),
+                fallback_package["segments"],
+                allowed_headings,
+            )
+            normalized_segments = ensure_teacher_section_coverage(
+                normalized_segments,
                 fallback_package["segments"],
                 allowed_headings,
             )
@@ -7595,6 +7936,11 @@ async def generate_teacher_lesson_package(
     if not normalized_segments:
         normalized_segments = fallback_package["segments"]
     normalized_segments = extend_teacher_segments_to_target(normalized_segments, fallback_package["segments"])
+    normalized_segments = ensure_teacher_section_coverage(
+        normalized_segments,
+        fallback_package["segments"],
+        allowed_headings,
+    )
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
 
