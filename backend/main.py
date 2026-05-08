@@ -134,6 +134,9 @@ MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_TRANSCRIPT_STUDY_GUI
 STUDY_GUIDE_REQUEST_TIMEOUT = float(os.getenv("STUDY_GUIDE_REQUEST_TIMEOUT", "90"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
+TRANSCRIPTION_JOB_TIMEOUT = float(
+    os.getenv("TRANSCRIPTION_JOB_TIMEOUT", str(max(int(TRANSCRIPTION_REQUEST_TIMEOUT * 4), 3600)))
+)
 VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "1200"))
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
@@ -146,6 +149,8 @@ SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
+ADMIN_DASHBOARD_AUDIT_LOG_LIMIT = int(os.getenv("ADMIN_DASHBOARD_AUDIT_LOG_LIMIT", "8000"))
+ADMIN_DASHBOARD_HISTORY_LIMIT = int(os.getenv("ADMIN_DASHBOARD_HISTORY_LIMIT", "1200"))
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 ADMIN_EMAILS_RAW = os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")).strip()
@@ -2925,8 +2930,8 @@ def compute_session_analytics(
 
 def build_admin_dashboard_snapshot() -> dict[str, Any]:
     now = utc_now()
-    logs = load_audit_logs(limit=1600, days=35)
-    history_items = load_history_items_with_owners(limit=300)
+    logs = load_audit_logs(limit=ADMIN_DASHBOARD_AUDIT_LOG_LIMIT, days=35)
+    history_items = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
 
     with get_db_connection() as connection:
         user_rows = connection.execute(
@@ -4175,7 +4180,8 @@ async def apple_login(payload: AppleAuthRequest, request: Request):
 
 
 @app.get("/auth/me")
-async def auth_me(authorization: str | None = Header(None)):
+async def auth_me(request: Request, authorization: str | None = Header(None)):
+    started_at = utc_now()
     token = get_authorization_token(authorization)
     context = get_session_context(token)
     if not context:
@@ -4184,6 +4190,15 @@ async def auth_me(authorization: str | None = Header(None)):
     refreshed_token = ""
     if should_refresh_session_token(token):
         refreshed_token = create_session(context["email"], session_mode=context["mode"])
+    record_audit_log(
+        action="auth.session.resume",
+        email=context["email"],
+        request=request,
+        resource_type="auth",
+        resource_name=context["mode"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"token_refreshed": bool(refreshed_token)},
+    )
     response = build_auth_response(context["email"], refreshed_token or token)
     response["token"] = refreshed_token
     return response
@@ -5904,7 +5919,7 @@ async def transcribe_audio(file_path: Path, job_id: str) -> str:
                 except OSError:
                     logger.warning("Could not delete chunk directory: %s", chunk_dir)
 
-    return await asyncio.wait_for(asyncio.to_thread(_transcribe), timeout=TRANSCRIPTION_REQUEST_TIMEOUT)
+    return await asyncio.wait_for(asyncio.to_thread(_transcribe), timeout=TRANSCRIPTION_JOB_TIMEOUT)
 
 
 def build_fallback_study_guide(transcript: str) -> str:

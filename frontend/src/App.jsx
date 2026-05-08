@@ -47,6 +47,8 @@ const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
 const RECORDING_SILENCE_THRESHOLD = 0.02;
+const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
+const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -1545,6 +1547,13 @@ function isTransientHttpStatus(status) {
   return [502, 503, 504].includes(Number(status));
 }
 
+function getAdaptiveFileUploadTimeoutMs(file, { minMs = MIN_FILE_UPLOAD_TIMEOUT_MS, maxMs = LARGE_LECTURE_UPLOAD_TIMEOUT_MS } = {}) {
+  const sizeBytes = Number(file?.size || 0);
+  const sizeMb = sizeBytes > 0 ? sizeBytes / (1024 * 1024) : 0;
+  const scaledMs = Math.ceil(Math.max(sizeMb, 1) / 20) * 60 * 1000;
+  return Math.min(maxMs, Math.max(minMs, scaledMs));
+}
+
 async function fetchJsonWithTransientRetries(resource, options = {}, { timeoutMs = 15000, retries = 0 } = {}) {
   let attempt = 0;
   while (true) {
@@ -2148,7 +2157,9 @@ export default function App() {
   const hasRestoredRecoveredRecordingRef = useRef(false);
   const hasResumedPendingJobRef = useRef(false);
   const teacherSectionRefs = useRef({});
+  const teacherExamplesPanelRef = useRef(null);
   const teacherPlaybackRunRef = useRef(0);
+  const teacherAutoTabRef = useRef("");
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -2269,6 +2280,10 @@ export default function App() {
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
   const isAdminAccount = authAvailableModes.includes("admin");
+  const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
+    const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
+    return normalizedHeading.includes("worked example") || normalizedHeading.includes("step-by-step explanation") || normalizedHeading.includes("step by step explanation");
+  };
 
   const getActiveWorkspaceOwnerEmail = () => normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || authEmailInput || "");
 
@@ -2387,8 +2402,27 @@ export default function App() {
     }
   };
 
+  const returnTeacherToGuide = (sectionHeading = "") => {
+    teacherAutoTabRef.current = "";
+    setActiveTab("guide");
+    if (!sectionHeading || typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      scrollTeacherToSection(sectionHeading);
+    });
+  };
+
+  const syncTeacherSegmentToolView = (sectionHeading = "") => {
+    if (formattedExample.trim() && isWorkedExampleTeacherSegment(sectionHeading)) {
+      teacherAutoTabRef.current = "examples";
+      setActiveTab("examples");
+      return;
+    }
+    returnTeacherToGuide(sectionHeading);
+  };
+
   const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
     teacherPlaybackRunRef.current += 1;
+    teacherAutoTabRef.current = "";
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -2396,6 +2430,18 @@ export default function App() {
     setIsTeacherPaused(false);
     if (resetIndex) setActiveTeacherSegmentIndex(-1);
   };
+
+  useEffect(() => {
+    if (activeTab !== "examples" || teacherAutoTabRef.current !== "examples" || typeof window === "undefined") {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeTab, activeTeacherSegmentIndex]);
 
   useEffect(() => {
     setSelectedPresentationSlideIndex(0);
@@ -6127,7 +6173,10 @@ export default function App() {
         });
         navigator.mediaSession.setActionHandler("pause", () => pauseTeacherLesson());
         navigator.mediaSession.setActionHandler("play", () => resumeTeacherLesson());
-        navigator.mediaSession.setActionHandler("stop", () => stopTeacherPlayback({ resetIndex: true }));
+        navigator.mediaSession.setActionHandler("stop", () => {
+          stopTeacherPlayback({ resetIndex: true });
+          returnTeacherToGuide(activeSegment?.sectionHeading || "");
+        });
       } else {
         navigator.mediaSession.metadata = null;
         clearHandlers();
@@ -7345,7 +7394,7 @@ export default function App() {
       const response = await authFetch("/extract-slide-text/", {
         method: "POST",
         body: formData,
-        timeoutMs: STUDY_SOURCE_EXTRACT_TIMEOUT_MS,
+        timeoutMs: Math.max(STUDY_SOURCE_EXTRACT_TIMEOUT_MS, getAdaptiveFileUploadTimeoutMs(selectedFile)),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
@@ -7472,7 +7521,14 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      const response = await authFetch("/upload-audio/", { method: "POST", body: formData });
+      const response = await authFetch("/upload-audio/", {
+        method: "POST",
+        body: formData,
+        timeoutMs: getAdaptiveFileUploadTimeoutMs(selectedFile, {
+          minMs: 5 * 60 * 1000,
+          maxMs: LARGE_LECTURE_UPLOAD_TIMEOUT_MS,
+        }),
+      });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || failureStatus);
       persistPendingJob({
@@ -8356,6 +8412,7 @@ export default function App() {
     const runId = teacherPlaybackRunRef.current + 1;
     teacherPlaybackRunRef.current = runId;
     window.speechSynthesis.cancel();
+    const lastSectionHeading = normalizedLesson.segments[normalizedLesson.segments.length - 1]?.sectionHeading || "";
 
     const voices = window.speechSynthesis.getVoices();
     const selectedVoice = voices.find((voice) => voice.name === selectedTeacherVoiceName)
@@ -8369,6 +8426,7 @@ export default function App() {
         setIsTeacherPlaying(false);
         setIsTeacherPaused(false);
         setActiveTeacherSegmentIndex(-1);
+        returnTeacherToGuide(lastSectionHeading);
         setStatus("Teacher mode finished the lesson.");
         return;
       }
@@ -8384,7 +8442,7 @@ export default function App() {
         setActiveTeacherSegmentIndex(segmentIndex);
         setIsTeacherPlaying(true);
         setIsTeacherPaused(false);
-        scrollTeacherToSection(segment.sectionHeading);
+        syncTeacherSegmentToolView(segment.sectionHeading);
       };
       utterance.onend = () => {
         if (teacherPlaybackRunRef.current !== runId) return;
@@ -8422,6 +8480,12 @@ export default function App() {
       return;
     }
     playTeacherLesson(teacherLessonData, { startIndex: Math.max(0, activeTeacherSegmentIndex) });
+  };
+
+  const stopTeacherLessonAndReturnToGuide = ({ resetIndex = true } = {}) => {
+    const sectionHeading = activeTeacherSegment?.sectionHeading || "";
+    stopTeacherPlayback({ resetIndex });
+    returnTeacherToGuide(sectionHeading);
   };
 
   const generateTeacherLesson = async ({ autoplay = true } = {}) => {
@@ -9954,7 +10018,7 @@ export default function App() {
                           <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Play</button>
                           <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
                           <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Resume</button>
-                          <button type="button" onClick={() => stopTeacherPlayback({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Stop</button>
+                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Stop</button>
                         </div>
                       </div>
                       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
@@ -10024,7 +10088,7 @@ export default function App() {
                   </div>
                 ) : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
-                {activeTab === "examples" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
+                {activeTab === "examples" ? <div ref={teacherExamplesPanelRef} className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedExample || "Worked examples will appear here after study guide generation."}</div> : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
                 {activeTab === "quiz" ? (selectedQuizQuestions.length ? renderQuizSection({
