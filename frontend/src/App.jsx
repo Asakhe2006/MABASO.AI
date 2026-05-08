@@ -2890,25 +2890,6 @@ export default function App() {
     </section>
   ) : null;
 
-  const workspaceSnapshotPanel = (
-    <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-      <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Workspace Snapshot</p>
-      <div className="mt-4 space-y-3 text-sm text-slate-300">
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Lecture file: {workspaceFileLabel}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Lecture notes: {lectureNoteFileNames.length ? lectureNotesFileName || "Added" : "Not added"}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Slide sources: {lectureSlideFileNames.length || 0}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Past papers: {pastQuestionPaperFileNames.length || 0}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Memo reference: {pastQuestionMemo.trim() ? "Added" : "Not added"}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Study photos: {studyImages.length || 0}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Test questions: {quizQuestions.length || 0}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Presentation ready: {presentationData.slides.length ? "Yes" : "Not yet"}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Podcast ready: {podcastData.script ? "Yes" : "Not yet"}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Teacher mode ready: {teacherLessonData.segments.length ? "Yes" : "Not yet"}</div>
-        <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Saved workspaces for this email: {historyItems.length}</div>
-      </div>
-    </div>
-  );
-
   const renderHelpAboutPage = () => (
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
@@ -10158,7 +10139,6 @@ export default function App() {
               </div>
             </div>
 
-            {workspaceSnapshotPanel}
           </div>
         </section> : null}
 
