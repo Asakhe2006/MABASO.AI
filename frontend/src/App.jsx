@@ -8935,7 +8935,6 @@ export default function App() {
       setChatMessages((current) => [...current, { role: "user", content: userMessage }, { role: "assistant", content: data.answer || "No answer returned." }]);
       setChatQuestion("");
       setChatReferenceImages([]);
-      setActiveTab("chat");
       setStatus("MABASO answered your question.");
     } catch (err) {
       setError(err.message || "Study chat failed.");
@@ -10108,6 +10107,20 @@ export default function App() {
                           </svg>
                         </button>
                       </div>
+                      {isAskingChat ? <p className="mt-3 text-xs text-slate-400">Working through your lecture question...</p> : null}
+                      {chatMessages.length ? (
+                        <div className="mt-3 space-y-3 rounded-[20px] border border-emerald-300/15 bg-emerald-300/10 p-3">
+                          {chatMessages.slice(-2).map((message, index) => (
+                            <div
+                              key={`${message.role}-${chatMessages.length - Math.min(chatMessages.length, 2) + index}`}
+                              className={`rounded-2xl px-3 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-slate-950/70 text-slate-100" : "border border-white/10 bg-white/5 text-white"}`}
+                            >
+                              <p className="mb-2 text-[11px] uppercase tracking-[0.22em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p>
+                              <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
