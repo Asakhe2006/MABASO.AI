@@ -10066,42 +10066,45 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="rounded-[22px] border border-white/10 bg-slate-950/80 p-3 sm:p-4">
-                      <div className="force-mobile-stack flex items-end gap-3">
-                        <textarea
-                          value={chatQuestion}
-                          onChange={(event) => setChatQuestion(event.target.value)}
-                          onKeyDown={handleStudyChatKeyDown}
-                          rows={1}
-                          className="min-h-[48px] flex-1 resize-none rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500"
-                          placeholder="Ask anything from this lecture..."
-                        />
-                        <button
-                          type="button"
-                          onClick={askStudyAssistant}
-                          disabled={isAskingChat}
-                          className="flex h-10 w-10 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
-                          aria-label="Send study question"
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                            <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                          </svg>
-                        </button>
-                      </div>
-                      {isAskingChat ? <p className="mt-3 text-xs text-slate-400">Working through your lecture question...</p> : null}
+                    <div className="space-y-3">
                       {chatMessages.length ? (
-                        <div className="mt-3 space-y-3 rounded-[20px] border border-emerald-300/15 bg-emerald-300/10 p-3">
-                          {chatMessages.slice(-2).map((message, index) => (
+                        <div className="space-y-4 rounded-[22px] border border-white/10 bg-slate-950/80 p-4">
+                          {chatMessages.map((message, index) => (
                             <div
-                              key={`${message.role}-${chatMessages.length - Math.min(chatMessages.length, 2) + index}`}
-                              className={`rounded-2xl px-3 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-slate-950/70 text-slate-100" : "border border-white/10 bg-white/5 text-white"}`}
+                              key={`${message.role}-${index}`}
+                              className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}
                             >
-                              <p className="mb-2 text-[11px] uppercase tracking-[0.22em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p>
+                              <p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p>
                               <div className="whitespace-pre-wrap break-words">{message.content}</div>
                             </div>
                           ))}
+                          {isAskingChat ? <p className="text-xs text-slate-400">Working through your lecture question...</p> : null}
                         </div>
-                      ) : null}
+                      ) : isAskingChat ? <div className="rounded-[22px] border border-white/10 bg-slate-950/80 px-4 py-3 text-xs text-slate-400">Working through your lecture question...</div> : null}
+
+                      <div className="rounded-[22px] border border-white/10 bg-slate-950/80 p-3 sm:p-4">
+                        <div className="force-mobile-stack flex items-end gap-3">
+                          <textarea
+                            value={chatQuestion}
+                            onChange={(event) => setChatQuestion(event.target.value)}
+                            onKeyDown={handleStudyChatKeyDown}
+                            rows={1}
+                            className="min-h-[48px] flex-1 resize-none rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500"
+                            placeholder="Ask anything from this lecture..."
+                          />
+                          <button
+                            type="button"
+                            onClick={askStudyAssistant}
+                            disabled={isAskingChat}
+                            className="flex h-10 w-10 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
+                            aria-label="Send study question"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                              <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : null}
