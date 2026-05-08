@@ -46,7 +46,11 @@ const MAX_AI_REFERENCE_IMAGES = 4;
 const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
-const RECORDING_SILENCE_THRESHOLD = 0.02;
+const RECORDING_SILENCE_MONITOR_INTERVAL_MS = 1250;
+const RECORDING_SILENCE_THRESHOLD = 0.012;
+const RECORDING_SILENCE_PEAK_THRESHOLD = 0.03;
+const RECORDING_SILENCE_ACTIVITY_MULTIPLIER = 2.4;
+const RECORDING_NOISE_FLOOR_SMOOTHING = 0.04;
 const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
@@ -299,7 +303,7 @@ const helpAboutSections = [
     points: [
       "The Transcribe Lecture button should carry the live transcription stages when lecture audio, video, or a public video link is being processed.",
       "The Generate Study Guide button should carry the live reading and guide-building stages when notes, slides, or past papers are being read or turned into revision material.",
-      "Live recording now watches for 10 minutes of silence. When that happens, MABASO stops the recorder and starts transcription automatically. A manual stop still only saves the recording so the student stays in control.",
+      "Live recording now watches for 10 minutes of real monitored silence. When that happens, MABASO stops the recorder and starts transcription automatically. A manual stop still saves the recording first so the student can add slides, notes, or past papers before transcribing.",
       "If a scan or source file is too messy, too broken, or too unreadable, students should expect weaker notes. Clean PDFs, typed notes, and clearer slide files usually produce stronger study packs.",
       "If the guide feels mixed up, too transcript-heavy, or too shallow, students should add better notes or slides and regenerate instead of trusting a weak first draft.",
     ],
@@ -2143,8 +2147,10 @@ export default function App() {
   const recordingAudioContextRef = useRef(null);
   const recordingSourceNodeRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
-  const recordingMonitorFrameRef = useRef(0);
-  const recordingLastSoundAtRef = useRef(0);
+  const recordingMonitorTimerRef = useRef(0);
+  const recordingLastMonitorAtRef = useRef(0);
+  const recordingSilenceElapsedMsRef = useRef(0);
+  const recordingNoiseFloorRef = useRef(RECORDING_SILENCE_THRESHOLD / 2);
   const recordingStopReasonRef = useRef("");
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
@@ -2516,7 +2522,7 @@ export default function App() {
         return {
           eyebrow: "Live recording",
           badge: "REC",
-          detail: "Recording is running. MABASO auto-stops after 10 minutes of silence, while a manual stop only saves the file.",
+          detail: "Recording is running. MABASO only auto-stops after 10 minutes of real monitored silence, while a manual stop saves the file and lets you keep adding lecture material.",
           showProgress: false,
           progressValue: 0,
           statusLine: "",
@@ -7265,9 +7271,9 @@ export default function App() {
   };
 
   const cleanupRecordingMonitoring = ({ stopStream = false } = {}) => {
-    if (recordingMonitorFrameRef.current) {
-      window.cancelAnimationFrame(recordingMonitorFrameRef.current);
-      recordingMonitorFrameRef.current = 0;
+    if (recordingMonitorTimerRef.current) {
+      window.clearTimeout(recordingMonitorTimerRef.current);
+      recordingMonitorTimerRef.current = 0;
     }
     if (recordingSourceNodeRef.current) {
       try {
@@ -7288,7 +7294,9 @@ export default function App() {
       recordingStreamRef.current.getTracks().forEach((track) => track.stop());
     }
     recordingStreamRef.current = null;
-    recordingLastSoundAtRef.current = 0;
+    recordingLastMonitorAtRef.current = 0;
+    recordingSilenceElapsedMsRef.current = 0;
+    recordingNoiseFloorRef.current = RECORDING_SILENCE_THRESHOLD / 2;
   };
 
   const beginRecordingSilenceMonitoring = (stream) => {
@@ -7307,7 +7315,9 @@ export default function App() {
     recordingAudioContextRef.current = audioContext;
     recordingSourceNodeRef.current = sourceNode;
     recordingAnalyserRef.current = analyser;
-    recordingLastSoundAtRef.current = Date.now();
+    recordingLastMonitorAtRef.current = Date.now();
+    recordingSilenceElapsedMsRef.current = 0;
+    recordingNoiseFloorRef.current = RECORDING_SILENCE_THRESHOLD / 2;
 
     audioContext.resume().catch(() => {
       // Browsers can start the context suspended. Recording still continues even if resume fails.
@@ -7316,34 +7326,65 @@ export default function App() {
     const samples = new Uint8Array(analyser.fftSize);
     const monitor = () => {
       const recorder = mediaRecorderRef.current;
-      if (!recorder || recorder.state !== "recording" || !recordingAnalyserRef.current) {
-        recordingMonitorFrameRef.current = 0;
+      const activeAnalyser = recordingAnalyserRef.current;
+      if (!recorder || recorder.state !== "recording" || !activeAnalyser) {
+        recordingMonitorTimerRef.current = 0;
         return;
       }
 
-      recordingAnalyserRef.current.getByteTimeDomainData(samples);
+      activeAnalyser.getByteTimeDomainData(samples);
       let sumSquares = 0;
+      let peak = 0;
       for (const sample of samples) {
         const normalized = (sample - 128) / 128;
+        peak = Math.max(peak, Math.abs(normalized));
         sumSquares += normalized * normalized;
       }
       const rms = Math.sqrt(sumSquares / samples.length);
       const now = Date.now();
-      if (rms >= RECORDING_SILENCE_THRESHOLD) {
-        recordingLastSoundAtRef.current = now;
-      } else if (recordingLastSoundAtRef.current && now - recordingLastSoundAtRef.current >= RECORDING_SILENCE_AUTO_STOP_MS) {
+      const lastMonitorAt = recordingLastMonitorAtRef.current || now;
+      const elapsedSinceLastCheck = Math.max(0, Math.min(now - lastMonitorAt, RECORDING_SILENCE_MONITOR_INTERVAL_MS * 2));
+      recordingLastMonitorAtRef.current = now;
+
+      const priorNoiseFloor = recordingNoiseFloorRef.current || (RECORDING_SILENCE_THRESHOLD / 2);
+      const activityThreshold = Math.max(
+        RECORDING_SILENCE_THRESHOLD,
+        priorNoiseFloor * RECORDING_SILENCE_ACTIVITY_MULTIPLIER,
+      );
+      const peakThreshold = Math.max(
+        RECORDING_SILENCE_PEAK_THRESHOLD,
+        activityThreshold * 1.8,
+      );
+      const hasMeaningfulSound = rms >= activityThreshold || peak >= peakThreshold;
+
+      const baselineSample = hasMeaningfulSound
+        ? Math.min(rms, priorNoiseFloor * 1.15)
+        : rms;
+      recordingNoiseFloorRef.current = Math.max(
+        RECORDING_SILENCE_THRESHOLD / 2,
+        (priorNoiseFloor * (1 - RECORDING_NOISE_FLOOR_SMOOTHING)) + (baselineSample * RECORDING_NOISE_FLOOR_SMOOTHING),
+      );
+
+      const isTrustedMonitoringWindow = !document.hidden && recordingAudioContextRef.current?.state === "running";
+      if (hasMeaningfulSound) {
+        recordingSilenceElapsedMsRef.current = 0;
+      } else if (isTrustedMonitoringWindow) {
+        recordingSilenceElapsedMsRef.current += elapsedSinceLastCheck;
+      }
+
+      if (isTrustedMonitoringWindow && recordingSilenceElapsedMsRef.current >= RECORDING_SILENCE_AUTO_STOP_MS) {
         recordingStopReasonRef.current = "silence";
         setRecording(false);
-        setStatus("10 minutes of silence detected. Stopping the recording and preparing transcription...");
+        setStatus("10 minutes of real silence detected. Stopping the recording and preparing transcription...");
         recorder.stop();
-        recordingMonitorFrameRef.current = 0;
+        recordingMonitorTimerRef.current = 0;
         return;
       }
 
-      recordingMonitorFrameRef.current = window.requestAnimationFrame(monitor);
+      recordingMonitorTimerRef.current = window.setTimeout(monitor, RECORDING_SILENCE_MONITOR_INTERVAL_MS);
     };
 
-    recordingMonitorFrameRef.current = window.requestAnimationFrame(monitor);
+    recordingMonitorTimerRef.current = window.setTimeout(monitor, RECORDING_SILENCE_MONITOR_INTERVAL_MS);
   };
 
   const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus }) => {
@@ -7807,7 +7848,14 @@ export default function App() {
     setError("");
     clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
       recordingStreamRef.current = stream;
       recordingStopReasonRef.current = "";
       mediaRecorderRef.current = new MediaRecorder(stream);
@@ -7832,22 +7880,22 @@ export default function App() {
         });
         setRecording(false);
         if (stopReason === "silence") {
-          setStatus("10 minutes of silence detected. Transcribing the saved recording...");
+          setStatus("10 minutes of real silence detected. Transcribing the saved recording...");
           try {
             await transcribeLectureFile(recordedFile, {
-              initialStatus: "10 minutes of silence detected. Transcribing the saved recording...",
+              initialStatus: "10 minutes of real silence detected. Transcribing the saved recording...",
             });
           } catch {
             // transcribeLectureFile already updates the UI error state when auto-processing fails.
           }
         } else {
-          setStatus("Recording saved. It will still be here after refresh.");
+          setStatus("Recording saved. Add slides, notes, or past papers, then transcribe when you are ready.");
         }
       };
       beginRecordingSilenceMonitoring(stream);
       mediaRecorderRef.current.start(1000);
       setRecording(true);
-      setStatus("Recording started. MABASO will stop automatically after 10 minutes of silence.");
+      setStatus("Recording started. MABASO will only auto-stop after 10 minutes of real monitored silence.");
     } catch {
       cleanupRecordingMonitoring({ stopStream: true });
       setError("Microphone access failed. Please allow recording permissions.");
@@ -7859,7 +7907,7 @@ export default function App() {
     recordingStopReasonRef.current = "manual";
     mediaRecorderRef.current?.stop();
     setRecording(false);
-    setStatus("Stopping the recording...");
+    setStatus("Saving the recording so you can keep adding lecture material...");
   };
 
   const pollJob = async (jobId, jobType) => {
@@ -9847,7 +9895,7 @@ export default function App() {
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></button>
                     <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></button>
-                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>Auto-stop after 10 min silence</span></button>
+                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>Saves unless real 10 min silence</span></button>
                     <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Upload Notes</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">TXT MD PDF DOCX IMG</span></button>
                     <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Slides</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
                     <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Past Paper</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
