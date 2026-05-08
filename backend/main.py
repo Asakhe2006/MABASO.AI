@@ -6702,16 +6702,35 @@ def tidy_study_guide_layout(summary: str) -> str:
 
 def extract_study_assets(summary: str) -> dict:
     formula_section = extract_section(summary, "IMPORTANT FORMULAS")
-    example_section = extract_section(summary, "WORKED EXAMPLES")
     flashcard_section = extract_section(summary, "FLASHCARDS")
     quiz_section = extract_section(summary, "PRACTICE QUESTIONS AND ANSWERS")
 
     return {
         "formula": formula_section or "No formula section was detected in the notes.",
-        "worked_example": example_section or "No worked example section was detected in the notes.",
+        "worked_example": build_worked_example_asset(summary),
         "flashcards": parse_flashcards(flashcard_section),
         "quiz_questions": parse_quiz_questions(quiz_section),
     }
+
+
+def build_worked_example_asset(summary: str, generated_worked_example: str = "") -> str:
+    example_section = compact_text(extract_section(summary, "WORKED EXAMPLES"))
+    step_section = compact_text(extract_section(summary, "STEP-BY-STEP EXPLANATIONS"))
+    generated_section = compact_text(generated_worked_example)
+    sections: list[str] = []
+
+    if example_section:
+        sections.append(f"**WORKED EXAMPLES**\n\n{example_section}")
+
+    if step_section:
+        sections.append(f"**STEP-BY-STEP EXPLANATIONS**\n\n{step_section}")
+
+    if sections:
+        if generated_section and not step_section:
+            sections.append(f"**STEP-BY-STEP WALKTHROUGH**\n\n{generated_section}")
+        return "\n\n".join(section.strip() for section in sections if section.strip()).strip()
+
+    return generated_section or "No worked example section was detected in the notes."
 
 
 def clamp_podcast_speaker_count(value: int) -> int:
@@ -9177,7 +9196,9 @@ async def generate_structured_study_assets(
                         "- Do not mention how a student should feel.\n"
                         "- Use plain readable formulas, never LaTeX.\n"
                         "- `formula` should be a compact markdown study sheet or a short note when no formula is relevant.\n"
-                        "- `worked_example` should be a clear step-by-step example in markdown.\n"
+                        "- `worked_example` should explain every example that appears in the study guide WORKED EXAMPLES section.\n"
+                        "- For each worked example, write the method step by step in markdown, using labels like Step 1, Step 2, and so on.\n"
+                        "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"
                         "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
                         "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
                         f"- Write every returned field in {output_language}.\n"
@@ -9198,7 +9219,10 @@ async def generate_structured_study_assets(
 
     return {
         "formula": compact_text(generated_assets.get("formula"), fallback_assets["formula"]),
-        "worked_example": compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
+        "worked_example": build_worked_example_asset(
+            summary,
+            compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
+        ),
         "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
     }
 
