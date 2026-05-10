@@ -526,7 +526,7 @@ class PresentationGenerationRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
-    design_id: str = "terracotta-atelier"
+    design_id: str = "quantum-black"
     language: str = "English"
     reference_images: list[str] = []
 
@@ -9075,164 +9075,324 @@ async def generate_teacher_lesson_package(
     }
 
 
-PRESENTATION_THEMES: dict[str, dict[str, str]] = {
-    "terracotta-atelier": {
-        "id": "terracotta-atelier",
-        "style_family": "terracotta-atelier",
-        "name": "Terracotta Atelier",
-        "background": "FFF9F3",
-        "surface": "F6E5D8",
-        "surface_alt": "EFCDB6",
-        "accent": "C65D1A",
-        "accent_soft": "FDE7D3",
-        "text": "7C2D12",
-        "muted": "9A3412",
-        "dark_text": "7C2D12",
-    },
-    "emerald-scholar": {
-        "id": "emerald-scholar",
-        "style_family": "emerald-scholar",
-        "name": "Emerald Scholar",
-        "background": "061912",
-        "surface": "0F2B20",
-        "surface_alt": "15392A",
-        "accent": "4ADE80",
-        "accent_soft": "D9F99D",
-        "text": "F8FAFC",
-        "muted": "CFE8DA",
-        "dark_text": "052E16",
-    },
-    "sunset-classroom": {
-        "id": "sunset-classroom",
-        "style_family": "sunset-classroom",
-        "name": "Sunset Classroom",
-        "background": "FFF8F1",
-        "surface": "FFF1E1",
-        "surface_alt": "F6D2B6",
-        "accent": "EA580C",
-        "accent_soft": "FDBA74",
-        "text": "7C2D12",
-        "muted": "9A3412",
-        "dark_text": "7C2D12",
-    },
-    "midnight-grid": {
-        "id": "midnight-grid",
+PRESENTATION_THEMES: dict[str, dict[str, Any]] = {
+    "quantum-black": {
+        "id": "quantum-black",
         "style_family": "midnight-grid",
-        "name": "Midnight Grid",
-        "background": "020617",
-        "surface": "0F172A",
-        "surface_alt": "172554",
-        "accent": "38BDF8",
+        "name": "Quantum Black",
+        "category": "Executive / AI",
+        "accent_label": "Luxury dark glass",
+        "font_title": "Space Grotesk",
+        "font_body": "Inter",
+        "description": "Ultra-premium cinematic dark theme with glowing gradients, glass surfaces, and executive-level structure inspired by elite startup pitch decks.",
+        "slide_style": "Minimal dark backgrounds, oversized typography, glowing accent bars, soft gradient lighting, floating cards, large data visuals.",
+        "layout_features": [
+            "Floating glass cards",
+            "Cinematic section dividers",
+            "Minimal bullet points",
+            "Large typography hierarchy",
+            "Animated infographic blocks",
+        ],
+        "background": "0B1020",
+        "surface": "111827",
+        "surface_alt": "1F2937",
+        "accent": "22D3EE",
         "accent_soft": "A5F3FC",
-        "text": "E2E8F0",
-        "muted": "BFDBFE",
+        "text": "F8FAFC",
+        "muted": "CBD5E1",
+        "dark_text": "0B1020",
+    },
+    "nordic-minimal": {
+        "id": "nordic-minimal",
+        "style_family": "sunset-classroom",
+        "name": "Nordic Minimal",
+        "category": "Corporate / Academic",
+        "accent_label": "Luxury white minimalism",
+        "font_title": "General Sans",
+        "font_body": "Inter",
+        "description": "Elegant Scandinavian-inspired presentation design with refined spacing, editorial typography, and premium clean layouts.",
+        "slide_style": "White backgrounds, thin dividers, structured content blocks, balanced whitespace, subtle grayscale shadows.",
+        "layout_features": [
+            "Editorial layouts",
+            "Large image sections",
+            "Minimal infographic cards",
+            "Luxury whitespace system",
+            "Modern chart placements",
+        ],
+        "background": "FFFFFF",
+        "surface": "F8FAFC",
+        "surface_alt": "E2E8F0",
+        "accent": "1E293B",
+        "accent_soft": "CBD5E1",
+        "text": "0F172A",
+        "muted": "475569",
+        "dark_text": "0F172A",
+    },
+    "aurora-flow": {
+        "id": "aurora-flow",
+        "style_family": "midnight-grid",
+        "name": "Aurora Flow",
+        "category": "Creative / Technology",
+        "accent_label": "Gradient neon",
+        "font_title": "Satoshi",
+        "font_body": "Manrope",
+        "description": "Futuristic gradient presentation system inspired by high-end UI/UX product showcases and modern SaaS presentations.",
+        "slide_style": "Soft neon gradients, glowing interface cards, layered blur effects, animated visual rhythm.",
+        "layout_features": [
+            "Gradient section blocks",
+            "Glowing statistics cards",
+            "Interactive visual hierarchy",
+            "Tech-inspired layouts",
+            "Immersive hero slides",
+        ],
+        "background": "0F172A",
+        "surface": "111827",
+        "surface_alt": "0F766E",
+        "accent": "06B6D4",
+        "accent_soft": "99F6E4",
+        "text": "F8FAFC",
+        "muted": "D1D5DB",
+        "dark_text": "0F172A",
+    },
+    "royal-editorial": {
+        "id": "royal-editorial",
+        "style_family": "midnight-grid",
+        "name": "Royal Editorial",
+        "category": "Formal / University",
+        "accent_label": "Deep royal elegance",
+        "font_title": "Clash Display",
+        "font_body": "Inter",
+        "description": "Sophisticated editorial-inspired layout with premium typography and formal presentation structure for elite academic and business reports.",
+        "slide_style": "Royal gradients, magazine-like structure, oversized headings, elegant section flow.",
+        "layout_features": [
+            "Magazine-style sections",
+            "Elegant typography hierarchy",
+            "Formal report structure",
+            "Luxury content spacing",
+            "Professional infographics",
+        ],
+        "background": "1E1B4B",
+        "surface": "312E81",
+        "surface_alt": "6D28D9",
+        "accent": "C084FC",
+        "accent_soft": "DDD6FE",
+        "text": "F5F3FF",
+        "muted": "DDD6FE",
+        "dark_text": "1E1B4B",
+    },
+    "glasswave-pro": {
+        "id": "glasswave-pro",
+        "style_family": "sunset-classroom",
+        "name": "Glasswave Pro",
+        "category": "Startup / Product",
+        "accent_label": "Modern glassmorphism",
+        "font_title": "Plus Jakarta Sans",
+        "font_body": "Inter",
+        "description": "Next-generation glassmorphism template featuring translucent panels, layered gradients, and immersive premium visual depth.",
+        "slide_style": "Blurred glass cards, layered interface panels, floating statistics blocks, smooth transparency effects.",
+        "layout_features": [
+            "Glass UI components",
+            "Floating visual layers",
+            "Soft blur containers",
+            "Modern startup visuals",
+            "High-end product showcase layouts",
+        ],
+        "background": "E0F2FE",
+        "surface": "F8FAFC",
+        "surface_alt": "DBEAFE",
+        "accent": "0284C7",
+        "accent_soft": "A5F3FC",
+        "text": "0F172A",
+        "muted": "334155",
+        "dark_text": "0F172A",
+    },
+    "obsidian-red": {
+        "id": "obsidian-red",
+        "style_family": "midnight-grid",
+        "name": "Obsidian Red",
+        "category": "Debate / Motivation",
+        "accent_label": "Bold cinematic contrast",
+        "font_title": "Bricolage Grotesque",
+        "font_body": "Manrope",
+        "description": "Powerful cinematic presentation theme with dramatic red lighting and bold typography designed for persuasive communication.",
+        "slide_style": "Dark cinematic backgrounds, strong visual contrast, emotional typography emphasis, spotlight layouts.",
+        "layout_features": [
+            "Dramatic hero slides",
+            "Bold statement typography",
+            "High contrast infographic sections",
+            "Presentation spotlight effects",
+            "Cinematic storytelling layouts",
+        ],
+        "background": "111827",
+        "surface": "450A0A",
+        "surface_alt": "991B1B",
+        "accent": "EF4444",
+        "accent_soft": "FCA5A5",
+        "text": "FFFFFF",
+        "muted": "E5E7EB",
+        "dark_text": "450A0A",
+    },
+    "oceanic-premium": {
+        "id": "oceanic-premium",
+        "style_family": "midnight-grid",
+        "name": "Oceanic Premium",
+        "category": "Research / Science",
+        "accent_label": "Deep ocean gradients",
+        "font_title": "Outfit",
+        "font_body": "Inter",
+        "description": "Scientific and research-focused premium presentation system with calm oceanic tones and structured information hierarchy.",
+        "slide_style": "Structured academic layouts, clean research sections, modern data visuals, smooth gradient depth.",
+        "layout_features": [
+            "Research-friendly structures",
+            "Professional chart systems",
+            "Scientific infographic layouts",
+            "Modern academic spacing",
+            "Clean analytical sections",
+        ],
+        "background": "082F49",
+        "surface": "0F172A",
+        "surface_alt": "1D4ED8",
+        "accent": "38BDF8",
+        "accent_soft": "BFDBFE",
+        "text": "F8FAFC",
+        "muted": "CBD5E1",
         "dark_text": "082F49",
     },
-    "aurora-waves": {
-        "id": "aurora-waves",
-        "style_family": "midnight-grid",
-        "name": "Aurora Waves",
-        "background": "04111F",
-        "surface": "0B1730",
-        "surface_alt": "1D2E67",
-        "accent": "60A5FA",
-        "accent_soft": "BFDBFE",
-        "text": "EFF6FF",
-        "muted": "DBEAFE",
-        "dark_text": "1E3A8A",
-    },
-    "glass-cube": {
-        "id": "glass-cube",
-        "style_family": "sunset-classroom",
-        "name": "Glass Cube",
-        "background": "F0FDFA",
-        "surface": "DDF8F3",
-        "surface_alt": "BDEEE5",
-        "accent": "0F766E",
-        "accent_soft": "99F6E4",
-        "text": "134E4A",
-        "muted": "115E59",
-        "dark_text": "134E4A",
-    },
-    "celebration-night": {
-        "id": "celebration-night",
-        "style_family": "midnight-grid",
-        "name": "Celebration Night",
-        "background": "111827",
-        "surface": "1F2937",
-        "surface_alt": "312E81",
-        "accent": "F59E0B",
-        "accent_soft": "FDE68A",
-        "text": "F9FAFB",
-        "muted": "E0E7FF",
-        "dark_text": "78350F",
-    },
-    "amber-lux": {
-        "id": "amber-lux",
-        "style_family": "midnight-grid",
-        "name": "Amber Lux",
-        "background": "09090B",
-        "surface": "18181B",
-        "surface_alt": "3F3F46",
-        "accent": "F59E0B",
+    "champagne-luxury": {
+        "id": "champagne-luxury",
+        "style_family": "terracotta-atelier",
+        "name": "Champagne Luxury",
+        "category": "Formal / Portfolio",
+        "accent_label": "Elegant gold minimalism",
+        "font_title": "Cormorant Garamond",
+        "font_body": "Inter",
+        "description": "Luxury editorial presentation system with champagne tones, elegant serif typography, and premium portfolio aesthetics.",
+        "slide_style": "Soft luxury gradients, premium serif headings, sophisticated editorial spacing, refined content blocks.",
+        "layout_features": [
+            "Luxury editorial design",
+            "Elegant serif typography",
+            "Portfolio showcase layouts",
+            "Premium spacing system",
+            "Minimal luxury infographics",
+        ],
+        "background": "FFFBEB",
+        "surface": "FEF3C7",
+        "surface_alt": "FDE68A",
+        "accent": "D97706",
         "accent_soft": "FCD34D",
-        "text": "FAFAFA",
-        "muted": "FDE68A",
-        "dark_text": "78350F",
-    },
-    "editorial-sage": {
-        "id": "editorial-sage",
-        "style_family": "emerald-scholar",
-        "name": "Editorial Sage",
-        "background": "F7F7F2",
-        "surface": "E9F2E4",
-        "surface_alt": "D7E7CF",
-        "accent": "2F6B4F",
-        "accent_soft": "CBE7D6",
-        "text": "1F3A2A",
-        "muted": "466A55",
-        "dark_text": "1F3A2A",
-    },
-    "clinical-blue": {
-        "id": "clinical-blue",
-        "style_family": "sunset-classroom",
-        "name": "Clinical Blue",
-        "background": "F4FBFF",
-        "surface": "E7F4FB",
-        "surface_alt": "D4ECF8",
-        "accent": "2563EB",
-        "accent_soft": "BFDBFE",
-        "text": "1E3A8A",
-        "muted": "3B82F6",
-        "dark_text": "1E3A8A",
-    },
-    "festival-pop": {
-        "id": "festival-pop",
-        "style_family": "sunset-classroom",
-        "name": "Festival Pop",
-        "background": "FFF7FB",
-        "surface": "FFE4F1",
-        "surface_alt": "FED7E2",
-        "accent": "DB2777",
-        "accent_soft": "F9A8D4",
-        "text": "9D174D",
-        "muted": "BE185D",
-        "dark_text": "9D174D",
-    },
-    "summit-minimal": {
-        "id": "summit-minimal",
-        "style_family": "sunset-classroom",
-        "name": "Summit Minimal",
-        "background": "FFFDEA",
-        "surface": "F5F3FF",
-        "surface_alt": "DBEAFE",
-        "accent": "4F46E5",
-        "accent_soft": "C7D2FE",
-        "text": "3730A3",
-        "muted": "4338CA",
-        "dark_text": "3730A3",
+        "text": "422006",
+        "muted": "78350F",
+        "dark_text": "422006",
     },
 }
+
+POWERPOINT_GENERATION_PROMPT = """
+You are an elite presentation designer creating premium PowerPoint slides comparable to high-end corporate keynote decks.
+
+PRESENTATION STYLE RULES:
+1. Every slide must feel visually premium and professionally designed.
+2. Use modern typography hierarchy.
+3. Avoid dense paragraphs completely.
+4. Slides must feel cinematic, minimal, and high-end.
+5. Every slide should prioritize readability and visual structure.
+6. Use strong section spacing and balanced layouts.
+7. Slides must look beautiful on both desktop and projector screens.
+
+DESIGN SYSTEM:
+TITLE STYLING:
+- Large bold headings
+- Premium typography
+- Consistent visual rhythm
+- Strong contrast between headings and body text
+
+BODY CONTENT:
+- Short readable paragraphs
+- Maximum 4 bullet points per section
+- Clear hierarchy
+- Professional wording
+- Visually balanced formatting
+
+LAYOUT STRUCTURE:
+- Use hero sections
+- Use infographic sections
+- Use split layouts
+- Use card-based information blocks
+- Use modern timeline structures
+- Use modern chart positioning
+- Use clean comparison layouts
+
+VISUAL RULES:
+- Use gradient overlays
+- Use glassmorphism when appropriate
+- Use subtle shadows
+- Use clean whitespace
+- Use elegant dividers
+- Use premium color contrast
+- Use modern alignment systems
+
+FONT PAIRING RULES:
+- Headings use premium modern fonts
+- Body text uses highly readable sans-serif fonts
+- Use consistent font sizing hierarchy
+- Avoid default PowerPoint typography
+
+POWERPOINT STRUCTURE:
+Slide 1:
+- Cinematic cover page
+- Large title
+- Subtitle
+- Elegant visual composition
+
+Slide 2:
+- Agenda or overview
+- Minimal clean structure
+
+Middle Slides:
+- One core idea per slide
+- Strong visual hierarchy
+- Large supporting visuals
+- Modern infographics
+
+Final Slide:
+- Elegant summary
+- Key takeaways
+- Premium closing design
+
+IMPORTANT:
+- Never generate ugly academic-style slides.
+- Never overload slides with text.
+- Never create outdated PowerPoint layouts.
+- Never use default presentation formatting.
+- Always prioritize visual elegance and readability.
+
+The final output must resemble a premium startup pitch deck, Apple-style keynote presentation, or elite corporate strategy presentation.
+""".strip()
+
+
+def get_presentation_title_font(theme: dict[str, Any]) -> str:
+    return compact_text(theme.get("font_title"), "Aptos Display")
+
+
+def get_presentation_body_font(theme: dict[str, Any]) -> str:
+    return compact_text(theme.get("font_body"), "Aptos")
+
+
+def build_presentation_design_brief(theme: dict[str, Any]) -> str:
+    layout_features = theme.get("layout_features") or []
+    if not isinstance(layout_features, list):
+        layout_features = []
+    feature_text = ", ".join(compact_text(item) for item in layout_features if compact_text(item))
+    return (
+        f"Selected design: {compact_text(theme.get('name'), 'Premium deck')}\n"
+        f"Category: {compact_text(theme.get('category'), 'Presentation')}\n"
+        f"Accent direction: {compact_text(theme.get('accent_label'), compact_text(theme.get('name'), 'Premium styling'))}\n"
+        f"Title font: {get_presentation_title_font(theme)}\n"
+        f"Body font: {get_presentation_body_font(theme)}\n"
+        f"Design description: {compact_text(theme.get('description'), '')}\n"
+        f"Slide style: {compact_text(theme.get('slide_style'), '')}\n"
+        f"Layout features to echo when appropriate: {feature_text or 'Clean hierarchy, strong visual structure, and premium spacing.'}\n"
+        f"Color palette anchor: background #{theme['background']}, accent #{theme['accent']}, secondary accent #{theme['surface_alt']}."
+    )
 
 
 def ensure_presentation_support():
@@ -9244,8 +9404,8 @@ def ensure_presentation_support():
 
 
 def normalize_presentation_design_id(value: str) -> str:
-    design_id = compact_text(value, "terracotta-atelier").lower()
-    return design_id if design_id in PRESENTATION_THEMES else "terracotta-atelier"
+    design_id = compact_text(value, "quantum-black").lower()
+    return design_id if design_id in PRESENTATION_THEMES else "quantum-black"
 
 
 def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
@@ -9588,7 +9748,7 @@ def add_textbox(
     color_hex: str,
     bold: bool = False,
     align: Any = None,
-    font_name: str = "Aptos",
+    font_name: str = "Inter",
 ):
     box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
     frame = box.text_frame
@@ -9616,7 +9776,7 @@ def add_bullet_list(
     height: float,
     bullets: list[str],
     color_hex: str,
-    font_name: str = "Aptos",
+    font_name: str = "Inter",
 ):
     box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
     frame = box.text_frame
@@ -9650,6 +9810,7 @@ def add_visual_card(
     text_hex: str,
     font_size: int = 13,
     bold: bool = False,
+    font_name: str = "Inter",
 ):
     card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(left), Inches(top), Inches(width), Inches(height))
     style_shape(card, fill_hex)
@@ -9663,6 +9824,7 @@ def add_visual_card(
         font_size=font_size,
         color_hex=text_hex,
         bold=bold,
+        font_name=font_name,
     )
     return card
 
@@ -9711,13 +9873,14 @@ def resolve_reference_image_source(reference_images: list[str], slide_content: d
 def draw_presentation_visual_panel(
     slide: Any,
     slide_content: dict[str, Any],
-    theme: dict[str, str],
+    theme: dict[str, Any],
     reference_images: list[str],
 ):
     panel_left = 8.72
     panel_top = 1.95
     panel_width = 3.65
     panel_height = 4.73
+    title_font = get_presentation_title_font(theme)
 
     panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(panel_left), Inches(panel_top), Inches(panel_width), Inches(panel_height))
     style_shape(panel, theme["accent"])
@@ -9731,7 +9894,7 @@ def draw_presentation_visual_panel(
         font_size=14,
         color_hex=theme["dark_text"],
         bold=True,
-        font_name="Aptos Display",
+        font_name=title_font,
     )
 
     style_family = get_presentation_style_family(theme)
@@ -10133,10 +10296,12 @@ def add_presentation_title_slide(
     presentation: Any,
     title: str,
     subtitle: str,
-    theme: dict[str, str],
+    theme: dict[str, Any],
     *,
     use_custom_template: bool = False,
 ):
+    title_font = get_presentation_title_font(theme)
+    body_font = get_presentation_body_font(theme)
     slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
     if not use_custom_template:
         decorate_presentation_slide(slide, theme, 0, is_title=True)
@@ -10155,7 +10320,7 @@ def add_presentation_title_slide(
         font_size=32 if use_custom_template else 30,
         color_hex=title_color,
         bold=True,
-        font_name="Aptos Display",
+        font_name=title_font,
     )
     add_textbox(
         slide,
@@ -10166,6 +10331,7 @@ def add_presentation_title_slide(
         text=subtitle,
         font_size=18,
         color_hex=subtitle_color,
+        font_name=body_font,
     )
 
 
@@ -10173,11 +10339,13 @@ def add_presentation_content_slide(
     presentation: Any,
     slide_index: int,
     slide_content: dict[str, Any],
-    theme: dict[str, str],
+    theme: dict[str, Any],
     reference_images: list[str],
     *,
     use_custom_template: bool = False,
 ):
+    title_font = get_presentation_title_font(theme)
+    body_font = get_presentation_body_font(theme)
     slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
     if not use_custom_template:
         decorate_presentation_slide(slide, theme, slide_index)
@@ -10200,7 +10368,7 @@ def add_presentation_content_slide(
         font_size=23,
         color_hex=title_color,
         bold=True,
-        font_name="Aptos Display",
+        font_name=title_font,
     )
 
     body_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.85), Inches(2.35), Inches(7.5), Inches(4.35))
@@ -10213,6 +10381,7 @@ def add_presentation_content_slide(
         height=3.7,
         bullets=slide_content.get("bullets", []),
         color_hex=body_text_color,
+        font_name=body_font,
     )
     draw_presentation_visual_panel(slide, slide_content, theme, reference_images)
 
@@ -10235,10 +10404,11 @@ def add_presentation_content_slide(
 def add_presentation_closing_slide(
     presentation: Any,
     slide_content: dict[str, Any],
-    theme: dict[str, str],
+    theme: dict[str, Any],
     *,
     use_custom_template: bool = False,
 ):
+    title_font = get_presentation_title_font(theme)
     slide = presentation.slides.add_slide(get_presentation_slide_layout(presentation, "blank", fallback_index=6))
     if not use_custom_template:
         decorate_presentation_slide(slide, theme, len(presentation.slides))
@@ -10256,7 +10426,7 @@ def add_presentation_closing_slide(
         font_size=36,
         color_hex="FFFFFF" if use_custom_template else theme["text"],
         bold=True,
-        font_name="Aptos Display",
+        font_name=title_font,
         align=PP_ALIGN.CENTER,
     )
 
@@ -10323,6 +10493,8 @@ async def generate_presentation_package(
     template_file_name: str = "",
 ) -> dict[str, Any]:
     normalized_design_id = normalize_presentation_design_id(design_id)
+    theme = PRESENTATION_THEMES[normalized_design_id]
+    design_brief = build_presentation_design_brief(theme)
     fallback_package = build_presentation_fallback(summary, transcript)
     reference_catalog_items = await analyze_reference_images_for_study_guide(
         reference_images,
@@ -10351,21 +10523,23 @@ async def generate_presentation_package(
                 {
                     "role": "system",
                     "content": (
-                        "You create concise academic PowerPoint structures for students. "
-                        "Return strict JSON only with these keys: title, subtitle, slides.\n\n"
-                        "Rules:\n"
+                        f"{POWERPOINT_GENERATION_PROMPT}\n\n"
+                        "SELECTED DESIGN SYSTEM:\n"
+                        f"{design_brief}\n\n"
+                        "OUTPUT FORMAT RULES:\n"
+                        "- Return strict JSON only with these keys: title, subtitle, slides.\n"
                         "- `title` must be the lecture topic only.\n"
-                        "- `subtitle` must be one short description sentence for the topic slide.\n"
+                        "- `subtitle` must be one short high-end descriptor sentence for the opening slide.\n"
                         "- `slides` must be an array of 5 to 7 content slides.\n"
                         "- Each slide object must contain `title`, `bullets`, `visual_title`, `visual_type`, `visual_items`, `flow_note`, and `reference_image_index`.\n"
-                        "- `bullets` must contain 3 to 5 short bullet strings with useful teaching value, not copied fragments.\n"
+                        "- `bullets` must contain 3 to 4 short bullet strings with useful teaching value, not copied fragments.\n"
                         "- `visual_items` must contain 2 to 4 short labels for a diagram panel on the slide.\n"
                         "- `visual_type` must be one of: flow, comparison, timeline, cycle, formula, cluster, components, table, chart, graph, photo.\n"
                         "- `flow_note` must explain how the slide advances the lesson flow in one sentence.\n"
                         f"- `reference_image_index` must be -1 when no uploaded image clearly matches, otherwise an integer from 0 to {max(len(reference_images) - 1, 0)}.\n"
                         "- This is a formal PowerPoint deck, not speaker notes. Do not write what the presenter should say.\n"
-                        "- Keep bullet lines concise, readable, and presentation-ready.\n"
                         f"- Write the slide text in {output_language}.\n"
+                        "- The first generated content slide should behave like a premium agenda or overview slide.\n"
                         "- When the lecture material covers multiple topics, keep those topics separate instead of mixing them into one slide.\n"
                         "- Cover overview, core concepts, definitions or structure, formulas or rules when present, and worked examples or applications.\n"
                         "- Do not create slides about common mistakes, exam tips, revision plans, study advice, exam traps, or test strategy.\n"
@@ -10374,8 +10548,8 @@ async def generate_presentation_package(
                         "- Only use `photo` when the uploaded lecture images clearly match the topic on that slide.\n"
                         "- If the reference image catalog does not clearly match a slide, use a non-photo visual instead of forcing an image.\n"
                         "- When no real photo fits, create a designed diagram panel using components, graphs, charts, formulas, or process visuals instead of a generic placeholder.\n"
-                        "- Do not create a thank-you slide or closing slide in JSON. The app adds the final closing slide automatically.\n"
-                        "- Make the slide sequence feel like a high-grade classroom deck: clear concepts first, then structure, then worked explanation or interpretation.\n"
+                        "- Do not create a title slide, thank-you slide, or closing slide in JSON. The app adds the opening and closing slides automatically.\n"
+                        "- Make the slide sequence feel like a premium keynote: clear concepts first, then structure, then worked explanation or interpretation.\n"
                         "- Use lecture language when it is reliable, but rewrite it cleanly for slides.\n"
                         "- Do not return markdown, numbering, or commentary outside JSON."
                     ),
@@ -11863,7 +12037,7 @@ async def create_presentation(
             lecture_notes=compact_text(form.get("lecture_notes")),
             lecture_slides=compact_text(form.get("lecture_slides")),
             past_question_papers=compact_text(form.get("past_question_papers")),
-            design_id=compact_text(form.get("design_id"), "terracotta-atelier"),
+            design_id=compact_text(form.get("design_id"), "quantum-black"),
             language=compact_text(form.get("language"), "English"),
             reference_images=[
                 compact_text(item)

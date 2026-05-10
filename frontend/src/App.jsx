@@ -93,147 +93,367 @@ const tabs = [
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
-const presentationDesigns = [
+const premiumPresentationDesigns = [
   {
-    id: "terracotta-atelier",
-    name: "Terracotta Atelier",
-    accent: "Editorial studio",
-    description: "Ivory paper slides with terracotta panels, copper accents, and a refined lecture-magazine look for standout academic storytelling.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.3),transparent_34%),linear-gradient(135deg,#fffaf4,#f7e4d3_56%,#efc7a4)]",
-    chipClassName: "border-orange-300/45 bg-white/80 text-orange-900",
-    previewTitleClassName: "text-stone-900",
-    previewDecorationClassName: "before:absolute before:inset-x-0 before:bottom-0 before:h-3 before:bg-[linear-gradient(90deg,#9a3412,#ea580c,#fdba74)] after:absolute after:right-4 after:top-4 after:h-24 after:w-24 after:rounded-[30px] after:bg-[linear-gradient(180deg,rgba(194,65,12,0.18),rgba(251,146,60,0.42))]",
+    id: "quantum-black",
+    name: "Quantum Black",
+    category: "Executive / AI",
+    accent: "Luxury dark glass",
+    fontTitle: "Space Grotesk",
+    fontBody: "Inter",
+    description: "Ultra-premium cinematic dark theme with glowing gradients, glass surfaces, and executive-level structure inspired by elite startup pitch decks.",
+    slideStyle: "Minimal dark backgrounds, oversized typography, glowing accent bars, soft gradient lighting, floating cards, large data visuals.",
+    colorPalette: {
+      primary: "#0B1020",
+      secondary: "#111827",
+      accent: "#22D3EE",
+      accentSecondary: "#8B5CF6",
+      text: "#F8FAFC",
+      mutedText: "#CBD5E1",
+    },
+    previewClassName: "bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.22),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.22),transparent_30%),linear-gradient(145deg,#020617,#0f172a_50%,#111827)]",
+    chipClassName: "border-cyan-300/30 bg-cyan-400/10 text-cyan-50 backdrop-blur-xl",
+    previewTitleClassName: "text-white",
+    layoutFeatures: [
+      "Floating glass cards",
+      "Cinematic section dividers",
+      "Minimal bullet points",
+      "Large typography hierarchy",
+      "Animated infographic blocks",
+    ],
   },
   {
-    id: "emerald-scholar",
-    name: "Emerald Scholar",
-    accent: "Emerald focus",
-    description: "Deep green lecture slides with sharp contrast, strong headings, and a polished academic feel.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.35),transparent_42%),linear-gradient(135deg,#061912,#0f2b20_58%,#15392a)]",
-    chipClassName: "border-emerald-300/30 bg-emerald-300/10 text-emerald-50",
-    previewTitleClassName: "text-emerald-50",
-    previewDecorationClassName: "after:absolute after:-right-8 after:top-6 after:h-28 after:w-36 after:rounded-full after:bg-emerald-200/20 after:blur-2xl",
+    id: "nordic-minimal",
+    name: "Nordic Minimal",
+    category: "Corporate / Academic",
+    accent: "Luxury white minimalism",
+    fontTitle: "General Sans",
+    fontBody: "Inter",
+    description: "Elegant Scandinavian-inspired presentation design with refined spacing, editorial typography, and premium clean layouts.",
+    slideStyle: "White backgrounds, thin dividers, structured content blocks, balanced whitespace, subtle grayscale shadows.",
+    colorPalette: {
+      primary: "#FFFFFF",
+      secondary: "#F8FAFC",
+      accent: "#1E293B",
+      accentSecondary: "#94A3B8",
+      text: "#0F172A",
+      mutedText: "#475569",
+    },
+    previewClassName: "bg-[linear-gradient(135deg,#ffffff,#f8fafc_58%,#e2e8f0)]",
+    chipClassName: "border-slate-300/40 bg-white/70 text-slate-800",
+    previewTitleClassName: "text-slate-900",
+    layoutFeatures: [
+      "Editorial layouts",
+      "Large image sections",
+      "Minimal infographic cards",
+      "Luxury whitespace system",
+      "Modern chart placements",
+    ],
   },
   {
-    id: "sunset-classroom",
-    name: "Sunset Classroom",
-    accent: "Warm and bright",
-    description: "Soft cream and orange slides for friendlier presentations, revision classes, and classroom explanations.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.22),transparent_38%),linear-gradient(135deg,#fff8f1,#fff1e1_55%,#f6d2b6)]",
-    chipClassName: "border-orange-300/40 bg-orange-300/15 text-orange-50",
-    previewTitleClassName: "text-orange-950",
-    previewDecorationClassName: "after:absolute after:-right-6 after:bottom-2 after:h-20 after:w-44 after:rounded-full after:bg-orange-200/55 after:blur-2xl",
+    id: "aurora-flow",
+    name: "Aurora Flow",
+    category: "Creative / Technology",
+    accent: "Gradient neon",
+    fontTitle: "Satoshi",
+    fontBody: "Manrope",
+    description: "Futuristic gradient presentation system inspired by high-end UI/UX product showcases and modern SaaS presentations.",
+    slideStyle: "Soft neon gradients, glowing interface cards, layered blur effects, animated visual rhythm.",
+    colorPalette: {
+      primary: "#0F172A",
+      secondary: "#111827",
+      accent: "#06B6D4",
+      accentSecondary: "#14B8A6",
+      text: "#F8FAFC",
+      mutedText: "#D1D5DB",
+    },
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(20,184,166,0.22),transparent_35%),linear-gradient(145deg,#020617,#111827_50%,#0f766e)]",
+    chipClassName: "border-teal-300/30 bg-teal-400/10 text-teal-50",
+    previewTitleClassName: "text-white",
+    layoutFeatures: [
+      "Gradient section blocks",
+      "Glowing statistics cards",
+      "Interactive visual hierarchy",
+      "Tech-inspired layouts",
+      "Immersive hero slides",
+    ],
   },
   {
-    id: "midnight-grid",
-    name: "Midnight Grid",
-    accent: "Tech deck",
-    description: "Dark navy slides with cool blue accents for modern demos, systems topics, and technical lectures.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.28),transparent_40%),linear-gradient(135deg,#020617,#0f172a_58%,#172554)]",
-    chipClassName: "border-sky-300/35 bg-sky-300/10 text-sky-50",
-    previewTitleClassName: "text-sky-50",
-    previewDecorationClassName: "after:absolute after:right-3 after:top-4 after:h-24 after:w-24 after:rounded-[28px] after:border after:border-sky-200/20 after:bg-sky-300/10",
+    id: "royal-editorial",
+    name: "Royal Editorial",
+    category: "Formal / University",
+    accent: "Deep royal elegance",
+    fontTitle: "Clash Display",
+    fontBody: "Inter",
+    description: "Sophisticated editorial-inspired layout with premium typography and formal presentation structure for elite academic and business reports.",
+    slideStyle: "Royal gradients, magazine-like structure, oversized headings, elegant section flow.",
+    colorPalette: {
+      primary: "#1E1B4B",
+      secondary: "#312E81",
+      accent: "#C084FC",
+      accentSecondary: "#A855F7",
+      text: "#F5F3FF",
+      mutedText: "#DDD6FE",
+    },
+    previewClassName: "bg-[linear-gradient(145deg,#1e1b4b,#312e81_52%,#6d28d9)]",
+    chipClassName: "border-violet-300/30 bg-violet-400/10 text-violet-50",
+    previewTitleClassName: "text-violet-50",
+    layoutFeatures: [
+      "Magazine-style sections",
+      "Elegant typography hierarchy",
+      "Formal report structure",
+      "Luxury content spacing",
+      "Professional infographics",
+    ],
   },
   {
-    id: "aurora-waves",
-    name: "Aurora Waves",
-    accent: "Blue ribbon",
-    description: "Airy blue curves and soft light for clean lecture introductions, summaries, and concept walkthroughs.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(191,219,254,0.8),transparent_42%),linear-gradient(135deg,#f8fbff,#dbeafe_58%,#bfdbfe)]",
-    chipClassName: "border-blue-300/40 bg-blue-300/20 text-blue-950",
-    previewTitleClassName: "text-blue-700",
-    previewDecorationClassName: "after:absolute after:right-0 after:bottom-0 after:h-28 after:w-44 after:rounded-[999px] after:bg-[radial-gradient(circle_at_center,rgba(96,165,250,0.4),transparent_60%)]",
+    id: "glasswave-pro",
+    name: "Glasswave Pro",
+    category: "Startup / Product",
+    accent: "Modern glassmorphism",
+    fontTitle: "Plus Jakarta Sans",
+    fontBody: "Inter",
+    description: "Next-generation glassmorphism template featuring translucent panels, layered gradients, and immersive premium visual depth.",
+    slideStyle: "Blurred glass cards, layered interface panels, floating statistics blocks, smooth transparency effects.",
+    colorPalette: {
+      primary: "#E0F2FE",
+      secondary: "#F8FAFC",
+      accent: "#0284C7",
+      accentSecondary: "#06B6D4",
+      text: "#0F172A",
+      mutedText: "#334155",
+    },
+    previewClassName: "bg-[linear-gradient(135deg,#ecfeff,#dbeafe_52%,#e0f2fe)]",
+    chipClassName: "border-white/50 bg-white/30 text-slate-800 backdrop-blur-xl",
+    previewTitleClassName: "text-slate-900",
+    layoutFeatures: [
+      "Glass UI components",
+      "Floating visual layers",
+      "Soft blur containers",
+      "Modern startup visuals",
+      "High-end product showcase layouts",
+    ],
   },
   {
-    id: "glass-cube",
-    name: "Glass Cube",
-    accent: "Clean geometry",
-    description: "Fresh mint geometry for engineering, business, and structured explanation decks.",
-    previewClassName: "bg-[linear-gradient(135deg,#ecfeff,#d1fae5_46%,#bae6fd)]",
-    chipClassName: "border-teal-300/45 bg-teal-300/20 text-teal-950",
-    previewTitleClassName: "text-teal-950",
-    previewDecorationClassName: "after:absolute after:right-4 after:top-3 after:h-24 after:w-24 after:rotate-12 after:rounded-[26px] after:border after:border-teal-600/20 after:bg-white/35",
+    id: "obsidian-red",
+    name: "Obsidian Red",
+    category: "Debate / Motivation",
+    accent: "Bold cinematic contrast",
+    fontTitle: "Bricolage Grotesque",
+    fontBody: "Manrope",
+    description: "Powerful cinematic presentation theme with dramatic red lighting and bold typography designed for persuasive communication.",
+    slideStyle: "Dark cinematic backgrounds, strong visual contrast, emotional typography emphasis, spotlight layouts.",
+    colorPalette: {
+      primary: "#111827",
+      secondary: "#450A0A",
+      accent: "#EF4444",
+      accentSecondary: "#F87171",
+      text: "#FFFFFF",
+      mutedText: "#E5E7EB",
+    },
+    previewClassName: "bg-[linear-gradient(145deg,#111827,#450a0a_58%,#991b1b)]",
+    chipClassName: "border-red-300/30 bg-red-400/10 text-red-50",
+    previewTitleClassName: "text-red-50",
+    layoutFeatures: [
+      "Dramatic hero slides",
+      "Bold statement typography",
+      "High contrast infographic sections",
+      "Presentation spotlight effects",
+      "Cinematic storytelling layouts",
+    ],
   },
   {
-    id: "celebration-night",
-    name: "Celebration Night",
-    accent: "Event style",
-    description: "Dark celebratory slides with amber highlights for launches, recaps, and energetic storytelling.",
-    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,191,36,0.2),transparent_30%),linear-gradient(135deg,#111827,#1f2937_60%,#312e81)]",
-    chipClassName: "border-amber-300/40 bg-amber-300/15 text-amber-50",
-    previewTitleClassName: "text-amber-50",
-    previewDecorationClassName: "after:absolute after:right-6 after:top-5 after:h-4 after:w-4 after:rounded-full after:bg-amber-200 before:absolute before:right-12 before:top-10 before:h-3 before:w-3 before:rounded-full before:bg-white/70",
+    id: "oceanic-premium",
+    name: "Oceanic Premium",
+    category: "Research / Science",
+    accent: "Deep ocean gradients",
+    fontTitle: "Outfit",
+    fontBody: "Inter",
+    description: "Scientific and research-focused premium presentation system with calm oceanic tones and structured information hierarchy.",
+    slideStyle: "Structured academic layouts, clean research sections, modern data visuals, smooth gradient depth.",
+    colorPalette: {
+      primary: "#082F49",
+      secondary: "#0F172A",
+      accent: "#38BDF8",
+      accentSecondary: "#2563EB",
+      text: "#F8FAFC",
+      mutedText: "#CBD5E1",
+    },
+    previewClassName: "bg-[linear-gradient(145deg,#082f49,#0f172a_52%,#1d4ed8)]",
+    chipClassName: "border-sky-300/30 bg-sky-400/10 text-sky-50",
+    previewTitleClassName: "text-white",
+    layoutFeatures: [
+      "Research-friendly structures",
+      "Professional chart systems",
+      "Scientific infographic layouts",
+      "Modern academic spacing",
+      "Clean analytical sections",
+    ],
   },
   {
-    id: "amber-lux",
-    name: "Amber Lux",
-    accent: "Black and gold",
-    description: "Luxury black slides with gold light streaks for premium reports and standout final presentations.",
-    previewClassName: "bg-[radial-gradient(circle_at_bottom_right,rgba(245,158,11,0.55),transparent_30%),linear-gradient(135deg,#09090b,#18181b_56%,#3f3f46)]",
-    chipClassName: "border-amber-300/40 bg-amber-300/15 text-amber-50",
-    previewTitleClassName: "text-amber-100",
-    previewDecorationClassName: "after:absolute after:right-0 after:bottom-1 after:h-20 after:w-40 after:rounded-[999px] after:bg-[linear-gradient(90deg,transparent,rgba(245,158,11,0.55),transparent)]",
-  },
-  {
-    id: "festival-pop",
-    name: "Festival Pop",
-    accent: "Bright curve",
-    description: "Playful pink gradients for lighter classroom decks, youth workshops, and visual revision packs.",
-    previewClassName: "bg-[linear-gradient(135deg,#fff7fb,#ffe4f1_52%,#fed7e2)]",
-    chipClassName: "border-pink-300/45 bg-pink-300/20 text-pink-950",
-    previewTitleClassName: "text-pink-950",
-    previewDecorationClassName: "after:absolute after:-left-6 after:bottom-0 after:h-14 after:w-[130%] after:rounded-t-[999px] after:bg-[linear-gradient(90deg,#ec4899,#a855f7,#38bdf8)]",
-  },
-  {
-    id: "editorial-sage",
-    name: "Editorial Sage",
-    accent: "Magazine feel",
-    description: "Calm editorial green for professional lectures, essays, and policy or humanities presentations.",
-    previewClassName: "bg-[linear-gradient(135deg,#f7f7f2,#e9f2e4_60%,#d7e7cf)]",
-    chipClassName: "border-lime-300/40 bg-lime-300/20 text-lime-950",
-    previewTitleClassName: "text-emerald-950",
-    previewDecorationClassName: "after:absolute after:right-5 after:bottom-5 after:h-20 after:w-16 after:rounded-[18px] after:bg-[linear-gradient(180deg,#a7f3d0,#fef3c7)]",
-  },
-  {
-    id: "clinical-blue",
-    name: "Clinical Blue",
-    accent: "Lab visual",
-    description: "Bright scientific blue styling that fits medical, biology, chemistry, and lab-based content.",
-    previewClassName: "bg-[linear-gradient(135deg,#f4fbff,#e7f4fb_54%,#d4ecf8)]",
-    chipClassName: "border-sky-300/40 bg-sky-300/20 text-sky-950",
-    previewTitleClassName: "text-sky-800",
-    previewDecorationClassName: "after:absolute after:right-4 after:bottom-3 after:h-24 after:w-24 after:rounded-full after:border after:border-sky-300/40 after:bg-white/50 before:absolute before:right-12 before:bottom-11 before:h-10 before:w-10 before:rounded-full before:border before:border-sky-200/50",
-  },
-  {
-    id: "summit-minimal",
-    name: "Summit Minimal",
-    accent: "Soft summit",
-    description: "Pastel geometric slides for polished study summaries, revision decks, and calm closing presentations.",
-    previewClassName: "bg-[linear-gradient(135deg,#fffdea,#f5f3ff_56%,#dbeafe)]",
-    chipClassName: "border-indigo-300/40 bg-indigo-300/20 text-indigo-950",
-    previewTitleClassName: "text-indigo-800",
-    previewDecorationClassName: "after:absolute after:right-0 after:bottom-0 after:h-24 after:w-36 after:bg-[linear-gradient(135deg,transparent_10%,rgba(79,70,229,0.15),rgba(96,165,250,0.25))] after:[clip-path:polygon(35%_100%,100%_100%,100%_15%)]",
+    id: "champagne-luxury",
+    name: "Champagne Luxury",
+    category: "Formal / Portfolio",
+    accent: "Elegant gold minimalism",
+    fontTitle: "Cormorant Garamond",
+    fontBody: "Inter",
+    description: "Luxury editorial presentation system with champagne tones, elegant serif typography, and premium portfolio aesthetics.",
+    slideStyle: "Soft luxury gradients, premium serif headings, sophisticated editorial spacing, refined content blocks.",
+    colorPalette: {
+      primary: "#FFFBEB",
+      secondary: "#FEF3C7",
+      accent: "#D97706",
+      accentSecondary: "#F59E0B",
+      text: "#422006",
+      mutedText: "#78350F",
+    },
+    previewClassName: "bg-[linear-gradient(145deg,#fffdf7,#fef3c7_58%,#fde68a)]",
+    chipClassName: "border-amber-300/30 bg-amber-200/20 text-amber-950",
+    previewTitleClassName: "text-amber-950",
+    layoutFeatures: [
+      "Luxury editorial design",
+      "Elegant serif typography",
+      "Portfolio showcase layouts",
+      "Premium spacing system",
+      "Minimal luxury infographics",
+    ],
   },
 ];
 
-const defaultPresentationDesignId = presentationDesigns[0]?.id || "terracotta-atelier";
-const legacyPresentationDefaultIds = new Set(["emerald-scholar"]);
+const presentationDesigns = premiumPresentationDesigns;
+const defaultPresentationDesignId = presentationDesigns[0]?.id || "quantum-black";
+const legacyPresentationDefaultIds = new Set(["terracotta-atelier", "emerald-scholar"]);
+const legacyPresentationDesignAliases = {
+  "terracotta-atelier": "champagne-luxury",
+  "emerald-scholar": "quantum-black",
+  "sunset-classroom": "nordic-minimal",
+  "midnight-grid": "quantum-black",
+  "aurora-waves": "oceanic-premium",
+  "glass-cube": "glasswave-pro",
+  "celebration-night": "obsidian-red",
+  "amber-lux": "champagne-luxury",
+  "festival-pop": "aurora-flow",
+  "editorial-sage": "nordic-minimal",
+  "clinical-blue": "oceanic-premium",
+  "summit-minimal": "nordic-minimal",
+};
 
 function normalizePresentationDesignId(designId, { allowLegacyDefault = true } = {}) {
-  const normalizedDesignId = String(designId || "").trim().toLowerCase();
+  const rawDesignId = String(designId || "").trim().toLowerCase();
+  const normalizedDesignId = legacyPresentationDesignAliases[rawDesignId] || rawDesignId;
   const matchingDesign = presentationDesigns.find((design) => design.id === normalizedDesignId);
   if (!matchingDesign) return defaultPresentationDesignId;
-  if (!allowLegacyDefault && legacyPresentationDefaultIds.has(normalizedDesignId)) {
+  if (!allowLegacyDefault && legacyPresentationDefaultIds.has(rawDesignId)) {
     return defaultPresentationDesignId;
   }
   return matchingDesign.id;
 }
 
-function getPresentationDesignFamily(designId) {
-  if (designId === "terracotta-atelier") return "paper";
-  if (["sunset-classroom", "glass-cube", "festival-pop", "clinical-blue", "summit-minimal"].includes(designId)) return "light";
-  if (["midnight-grid", "aurora-waves", "celebration-night", "amber-lux"].includes(designId)) return "dark";
-  return "emerald";
+function normalizeHexColor(value, fallback = "#0F172A") {
+  const normalized = String(value || "").trim();
+  if (/^#?[0-9a-f]{6}$/i.test(normalized)) {
+    return `#${normalized.replace(/^#/, "").toUpperCase()}`;
+  }
+  return fallback;
+}
+
+function hexToRgbTriplet(value, fallback = "#0F172A") {
+  const normalized = normalizeHexColor(value, fallback).slice(1);
+  return [
+    Number.parseInt(normalized.slice(0, 2), 16),
+    Number.parseInt(normalized.slice(2, 4), 16),
+    Number.parseInt(normalized.slice(4, 6), 16),
+  ].join(", ");
+}
+
+function hexToRgba(value, alpha, fallback = "#0F172A") {
+  return `rgba(${hexToRgbTriplet(value, fallback)}, ${alpha})`;
+}
+
+function isLightHexColor(value) {
+  const normalized = normalizeHexColor(value, "#0F172A").slice(1);
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+  const luminance = (0.299 * red) + (0.587 * green) + (0.114 * blue);
+  return luminance >= 180;
+}
+
+function getPresentationDesignTokens(design) {
+  const palette = design?.colorPalette || {};
+  const primary = normalizeHexColor(palette.primary, "#0B1020");
+  const secondary = normalizeHexColor(palette.secondary, primary);
+  const accent = normalizeHexColor(palette.accent, "#22D3EE");
+  const accentSecondary = normalizeHexColor(palette.accentSecondary, accent);
+  const text = normalizeHexColor(palette.text, "#F8FAFC");
+  const mutedText = normalizeHexColor(palette.mutedText, "#CBD5E1");
+  const lightSurface = isLightHexColor(primary);
+  const contrastText = lightSurface ? primary : text;
+  const softBorder = hexToRgba(accentSecondary, lightSurface ? 0.18 : 0.16, accent);
+  const accentGradient = `linear-gradient(135deg, ${accent}, ${accentSecondary})`;
+
+  return {
+    lightSurface,
+    primary,
+    secondary,
+    accent,
+    accentSecondary,
+    text,
+    mutedText,
+    contrastText,
+    accentGradient,
+    frameStyle: {
+      borderColor: hexToRgba(accent, lightSurface ? 0.18 : 0.24),
+      background: `radial-gradient(circle at top right, ${hexToRgba(accent, lightSurface ? 0.2 : 0.24)}, transparent 32%), radial-gradient(circle at bottom left, ${hexToRgba(accentSecondary, lightSurface ? 0.14 : 0.18, accent)}, transparent 36%), linear-gradient(135deg, ${primary}, ${secondary} 58%, ${lightSurface ? secondary : accentSecondary})`,
+      color: contrastText,
+      boxShadow: lightSurface
+        ? `0 18px 48px ${hexToRgba(accentSecondary, 0.1, accent)}`
+        : "0 18px 48px rgba(2, 8, 23, 0.34)",
+    },
+    shellStyle: {
+      borderColor: softBorder,
+      background: lightSurface ? hexToRgba("#FFFFFF", 0.84) : hexToRgba(secondary, 0.52, primary),
+      color: contrastText,
+    },
+    cardStyle: {
+      borderColor: hexToRgba(accentSecondary, lightSurface ? 0.16 : 0.12, accent),
+      background: lightSurface ? hexToRgba("#FFFFFF", 0.92) : hexToRgba("#FFFFFF", 0.08),
+      color: contrastText,
+    },
+    bulletCardStyle: {
+      borderColor: hexToRgba(accent, lightSurface ? 0.12 : 0.14),
+      background: lightSurface ? hexToRgba("#FFFFFF", 0.88) : hexToRgba(primary, 0.38, secondary),
+      color: contrastText,
+    },
+    chipStyle: {
+      borderColor: hexToRgba(accent, lightSurface ? 0.22 : 0.28),
+      background: lightSurface ? hexToRgba("#FFFFFF", 0.84) : hexToRgba(accent, 0.12),
+      color: contrastText,
+      backdropFilter: "blur(18px)",
+    },
+    mutedStyle: {
+      color: mutedText,
+    },
+    accentStripStyle: {
+      background: `linear-gradient(90deg, ${accent}, ${accentSecondary})`,
+    },
+    accentVerticalStyle: {
+      background: `linear-gradient(180deg, ${accent}, ${accentSecondary})`,
+    },
+    accentOrbStyle: {
+      background: hexToRgba(accent, lightSurface ? 0.24 : 0.18),
+    },
+    accentOrbSecondaryStyle: {
+      background: hexToRgba(accentSecondary, lightSurface ? 0.18 : 0.16, accent),
+    },
+    barStyle: {
+      background: `linear-gradient(180deg, ${accent}, ${accentSecondary})`,
+    },
+    centerPanelStyle: {
+      borderColor: hexToRgba(accentSecondary, lightSurface ? 0.18 : 0.14, accent),
+      background: lightSurface ? hexToRgba(accentSecondary, 0.1, accent) : hexToRgba("#FFFFFF", 0.08),
+    },
+  };
 }
 
 function convertMarkdownTablesToMobileCards(markdown = "") {
@@ -2939,7 +3159,7 @@ export default function App() {
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activePresentationDesign = presentationDesigns.find((design) => design.id === (presentationData.designId || selectedPresentationDesign)) || presentationDesigns[0];
-  const activePresentationDesignFamily = getPresentationDesignFamily(activePresentationDesign?.id);
+  const activePresentationDesignTokens = getPresentationDesignTokens(activePresentationDesign);
   const selectedPresentationTemplateName = presentationTemplateFile?.name || "";
   const generatedPresentationTemplateName = presentationData.templateName || "";
   const presentationViewerSlides = presentationData.slides.length
@@ -4124,32 +4344,26 @@ export default function App() {
     const visualItems = (slide?.visualItems || []).filter(Boolean);
     const referenceImageIndex = Number.isFinite(Number(slide?.referenceImageIndex)) ? Number(slide.referenceImageIndex) : -1;
     const referenceImage = referenceImageIndex >= 0 ? (visualReferences[referenceImageIndex]?.image_url || "") : "";
-    const shellClassName = activePresentationDesignFamily === "dark"
-      ? "border-white/10 bg-slate-950/45 text-white"
-      : activePresentationDesignFamily === "light"
-        ? "border-slate-200 bg-white/90 text-slate-900"
-        : activePresentationDesignFamily === "paper"
-          ? "border-orange-200 bg-[linear-gradient(180deg,rgba(255,251,246,0.98),rgba(249,237,223,0.96))] text-stone-900"
-          : "border-emerald-200/15 bg-emerald-950/35 text-white";
-    const cardClassName = activePresentationDesignFamily === "light"
-      ? "border-slate-200 bg-slate-50/90 text-slate-700"
-      : activePresentationDesignFamily === "paper"
-        ? "border-orange-200 bg-white/92 text-stone-700"
-        : "border-white/10 bg-white/10 text-slate-100";
-    const mutedClassName = activePresentationDesignFamily === "light"
-      ? "text-slate-500"
-      : activePresentationDesignFamily === "paper"
-        ? "text-stone-500"
-        : "text-slate-200/65";
-    const barClassName = activePresentationDesignFamily === "light"
-      ? "bg-[linear-gradient(180deg,#60a5fa,#2563eb)]"
-      : activePresentationDesignFamily === "paper"
-        ? "bg-[linear-gradient(180deg,#f97316,#9a3412)]"
-        : "bg-[linear-gradient(180deg,#93c5fd,#38bdf8)]";
+    const {
+      shellStyle,
+      cardStyle,
+      mutedStyle,
+      barStyle,
+      centerPanelStyle,
+      lightSurface,
+      contrastText,
+    } = activePresentationDesignTokens;
+    const nodeStyle = {
+      ...cardStyle,
+      background: lightSurface
+        ? hexToRgba(activePresentationDesignTokens.accentSecondary, 0.08, activePresentationDesignTokens.accent)
+        : hexToRgba("#FFFFFF", 0.1),
+      color: contrastText,
+    };
 
     if (visualType === "photo" && referenceImage) {
       return (
-        <div className={`h-full overflow-hidden rounded-[22px] border ${shellClassName}`}>
+        <div className="h-full overflow-hidden rounded-[22px] border" style={shellStyle}>
           <img src={referenceImage} alt={slide?.visualTitle || "Lecture reference"} className="h-full w-full object-cover" loading="lazy" />
         </div>
       );
@@ -4157,8 +4371,8 @@ export default function App() {
 
     if (visualType === "table") {
       return (
-        <div className={`h-full rounded-[22px] border p-3 ${shellClassName}`}>
-          <div className={`grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-hidden rounded-2xl border ${cardClassName}`}>
+        <div className="h-full rounded-[22px] border p-3" style={shellStyle}>
+          <div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] overflow-hidden rounded-2xl border" style={cardStyle}>
             <div className="border-r border-current/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.22em]">Point</div>
             <div className="px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.22em]">Detail</div>
             {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => {
@@ -4166,7 +4380,7 @@ export default function App() {
               return (
                 <div key={`${item}-${index}`} className="contents">
                   <div className="border-r border-t border-current/10 px-3 py-2 text-xs font-semibold">{label.trim()}</div>
-                  <div className={`border-t border-current/10 px-3 py-2 text-xs ${mutedClassName}`}>{(rest.join(":").trim() || label.trim())}</div>
+                  <div className="border-t border-current/10 px-3 py-2 text-xs" style={mutedStyle}>{(rest.join(":").trim() || label.trim())}</div>
                 </div>
               );
             })}
@@ -4178,14 +4392,14 @@ export default function App() {
     if (visualType === "chart" || visualType === "graph") {
       const chartItems = (visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4);
       return (
-        <div className={`h-full rounded-[22px] border p-3 ${shellClassName}`}>
+        <div className="h-full rounded-[22px] border p-3" style={shellStyle}>
           <div className="flex h-full items-end gap-2">
             {chartItems.map((item, index) => {
               const height = Math.min(92, 34 + item.length * 1.7 + index * 8);
               return (
                 <div key={`${item}-${index}`} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
-                  <div className={`w-full rounded-t-2xl ${barClassName}`} style={{ height: `${height}%` }} />
-                  <p className={`line-clamp-2 text-center text-[10px] ${mutedClassName}`}>{item}</p>
+                  <div className="w-full rounded-t-2xl" style={{ ...barStyle, height: `${height}%` }} />
+                  <p className="line-clamp-2 text-center text-[10px]" style={mutedStyle}>{item}</p>
                 </div>
               );
             })}
@@ -4198,11 +4412,11 @@ export default function App() {
       const leftItems = visualItems.filter((_, index) => index % 2 === 0).slice(0, 2);
       const rightItems = visualItems.filter((_, index) => index % 2 === 1).slice(0, 2);
       return (
-        <div className={`grid h-full grid-cols-2 gap-3 rounded-[22px] border p-3 ${shellClassName}`}>
-          <div className={`rounded-2xl border p-3 ${cardClassName}`}>
+        <div className="grid h-full grid-cols-2 gap-3 rounded-[22px] border p-3" style={shellStyle}>
+          <div className="rounded-2xl border p-3" style={cardStyle}>
             {leftItems.map((item, index) => <div key={`${item}-${index}`} className="rounded-xl border border-current/10 px-3 py-2 text-xs">{item}</div>)}
           </div>
-          <div className={`rounded-2xl border p-3 ${cardClassName}`}>
+          <div className="rounded-2xl border p-3" style={cardStyle}>
             {(rightItems.length ? rightItems : leftItems).map((item, index) => <div key={`${item}-${index}`} className="rounded-xl border border-current/10 px-3 py-2 text-xs">{item}</div>)}
           </div>
         </div>
@@ -4213,22 +4427,19 @@ export default function App() {
       const componentItems = (visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 4 : 5);
       const coreLabel = componentItems[0] || "Core unit";
       const outerItems = componentItems.slice(1, compact ? 4 : 5);
-      const nodeClassName = activePresentationDesignFamily === "light"
-        ? "border-slate-200 bg-slate-50/95 text-slate-700"
-        : "border-white/10 bg-white/10 text-slate-100";
       return (
-        <div className={`relative h-full rounded-[22px] border p-4 ${shellClassName}`}>
-          <div className="absolute left-1/2 top-1/2 h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-current/10 bg-current/10" />
+        <div className="relative h-full rounded-[22px] border p-4" style={shellStyle}>
+          <div className="absolute left-1/2 top-1/2 h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border" style={centerPanelStyle} />
           <div className="absolute left-1/2 top-[26%] h-8 w-px -translate-x-1/2 bg-current/20" />
           <div className="absolute left-[28%] top-1/2 h-px w-12 -translate-y-1/2 bg-current/20" />
           <div className="absolute right-[28%] top-1/2 h-px w-12 -translate-y-1/2 bg-current/20" />
           <div className="absolute left-1/2 bottom-[24%] h-8 w-px -translate-x-1/2 bg-current/20" />
           <div className="relative grid h-full grid-cols-3 grid-rows-3 items-center justify-items-center gap-2">
-            <span className={`col-start-2 row-start-2 flex min-h-[64px] w-full items-center justify-center rounded-[22px] border px-3 text-center text-xs font-semibold ${nodeClassName}`}>{coreLabel}</span>
-            {outerItems[0] ? <span className={`col-start-2 row-start-1 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[0]}</span> : null}
-            {outerItems[1] ? <span className={`col-start-1 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[1]}</span> : null}
-            {outerItems[2] ? <span className={`col-start-3 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[2]}</span> : null}
-            {outerItems[3] ? <span className={`col-start-2 row-start-3 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px] ${nodeClassName}`}>{outerItems[3]}</span> : null}
+            <span className="col-start-2 row-start-2 flex min-h-[64px] w-full items-center justify-center rounded-[22px] border px-3 text-center text-xs font-semibold" style={nodeStyle}>{coreLabel}</span>
+            {outerItems[0] ? <span className="col-start-2 row-start-1 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px]" style={nodeStyle}>{outerItems[0]}</span> : null}
+            {outerItems[1] ? <span className="col-start-1 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px]" style={nodeStyle}>{outerItems[1]}</span> : null}
+            {outerItems[2] ? <span className="col-start-3 row-start-2 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px]" style={nodeStyle}>{outerItems[2]}</span> : null}
+            {outerItems[3] ? <span className="col-start-2 row-start-3 flex min-h-[52px] w-full items-center justify-center rounded-[18px] border px-3 text-center text-[11px]" style={nodeStyle}>{outerItems[3]}</span> : null}
           </div>
         </div>
       );
@@ -4236,13 +4447,13 @@ export default function App() {
 
     if (visualType === "timeline") {
       return (
-        <div className={`h-full rounded-[22px] border p-4 ${shellClassName}`}>
+        <div className="h-full rounded-[22px] border p-4" style={shellStyle}>
           <div className="relative h-full pl-6">
             <div className="absolute left-2 top-0 h-full w-px bg-current/20" />
             {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
               <div key={`${item}-${index}`} className="relative mb-3">
                 <span className="absolute -left-[1.1rem] top-1.5 h-2.5 w-2.5 rounded-full bg-current/80" />
-                <div className={`rounded-xl border px-3 py-2 text-xs ${cardClassName}`}>{item}</div>
+                <div className="rounded-xl border px-3 py-2 text-xs" style={cardStyle}>{item}</div>
               </div>
             ))}
           </div>
@@ -4252,10 +4463,10 @@ export default function App() {
 
     if (visualType === "cycle") {
       return (
-        <div className={`flex h-full items-center justify-center rounded-[22px] border p-4 ${shellClassName}`}>
+        <div className="flex h-full items-center justify-center rounded-[22px] border p-4" style={shellStyle}>
           <div className="grid grid-cols-2 gap-3">
             {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
-              <div key={`${item}-${index}`} className={`flex aspect-square items-center justify-center rounded-full border px-3 text-center text-xs ${cardClassName}`}>{item}</div>
+              <div key={`${item}-${index}`} className="flex aspect-square items-center justify-center rounded-full border px-3 text-center text-xs" style={cardStyle}>{item}</div>
             ))}
           </div>
         </div>
@@ -4264,9 +4475,9 @@ export default function App() {
 
     if (visualType === "formula") {
       return (
-        <div className={`space-y-2 rounded-[22px] border p-3 ${shellClassName}`}>
+        <div className="space-y-2 rounded-[22px] border p-3" style={shellStyle}>
           {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
-            <div key={`${item}-${index}`} className={`rounded-2xl border px-3 py-3 font-mono text-xs ${cardClassName}`}>{item}</div>
+            <div key={`${item}-${index}`} className="rounded-2xl border px-3 py-3 font-mono text-xs" style={cardStyle}>{item}</div>
           ))}
         </div>
       );
@@ -4274,11 +4485,11 @@ export default function App() {
 
     if (visualType === "flow") {
       return (
-        <div className={`space-y-2 rounded-[22px] border p-3 ${shellClassName}`}>
+        <div className="space-y-2 rounded-[22px] border p-3" style={shellStyle}>
           {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
             <div key={`${item}-${index}`} className="flex items-center gap-2">
-              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${cardClassName}`}>{index + 1}</span>
-              <div className={`min-w-0 flex-1 rounded-2xl border px-3 py-2 text-xs ${cardClassName}`}>{item}</div>
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold" style={cardStyle}>{index + 1}</span>
+              <div className="min-w-0 flex-1 rounded-2xl border px-3 py-2 text-xs" style={cardStyle}>{item}</div>
             </div>
           ))}
         </div>
@@ -4286,11 +4497,11 @@ export default function App() {
     }
 
     return (
-      <div className={`relative h-full rounded-[22px] border p-4 ${shellClassName}`}>
-        <div className="absolute left-1/2 top-[46%] h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-current/10 bg-current/10" />
+      <div className="relative h-full rounded-[22px] border p-4" style={shellStyle}>
+        <div className="absolute left-1/2 top-[46%] h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-[24px] border" style={centerPanelStyle} />
         <div className="relative flex h-full flex-wrap items-center justify-center gap-2">
           {(visualItems.length ? visualItems : slide?.bullets || []).slice(0, compact ? 3 : 4).map((item, index) => (
-            <span key={`${item}-${index}`} className={`rounded-full border px-3 py-2 text-[11px] ${cardClassName}`}>{item}</span>
+            <span key={`${item}-${index}`} className="rounded-full border px-3 py-2 text-[11px]" style={cardStyle}>{item}</span>
           ))}
         </div>
       </div>
@@ -4298,43 +4509,31 @@ export default function App() {
   };
 
   const renderPresentationSlideCanvas = (slide, index, { thumbnail = false } = {}) => {
-    const frameClassName = activePresentationDesignFamily === "dark"
-      ? "border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.16),transparent_34%),linear-gradient(135deg,rgba(9,16,32,0.98),rgba(15,23,42,0.98),rgba(30,41,59,0.96))] text-white"
-      : activePresentationDesignFamily === "light"
-        ? "border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(191,219,254,0.45),transparent_30%),linear-gradient(135deg,#ffffff,#f8fafc_56%,#eff6ff)] text-slate-900"
-        : activePresentationDesignFamily === "paper"
-          ? "border-orange-200 bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.24),transparent_30%),linear-gradient(135deg,#fffaf5,#f8e7d8_56%,#f2d2b4)] text-stone-900"
-        : "border-emerald-300/12 bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.16),transparent_30%),linear-gradient(135deg,#061912,#0f2b20_52%,#15392a)] text-white";
-    const mutedClassName = activePresentationDesignFamily === "light"
-      ? "text-slate-600"
-      : activePresentationDesignFamily === "paper"
-        ? "text-stone-600"
-        : "text-slate-200/72";
-    const chipClassName = activePresentationDesignFamily === "light"
-      ? "border-slate-200 bg-white/85 text-slate-700"
-      : activePresentationDesignFamily === "paper"
-        ? "border-orange-200 bg-white/88 text-orange-900"
-        : "border-white/10 bg-white/10 text-slate-100";
-    const bulletCardClassName = activePresentationDesignFamily === "light"
-      ? "border-slate-200/90 bg-white/90 text-slate-700"
-      : activePresentationDesignFamily === "paper"
-        ? "border-orange-100 bg-white/88 text-stone-700"
-        : "border-white/10 bg-slate-950/35 text-slate-100";
+    const {
+      frameStyle,
+      mutedStyle,
+      chipStyle,
+      bulletCardStyle,
+      accentStripStyle,
+      accentVerticalStyle,
+      accentOrbStyle,
+      accentOrbSecondaryStyle,
+    } = activePresentationDesignTokens;
     const visualType = (slide?.visualType || "cluster").toLowerCase();
 
     if (visualType === "title") {
       return (
-        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
           <div className="absolute inset-0 opacity-80">
-            <div className={`absolute left-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/35" : "bg-white/10"} blur-3xl`} />
-            <div className={`absolute bottom-0 right-0 h-40 w-72 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-400/20" : "bg-current/10"} blur-3xl`} />
-            {activePresentationDesignFamily === "paper" ? <div className="absolute inset-x-0 bottom-0 h-4 bg-[linear-gradient(90deg,#9a3412,#ea580c,#fdba74)]" /> : null}
-            {activePresentationDesignFamily === "paper" ? <div className="absolute right-5 top-5 h-24 w-24 rounded-[28px] border border-orange-200/80 bg-white/45" /> : null}
+            <div className="absolute left-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
+            <div className="absolute bottom-0 right-0 h-40 w-72 rounded-full blur-3xl" style={accentOrbSecondaryStyle} />
+            <div className="absolute inset-x-0 bottom-0 h-4" style={accentStripStyle} />
+            <div className="absolute right-5 top-5 h-24 w-24 rounded-[28px] border bg-white/20" style={chipStyle} />
           </div>
           <div className={`relative flex h-full flex-col justify-center ${thumbnail ? "gap-2 py-6" : "gap-4 py-14"}`}>
-            {activePresentationDesignFamily === "paper" ? <span className="w-fit rounded-full border border-orange-200 bg-white/88 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-900">Lecture deck</span> : null}
+            <span className="w-fit rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]" style={chipStyle}>Lecture deck</span>
             <h5 className={`${thumbnail ? "text-xl" : "text-[3.2rem]"} font-semibold leading-tight`}>{slide?.title || "Lecture Presentation"}</h5>
-            {slide?.bullets?.[0] ? <p className={`max-w-3xl ${thumbnail ? "text-[10px] leading-5" : "text-base leading-7"} ${mutedClassName}`}>{slide.bullets[0]}</p> : null}
+            {slide?.bullets?.[0] ? <p className={`max-w-3xl ${thumbnail ? "text-[10px] leading-5" : "text-base leading-7"}`} style={mutedStyle}>{slide.bullets[0]}</p> : null}
           </div>
         </div>
       );
@@ -4342,11 +4541,11 @@ export default function App() {
 
     if (visualType === "closing") {
       return (
-        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
           <div className="absolute inset-0 opacity-80">
-            <div className={`absolute right-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/30" : "bg-white/10"} blur-3xl`} />
-            <div className={`absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-400/18" : "bg-current/10"} blur-3xl`} />
-            {activePresentationDesignFamily === "paper" ? <div className="absolute inset-x-0 top-0 h-4 bg-[linear-gradient(90deg,#fdba74,#ea580c,#9a3412)]" /> : null}
+            <div className="absolute right-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
+            <div className="absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full blur-3xl" style={accentOrbSecondaryStyle} />
+            <div className="absolute inset-x-0 top-0 h-4" style={accentStripStyle} />
           </div>
           <div className="relative flex h-full items-center justify-center text-center">
             <h5 className={`${thumbnail ? "text-xl" : "text-[3.4rem]"} font-semibold leading-none`}>{slide?.title || "THANK YOU"}</h5>
@@ -4356,24 +4555,24 @@ export default function App() {
     }
 
     return (
-      <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
+      <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
         <div className="absolute inset-0 opacity-80">
-          <div className={`absolute right-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/28" : "bg-white/10"} blur-3xl`} />
-          <div className={`absolute bottom-0 right-0 h-28 w-56 rounded-[999px] ${activePresentationDesignFamily === "paper" ? "bg-orange-400/12" : "bg-current/5"}`} />
-          {activePresentationDesignFamily === "paper" ? <div className="absolute left-6 top-6 h-[84%] w-1.5 rounded-full bg-[linear-gradient(180deg,#9a3412,#ea580c,#fdba74)]" /> : null}
+          <div className="absolute right-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
+          <div className="absolute bottom-0 right-0 h-28 w-56 rounded-[999px]" style={accentOrbSecondaryStyle} />
+          <div className="absolute left-6 top-6 h-[84%] w-1.5 rounded-full" style={accentVerticalStyle} />
         </div>
         <div className="relative">
           <div className="flex items-center justify-between gap-3">
-            <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>Slide {index + 1}</span>
-            {!thumbnail ? <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em] ${chipClassName}`}>{getPresentationVisualTypeLabel(slide?.visualType)}</span> : null}
+            <span className="rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em]" style={chipStyle}>Slide {index + 1}</span>
+            {!thumbnail ? <span className="rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.22em]" style={chipStyle}>{getPresentationVisualTypeLabel(slide?.visualType)}</span> : null}
           </div>
           <div className={`${thumbnail ? "mt-3 space-y-3" : "mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_280px]"}`}>
             <div className="min-w-0">
               <h5 className={`${thumbnail ? "text-sm" : "text-[1.95rem]"} font-semibold leading-tight`}>{slide?.title || "Untitled slide"}</h5>
-              {!thumbnail ? <p className={`mt-3 text-sm leading-6 ${mutedClassName}`}>{slide?.visualTitle || "Visual explanation for the lecture point on this slide."}</p> : null}
+              {!thumbnail ? <p className="mt-3 text-sm leading-6" style={mutedStyle}>{slide?.visualTitle || "Visual explanation for the lecture point on this slide."}</p> : null}
               <div className={`${thumbnail ? "mt-3 space-y-2" : "mt-5 space-y-3"}`}>
                 {(slide?.bullets || []).slice(0, thumbnail ? 2 : 5).map((bullet, bulletIndex) => (
-                  <div key={`${slide?.title}-${bulletIndex}`} className={`rounded-2xl border px-4 py-3 text-sm leading-6 ${bulletCardClassName}`}>
+                  <div key={`${slide?.title}-${bulletIndex}`} className="rounded-2xl border px-4 py-3 text-sm leading-6" style={bulletCardStyle}>
                     {bullet}
                   </div>
                 ))}
@@ -4385,13 +4584,13 @@ export default function App() {
           </div>
           {!thumbnail ? (
             <div className="mt-5 flex items-end justify-between gap-4">
-              <p className={`max-w-2xl text-sm leading-6 ${mutedClassName}`}>{slide?.flowNote || "This slide keeps the lesson moving in a clear teaching order."}</p>
-              <span className={`text-[11px] font-semibold uppercase tracking-[0.28em] ${mutedClassName}`}>mabaso</span>
+              <p className="max-w-2xl text-sm leading-6" style={mutedStyle}>{slide?.flowNote || "This slide keeps the lesson moving in a clear teaching order."}</p>
+              <span className="text-[11px] font-semibold uppercase tracking-[0.28em]" style={mutedStyle}>mabaso</span>
             </div>
           ) : (
             <div className="mt-3 flex items-center justify-between gap-2">
-              <p className={`line-clamp-2 text-[10px] leading-5 ${mutedClassName}`}>{slide?.flowNote || slide?.visualTitle || "Lecture flow note"}</p>
-              <span className={`text-[9px] font-semibold uppercase tracking-[0.24em] ${mutedClassName}`}>mabaso</span>
+              <p className="line-clamp-2 text-[10px] leading-5" style={mutedStyle}>{slide?.flowNote || slide?.visualTitle || "Lecture flow note"}</p>
+              <span className="text-[9px] font-semibold uppercase tracking-[0.24em]" style={mutedStyle}>mabaso</span>
             </div>
           )}
         </div>
@@ -4604,9 +4803,9 @@ export default function App() {
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Template Gallery</p>
-                  <h5 className="mt-2 text-2xl font-semibold text-white">Pick the deck style before you generate.</h5>
+                  <h5 className="mt-2 text-2xl font-semibold text-white">Pick the premium deck style before you generate.</h5>
                 </div>
-                <p className="max-w-2xl text-sm leading-7 text-slate-300">The generated slides now aim for clearer classroom quality: stronger headings, better supporting points, and cleaner visual panels instead of loose extraction.</p>
+                <p className="max-w-2xl text-sm leading-7 text-slate-300">These templates now push the deck closer to a premium keynote: stronger typography, cleaner hierarchy, and a more deliberate visual rhythm from cover slide to closing summary.</p>
               </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {presentationDesigns.map((design) => {
@@ -4618,21 +4817,33 @@ export default function App() {
                       onClick={() => setSelectedPresentationDesign(design.id)}
                       className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10"}`}
                     >
-                      <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName} ${design.previewDecorationClassName}`}>
+                      <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName}`}>
                         <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent,rgba(15,23,42,0.06))]" />
+                        <div
+                          className="absolute -right-6 bottom-0 h-24 w-32 rounded-full blur-2xl"
+                          style={{ background: hexToRgba(design.colorPalette?.accentSecondary, 0.26, design.colorPalette?.accent) }}
+                        />
                         <div className="relative flex h-full flex-col justify-between p-4">
                           <div className="flex items-center justify-between gap-3">
-                            <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.accent}</span>
+                            <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.24em] ${design.chipClassName}`}>{design.category}</span>
                             {isSelected ? <span className="rounded-full border border-white/15 bg-white/30 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-white">Selected</span> : null}
                           </div>
                           <div>
-                            <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${design.previewTitleClassName}`}>Presentation</p>
-                            <p className={`mt-1 text-xl font-semibold ${design.previewTitleClassName}`}>Title</p>
+                            <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${design.previewTitleClassName}`}>{design.accent}</p>
+                            <p className={`mt-1 text-xl font-semibold ${design.previewTitleClassName}`}>{design.name}</p>
+                            <p className={`mt-1 text-[11px] ${design.previewTitleClassName}`}>{design.fontTitle} + {design.fontBody}</p>
                           </div>
                         </div>
                       </div>
                       <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {design.layoutFeatures.slice(0, 2).map((feature) => (
+                          <span key={`${design.id}-${feature}`} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-slate-200">
+                            {feature}
+                          </span>
+                        ))}
+                      </div>
                     </button>
                   );
                 })}
