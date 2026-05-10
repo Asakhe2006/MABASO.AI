@@ -356,10 +356,12 @@ MANDATORY COMPATIBILITY RULES
 - Because the app builds formulas, worked-example, flashcard, quiz, teacher-mode, and presentation assets from the guide, keep these exact headings whenever the content supports them:
   - ## IMPORTANT FORMULAS
   - ## WORKED EXAMPLES
+  - ## STEP-BY-STEP EXPLANATIONS
   - ## PRACTICE QUESTIONS AND ANSWERS
   - ## FLASHCARDS
 - If the topic includes formulas, always include ## IMPORTANT FORMULAS.
 - If the topic includes calculations, derivations, worked procedures, or problem-solving, always include ## WORKED EXAMPLES.
+- Always include ## STEP-BY-STEP EXPLANATIONS with 3 to 6 clear sequenced steps or step-labeled bullets that teach the learner how to move through the method, process, argument, or reasoning. This section is mandatory and is never optional.
 - Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
 - Always include ## FLASHCARDS and use this exact card format for every card:
   Q: ...
@@ -6595,7 +6597,7 @@ def parse_quiz_questions(section_text: str) -> list[dict[str, str]]:
 def replace_section(markdown: str, heading: str, new_body: str) -> str:
     pattern = re.compile(
         rf"((?:\*\*{re.escape(heading)}\*\*|##\s+{re.escape(heading)}))\s*(.*?)(?=\n(?:\*\*[A-Z][A-Z \-&]+\*\*|##\s+\S)|\Z)",
-        re.DOTALL,
+        re.DOTALL | re.IGNORECASE,
     )
 
     def _replace(match: re.Match[str]) -> str:
@@ -6614,6 +6616,67 @@ def append_section_if_missing(markdown: str, heading: str, body: str) -> str:
     return f"{cleaned}{separator}**{heading}**\n\n{body.strip()}".strip()
 
 
+def render_study_guide_sections(sections: list[dict[str, str]]) -> str:
+    rendered: list[str] = []
+    for section in sections:
+        heading = compact_text(section.get("heading") or section.get("raw_heading"))
+        content = (section.get("content") or "").strip()
+        if not heading:
+            continue
+        if heading == "LECTURE TITLE":
+            title = compact_text(content, compact_text(section.get("raw_heading"), "Study Guide"))
+            rendered.append(f"# {title}")
+            continue
+        display_heading = compact_text(section.get("raw_heading"), heading)
+        rendered.append(f"## {display_heading}")
+        if content:
+            rendered.append("")
+            rendered.append(content)
+        rendered.append("")
+    return "\n".join(rendered).strip()
+
+
+def upsert_guide_section(markdown: str, heading: str, new_body: str, after_heading: str = "") -> str:
+    target_heading = canonical_guide_heading(heading)
+    insert_after_heading = canonical_guide_heading(after_heading) if after_heading else ""
+    sections = parse_study_guide_sections(markdown)
+    if not sections:
+        return append_section_if_missing(markdown, target_heading, new_body)
+
+    updated_sections: list[dict[str, str]] = []
+    replaced = False
+    for section in sections:
+        if section["heading"] == target_heading:
+            updated_sections.append(
+                {
+                    "heading": target_heading,
+                    "raw_heading": target_heading,
+                    "content": new_body.strip(),
+                }
+            )
+            replaced = True
+            continue
+        updated_sections.append(dict(section))
+
+    if not replaced:
+        insert_at = len(updated_sections)
+        if insert_after_heading:
+            for index, section in enumerate(updated_sections):
+                if section["heading"] == insert_after_heading:
+                    insert_at = index + 1
+                    break
+        updated_sections.insert(
+            insert_at,
+            {
+                "heading": target_heading,
+                "raw_heading": target_heading,
+                "content": new_body.strip(),
+            },
+        )
+
+    return render_study_guide_sections(updated_sections)
+
+
 def extract_bullet_points(section_text: str) -> list[str]:
     items: list[str] = []
     for line in (section_text or "").splitlines():
@@ -6627,9 +6690,54 @@ def extract_bullet_points(section_text: str) -> list[str]:
     return items
 
 
+def build_missing_step_by_step_section(summary: str) -> str:
+    worked_points = extract_bullet_points(extract_section(summary, "WORKED EXAMPLES"))
+    concept_points = extract_bullet_points(extract_section(summary, "KEY CONCEPTS"))
+    definition_points = extract_bullet_points(extract_section(summary, "IMPORTANT DEFINITIONS"))
+    summary_points = extract_bullet_points(extract_section(summary, "SHORT SUMMARY"))
+    formula_lines = [
+        line.strip()
+        for line in extract_section(summary, "IMPORTANT FORMULAS").splitlines()
+        if compact_text(line) and not line.strip().startswith("|")
+    ]
+
+    explicit_steps: list[str] = []
+    for point in worked_points:
+        cleaned_point = compact_text(re.sub(r"^step\s*\d+\s*[:.\-]?\s*", "", point, flags=re.IGNORECASE))
+        if cleaned_point:
+            explicit_steps.append(cleaned_point)
+
+    if explicit_steps:
+        formatted_steps: list[str] = []
+        for index, item in enumerate(explicit_steps[:4], start=1):
+            ending = item if re.search(r"[.!?]$", item) else f"{item}."
+            formatted_steps.append(f"- Step {index}: {ending}")
+        return "\n".join(formatted_steps)
+
+    topic_anchor = concept_points[0] if concept_points else (summary_points[0] if summary_points else "the main lecture topic")
+    rule_anchor = formula_lines[0] if formula_lines else (definition_points[0] if definition_points else "the key rule or definition")
+    ending_anchor = concept_points[1] if len(concept_points) > 1 else topic_anchor
+
+    return "\n".join(
+        [
+            f"- Step 1: Identify the exact question, process, or idea and connect it to {topic_anchor}.",
+            f"- Step 2: Recall the main rule, definition, formula, or principle that controls it: {rule_anchor}.",
+            "- Step 3: Follow the lecture method carefully and explain each transition instead of jumping straight to the final result.",
+            f"- Step 4: Check the final answer, interpretation, or conclusion and link it back to {ending_anchor}.",
+        ]
+    )
+
+
 def add_student_support_sections(summary: str) -> str:
     cleaned = (summary or "").strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    if not compact_text(extract_section(cleaned, "STEP-BY-STEP EXPLANATIONS")):
+        cleaned = upsert_guide_section(
+            cleaned,
+            "STEP-BY-STEP EXPLANATIONS",
+            build_missing_step_by_step_section(cleaned),
+            after_heading="WORKED EXAMPLES",
+        )
     return cleaned.strip()
 
 

@@ -2735,6 +2735,45 @@ export default function App() {
     if (activeHistoryId === itemId) setActiveHistoryId("");
   };
 
+  const collaborationMaterialsSection = (
+    <div className="mt-8 border-t border-white/10 pt-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration Materials</p>
+          <h3 className="mt-2 text-2xl font-semibold text-white">Your recent study rooms.</h3>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Open a shared study room from here whenever you want to continue group revision from your saved materials.</p>
+        </div>
+        <div className="force-mobile-stack flex flex-wrap gap-3">
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{collaborationRooms.length} room{collaborationRooms.length === 1 ? "" : "s"}</div>
+          <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh Rooms</button>
+        </div>
+      </div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        {collaborationRooms.length ? collaborationRooms.map((room) => (
+          <article key={room.id} className={`rounded-[24px] border p-5 transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(room.updated_at).toLocaleString()}</p>
+                <h4 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{room.title}</h4>
+                <p className="phone-safe-copy mt-2 text-sm text-slate-300">Owner: {room.owner_email}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{room.member_count} member{room.member_count === 1 ? "" : "s"}</span>
+                  <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-50">Test mode: {room.test_visibility}</span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Shared tool: {tabs.find((tab) => tab.id === room.active_tab)?.label || "Study Guide"}</span>
+                </div>
+              </div>
+              <div className="force-mobile-stack flex flex-wrap gap-2">
+                <button type="button" onClick={async () => { setCurrentPage("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open Room</button>
+              </div>
+            </div>
+          </article>
+        )) : (
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Collaboration rooms will appear here after the first room is created.</div>
+        )}
+      </div>
+    </div>
+  );
+
   const historyPanel = showHistoryPanel ? (
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
@@ -2761,6 +2800,7 @@ export default function App() {
         </div>
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
+      {collaborationMaterialsSection}
     </section>
   ) : null;
 
@@ -3185,23 +3225,6 @@ export default function App() {
       </div>
     );
   };
-
-  const showCollaborationHistoryPanel = currentPage === "capture" || currentPage === "collaboration";
-  const collaborationHistoryPanel = showCollaborationHistoryPanel ? (
-    <section className="mt-8 rounded-[32px] border border-white/10 bg-slate-950/60 p-5 shadow-[0_20px_70px_rgba(2,8,23,0.28)] backdrop-blur xl:p-6">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration History</p>
-          <h2 className="mt-2 text-3xl font-semibold text-white">Your recent study rooms.</h2>
-        </div>
-        <div className="force-mobile-stack flex flex-wrap gap-3">
-          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{collaborationRooms.length} room{collaborationRooms.length === 1 ? "" : "s"}</div>
-          <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh Rooms</button>
-        </div>
-      </div>
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">{collaborationRooms.length ? collaborationRooms.map((room) => <article key={room.id} className={`rounded-[24px] border p-5 transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(room.updated_at).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{room.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">Owner: {room.owner_email}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{room.member_count} member{room.member_count === 1 ? "" : "s"}</span><span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-50">Test mode: {room.test_visibility}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Shared tool: {tabs.find((tab) => tab.id === room.active_tab)?.label || "Study Guide"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={async () => { setCurrentPage("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open Room</button></div></div></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Collaboration rooms will appear here after the first room is created.</div>}</div>
-    </section>
-  ) : null;
 
   const renderHelpAboutPage = () => (
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
@@ -10554,32 +10577,32 @@ export default function App() {
                       ) : null}
                     </div>
 
-                    <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-4">
+                    <div className="rounded-[24px] border border-emerald-300/25 bg-[linear-gradient(180deg,rgba(236,253,245,0.98),rgba(220,252,231,0.92))] p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Teacher Mode</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-white">Friendly lesson walkthrough that stays with the guide.</h4>
-                          <p className="mt-3 text-sm leading-7 text-slate-200">This gives a longer 15+ minute explanation, spends extra time on worked examples, skips flashcards and Q&amp;A, and follows the guide while it speaks.</p>
+                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-700">Teacher Mode</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-slate-900">Friendly lesson walkthrough that stays with the guide.</h4>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">This gives a longer 15+ minute explanation, spends extra time on worked examples, skips flashcards and Q&amp;A, and follows the guide while it speaks.</p>
                         </div>
                         <div className="force-mobile-stack flex flex-wrap gap-3">
-                          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-200">
+                          <div className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-700 shadow-sm">
                             {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min lesson` : "15+ min target"}
                           </div>
                           <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Build Teacher Lesson"}</button>
-                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Play</button>
-                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Pause</button>
-                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Resume</button>
-                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white disabled:opacity-50">Stop</button>
+                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play</button>
+                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause</button>
+                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume</button>
+                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Stop</button>
                         </div>
                       </div>
                       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-                        <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-200">
+                        <div className="rounded-2xl border border-slate-200 bg-white/88 px-4 py-4 text-sm leading-7 text-slate-700 shadow-sm">
                           {teacherLessonData.overview || "Generate teacher mode to hear a softer 15+ minute explanation that teaches the guide instead of reading it line by line."}
-                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-3 text-sm text-emerald-50">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
+                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
                         </div>
                         <div>
-                          <label className="block text-xs uppercase tracking-[0.22em] text-slate-300">Voice</label>
-                          <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                          <label className="block text-xs uppercase tracking-[0.22em] text-slate-500">Voice</label>
+                          <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
                             {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Browser default voice</option>}
                           </select>
                         </div>
@@ -10744,7 +10767,6 @@ export default function App() {
         />
 
         {historyPanel}
-        {collaborationHistoryPanel}
         {quizFeedbackModal}
       </main>
     </div>
