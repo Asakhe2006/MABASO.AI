@@ -198,7 +198,8 @@ iframe {
 
 .notes-markdown table {
   display: block;
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
 }
 
 .notes-markdown img {
@@ -456,6 +457,10 @@ iframe {
 }
 
 .study-guide-markdown table {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
   border-collapse: collapse;
   border-radius: 1rem;
   overflow: hidden;

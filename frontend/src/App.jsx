@@ -2243,13 +2243,30 @@ function extractGuideVisualSequence(prompt = "") {
 
 function extractGuideComparisonLabels(prompt = "") {
   const normalizedPrompt = compactGuideVisualText(prompt);
+  const cleanComparisonSide = (value = "", sibling = "") => {
+    let cleaned = compactGuideVisualText(value)
+      .replace(/^(diagram|table|comparison|chart|graph|plot|illustration|figure)\s+(comparing|showing|of)\s+/i, "")
+      .replace(/^(diagram|table|comparison|chart|graph|plot|illustration|figure)\s+/i, "");
+    const trailingLeadMatch = cleaned.match(/(?:^|.*\b)(?:for|between)\s+(.+)$/i);
+    if (trailingLeadMatch?.[1]) cleaned = trailingLeadMatch[1];
+    const siblingSuffixMatch = compactGuideVisualText(sibling).match(/\b(systems?|signals?|methods?|process(?:es)?|formulas?|properties|timelines?)\b$/i);
+    if (siblingSuffixMatch && !new RegExp(`\\b${siblingSuffixMatch[1]}\\b$`, "i").test(cleaned)) {
+      const wordCount = cleaned.split(/\s+/).filter(Boolean).length;
+      if (wordCount <= 3) cleaned = `${cleaned} ${siblingSuffixMatch[1]}`;
+    }
+    return formatGuideVisualLabel(cleaned);
+  };
   const compareMatch = normalizedPrompt.match(/\bcomparing?\s+(.+?)\s+and\s+(.+?)(?:\s+(?:formula|formulas|properties|process|steps|signals|systems|methods)\b|[.:]|$)/i);
   if (compareMatch) {
-    return [formatGuideVisualLabel(compareMatch[1]), formatGuideVisualLabel(compareMatch[2])];
+    return [cleanComparisonSide(compareMatch[1], compareMatch[2]), cleanComparisonSide(compareMatch[2], compareMatch[1])];
+  }
+  const forCompareMatch = normalizedPrompt.match(/\bfor\s+(.+?)\s+and\s+(.+?)(?:[.:]|$)/i);
+  if (forCompareMatch) {
+    return [cleanComparisonSide(forCompareMatch[1], forCompareMatch[2]), cleanComparisonSide(forCompareMatch[2], forCompareMatch[1])];
   }
   const versusMatch = normalizedPrompt.match(/\b(.+?)\s+vs\.?\s+(.+?)(?:[.:]|$)/i);
   if (versusMatch) {
-    return [formatGuideVisualLabel(versusMatch[1]), formatGuideVisualLabel(versusMatch[2])];
+    return [cleanComparisonSide(versusMatch[1], versusMatch[2]), cleanComparisonSide(versusMatch[2], versusMatch[1])];
   }
   return ["Left view", "Right view"];
 }
@@ -2435,20 +2452,20 @@ function StudyGuideComparisonVisual({ prompt = "", labels = ["Left view", "Right
   const rows = buildGuideComparisonRows(prompt, columns);
   return (
     <div className="overflow-x-auto rounded-[20px] border border-slate-200 bg-white">
-      <table className="min-w-full border-collapse text-left">
+      <table className="min-w-[760px] w-full border-collapse table-auto text-left">
         <thead>
           <tr className="bg-sky-50">
-            <th className="border-b border-slate-200 px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-500">Aspect</th>
-            <th className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{columns[0]}</th>
-            <th className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{columns[1]}</th>
+            <th className="w-[140px] min-w-[140px] border-b border-slate-200 px-4 py-3 align-top text-xs uppercase tracking-[0.18em] text-slate-500">Aspect</th>
+            <th className="min-w-[260px] border-b border-slate-200 px-4 py-3 align-top text-sm font-semibold leading-7 text-slate-900">{columns[0]}</th>
+            <th className="min-w-[260px] border-b border-slate-200 px-4 py-3 align-top text-sm font-semibold leading-7 text-slate-900">{columns[1]}</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.label}>
-              <td className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">{row.label}</td>
-              <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">{row.left}</td>
-              <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">{row.right}</td>
+              <td className="w-[140px] min-w-[140px] border-b border-slate-100 px-4 py-3 align-top text-sm font-semibold text-slate-700">{row.label}</td>
+              <td className="min-w-[260px] border-b border-slate-100 px-4 py-3 align-top text-sm leading-7 text-slate-600">{row.left}</td>
+              <td className="min-w-[260px] border-b border-slate-100 px-4 py-3 align-top text-sm leading-7 text-slate-600">{row.right}</td>
             </tr>
           ))}
         </tbody>
@@ -2501,7 +2518,7 @@ function StudyGuideVisualGallery({ sectionHeading = "", content = "" }) {
       {visualItems.length ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {visualItems.map((item) => (
-            <div key={item.id} className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))] p-4 shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
+            <div key={item.id} className={`rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))] p-4 shadow-[0_14px_34px_rgba(15,23,42,0.08)] ${["comparison", "plot"].includes(item.layout) ? "lg:col-span-2" : ""}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-[11px] uppercase tracking-[0.24em] text-violet-600">Rendered Visual</p>
@@ -2834,6 +2851,10 @@ export default function App() {
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
+  const rawExampleSections = extractGuideSections(formattedExample || example);
+  const exampleSections = rawExampleSections.length === 1 && rawExampleSections[0]?.normalizedHeading === "study guide" && compactGuideVisualText(formattedExample || example)
+    ? [toGuideSectionRecord("WORKED EXAMPLES", rawExampleSections[0].content, "WORKED EXAMPLES")]
+    : rawExampleSections;
   const guideTitleSection = getGuideSectionByHeading(guideSections, "LECTURE TITLE");
   const guideSummarySection = getGuideSectionByHeading(guideSections, "SHORT SUMMARY");
   const visibleGuideSections = guideSections.filter(
@@ -2845,16 +2866,37 @@ export default function App() {
     || "Study Guide";
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
-  const resolveTeacherSectionKey = (sectionHeading = "") => {
+  const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
+    const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
+    return normalizedHeading.includes("worked example") || normalizedHeading.includes("step-by-step explanation") || normalizedHeading.includes("step by step explanation");
+  };
+  const resolveTeacherSectionKey = (sectionHeading = "", sectionCollections = [guideSections]) => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
     if (!normalizedHeading) return "";
     const canonicalHeading = normalizeGuideHeading(getGuideCanonicalHeading(normalizedHeading) || normalizedHeading);
-    const matchingSection = guideSections.find((section) => section.normalizedHeading === canonicalHeading)
-      || guideSections.find((section) => canonicalHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(canonicalHeading))
-      || guideSections.find((section) => normalizedHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(normalizedHeading));
-    return matchingSection?.normalizedHeading || canonicalHeading || normalizedHeading;
+    const collections = (Array.isArray(sectionCollections) ? sectionCollections : [sectionCollections]).filter(Boolean);
+    for (const sections of collections) {
+      const matchingSection = (sections || []).find((section) => section.normalizedHeading === canonicalHeading)
+        || (sections || []).find((section) => canonicalHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(canonicalHeading))
+        || (sections || []).find((section) => normalizedHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(normalizedHeading));
+      if (matchingSection?.normalizedHeading) return matchingSection.normalizedHeading;
+    }
+    return canonicalHeading || normalizedHeading;
   };
-  const activeTeacherSectionKey = resolveTeacherSectionKey(activeTeacherSegment?.sectionHeading || "");
+  const resolveMountedTeacherSectionKey = (sectionHeading = "", sections = []) => {
+    const targetKey = resolveTeacherSectionKey(sectionHeading, [sections]);
+    return (sections || []).some((section) => section.normalizedHeading === targetKey) ? targetKey : "";
+  };
+  const resolveTeacherExampleSectionKey = (sectionHeading = "") => {
+    const directMatch = resolveMountedTeacherSectionKey(sectionHeading, exampleSections);
+    if (directMatch) return directMatch;
+    if (isWorkedExampleTeacherSegment(sectionHeading) && exampleSections.length === 1) {
+      return exampleSections[0].normalizedHeading;
+    }
+    return "";
+  };
+  const activeTeacherSectionKey = resolveMountedTeacherSectionKey(activeTeacherSegment?.sectionHeading || "", guideSections);
+  const activeExampleSectionKey = resolveTeacherExampleSectionKey(activeTeacherSegment?.sectionHeading || "");
   const isTeacherOnGuideIntro = Boolean(
     activeTeacherSectionKey
     && [guideTitleSection?.normalizedHeading, guideSummarySection?.normalizedHeading].filter(Boolean).includes(activeTeacherSectionKey),
@@ -2989,8 +3031,8 @@ export default function App() {
     return nextItem;
   };
 
-  const scrollTeacherToSection = (sectionHeading = "") => {
-    const targetKey = resolveTeacherSectionKey(sectionHeading);
+  const scrollTeacherToSection = (sectionHeading = "", sectionCollections = [guideSections]) => {
+    const targetKey = resolveTeacherSectionKey(sectionHeading, sectionCollections);
     if (!targetKey) return;
     const targetNode = teacherSectionRefs.current[targetKey];
     if (targetNode?.scrollIntoView) {
@@ -2999,17 +3041,40 @@ export default function App() {
   };
 
   const returnTeacherToGuide = (sectionHeading = "") => {
-    teacherAutoTabRef.current = "";
+    teacherAutoTabRef.current = "guide";
     setActiveTab("guide");
     if (!sectionHeading || typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        scrollTeacherToSection(sectionHeading);
+        scrollTeacherToSection(sectionHeading, [guideSections]);
       });
     });
   };
 
-  const syncTeacherSegmentToolView = (sectionHeading = "") => returnTeacherToGuide(sectionHeading);
+  const openTeacherExamples = (sectionHeading = "") => {
+    teacherAutoTabRef.current = "examples";
+    setActiveTab("examples");
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const targetKey = resolveTeacherExampleSectionKey(sectionHeading);
+        if (targetKey) {
+          const targetNode = teacherSectionRefs.current[targetKey];
+          targetNode?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+        } else {
+          teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    });
+  };
+
+  const syncTeacherSegmentToolView = (sectionHeading = "") => {
+    if (formattedExample.trim() && isWorkedExampleTeacherSegment(sectionHeading)) {
+      openTeacherExamples(sectionHeading);
+      return;
+    }
+    returnTeacherToGuide(sectionHeading);
+  };
 
   const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
     teacherPlaybackRunRef.current += 1;
@@ -3027,12 +3092,17 @@ export default function App() {
       return undefined;
     }
     const frameId = window.requestAnimationFrame(() => {
-      teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const targetKey = resolveTeacherExampleSectionKey(activeTeacherSegment?.sectionHeading || "");
+      if (targetKey) {
+        teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+      } else {
+        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     });
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeTab, activeTeacherSegmentIndex]);
+  }, [activeTab, activeTeacherSegment?.sectionHeading, formattedExample]);
 
   useEffect(() => {
     setSelectedPresentationSlideIndex(0);
@@ -10892,7 +10962,7 @@ export default function App() {
                 <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
               </div>
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
+              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
                   <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
                     <div
@@ -11049,9 +11119,35 @@ export default function App() {
                 {activeTab === "examples" ? (
                   <div
                     ref={teacherExamplesPanelRef}
-                    className="notes-markdown phone-safe-copy prose prose-invert max-w-none break-words text-sm leading-7 prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"
+                    className="study-guide-shell min-w-0 space-y-4 rounded-[28px] p-1"
                   >
-                    <ReactMarkdown>{formattedExample || "Worked examples will appear here after study guide generation."}</ReactMarkdown>
+                    {exampleSections.length ? exampleSections.map((section, index) => {
+                      const isActiveSection = activeExampleSectionKey
+                        ? activeExampleSectionKey === section.normalizedHeading
+                          || activeExampleSectionKey.includes(section.normalizedHeading)
+                          || section.normalizedHeading.includes(activeExampleSectionKey)
+                        : false;
+                      return (
+                        <article
+                          key={`${section.heading}-${index}`}
+                          ref={(node) => {
+                            if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
+                            else delete teacherSectionRefs.current[section.normalizedHeading];
+                          }}
+                          className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                        >
+                          {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this example</p> : null}
+                          <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                          <div className="phone-safe-copy mt-3 max-w-none">
+                            <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
+                          </div>
+                        </article>
+                      );
+                    }) : (
+                      <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+                        <ReactMarkdown>{formattedExample || "Worked examples will appear here after study guide generation."}</ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 ) : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
