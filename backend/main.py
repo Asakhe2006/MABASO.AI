@@ -20,7 +20,7 @@ import secrets
 import ssl
 import subprocess
 import tempfile
-import textwrap
+import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -61,7 +61,7 @@ try:
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.platypus import Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 except ImportError:
     A4 = None
 
@@ -2344,30 +2344,242 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
             detail="PDF export is not configured on the server yet. Install reportlab and redeploy.",
         )
 
+    pdf_symbol_replacements = {
+        "≥": ">=",
+        "≤": "<=",
+        "≠": "!=",
+        "≈": "approx",
+        "→": "->",
+        "←": "<-",
+        "↔": "<->",
+        "−": "-",
+        "–": "-",
+        "—": "-",
+        "∞": "infinity",
+        "∫": "Integral",
+        "∑": "Sum",
+        "∏": "Product",
+        "√": "sqrt",
+        "Δ": "Delta",
+        "δ": "delta",
+        "τ": "tau",
+        "θ": "theta",
+        "λ": "lambda",
+        "μ": "mu",
+        "σ": "sigma",
+        "π": "pi",
+        "ω": "omega",
+        "Ω": "Omega",
+        "α": "alpha",
+        "β": "beta",
+        "γ": "gamma",
+        "ε": "epsilon",
+        "η": "eta",
+        "ρ": "rho",
+        "φ": "phi",
+        "∂": "partial",
+        "∈": "in",
+        "∉": "not in",
+        "∪": "union",
+        "∩": "intersection",
+        "·": " * ",
+        "×": " x ",
+        "÷": " / ",
+        "°": " degrees",
+        "â‰¥": ">=",
+        "â‰¤": "<=",
+        "â‰ ": "!=",
+        "â†’": "->",
+    }
+    superscript_translation = str.maketrans({
+        "⁰": "0",
+        "¹": "1",
+        "²": "2",
+        "³": "3",
+        "⁴": "4",
+        "⁵": "5",
+        "⁶": "6",
+        "⁷": "7",
+        "⁸": "8",
+        "⁹": "9",
+        "⁺": "+",
+        "⁻": "-",
+        "⁼": "=",
+        "⁽": "(",
+        "⁾": ")",
+        "ᵃ": "a",
+        "ᵇ": "b",
+        "ᶜ": "c",
+        "ᵈ": "d",
+        "ᵉ": "e",
+        "ᶠ": "f",
+        "ᵍ": "g",
+        "ʰ": "h",
+        "ᶦ": "i",
+        "ʲ": "j",
+        "ᵏ": "k",
+        "ˡ": "l",
+        "ᵐ": "m",
+        "ⁿ": "n",
+        "ᵒ": "o",
+        "ᵖ": "p",
+        "ʳ": "r",
+        "ˢ": "s",
+        "ᵗ": "t",
+        "ᵘ": "u",
+        "ᵛ": "v",
+        "ʷ": "w",
+        "ˣ": "x",
+        "ʸ": "y",
+        "ᶻ": "z",
+    })
+    subscript_translation = str.maketrans({
+        "₀": "0",
+        "₁": "1",
+        "₂": "2",
+        "₃": "3",
+        "₄": "4",
+        "₅": "5",
+        "₆": "6",
+        "₇": "7",
+        "₈": "8",
+        "₉": "9",
+        "₊": "+",
+        "₋": "-",
+        "₌": "=",
+        "₍": "(",
+        "₎": ")",
+        "ₐ": "a",
+        "ₑ": "e",
+        "ₕ": "h",
+        "ᵢ": "i",
+        "ⱼ": "j",
+        "ₖ": "k",
+        "ₗ": "l",
+        "ₘ": "m",
+        "ₙ": "n",
+        "ₒ": "o",
+        "ₚ": "p",
+        "ᵣ": "r",
+        "ₛ": "s",
+        "ₜ": "t",
+        "ᵤ": "u",
+        "ᵥ": "v",
+        "ₓ": "x",
+    })
+
+    def normalize_pdf_export_text(value: str) -> str:
+        cleaned = compact_text(value)
+        if not cleaned:
+            return ""
+        cleaned = cleaned.translate(superscript_translation)
+        cleaned = cleaned.translate(subscript_translation)
+        for old, new in pdf_symbol_replacements.items():
+            cleaned = cleaned.replace(old, new)
+        cleaned = re.sub(r"^```(?:\w+)?\s*", "", cleaned, flags=re.MULTILINE)
+        cleaned = cleaned.replace("```", "")
+        cleaned = cleaned.replace("\t", "    ").replace("\xa0", " ")
+        cleaned = unicodedata.normalize("NFKD", cleaned).encode("ascii", "ignore").decode("ascii")
+        cleaned = re.sub(r"[ ]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
+    def build_pdf_markup(value: str) -> str:
+        safe = html.escape(normalize_pdf_export_text(value), quote=False)
+        safe = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", safe)
+        safe = re.sub(r"__(.+?)__", r"<b>\1</b>", safe)
+        safe = safe.replace("`", "")
+        return safe.replace("\n", "<br/>")
+
+    def is_markdown_table_separator(line: str) -> bool:
+        stripped = line.strip()
+        return bool(stripped) and set(stripped) <= {"|", "-", ":", " "}
+
+    def build_pdf_table(table_lines: list[str]):
+        raw_rows = [
+            [normalize_pdf_export_text(cell) for cell in line.strip().strip("|").split("|")]
+            for line in table_lines
+            if line.strip().startswith("|")
+        ]
+        rows = [row for row in raw_rows if row and any(cell.strip("-: ") for cell in row)]
+        if not rows:
+            return None
+        column_count = max(len(row) for row in rows)
+        normalized_rows = [
+            row + [""] * (column_count - len(row))
+            for row in rows
+        ]
+        paragraph_rows = [
+            [Paragraph(build_pdf_markup(cell), body_style) for cell in row]
+            for row in normalized_rows
+        ]
+        table = Table(paragraph_rows, hAlign="LEFT")
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eff6ff")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#dbeafe")),
+                    ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#cbd5e1")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                ]
+            )
+        )
+        return table
+
     styles = getSampleStyleSheet()
     title_style = styles["Heading1"]
     title_style.textColor = colors.HexColor("#0f172a")
     title_style.spaceAfter = 12
+    title_style.fontName = "Helvetica-Bold"
     heading_style = styles["Heading2"]
     heading_style.textColor = colors.HexColor("#0f172a")
     heading_style.spaceBefore = 12
     heading_style.spaceAfter = 8
+    heading_style.fontName = "Helvetica-Bold"
+    heading_style.fontSize = 16
+    subheading_style = ParagraphStyle(
+        "MabasoSubheading",
+        parent=styles["Heading3"],
+        fontName="Helvetica-Bold",
+        fontSize=13,
+        leading=16,
+        textColor=colors.HexColor("#2563eb"),
+        spaceBefore=10,
+        spaceAfter=6,
+    )
+    minor_heading_style = ParagraphStyle(
+        "MabasoMinorHeading",
+        parent=styles["Heading4"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=14,
+        textColor=colors.HexColor("#16a34a"),
+        spaceBefore=8,
+        spaceAfter=4,
+    )
     body_style = ParagraphStyle(
         "MabasoBody",
         parent=styles["BodyText"],
         fontName="Helvetica",
-        fontSize=10,
-        leading=15,
+        fontSize=10.5,
+        leading=15.5,
         textColor=colors.HexColor("#1f2937"),
         alignment=TA_LEFT,
         spaceAfter=8,
     )
-    mono_style = ParagraphStyle(
-        "MabasoMono",
+    bullet_style = ParagraphStyle(
+        "MabasoBullet",
         parent=body_style,
-        fontName="Courier",
-        fontSize=9,
-        leading=13,
+        leftIndent=14,
+        firstLineIndent=-10,
+        spaceAfter=5,
     )
 
     buffer = BytesIO()
@@ -2380,63 +2592,98 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         bottomMargin=36,
     )
 
-    def split_pdf_blocks(value: str) -> list[str]:
+    story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
+
+    def flush_paragraph_lines(paragraph_lines: list[str]) -> None:
+        text = "\n".join(paragraph_lines).strip()
+        if not text:
+            return
+        story.append(Paragraph(build_pdf_markup(text), body_style))
+        story.append(Spacer(1, 6))
+
+    def append_structured_pdf_content(value: str) -> None:
         cleaned = (value or "").replace("\r\n", "\n").strip()
         if not cleaned:
-            return []
-        wrapped_lines: list[str] = []
-        for raw_line in cleaned.splitlines():
-            line = raw_line.rstrip()
-            if not line.strip():
-                wrapped_lines.append("")
-                continue
-            numbered_match = re.match(r"^(\d+\.\s+)(.*)$", line)
-            bullet_match = re.match(r"^([-*]\s+)(.*)$", line)
-            if numbered_match:
-                prefix, remainder = numbered_match.groups()
-                wrapped = textwrap.fill(
-                    remainder,
-                    width=88,
-                    initial_indent=prefix,
-                    subsequent_indent=" " * len(prefix),
-                )
-            elif bullet_match:
-                prefix, remainder = bullet_match.groups()
-                wrapped = textwrap.fill(
-                    remainder,
-                    width=88,
-                    initial_indent=prefix,
-                    subsequent_indent=" " * len(prefix),
-                )
-            else:
-                wrapped = textwrap.fill(line, width=92)
-            wrapped_lines.extend(wrapped.splitlines())
-        cleaned = "\n".join(wrapped_lines).strip()
-        blocks: list[str] = []
-        for raw_block in re.split(r"\n{2,}", cleaned):
-            lines = raw_block.splitlines() or [raw_block]
-            chunk: list[str] = []
-            chunk_chars = 0
-            for line in lines:
-                addition = len(line) + 1
-                if chunk and (len(chunk) >= 18 or chunk_chars + addition > 1800):
-                    blocks.append("\n".join(chunk).strip())
-                    chunk = []
-                    chunk_chars = 0
-                chunk.append(line)
-                chunk_chars += addition
-            if chunk:
-                blocks.append("\n".join(chunk).strip())
-        return [block for block in blocks if block]
+            return
+        lines = cleaned.splitlines()
+        paragraph_lines: list[str] = []
+        index = 0
 
-    story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
+        while index < len(lines):
+            line = lines[index].rstrip()
+            stripped = line.strip()
+            next_line = lines[index + 1].rstrip() if index + 1 < len(lines) else ""
+
+            if not stripped:
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                index += 1
+                continue
+
+            if stripped.startswith("|") and next_line.strip().startswith("|") and is_markdown_table_separator(next_line):
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                table_lines = [line, next_line]
+                index += 2
+                while index < len(lines) and lines[index].strip().startswith("|"):
+                    table_lines.append(lines[index].rstrip())
+                    index += 1
+                table = build_pdf_table(table_lines)
+                if table is not None:
+                    story.append(table)
+                    story.append(Spacer(1, 10))
+                continue
+
+            markdown_heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+            if markdown_heading_match:
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                level = len(markdown_heading_match.group(1))
+                heading_text = markdown_heading_match.group(2).strip().strip("*").strip()
+                style = heading_style if level <= 2 else subheading_style if level == 3 else minor_heading_style
+                story.append(Paragraph(build_pdf_markup(heading_text), style))
+                story.append(Spacer(1, 4))
+                index += 1
+                continue
+
+            bold_heading_match = re.match(r"^\*\*(.+?)\*\*\s*:?\s*$", stripped)
+            if bold_heading_match:
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                story.append(Paragraph(build_pdf_markup(bold_heading_match.group(1).strip()), minor_heading_style))
+                story.append(Spacer(1, 4))
+                index += 1
+                continue
+
+            if re.match(r"^[-*_]{3,}\s*$", stripped):
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                story.append(Spacer(1, 6))
+                index += 1
+                continue
+
+            bullet_match = re.match(r"^([-*])\s+(.*)$", stripped)
+            numbered_match = re.match(r"^(\d+\.)\s+(.*)$", stripped)
+            if bullet_match or numbered_match:
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                prefix = bullet_match.group(1) if bullet_match else numbered_match.group(1)
+                text = bullet_match.group(2) if bullet_match else numbered_match.group(2)
+                story.append(Paragraph(build_pdf_markup(f"{prefix} {text}"), bullet_style))
+                story.append(Spacer(1, 2))
+                index += 1
+                continue
+
+            paragraph_lines.append(normalize_pdf_export_text(stripped))
+            index += 1
+
+        flush_paragraph_lines(paragraph_lines)
+
     for section in sections:
         if not section.content.strip():
             continue
         story.append(Paragraph(section.title, heading_style))
-        for block in split_pdf_blocks(section.content):
-            story.append(Preformatted(block, mono_style))
-            story.append(Spacer(1, 8))
+        append_structured_pdf_content(section.content)
         story.append(Spacer(1, 6))
 
     document.build(story)
