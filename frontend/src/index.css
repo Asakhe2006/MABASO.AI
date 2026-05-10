@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -10,6 +10,13 @@
   --panel-stroke: rgba(255, 255, 255, 0.1);
   --text-main: #f7fff8;
   --text-muted: #a7c4b1;
+  --study-bg: #fafafa;
+  --study-title: #1f2937;
+  --study-body: #374151;
+  --study-blue: #3b82f6;
+  --study-green: #22c55e;
+  --study-orange: #f97316;
+  --study-purple: #7c3aed;
 }
 
 * {
@@ -232,6 +239,178 @@ iframe {
   font-size: 1.22rem;
 }
 
+.study-guide-shell {
+  background: var(--study-bg);
+}
+
+.study-guide-title-card,
+.study-guide-section-card {
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+.study-guide-title-card {
+  border-left: 5px solid var(--study-purple);
+  background:
+    radial-gradient(circle at top right, rgba(124, 58, 237, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+}
+
+.study-guide-section-card {
+  border-left: 5px solid var(--study-blue);
+}
+
+.study-guide-section-info {
+  border-left-color: var(--study-blue);
+}
+
+.study-guide-section-concept {
+  border-left-color: var(--study-green);
+}
+
+.study-guide-section-warning {
+  border-left-color: var(--study-orange);
+}
+
+.study-guide-section-overview {
+  border-left-color: var(--study-purple);
+}
+
+.study-guide-section-active {
+  box-shadow:
+    0 0 0 2px rgba(124, 58, 237, 0.15),
+    0 22px 48px rgba(59, 130, 246, 0.12);
+}
+
+.study-guide-kicker {
+  font-family: "Inter", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--study-purple);
+}
+
+.study-guide-topic {
+  font-family: "Inter", sans-serif;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--study-title);
+}
+
+.study-guide-section-heading {
+  font-family: "Inter", sans-serif;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--study-blue);
+}
+
+.study-guide-section-concept .study-guide-section-heading {
+  color: var(--study-green);
+}
+
+.study-guide-section-warning .study-guide-section-heading {
+  color: var(--study-orange);
+}
+
+.study-guide-section-overview .study-guide-section-heading {
+  color: var(--study-purple);
+}
+
+.study-guide-markdown {
+  font-family: "Inter", sans-serif;
+  color: var(--study-body);
+}
+
+.study-guide-markdown h1 {
+  font-family: "Inter", sans-serif;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--study-title);
+}
+
+.study-guide-markdown h2 {
+  font-family: "Inter", sans-serif;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--study-blue);
+}
+
+.study-guide-markdown h3,
+.study-guide-markdown h4 {
+  font-family: "Inter", sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--study-green);
+}
+
+.study-guide-markdown p,
+.study-guide-markdown li,
+.study-guide-markdown td,
+.study-guide-markdown th {
+  font-family: "Inter", sans-serif;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--study-body);
+}
+
+.study-guide-markdown strong {
+  color: var(--study-title);
+  font-weight: 600;
+}
+
+.study-guide-markdown ul,
+.study-guide-markdown ol {
+  padding-left: 1.15rem;
+}
+
+.study-guide-markdown blockquote {
+  margin: 1rem 0;
+  border-left: 3px solid rgba(59, 130, 246, 0.35);
+  padding: 0.1rem 0 0.1rem 1rem;
+  color: #475569;
+}
+
+.study-guide-markdown code {
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.05);
+  padding: 0.12rem 0.35rem;
+  color: #1e293b;
+}
+
+.study-guide-markdown pre {
+  border-radius: 1rem;
+  background: #f8fafc;
+  padding: 1rem;
+  color: #1e293b;
+}
+
+.study-guide-markdown table {
+  border-collapse: collapse;
+  border-radius: 1rem;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: white;
+}
+
+.study-guide-markdown th,
+.study-guide-markdown td {
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  padding: 0.7rem 0.85rem;
+}
+
+.study-guide-markdown th {
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--study-title);
+}
+
 @media (max-width: 768px) {
   .hero-glow-left,
   .hero-glow-right,
@@ -253,6 +432,20 @@ iframe {
   .force-mobile-stack > * {
     min-width: 0;
     width: 100%;
+  }
+
+  .study-guide-topic {
+    font-size: 28px;
+  }
+
+  .study-guide-section-heading,
+  .study-guide-markdown h2 {
+    font-size: 21px;
+  }
+
+  .study-guide-markdown h3,
+  .study-guide-markdown h4 {
+    font-size: 18px;
   }
 }
 

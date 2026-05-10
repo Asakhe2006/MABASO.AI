@@ -51,6 +51,13 @@ const RECORDING_SILENCE_THRESHOLD = 0.012;
 const RECORDING_SILENCE_PEAK_THRESHOLD = 0.03;
 const RECORDING_SILENCE_ACTIVITY_MULTIPLIER = 2.4;
 const RECORDING_NOISE_FLOOR_SMOOTHING = 0.04;
+const RECORDING_MIME_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/ogg",
+  "audio/mp4",
+];
 const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
@@ -303,7 +310,7 @@ const helpAboutSections = [
     points: [
       "The Transcribe Lecture button should carry the live transcription stages when lecture audio, video, or a public video link is being processed.",
       "The Generate Study Guide button should carry the live reading and guide-building stages when notes, slides, or past papers are being read or turned into revision material.",
-      "Live recording now watches for 10 minutes of real monitored silence. When that happens, MABASO stops the recorder and starts transcription automatically. A manual stop still saves the recording first so the student can add slides, notes, or past papers before transcribing.",
+      "Live recording can now mix the microphone with shared browser-tab or system audio when the browser allows it, and it still watches for 10 minutes of real monitored silence before auto-transcribing. A manual stop still saves the recording first so the student can add slides, notes, or past papers before transcribing.",
       "If a scan or source file is too messy, too broken, or too unreadable, students should expect weaker notes. Clean PDFs, typed notes, and clearer slide files usually produce stronger study packs.",
       "If the guide feels mixed up, too transcript-heavy, or too shallow, students should add better notes or slides and regenerate instead of trusting a weak first draft.",
     ],
@@ -391,6 +398,42 @@ function normalizeAppleSignInError(error) {
 
 function normalizeHistoryOwnerEmail(email = "") {
   return (email || "").trim().toLowerCase();
+}
+
+function getSupportedRecordingMimeType() {
+  if (typeof window === "undefined" || typeof window.MediaRecorder === "undefined") return "";
+  if (typeof window.MediaRecorder.isTypeSupported !== "function") return "";
+  return RECORDING_MIME_CANDIDATES.find((type) => window.MediaRecorder.isTypeSupported(type)) || "";
+}
+
+function getRecordingFileExtension(mimeType) {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (normalized.includes("ogg")) return "ogg";
+  if (normalized.includes("mp4") || normalized.includes("aac") || normalized.includes("m4a")) return "m4a";
+  return "webm";
+}
+
+function describeRecordingInputs({ microphone = false, systemAudio = false }) {
+  if (microphone && systemAudio) return "microphone + shared tab/system audio";
+  if (systemAudio) return "shared tab/system audio";
+  if (microphone) return "microphone";
+  return "available audio sources";
+}
+
+function stopMediaStreams(streams) {
+  const stoppedTracks = new Set();
+  for (const stream of streams || []) {
+    if (!stream) continue;
+    for (const track of stream.getTracks()) {
+      if (stoppedTracks.has(track)) continue;
+      stoppedTracks.add(track);
+      try {
+        track.stop();
+      } catch {
+        // Ignore track shutdown errors during recorder cleanup.
+      }
+    }
+  }
 }
 
 function isInlineDataUrl(value = "") {
@@ -719,6 +762,88 @@ function getQuestionMarks(question) {
 
 function getTotalQuizMarks(questions) {
   return (questions || []).reduce((total, item) => total + getQuestionMarks(item), 0);
+}
+
+function estimateQuizDurationMinutes(questions) {
+  const safeQuestions = Array.isArray(questions) ? questions : [];
+  if (!safeQuestions.length) return 0;
+  const totalMarks = getTotalQuizMarks(safeQuestions);
+  const writtenQuestionCount = safeQuestions.filter((question) => !isOptionBasedQuestion(question)).length;
+  const optionSubpartCount = safeQuestions.reduce((total, question) => total + (Array.isArray(question?.subparts) ? question.subparts.length : 0), 0);
+  const answerPointLoad = safeQuestions.reduce((total, question) => total + (Array.isArray(question?.answer_points) ? question.answer_points.length : 0), 0);
+  const estimatedMinutes = Math.ceil((totalMarks * 1.3) + (writtenQuestionCount * 1.2) + (optionSubpartCount * 0.25) + (answerPointLoad * 0.08));
+  return Math.max(8, Math.min(180, estimatedMinutes));
+}
+
+function formatDurationClock(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDurationLabel(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.ceil((safeSeconds % 3600) / 60);
+  if (hours > 0 && minutes > 0) return `${hours} hr ${minutes} min`;
+  if (hours > 0) return `${hours} hr`;
+  return `${Math.max(1, Math.ceil(safeSeconds / 60))} min`;
+}
+
+function buildQuizFeedbackPrompt(scoreValue, totalMarks) {
+  const safeTotal = Math.max(1, Number(totalMarks || 0));
+  const safeScore = Math.max(0, Number(scoreValue || 0));
+  const percentage = Math.round((safeScore / safeTotal) * 100);
+
+  if (percentage >= 80) {
+    return {
+      percentage,
+      title: "Excellence unlocked",
+      accentClassName: "border-emerald-300/30 bg-emerald-400/15 text-emerald-50",
+      message: "Excellent work. This is a strong performance. Keep that discipline, review the few mistakes below, and you can stay at the top level.",
+    };
+  }
+  if (percentage >= 50) {
+    return {
+      percentage,
+      title: "You passed",
+      accentClassName: "border-sky-300/30 bg-sky-400/15 text-sky-50",
+      message: "Well done, you passed. Now pull up your socks because you can do even more. Review the missed questions, tighten your definitions, and practise under time pressure.",
+    };
+  }
+  if (percentage >= 40) {
+    return {
+      percentage,
+      title: "You are close",
+      accentClassName: "border-amber-300/30 bg-amber-400/15 text-amber-50",
+      message: "You are closer than it looks. Focus on the questions you lost, rewrite the key ideas in your own words, and do one more timed revision round.",
+    };
+  }
+  if (percentage >= 30) {
+    return {
+      percentage,
+      title: "Keep building",
+      accentClassName: "border-orange-300/30 bg-orange-400/15 text-orange-50",
+      message: "You have started the climb. Go back to the worked examples, learn the core terms properly, and practise short answers before you try the full test again.",
+    };
+  }
+  if (percentage >= 10) {
+    return {
+      percentage,
+      title: "Do not lose courage",
+      accentClassName: "border-rose-300/30 bg-rose-400/15 text-rose-50",
+      message: "This score is only a signal, not the end. Take courage, revisit the guide slowly, study one topic at a time, and practise with the model answers until the structure becomes natural.",
+    };
+  }
+  return {
+    percentage,
+    title: "One step at a time",
+    accentClassName: "border-rose-300/30 bg-rose-500/15 text-rose-50",
+    message: "Start again with the basics. Read the summary, definitions, and worked examples first, then come back and try the test after a calmer revision pass.",
+  };
 }
 
 function buildExpectedAnswerText(question) {
@@ -1866,47 +1991,114 @@ const GUIDE_SECTION_HEADINGS = [
   "FLASHCARDS",
   "EXAM TIPS",
 ];
-const GUIDE_SECTION_LOOKUP = new Map(
-  GUIDE_SECTION_HEADINGS.map((heading) => [heading.toLowerCase(), heading]),
-);
+const GUIDE_SECTION_ALIAS_ENTRIES = [
+  ...GUIDE_SECTION_HEADINGS.map((heading) => [heading.toLowerCase(), heading]),
+  ["topic title", "LECTURE TITLE"],
+  ["title", "LECTURE TITLE"],
+  ["summary", "SHORT SUMMARY"],
+  ["overview", "SHORT SUMMARY"],
+  ["brief overview", "SHORT SUMMARY"],
+  ["introduction", "SHORT SUMMARY"],
+  ["introduction / overview", "SHORT SUMMARY"],
+  ["introduction/overview", "SHORT SUMMARY"],
+  ["main concepts", "KEY CONCEPTS"],
+  ["definitions", "IMPORTANT DEFINITIONS"],
+  ["formulas", "IMPORTANT FORMULAS"],
+  ["examples", "WORKED EXAMPLES"],
+  ["step by step explanations", "STEP-BY-STEP EXPLANATIONS"],
+  ["step-by-step explanation", "STEP-BY-STEP EXPLANATIONS"],
+  ["step by step explanation", "STEP-BY-STEP EXPLANATIONS"],
+  ["real world examples", "REAL-WORLD EXAMPLES"],
+  ["practice questions", "PRACTICE QUESTIONS AND ANSWERS"],
+  ["exam-focused takeaways", "EXAM TIPS"],
+  ["exam focused takeaways", "EXAM TIPS"],
+  ["quick recap", "EXAM TIPS"],
+];
+const GUIDE_SECTION_LOOKUP = new Map(GUIDE_SECTION_ALIAS_ENTRIES);
 
 function normalizeGuideHeading(value) {
-  return (value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^[#*\-\s]+/, "")
+    .replace(/[*:]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getGuideCanonicalHeading(value) {
-  return GUIDE_SECTION_LOOKUP.get(normalizeGuideHeading(String(value || "").replace(/\*\*/g, "").replace(/:+$/, ""))) || "";
+  return GUIDE_SECTION_LOOKUP.get(normalizeGuideHeading(value)) || "";
 }
 
-function parseGuideHeadingLine(line) {
+function toGuideSectionRecord(heading, content, originalHeading = "") {
+  const canonicalHeading = getGuideCanonicalHeading(heading);
+  const resolvedHeading = canonicalHeading || String(originalHeading || heading || "").trim();
+  return {
+    heading: resolvedHeading,
+    normalizedHeading: normalizeGuideHeading(canonicalHeading || heading),
+    content: (content || "").trim(),
+    displayHeading: String(originalHeading || canonicalHeading || heading || "").trim(),
+  };
+}
+
+function parseGuideHeadingLine(line, { allowUnknownHeadings = true } = {}) {
   const trimmedLine = (line || "").trim();
   if (!trimmedLine) return null;
 
-  const candidates = [
-    trimmedLine.replace(/^[-*+]\s+/, ""),
-    trimmedLine.replace(/^#{1,6}\s+/, ""),
-  ];
+  const markdownHeadingMatch = trimmedLine.match(/^(#{1,6})\s+(.+?)\s*$/);
+  if (markdownHeadingMatch) {
+    const rawHeading = markdownHeadingMatch[2].trim().replace(/\*\*/g, "").replace(/:+$/, "").trim();
+    const canonicalHeading = getGuideCanonicalHeading(rawHeading);
+    if (canonicalHeading || allowUnknownHeadings) {
+      return {
+        heading: canonicalHeading || rawHeading,
+        inlineContent: "",
+        level: markdownHeadingMatch[1].length,
+        originalHeading: rawHeading,
+      };
+    }
+  }
+
+  const candidates = [trimmedLine.replace(/^[-*+]\s+/, "")];
 
   for (const candidateLine of candidates) {
     const boldMatch = candidateLine.match(/^\*\*(.+?)\*\*\s*:?\s*(.*)$/);
     if (boldMatch) {
-      const heading = getGuideCanonicalHeading(boldMatch[1]);
+      const rawHeading = boldMatch[1].trim();
+      const heading = getGuideCanonicalHeading(rawHeading);
       if (heading) {
-        return { heading, inlineContent: (boldMatch[2] || "").trim() };
+        return {
+          heading,
+          inlineContent: (boldMatch[2] || "").trim(),
+          level: 2,
+          originalHeading: rawHeading,
+        };
       }
     }
 
     const colonMatch = candidateLine.match(/^(.+?)\s*:\s*(.*)$/);
     if (colonMatch) {
-      const heading = getGuideCanonicalHeading(colonMatch[1]);
+      const rawHeading = colonMatch[1].trim();
+      const heading = getGuideCanonicalHeading(rawHeading);
       if (heading) {
-        return { heading, inlineContent: (colonMatch[2] || "").trim() };
+        return {
+          heading,
+          inlineContent: (colonMatch[2] || "").trim(),
+          level: 2,
+          originalHeading: rawHeading,
+        };
       }
     }
 
-    const plainHeading = getGuideCanonicalHeading(candidateLine.replace(/\*\*/g, ""));
+    const rawHeading = candidateLine.replace(/\*\*/g, "").replace(/:+$/, "").trim();
+    const plainHeading = getGuideCanonicalHeading(rawHeading);
     if (plainHeading) {
-      return { heading: plainHeading, inlineContent: "" };
+      return {
+        heading: plainHeading,
+        inlineContent: "",
+        level: 2,
+        originalHeading: rawHeading,
+      };
     }
   }
 
@@ -1920,17 +2112,14 @@ function extractGuideSections(markdown) {
   const lines = text.split("\n");
   const sections = [];
   const introLines = [];
+  let titleLine = "";
   let currentSection = null;
 
   const flushCurrentSection = () => {
     if (!currentSection) return;
     const content = currentSection.contentLines.join("\n").trim();
     if (currentSection.heading && content) {
-      sections.push({
-        heading: currentSection.heading,
-        normalizedHeading: normalizeGuideHeading(currentSection.heading),
-        content,
-      });
+      sections.push(toGuideSectionRecord(currentSection.heading, content, currentSection.originalHeading));
     }
     currentSection = null;
   };
@@ -1938,9 +2127,15 @@ function extractGuideSections(markdown) {
   for (const line of lines) {
     const parsedHeading = parseGuideHeadingLine(line);
     if (parsedHeading) {
+      if (parsedHeading.level === 1 && !titleLine) {
+        titleLine = parsedHeading.originalHeading || parsedHeading.heading;
+        flushCurrentSection();
+        continue;
+      }
       flushCurrentSection();
       currentSection = {
         heading: parsedHeading.heading,
+        originalHeading: parsedHeading.originalHeading,
         contentLines: parsedHeading.inlineContent ? [parsedHeading.inlineContent] : [],
       };
       continue;
@@ -1951,23 +2146,26 @@ function extractGuideSections(markdown) {
 
   flushCurrentSection();
 
+  if (titleLine) {
+    sections.unshift(toGuideSectionRecord("LECTURE TITLE", titleLine, titleLine));
+  }
+
   const introText = introLines.join("\n").trim();
   if (introText) {
     const hasLectureTitle = sections.some((section) => section.normalizedHeading === "lecture title");
     const hasShortSummary = sections.some((section) => section.normalizedHeading === "short summary");
     if (!hasLectureTitle) {
-      sections.unshift({
-        heading: "LECTURE TITLE",
-        normalizedHeading: "lecture title",
-        content: introText,
-      });
+      const [firstLine, ...restLines] = introText.split("\n");
+      if ((firstLine || "").trim()) {
+        sections.unshift(toGuideSectionRecord("LECTURE TITLE", firstLine.trim(), firstLine.trim()));
+      }
+      const summaryText = restLines.join("\n").trim();
+      if (summaryText) {
+        sections.splice(1, 0, toGuideSectionRecord("SHORT SUMMARY", summaryText, "SHORT SUMMARY"));
+      }
     } else if (!hasShortSummary) {
       const titleIndex = sections.findIndex((section) => section.normalizedHeading === "lecture title");
-      const summarySection = {
-        heading: "SHORT SUMMARY",
-        normalizedHeading: "short summary",
-        content: introText,
-      };
+      const summarySection = toGuideSectionRecord("SHORT SUMMARY", introText, "SHORT SUMMARY");
       if (titleIndex >= 0) sections.splice(titleIndex + 1, 0, summarySection);
       else sections.unshift(summarySection);
     }
@@ -1980,8 +2178,16 @@ function extractGuideSections(markdown) {
 }
 
 function getGuideSectionByHeading(sections, heading) {
-  const normalizedHeading = normalizeGuideHeading(heading);
+  const normalizedHeading = normalizeGuideHeading(getGuideCanonicalHeading(heading) || heading);
   return (sections || []).find((section) => section.normalizedHeading === normalizedHeading) || null;
+}
+
+function getGuideSectionTone(heading) {
+  const normalizedHeading = normalizeGuideHeading(heading);
+  if (/(mistake|warning|weakness|limitation|criticism|caution|risk|exception)/.test(normalizedHeading)) return "warning";
+  if (/(concept|definition|theory|principle|framework|mechanism|process|stage|component|architecture|workflow|comparison)/.test(normalizedHeading)) return "concept";
+  if (normalizedHeading === "lecture title" || normalizedHeading === "short summary") return "overview";
+  return "info";
 }
 
 function getPodcastEstimatedMinutes(podcast) {
@@ -2077,6 +2283,8 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [recording, setRecording] = useState(false);
+  const [includeSystemAudioInRecording, setIncludeSystemAudioInRecording] = useState(true);
+  const [monitorSharedAudioDuringRecording, setMonitorSharedAudioDuringRecording] = useState(true);
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState("guide");
   const [currentJobType, setCurrentJobType] = useState("");
@@ -2097,6 +2305,11 @@ export default function App() {
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [isMarkingQuiz, setIsMarkingQuiz] = useState(false);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [quizSessionStage, setQuizSessionStage] = useState("idle");
+  const [quizTimeLimitSeconds, setQuizTimeLimitSeconds] = useState(0);
+  const [quizTimeRemainingSeconds, setQuizTimeRemainingSeconds] = useState(0);
+  const [quizDeadlineAtMs, setQuizDeadlineAtMs] = useState(0);
+  const [quizFeedbackPrompt, setQuizFeedbackPrompt] = useState(null);
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
   const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
   const [roomQuizResults, setRoomQuizResults] = useState({});
@@ -2144,8 +2357,10 @@ export default function App() {
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingStreamRef = useRef(null);
+  const recordingOwnedStreamsRef = useRef([]);
   const recordingAudioContextRef = useRef(null);
-  const recordingSourceNodeRef = useRef(null);
+  const recordingSourceNodesRef = useRef([]);
+  const recordingMonitorGainRef = useRef(null);
   const recordingAnalyserRef = useRef(null);
   const recordingMonitorTimerRef = useRef(0);
   const recordingLastMonitorAtRef = useRef(0);
@@ -2155,6 +2370,7 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
+  const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
@@ -2185,6 +2401,8 @@ export default function App() {
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
   const visualReferences = uploadedVisualReferences;
+  const canShareSystemAudio = typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
+  const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
@@ -2196,6 +2414,10 @@ export default function App() {
       : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script);
   const selectedQuizQuestions = quizQuestions;
+  const quizTotalMarks = getTotalQuizMarks(selectedQuizQuestions);
+  const quizScore = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
+  const quizEstimatedDurationSeconds = quizTimeLimitSeconds || (estimateQuizDurationMinutes(selectedQuizQuestions) * 60);
+  const quizEstimatedDurationLabel = formatDurationLabel(quizEstimatedDurationSeconds);
   const deferredTranscript = useDeferredValue(transcript);
   const deferredSummary = useDeferredValue(summary);
   const deferredFormula = useDeferredValue(formula);
@@ -2252,7 +2474,7 @@ export default function App() {
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : currentPage === "workspace" ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
     fileName: file?.name || "",
@@ -2270,7 +2492,7 @@ export default function App() {
     : hasResults || activeTab === "chat";
   const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
-  const showHistoryPanel = currentPage === "capture" || currentPage === "workspace";
+  const showHistoryPanel = currentPage === "materials";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
@@ -2289,6 +2511,28 @@ export default function App() {
   const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
     return normalizedHeading.includes("worked example") || normalizedHeading.includes("step-by-step explanation") || normalizedHeading.includes("step by step explanation");
+  };
+  const resetQuizSessionState = (questions = []) => {
+    const estimatedSeconds = estimateQuizDurationMinutes(questions) * 60;
+    setQuizSessionStage(questions.length ? "ready" : "idle");
+    setQuizTimeLimitSeconds(estimatedSeconds);
+    setQuizTimeRemainingSeconds(estimatedSeconds);
+    setQuizDeadlineAtMs(0);
+    setQuizFeedbackPrompt(null);
+    quizAutoSubmitTriggeredRef.current = false;
+  };
+  const startQuizSession = () => {
+    const estimatedSeconds = quizTimeLimitSeconds || (estimateQuizDurationMinutes(selectedQuizQuestions) * 60);
+    if (!selectedQuizQuestions.length || !estimatedSeconds) return;
+    setQuizSubmitted(false);
+    setQuizResults({});
+    setQuizFeedbackPrompt(null);
+    setQuizTimeLimitSeconds(estimatedSeconds);
+    setQuizTimeRemainingSeconds(estimatedSeconds);
+    setQuizDeadlineAtMs(Date.now() + (estimatedSeconds * 1000));
+    setQuizSessionStage("active");
+    quizAutoSubmitTriggeredRef.current = false;
+    setStatus(`Test started. Countdown running for ${formatDurationLabel(estimatedSeconds)}.`);
   };
 
   const getActiveWorkspaceOwnerEmail = () => normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || authEmailInput || "");
@@ -2341,6 +2585,7 @@ export default function App() {
       setExample(snapshot.example || "");
       setFlashcards(Array.isArray(snapshot.flashcards) ? snapshot.flashcards : []);
       setQuizQuestions(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
+      resetQuizSessionState(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
       setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
       setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
       setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
@@ -2491,10 +2736,29 @@ export default function App() {
   };
 
   const historyPanel = showHistoryPanel ? (
-    <section className="mt-8 rounded-[32px] border border-white/10 bg-slate-950/60 p-5 shadow-[0_20px_70px_rgba(2,8,23,0.28)] backdrop-blur xl:p-6">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-end sm:justify-between">
-        <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">History</p><h2 className="mt-2 text-3xl font-semibold text-white">Saved workspaces for this email.</h2></div>
-        <div className="force-mobile-stack flex flex-wrap gap-3"><div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div><button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button></div>
+    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex items-start gap-4">
+          <button
+            type="button"
+            onClick={() => setCurrentPage(hasResults ? "workspace" : "capture")}
+            aria-label="Back from my materials"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+              <path d="M15 6 9 12l6 6M9 12h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+            </svg>
+          </button>
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Materials</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">All saved history for this email.</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Open any saved lecture workspace, download its study pack, or remove old material you no longer need.</p>
+          </div>
+        </div>
+        <div className="force-mobile-stack flex flex-wrap gap-3">
+          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div>
+          <button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button>
+        </div>
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
     </section>
@@ -2720,6 +2984,11 @@ export default function App() {
     ownerControls = null,
     ownerNotice = "",
     emptyMessage = "Generate a test from the Test tab when you need one.",
+    answerLocked = false,
+    countdownLabel = "",
+    countdownTone = "text-slate-200",
+    markButtonLabel = "Mark Test",
+    assessmentStatus = "",
   }) => {
     const totalMarks = getTotalQuizMarks(questions);
     const hasRoomVisibility = Boolean(visibilityMode);
@@ -2734,9 +3003,11 @@ export default function App() {
           <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">{questions.length} test question{questions.length === 1 ? "" : "s"} ready</div>
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{totalMarks} total marks</div>
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Written questions support camera and multiple photos.</div>
+          {countdownLabel ? <div className={`rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm font-semibold ${countdownTone}`}>Time left: {countdownLabel}</div> : null}
+          {assessmentStatus ? <div className="rounded-full border border-amber-300/20 bg-amber-400/15 px-4 py-2 text-sm text-amber-50">{assessmentStatus}</div> : null}
           {hasRoomVisibility ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Room test mode: {visibilityLabel}</div> : null}
           {scopeId === "workspace" ? <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="rounded-full border border-emerald-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:opacity-50">Upload Past Paper</button> : null}
-          <button type="button" onClick={onMark} disabled={!questions.length || isMarking} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarking ? "Marking..." : "Mark Test"}</button>
+          {(!submitted || !answerLocked) ? <button type="button" onClick={onMark} disabled={!questions.length || isMarking} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isMarking ? "Marking..." : markButtonLabel}</button> : null}
           {submitted ? <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">Score: {scoreValue} / {totalMarks}</div> : null}
         </div>
 
@@ -2798,9 +3069,9 @@ export default function App() {
                   const subpartResult = result?.subpart_results?.find((entry) => entry.label === subpart.label);
                   return <div key={`${scopeId}-${item.number}-${subpart.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><p className="phone-safe-copy text-sm font-semibold text-white">{subpart.label}) {subpart.question}</p><span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">{subpart.marks} mark</span></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{(subpart.options || []).map((option) => {
                     const checked = selectedOptions[subpart.label] === option;
-                    return <label key={`${scopeId}-${subpart.label}-${option}`} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${scopeId}-${item.number}-${subpart.label}`} checked={checked} onChange={() => onOptionChange(item, subpart.label, option)} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>;
+                    return <label key={`${scopeId}-${subpart.label}-${option}`} className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${answerLocked ? "cursor-not-allowed opacity-75" : "cursor-pointer"} ${checked ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}><input type="radio" name={`${scopeId}-${item.number}-${subpart.label}`} checked={checked} onChange={() => onOptionChange(item, subpart.label, option)} disabled={answerLocked} className="h-4 w-4 accent-emerald-400" /><span>{option}</span></label>;
                   })}</div>{submitted && subpartResult ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${subpartResult.is_correct ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-rose-300/25 bg-rose-500/10 text-slate-100"}`}><p>{subpartResult.marks_awarded} / {subpartResult.marks}</p><p className="mt-2 leading-7">{subpartResult.feedback}</p></div> : null}</div>;
-                })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50"><span className="phone-safe-copy">Photos</span><input type="file" accept="image/*" multiple className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label><label className="inline-flex max-w-full cursor-pointer items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white"><span className="phone-safe-copy">Camera</span><input type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label>{answerImageFiles.length ? <><span className="phone-safe-copy text-xs text-emerald-100/80">{getQuizAnswerImageLabel(answerImageFiles)}</span><div className="flex flex-wrap gap-2">{answerImageFiles.map((file) => <span key={`${scopeId}-${item.number}-${file.name}-${file.lastModified}`} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{file.name}</span>)}</div></> : null}</div></>}
+                })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} disabled={answerLocked} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-75 ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className={`inline-flex max-w-full items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 ${answerLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><span className="phone-safe-copy">Photos</span><input type="file" accept="image/*" multiple disabled={answerLocked} className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label><label className={`inline-flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white ${answerLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><span className="phone-safe-copy">Camera</span><input type="file" accept="image/*" capture="environment" multiple disabled={answerLocked} className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label>{answerImageFiles.length ? <><span className="phone-safe-copy text-xs text-emerald-100/80">{getQuizAnswerImageLabel(answerImageFiles)}</span><div className="flex flex-wrap gap-2">{answerImageFiles.map((file) => <span key={`${scopeId}-${item.number}-${file.name}-${file.lastModified}`} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{file.name}</span>)}</div></> : null}</div></>}
                 {visibilityMode === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${scopeId}-${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="phone-safe-copy font-semibold text-white">{answer.author_email}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}
                 {submitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="phone-safe-copy mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="phone-safe-copy mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}
               </div>
@@ -2810,6 +3081,42 @@ export default function App() {
       </div>
     );
   };
+
+  const renderQuizStartPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-[26px] border border-sky-300/20 bg-[linear-gradient(180deg,rgba(59,130,246,0.16),rgba(15,23,42,0.82))] p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.24em] text-sky-200/80">Start Test</p>
+            <h4 className="mt-2 text-2xl font-semibold text-white">Your test is ready to begin.</h4>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">When you press Start Test, the countdown begins immediately. When time finishes, MABASO ends the test and marks it automatically.</p>
+          </div>
+          <button type="button" onClick={startQuizSession} disabled={!selectedQuizQuestions.length} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#3b82f6)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+            Start Test
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Questions</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{selectedQuizQuestions.length}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total Marks</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{quizTotalMarks}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Estimated Duration</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{quizEstimatedDurationLabel}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-sm leading-7 text-slate-300">
+        <p className="font-semibold text-white">Before you start</p>
+        <p className="mt-3">Make sure you are ready to answer in one sitting. The countdown is estimated from the content and total marks, and the test will submit itself when the time reaches zero.</p>
+      </div>
+    </div>
+  );
 
   const renderQuizGenerationPanel = () => {
     const quizProgressValue = currentJobType === "quiz" ? Math.max(0, Math.min(100, Number(progress || 0))) : 0;
@@ -7177,6 +7484,7 @@ export default function App() {
       setQuizAnswerImages({});
       setQuizResults({});
       setQuizSubmitted(false);
+      resetQuizSessionState(item.quizQuestions || []);
       setChatMessages([]);
       setChatReferenceImages([]);
       setActiveHistoryId(item.id);
@@ -7194,6 +7502,7 @@ export default function App() {
     setExample("");
     setFlashcards([]);
     setQuizQuestions([]);
+    resetQuizSessionState([]);
     setStudyImages([]);
     setPresentationData(createEmptyPresentationData());
     setPresentationView("setup");
@@ -7275,13 +7584,21 @@ export default function App() {
       window.clearTimeout(recordingMonitorTimerRef.current);
       recordingMonitorTimerRef.current = 0;
     }
-    if (recordingSourceNodeRef.current) {
+    for (const sourceNode of recordingSourceNodesRef.current) {
       try {
-        recordingSourceNodeRef.current.disconnect();
+        sourceNode.disconnect();
       } catch {
         // Ignore disconnect errors when the node is already detached.
       }
-      recordingSourceNodeRef.current = null;
+    }
+    recordingSourceNodesRef.current = [];
+    if (recordingMonitorGainRef.current) {
+      try {
+        recordingMonitorGainRef.current.disconnect();
+      } catch {
+        // Ignore disconnect errors when the monitor branch is already detached.
+      }
+      recordingMonitorGainRef.current = null;
     }
     recordingAnalyserRef.current = null;
     if (recordingAudioContextRef.current) {
@@ -7290,34 +7607,57 @@ export default function App() {
       });
       recordingAudioContextRef.current = null;
     }
-    if (stopStream && recordingStreamRef.current) {
-      recordingStreamRef.current.getTracks().forEach((track) => track.stop());
-    }
+    if (stopStream) stopMediaStreams(recordingOwnedStreamsRef.current);
+    recordingOwnedStreamsRef.current = [];
     recordingStreamRef.current = null;
     recordingLastMonitorAtRef.current = 0;
     recordingSilenceElapsedMsRef.current = 0;
     recordingNoiseFloorRef.current = RECORDING_SILENCE_THRESHOLD / 2;
   };
 
-  const beginRecordingSilenceMonitoring = (stream) => {
+  const beginRecordingSilenceMonitoring = (inputStreams) => {
     cleanupRecordingMonitoring();
+    const normalizedSources = (Array.isArray(inputStreams) ? inputStreams : [inputStreams])
+      .map((entry) => (entry?.stream ? entry : { kind: "microphone", stream: entry }))
+      .filter((entry) => entry?.stream?.getAudioTracks?.().length);
+    const sourceStreams = Array.from(new Set(normalizedSources.map((entry) => entry.stream)));
+    if (!sourceStreams.length) return null;
+
+    recordingOwnedStreamsRef.current = sourceStreams;
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextCtor) return;
-
-    const audioContext = new AudioContextCtor();
-    const sourceNode = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.92;
-    sourceNode.connect(analyser);
-
-    recordingStreamRef.current = stream;
-    recordingAudioContextRef.current = audioContext;
-    recordingSourceNodeRef.current = sourceNode;
-    recordingAnalyserRef.current = analyser;
     recordingLastMonitorAtRef.current = Date.now();
     recordingSilenceElapsedMsRef.current = 0;
     recordingNoiseFloorRef.current = RECORDING_SILENCE_THRESHOLD / 2;
+
+    if (!AudioContextCtor) {
+      recordingStreamRef.current = sourceStreams[0];
+      return sourceStreams[0];
+    }
+
+    const audioContext = new AudioContextCtor();
+    const destination = audioContext.createMediaStreamDestination();
+    const analyser = audioContext.createAnalyser();
+    const shouldMonitorSharedAudio = monitorSharedAudioDuringRecording && normalizedSources.some(({ kind }) => kind === "system");
+    const monitorGain = shouldMonitorSharedAudio ? audioContext.createGain() : null;
+    if (monitorGain) {
+      monitorGain.gain.value = 1;
+      monitorGain.connect(audioContext.destination);
+    }
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.92;
+    const sourceNodes = normalizedSources.map(({ kind, stream }) => {
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      sourceNode.connect(analyser);
+      sourceNode.connect(destination);
+      if (monitorGain && kind === "system") sourceNode.connect(monitorGain);
+      return sourceNode;
+    });
+
+    recordingStreamRef.current = destination.stream;
+    recordingAudioContextRef.current = audioContext;
+    recordingSourceNodesRef.current = sourceNodes;
+    recordingMonitorGainRef.current = monitorGain;
+    recordingAnalyserRef.current = analyser;
 
     audioContext.resume().catch(() => {
       // Browsers can start the context suspended. Recording still continues even if resume fails.
@@ -7385,6 +7725,7 @@ export default function App() {
     };
 
     recordingMonitorTimerRef.current = window.setTimeout(monitor, RECORDING_SILENCE_MONITOR_INTERVAL_MS);
+    return destination.stream;
   };
 
   const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus }) => {
@@ -7847,28 +8188,129 @@ export default function App() {
   const startRecording = async () => {
     setError("");
     clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
+    if (typeof window === "undefined" || typeof window.MediaRecorder === "undefined") {
+      setError("Live recording is not supported in this browser.");
+      return;
+    }
+
+    const acquiredStreams = [];
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
-      recordingStreamRef.current = stream;
-      recordingStopReasonRef.current = "";
-      mediaRecorderRef.current = new MediaRecorder(stream);
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
+      const sourceInfos = [];
+      const statusNotes = [];
+
+      if (includeSystemAudioInRecording) {
+        if (canShareSystemAudio) {
+          try {
+            const displayStream = await navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: true,
+            });
+            if (displayStream.getAudioTracks().length) {
+              acquiredStreams.push(displayStream);
+              sourceInfos.push({ kind: "system", stream: displayStream });
+            } else {
+              stopMediaStreams([displayStream]);
+              statusNotes.push("The shared tab, window, or screen did not include audio.");
+            }
+          } catch (err) {
+            const errorName = String(err?.name || "");
+            if (errorName === "NotAllowedError" || errorName === "AbortError" || errorName === "InvalidStateError") {
+              statusNotes.push("Shared tab/system audio was skipped.");
+            } else {
+              statusNotes.push("Tab or system audio could not be captured.");
+            }
+          }
+        } else {
+          statusNotes.push("This browser cannot capture YouTube or app audio directly.");
+        }
+      }
+
+      let microphoneError = null;
+      try {
+        const microphoneStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
+        acquiredStreams.push(microphoneStream);
+        sourceInfos.push({ kind: "microphone", stream: microphoneStream });
+      } catch (err) {
+        microphoneError = err;
+      }
+
+      if (!sourceInfos.length) {
+        if (microphoneError && includeSystemAudioInRecording) {
+          throw new Error("Microphone access failed, and no shared tab or system audio was available. Please allow the permissions and try again.");
+        }
+        throw new Error("Microphone access failed. Please allow recording permissions.");
+      }
+
+      const activeInputs = {
+        microphone: sourceInfos.some(({ kind }) => kind === "microphone"),
+        systemAudio: sourceInfos.some(({ kind }) => kind === "system"),
       };
-      mediaRecorderRef.current.onstop = async () => {
+      if (!activeInputs.systemAudio && includeSystemAudioInRecording) {
+        statusNotes.push("To capture YouTube or app sound next time, share the playing browser tab and turn on Share audio or system audio.");
+      }
+      if (!activeInputs.microphone && activeInputs.systemAudio && microphoneError) {
+        statusNotes.push("Microphone permission was not granted, so only the shared audio source will be recorded.");
+      }
+      if (activeInputs.systemAudio && monitorSharedAudioDuringRecording && canMonitorSharedAudio) {
+        statusNotes.push("Shared lecture audio will stay audible through your current device output while recording.");
+      }
+
+      const handleSourceTrackEnded = () => {
+        const recorder = mediaRecorderRef.current;
+        if (!recorder || recorder.state !== "recording") return;
+
+        const liveInputs = {
+          microphone: sourceInfos.some(({ kind, stream }) => kind === "microphone" && stream.getAudioTracks().some((track) => track.readyState === "live")),
+          systemAudio: sourceInfos.some(({ kind, stream }) => kind === "system" && stream.getAudioTracks().some((track) => track.readyState === "live")),
+        };
+
+        if (liveInputs.microphone || liveInputs.systemAudio) {
+          setStatus(`Recording continues with ${describeRecordingInputs(liveInputs)} after another audio source ended.`);
+          return;
+        }
+
+        recordingStopReasonRef.current = "source-ended";
+        setRecording(false);
+        setStatus("The active audio source ended. Saving the recording...");
+        recorder.stop();
+      };
+
+      sourceInfos.forEach(({ stream }) => {
+        stream.getAudioTracks().forEach((track) => track.addEventListener("ended", handleSourceTrackEnded));
+      });
+
+      const recordingStream = beginRecordingSilenceMonitoring(sourceInfos);
+      if (!recordingStream) {
+        throw new Error("No recordable audio stream was created.");
+      }
+
+      recordingStopReasonRef.current = "";
+      audioChunksRef.current = [];
+      const mimeType = getSupportedRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(recordingStream, { mimeType })
+        : new MediaRecorder(recordingStream);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
         const stopReason = recordingStopReasonRef.current || "manual";
         recordingStopReasonRef.current = "";
-        const blob = new Blob(audioChunksRef.current, { type: "audio/wav" });
+        const resolvedMimeType = recorder.mimeType || mimeType || "audio/webm";
+        const fileExtension = getRecordingFileExtension(resolvedMimeType);
+        const blob = new Blob(audioChunksRef.current, { type: resolvedMimeType });
         audioChunksRef.current = [];
+        mediaRecorderRef.current = null;
         cleanupRecordingMonitoring({ stopStream: true });
-        const recordedFile = new File([blob], "mabaso-lecture.wav", { type: "audio/wav" });
+        const recordedFile = new File([blob], `mabaso-lecture.${fileExtension}`, { type: resolvedMimeType });
         await saveRecoveredRecordingToDb(getActiveWorkspaceOwnerEmail(), {
           blob,
           fileName: recordedFile.name,
@@ -7888,17 +8330,22 @@ export default function App() {
           } catch {
             // transcribeLectureFile already updates the UI error state when auto-processing fails.
           }
+        } else if (stopReason === "source-ended") {
+          setStatus("Recording source ended. The saved recording is ready. Add slides, notes, or past papers, then transcribe when you are ready.");
         } else {
           setStatus("Recording saved. Add slides, notes, or past papers, then transcribe when you are ready.");
         }
       };
-      beginRecordingSilenceMonitoring(stream);
-      mediaRecorderRef.current.start(1000);
+      recorder.start(1000);
       setRecording(true);
-      setStatus("Recording started. MABASO will only auto-stop after 10 minutes of real monitored silence.");
-    } catch {
+      const statusSuffix = statusNotes.length ? ` ${statusNotes.join(" ")}` : "";
+      setStatus(`Recording started with ${describeRecordingInputs(activeInputs)}. MABASO will only auto-stop after 10 minutes of real monitored silence.${statusSuffix}`);
+    } catch (err) {
+      stopMediaStreams(acquiredStreams);
+      mediaRecorderRef.current = null;
+      audioChunksRef.current = [];
       cleanupRecordingMonitoring({ stopStream: true });
-      setError("Microphone access failed. Please allow recording permissions.");
+      setError(err.message || "Recording could not start.");
     }
   };
 
@@ -8127,6 +8574,7 @@ export default function App() {
         setQuizAnswerImages({});
         setQuizResults({});
         setQuizSubmitted(false);
+        resetQuizSessionState(nextQuizQuestions);
       });
       const sourceLabel = getPrimarySourceLabel({
         fileName: file?.name || "",
@@ -8162,7 +8610,7 @@ export default function App() {
         teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
       });
       clearPendingJob();
-      setStatus("Test ready.");
+      setStatus("Test ready. Press Start Test when you are ready.");
       setProgress(100);
     } catch (err) {
       clearPendingJob();
@@ -8754,6 +9202,7 @@ export default function App() {
             setQuizAnswerImages({});
             setQuizResults({});
             setQuizSubmitted(false);
+            resetQuizSessionState(nextQuizQuestions);
             setActiveTab("quiz");
             setCurrentPage("workspace");
           });
@@ -9351,11 +9800,11 @@ export default function App() {
     setStatus(`${validFiles.length} answer photo${validFiles.length === 1 ? "" : "s"} added for question ${questionNumber}.`);
   };
 
-  const markQuiz = async () => {
-    if (!selectedQuizQuestions.length) return;
+  const markQuiz = async ({ autoSubmit = false } = {}) => {
+    if (!selectedQuizQuestions.length || isMarkingQuiz) return;
     setIsMarkingQuiz(true);
     setError("");
-    setStatus("Marking test answers...");
+    setStatus(autoSubmit ? "Time finished. Marking the test automatically..." : "Marking test answers...");
     try {
       const nextResults = {};
       for (const item of selectedQuizQuestions) {
@@ -9391,14 +9840,45 @@ export default function App() {
       }
       setQuizResults(nextResults);
       setQuizSubmitted(true);
-      setStatus("Test marked. Review the colored answers below.");
+      const totalScore = selectedQuizQuestions.reduce((total, item) => total + Number(nextResults[item.number]?.score || 0), 0);
+      const totalMarks = getTotalQuizMarks(selectedQuizQuestions);
+      setQuizFeedbackPrompt({
+        ...buildQuizFeedbackPrompt(totalScore, totalMarks),
+        score: totalScore,
+        totalMarks,
+      });
+      setQuizSessionStage("submitted");
+      setQuizDeadlineAtMs(0);
+      setQuizTimeRemainingSeconds(0);
+      setStatus(autoSubmit ? "Time finished. Test submitted and marked automatically." : "Test marked. Review the colored answers below.");
     } catch (err) {
       setError(err.message || "Test marking failed.");
-      setStatus("Test marking failed.");
+      setQuizSessionStage(autoSubmit ? "expired" : "active");
+      setStatus(autoSubmit ? "Time finished, but automatic marking failed. Use Mark Test to try again." : "Test marking failed.");
     } finally {
       setIsMarkingQuiz(false);
     }
   };
+
+  useEffect(() => {
+    if (quizSessionStage !== "active" || !quizDeadlineAtMs) return undefined;
+
+    const updateRemaining = () => {
+      const remainingSeconds = Math.max(0, Math.ceil((quizDeadlineAtMs - Date.now()) / 1000));
+      setQuizTimeRemainingSeconds(remainingSeconds);
+      if (remainingSeconds <= 0 && !quizAutoSubmitTriggeredRef.current) {
+        quizAutoSubmitTriggeredRef.current = true;
+        setQuizSessionStage("expired");
+        setQuizDeadlineAtMs(0);
+        setStatus("Time finished. Submitting your test for marking...");
+        markQuiz({ autoSubmit: true });
+      }
+    };
+
+    updateRemaining();
+    const timerId = window.setInterval(updateRemaining, 250);
+    return () => window.clearInterval(timerId);
+  }, [markQuiz, quizDeadlineAtMs, quizSessionStage]);
 
   const clearRoomQuestionResult = (questionNumber) => {
     setRoomQuizSubmitted(false);
@@ -9493,7 +9973,28 @@ export default function App() {
     }
   };
 
-  const score = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
+  const quizFeedbackModal = quizFeedbackPrompt ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
+      <div className={`w-full max-w-xl rounded-[28px] border p-6 shadow-[0_30px_90px_rgba(2,8,23,0.45)] ${quizFeedbackPrompt.accentClassName}`}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] opacity-80">Test Feedback</p>
+            <h3 className="mt-2 text-3xl font-semibold text-white">{quizFeedbackPrompt.title}</h3>
+          </div>
+          <button type="button" onClick={() => setQuizFeedbackPrompt(null)} className="rounded-full border border-white/15 bg-black/15 px-4 py-2 text-sm font-semibold text-white">
+            Close
+          </button>
+        </div>
+        <div className="mt-5 rounded-[22px] border border-white/10 bg-slate-950/55 px-4 py-4 text-white">
+          <p className="text-sm uppercase tracking-[0.2em] text-white/70">Score</p>
+          <p className="mt-2 text-3xl font-semibold">{quizFeedbackPrompt.score} / {quizFeedbackPrompt.totalMarks}</p>
+          <p className="mt-2 text-sm text-white/80">{quizFeedbackPrompt.percentage}%</p>
+        </div>
+        <p className="mt-5 text-sm leading-7 text-white">{quizFeedbackPrompt.message}</p>
+        <p className="mt-4 text-sm leading-7 text-white/80">Close this message and review the marked questions below to see exactly what went wrong and what to improve next.</p>
+      </div>
+    </div>
+  ) : null;
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -9854,10 +10355,11 @@ export default function App() {
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
-              <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-full px-4 py-2 text-sm ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
-              <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
-              <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-full px-4 py-2 text-sm ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
-              {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
+              <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
+              <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
+              <button type="button" onClick={() => setCurrentPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
+              <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+              {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
               <label className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-slate-200">
@@ -9871,10 +10373,11 @@ export default function App() {
             </div>
           </div>
         </header>
-        <div className="mb-6 grid grid-cols-3 gap-3 sm:hidden">
-          <button type="button" onClick={() => setCurrentPage("capture")} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Capture</button>
-          <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
-          <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`min-h-[56px] rounded-[20px] px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:hidden">
+          <button type="button" onClick={() => setCurrentPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
+          <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
+          <button type="button" onClick={() => setCurrentPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
+          <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
 
@@ -9895,11 +10398,31 @@ export default function App() {
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></button>
                     <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></button>
-                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>Saves unless real 10 min silence</span></button>
+                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>{recording ? "Saving when stopped" : includeSystemAudioInRecording ? "Mic plus shared tab or app audio" : "Microphone only"}</span></button>
                     <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Upload Notes</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">TXT MD PDF DOCX IMG</span></button>
                     <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Slides</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
                     <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Past Paper</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
                     <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Use Video Link</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">YouTube or public URL</span></button>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Recording capture</p>
+                        <p className="mt-2 text-sm font-semibold text-white">Include audio from YouTube, browser tabs, and supported apps</p>
+                        <p className="mt-2 text-xs leading-6 text-slate-300">{canShareSystemAudio ? "When this is on, the browser asks you to share a tab, window, or screen. For the clearest YouTube capture, choose the playing browser tab and turn on Share audio or system audio in the browser prompt." : "This browser can only do microphone capture here right now. Desktop Chrome or Edge usually gives the best tab or system audio support."}</p>
+                        <p className="mt-2 text-xs leading-6 text-slate-400">MABASO can keep shared lecture audio audible during recording, but your phone or browser still decides whether that sound goes to the loudspeaker or to connected headphones.</p>
+                      </div>
+                      <div className="grid gap-3 sm:min-w-[260px]">
+                        <label className="inline-flex items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-medium text-emerald-50">
+                          <input type="checkbox" checked={includeSystemAudioInRecording} onChange={(event) => setIncludeSystemAudioInRecording(event.target.checked)} disabled={loading || recording} className="h-4 w-4 accent-emerald-400" />
+                          <span>{includeSystemAudioInRecording ? "Shared audio on" : "Shared audio off"}</span>
+                        </label>
+                        <label className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white">
+                          <input type="checkbox" checked={monitorSharedAudioDuringRecording} onChange={(event) => setMonitorSharedAudioDuringRecording(event.target.checked)} disabled={loading || recording || !canMonitorSharedAudio} className="h-4 w-4 accent-violet-500" />
+                          <span>{canMonitorSharedAudio ? (monitorSharedAudioDuringRecording ? "Keep shared audio audible" : "Do not monitor shared audio") : "Audio monitor not available here"}</span>
+                        </label>
+                      </div>
+                    </div>
                   </div>
                   <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
                     <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Video Link</p>
@@ -10006,9 +10529,9 @@ export default function App() {
                 <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
               </div>
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-black/70" : "bg-slate-950/70"}`}>
+              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
-                  <div className="min-w-0 space-y-5">
+                  <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
                     <div
                       ref={(node) => {
                         if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
@@ -10016,16 +10539,16 @@ export default function App() {
                         if (node && guideSummarySection) teacherSectionRefs.current[guideSummarySection.normalizedHeading] = node;
                         else if (guideSummarySection) delete teacherSectionRefs.current[guideSummarySection.normalizedHeading];
                       }}
-                      className="rounded-[24px] border border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.16),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.92))] p-5"
+                      className="study-guide-title-card rounded-[24px] p-5"
                     >
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Topic</p>
-                          <h4 className="mt-2 text-3xl font-semibold text-white">{guideTopic}</h4>
+                          <p className="study-guide-kicker">Lecture Topic</p>
+                          <h4 className="study-guide-topic mt-2">{guideTopic}</h4>
                         </div>
                       </div>
                       {guideSummarySection?.content ? (
-                        <div className="notes-markdown phone-safe-copy mt-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                        <div className="notes-markdown study-guide-markdown phone-safe-copy mt-4 max-w-none">
                           <ReactMarkdown>{guideSummarySection.content}</ReactMarkdown>
                         </div>
                       ) : null}
@@ -10098,10 +10621,10 @@ export default function App() {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
                               }}
-                              className={`rounded-[24px] border p-4 transition ${isActiveSection ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/75"}`}
+                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
-                              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{section.heading}</p>
-                              <div className="notes-markdown phone-safe-copy mt-3 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                              <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                              <div className="notes-markdown study-guide-markdown phone-safe-copy mt-3 max-w-none">
                                 <ReactMarkdown>{section.content}</ReactMarkdown>
                               </div>
                             </article>
@@ -10109,7 +10632,7 @@ export default function App() {
                         })}
                       </div>
                     ) : (
-                      <div className="notes-markdown phone-safe-copy rounded-2xl bg-black/75 p-2 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200">
+                      <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
                         <ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown>
                       </div>
                     )}
@@ -10167,22 +10690,33 @@ export default function App() {
                 ) : null}
                 {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
                 {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
-                {activeTab === "quiz" ? (selectedQuizQuestions.length ? renderQuizSection({
-                  questions: selectedQuizQuestions,
-                  answers: quizAnswers,
-                  results: quizResults,
-                  quizImages: quizAnswerImages,
-                  submitted: quizSubmitted,
-                  isMarking: isMarkingQuiz,
-                  onMark: markQuiz,
-                  onAnswerChange: handleQuizAnswerChange,
-                  onOptionChange: handleQuizOptionChange,
-                  onImageChange: handleQuizImageChange,
-                  sharedAnswerGroups: roomAnswerGroups,
-                  visibilityMode: activeRoom ? activeRoom.test_visibility : "",
-                  scoreValue: score,
-                  scopeId: "workspace",
-                }) : renderQuizGenerationPanel()) : null}
+                {activeTab === "quiz" ? (
+                  selectedQuizQuestions.length
+                    ? (quizSessionStage === "ready"
+                      ? renderQuizStartPanel()
+                      : renderQuizSection({
+                        questions: selectedQuizQuestions,
+                        answers: quizAnswers,
+                        results: quizResults,
+                        quizImages: quizAnswerImages,
+                        submitted: quizSubmitted,
+                        isMarking: isMarkingQuiz,
+                        onMark: () => markQuiz({ autoSubmit: false }),
+                        onAnswerChange: handleQuizAnswerChange,
+                        onOptionChange: handleQuizOptionChange,
+                        onImageChange: handleQuizImageChange,
+                        sharedAnswerGroups: roomAnswerGroups,
+                        visibilityMode: activeRoom ? activeRoom.test_visibility : "",
+                        scoreValue: quizScore,
+                        scopeId: "workspace",
+                        answerLocked: quizSessionStage !== "active",
+                        countdownLabel: ["active", "expired"].includes(quizSessionStage) ? formatDurationClock(quizTimeRemainingSeconds) : "",
+                        countdownTone: quizTimeRemainingSeconds <= 300 ? "text-amber-200" : "text-sky-100",
+                        markButtonLabel: quizSessionStage === "expired" ? "Mark Finished Test" : "Finish and Mark",
+                        assessmentStatus: quizSessionStage === "expired" ? "Time finished" : quizSessionStage === "submitted" ? "Marked" : "Timed assessment",
+                      }))
+                    : renderQuizGenerationPanel()
+                ) : null}
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
@@ -10211,6 +10745,7 @@ export default function App() {
 
         {historyPanel}
         {collaborationHistoryPanel}
+        {quizFeedbackModal}
       </main>
     </div>
   );

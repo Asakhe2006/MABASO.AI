@@ -205,7 +205,7 @@ YOUTUBE_COOKIES_TXT = os.getenv("YOUTUBE_COOKIES_TXT", "").strip()
 jobs: dict[str, dict] = {}
 apple_jwk_client = PyJWKClient(APPLE_JWKS_URL) if PyJWKClient is not None else None
 
-STUDY_GUIDE_PROMPT = """
+LEGACY_STUDY_GUIDE_PROMPT = """
 You are an expert academic assistant for university students.
 
 Convert the available lecture material into concise, high-value study notes.
@@ -280,6 +280,195 @@ Rules:
 - Do not force photo-oriented commentary unless the topic clearly involves physical things students should recognise by sight.
 - Do not include YouTube links or long export suggestions.
 """
+
+STUDY_GUIDE_PROMPT = """
+You are an advanced academic study-guide generation engine.
+
+Your task is NOT to simply summarize.
+
+Your task is to:
+1. analyze the academic content,
+2. detect the subject and topic structure,
+3. identify what is educationally important,
+4. generate a clean university-level study guide.
+
+CORE BEHAVIOR RULES
+- Do NOT use the same sections every time.
+- Dynamically adapt the structure to the content.
+- Only include sections that are relevant to the topic.
+- Avoid filler information.
+- Avoid unnecessary advantages/disadvantages unless central to the material.
+- Avoid repeating concepts.
+- Avoid overly long explanations.
+- Prioritize clarity, organization, and revision efficiency.
+
+The notes should feel like:
+- a premium edtech platform,
+- a university study guide,
+- concise but intelligent,
+- visually organized,
+- optimized for exam revision.
+
+STEP 1 - ANALYZE CONTENT
+Before generating notes, identify:
+- academic subject
+- topic type
+- educational intent
+- major concepts
+- relationships between ideas
+- exam-relevant material
+- definitions and terminology
+- theories, processes, mechanisms, or frameworks if present
+
+Then decide the best note structure for this specific content.
+
+STEP 2 - CHOOSE STRUCTURE DYNAMICALLY
+Use only sections that naturally fit the material.
+
+Examples:
+- Theory content: Key Concepts, Main Assumptions, Important Thinkers, Examples, Criticisms, Applications
+- Science content: Definitions, Mechanisms, Functions, Processes, Stages, Comparisons
+- History content: Causes, Timeline, Major Events, Consequences, Historical Significance
+- Law content: Legal Principles, Elements, Case Applications, Exceptions
+- Medical content: Symptoms, Causes, Diagnosis, Treatment, Risk Factors
+- Technical content: Components, Architecture, Workflow, Inputs/Outputs, Advantages only if relevant
+
+Do not force sections unnecessarily.
+
+OUTPUT STYLE
+- Return clean Markdown.
+- Start with one H1 line only: # Topic Title
+- After the title, include a short overview section using either ## SHORT SUMMARY or ## Introduction / Overview.
+- Use clear headings and subheadings.
+- Mix bullets with short explanations.
+- Keep paragraphs short.
+- Use spacing generously.
+- Make notes easy to skim.
+- Keep the tone academic, simple, and clear.
+- Important concepts should get deeper explanation.
+- Minor concepts should stay concise.
+- Definitions should be short and precise.
+- Complex ideas should be simplified without losing meaning.
+- Examples should appear only when genuinely useful.
+- Add Key Questions only when educationally valuable.
+
+MANDATORY COMPATIBILITY RULES
+- Because the app builds formulas, worked-example, flashcard, quiz, teacher-mode, and presentation assets from the guide, keep these exact headings whenever the content supports them:
+  - ## IMPORTANT FORMULAS
+  - ## WORKED EXAMPLES
+  - ## PRACTICE QUESTIONS AND ANSWERS
+  - ## FLASHCARDS
+- If the topic includes formulas, always include ## IMPORTANT FORMULAS.
+- If the topic includes calculations, derivations, worked procedures, or problem-solving, always include ## WORKED EXAMPLES.
+- Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
+- Always include ## FLASHCARDS and use this exact card format for every card:
+  Q: ...
+
+  A: ...
+- Leave a blank line between Q and A, and a blank line between flashcards.
+
+FORMATTING AND DEPTH RULES
+- Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
+- Keep the notes concise but not shallow.
+- Use bullets where they improve revision speed.
+- Do not include generic motivational text.
+- Do not add filler conclusions unless they genuinely help.
+- Do not add unnecessary summaries after every section.
+- If multiple distinct topics appear in the source material, separate them clearly instead of blending them together.
+- If one source belongs to a different topic, isolate it under its own heading.
+
+FORMULA RULES
+- If formulas appear, rewrite them in readable human style.
+- Never use LaTeX syntax or math delimiters such as \\, $$, \\frac, \\int, \\mathcal, or \\begin.
+- Do not use caret notation like s^2 or t^n in the final answer.
+- Write formulas the way a lecturer would write them on a board using plain readable text.
+- Prefer short readable mappings when listing standard transform pairs, rules, or conversions.
+- Put a blank line before and after each formula block.
+
+VISUAL LEARNING RULES
+- After difficult concepts, add [Suggested Visual: ...] only when it genuinely improves understanding.
+- Good examples:
+  - [Suggested Visual: Flowchart of cellular respiration]
+  - [Suggested Visual: Diagram comparing Functionalism vs Conflict Theory]
+- Only suggest visuals that improve understanding.
+- If the lecture covers concrete physical things such as organs, instruments, valves, structures, machines, or components, mention the visual subtypes students should recognize.
+- Only include charts, graphs, axes, or trend sketches when the lecture discusses data or variable relationships. Do not invent fake numerical data.
+
+SOURCE PRIORITY RULES
+- If lecture notes, slides, and transcript are all provided, use all of them together.
+- Prefer clearer lecturer notes, slides, formulas, definitions, and worked examples over messy transcript wording.
+- Prefer well-structured notes, slides, and past-paper references over noisy OCR or broken transcript fragments.
+- Ignore corrupted OCR, duplicate scraps, unrelated fragments, and broken symbols.
+- Do not let a noisy transcript dominate cleaner source material.
+- If past question papers are provided, use them to infer recurring themes, command words, and assessment style, but do not copy their questions verbatim.
+- If the transcript is missing, still generate the guide from the other supplied sources and mention when the source material is limited.
+- If the lecture skips steps, fill in only the most important missing steps.
+- If a topic is unclear, say "Not clearly covered in the supplied material."
+
+QUALITY RULES
+- The output should feel intelligent, adaptive, academically useful, modern, polished, and revision-friendly.
+- Think like an expert university tutor creating revision notes for students before exams.
+- Write naturally like a highly organized top university student.
+- Use more comparison tables, process flows, and visual-learning suggestions when concepts are complex.
+- Focus on conceptual understanding and intuitive explanations, not just memorization.
+- Do not include YouTube links or long export suggestions.
+"""
+
+GUIDE_SECTION_HEADINGS = [
+    "LECTURE TITLE",
+    "SHORT SUMMARY",
+    "KEY CONCEPTS",
+    "IMPORTANT DEFINITIONS",
+    "IMPORTANT FORMULAS",
+    "WORKED EXAMPLES",
+    "STEP-BY-STEP EXPLANATIONS",
+    "ADVANTAGES AND DISADVANTAGES",
+    "COMMON MISTAKES TO AVOID",
+    "QUICK REVISION PLAN",
+    "VISUAL AIDS",
+    "REAL-WORLD EXAMPLES",
+    "PRACTICE QUESTIONS AND ANSWERS",
+    "FLASHCARDS",
+    "EXAM TIPS",
+]
+
+GUIDE_SECTION_ALIASES = {
+    "lecture title": "LECTURE TITLE",
+    "topic title": "LECTURE TITLE",
+    "title": "LECTURE TITLE",
+    "short summary": "SHORT SUMMARY",
+    "summary": "SHORT SUMMARY",
+    "overview": "SHORT SUMMARY",
+    "brief overview": "SHORT SUMMARY",
+    "introduction": "SHORT SUMMARY",
+    "introduction / overview": "SHORT SUMMARY",
+    "introduction/overview": "SHORT SUMMARY",
+    "key concepts": "KEY CONCEPTS",
+    "main concepts": "KEY CONCEPTS",
+    "important definitions": "IMPORTANT DEFINITIONS",
+    "definitions": "IMPORTANT DEFINITIONS",
+    "important formulas": "IMPORTANT FORMULAS",
+    "formulas": "IMPORTANT FORMULAS",
+    "worked examples": "WORKED EXAMPLES",
+    "examples": "WORKED EXAMPLES",
+    "step-by-step explanations": "STEP-BY-STEP EXPLANATIONS",
+    "step by step explanations": "STEP-BY-STEP EXPLANATIONS",
+    "step-by-step explanation": "STEP-BY-STEP EXPLANATIONS",
+    "step by step explanation": "STEP-BY-STEP EXPLANATIONS",
+    "advantages and disadvantages": "ADVANTAGES AND DISADVANTAGES",
+    "common mistakes to avoid": "COMMON MISTAKES TO AVOID",
+    "quick revision plan": "QUICK REVISION PLAN",
+    "visual aids": "VISUAL AIDS",
+    "real-world examples": "REAL-WORLD EXAMPLES",
+    "real world examples": "REAL-WORLD EXAMPLES",
+    "practice questions and answers": "PRACTICE QUESTIONS AND ANSWERS",
+    "practice questions": "PRACTICE QUESTIONS AND ANSWERS",
+    "flashcards": "FLASHCARDS",
+    "exam tips": "EXAM TIPS",
+    "exam-focused takeaways": "EXAM TIPS",
+    "exam focused takeaways": "EXAM TIPS",
+    "quick recap": "EXAM TIPS",
+}
 
 
 class StudyGuideRequest(BaseModel):
@@ -6231,15 +6420,142 @@ def make_formulas_human_readable(text: str) -> str:
     return cleaned.strip()
 
 
+def normalize_guide_heading(value: str) -> str:
+    cleaned = compact_text(value).lower()
+    cleaned = re.sub(r"^[#*\-\s]+", "", cleaned)
+    cleaned = re.sub(r"[*:]+$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def canonical_guide_heading(value: str) -> str:
+    normalized = normalize_guide_heading(value)
+    return GUIDE_SECTION_ALIASES.get(normalized, normalized.upper())
+
+
+def parse_study_guide_sections(markdown: str) -> list[dict[str, str]]:
+    text = (markdown or "").replace("\r\n", "\n").strip()
+    if not text:
+        return []
+
+    sections: list[dict[str, str]] = []
+    intro_lines: list[str] = []
+    current_heading = ""
+    current_lines: list[str] = []
+    title_text = ""
+
+    def flush_current() -> None:
+        nonlocal current_heading, current_lines
+        content = "\n".join(current_lines).strip()
+        if current_heading and content:
+            sections.append(
+                {
+                    "heading": canonical_guide_heading(current_heading),
+                    "raw_heading": compact_text(current_heading),
+                    "content": content,
+                }
+            )
+        current_heading = ""
+        current_lines = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            if current_heading:
+                current_lines.append("")
+            elif intro_lines:
+                intro_lines.append("")
+            continue
+
+        markdown_heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        if markdown_heading_match:
+            heading_level = len(markdown_heading_match.group(1))
+            heading_text = markdown_heading_match.group(2).strip().strip("*").strip()
+            if heading_level == 1 and heading_text:
+                if current_heading:
+                    flush_current()
+                if not title_text:
+                    title_text = heading_text
+                    continue
+            flush_current()
+            current_heading = heading_text
+            continue
+
+        bold_heading_match = re.match(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$", stripped)
+        if bold_heading_match:
+            heading_text = bold_heading_match.group(1).strip()
+            inline_content = bold_heading_match.group(2).strip()
+            if normalize_guide_heading(heading_text) in GUIDE_SECTION_ALIASES:
+                flush_current()
+                current_heading = heading_text
+                if inline_content:
+                    current_lines.append(inline_content)
+                continue
+
+        if current_heading:
+            current_lines.append(line)
+        else:
+            intro_lines.append(line)
+
+    flush_current()
+
+    if title_text:
+        sections.insert(
+            0,
+            {
+                "heading": "LECTURE TITLE",
+                "raw_heading": title_text,
+                "content": title_text,
+            },
+        )
+
+    intro_text = "\n".join(intro_lines).strip()
+    has_title = any(item["heading"] == "LECTURE TITLE" for item in sections)
+    has_summary = any(item["heading"] == "SHORT SUMMARY" for item in sections)
+
+    if intro_text:
+        if not has_title:
+            first_line = next((line.strip() for line in intro_text.splitlines() if line.strip()), "")
+            if first_line:
+                sections.insert(
+                    0,
+                    {
+                        "heading": "LECTURE TITLE",
+                        "raw_heading": first_line,
+                        "content": first_line,
+                    },
+                )
+                remainder = intro_text[len(first_line):].strip()
+                if remainder and not has_summary:
+                    sections.insert(
+                        1,
+                        {
+                            "heading": "SHORT SUMMARY",
+                            "raw_heading": "SHORT SUMMARY",
+                            "content": remainder,
+                        },
+                    )
+        elif not has_summary:
+            insert_at = 1 if sections and sections[0]["heading"] == "LECTURE TITLE" else 0
+            sections.insert(
+                insert_at,
+                {
+                    "heading": "SHORT SUMMARY",
+                    "raw_heading": "SHORT SUMMARY",
+                    "content": intro_text,
+                },
+            )
+
+    return sections
+
+
 def extract_section(markdown: str, heading: str) -> str:
-    pattern = re.compile(
-        rf"\*\*{re.escape(heading)}\*\*\s*(.*?)(?=\n\*\*[A-Z][A-Z \-&]+\*\*|\Z)",
-        re.DOTALL,
-    )
-    match = pattern.search(markdown)
-    if not match:
-        return ""
-    return match.group(1).strip()
+    target_heading = canonical_guide_heading(heading)
+    for section in parse_study_guide_sections(markdown):
+        if section["heading"] == target_heading:
+            return section["content"].strip()
+    return ""
 
 
 def parse_flashcards(section_text: str) -> list[dict[str, str]]:
@@ -6278,7 +6594,7 @@ def parse_quiz_questions(section_text: str) -> list[dict[str, str]]:
 
 def replace_section(markdown: str, heading: str, new_body: str) -> str:
     pattern = re.compile(
-        rf"(\*\*{re.escape(heading)}\*\*)\s*(.*?)(?=\n\*\*[A-Z][A-Z \-&]+\*\*|\Z)",
+        rf"((?:\*\*{re.escape(heading)}\*\*|##\s+{re.escape(heading)}))\s*(.*?)(?=\n(?:\*\*[A-Z][A-Z \-&]+\*\*|##\s+\S)|\Z)",
         re.DOTALL,
     )
 
@@ -6313,51 +6629,6 @@ def extract_bullet_points(section_text: str) -> list[str]:
 
 def add_student_support_sections(summary: str) -> str:
     cleaned = (summary or "").strip()
-    title_lines = [line.strip() for line in extract_section(cleaned, "LECTURE TITLE").splitlines() if line.strip()]
-    topic_label = title_lines[0] if title_lines else "this lecture topic"
-    concept_points = extract_bullet_points(extract_section(cleaned, "KEY CONCEPTS"))[:4]
-    focus_one = concept_points[0] if concept_points else "the main concept"
-    focus_two = concept_points[1] if len(concept_points) > 1 else "the worked examples"
-
-    cleaned = append_section_if_missing(
-        cleaned,
-        "ADVANTAGES AND DISADVANTAGES",
-        "\n".join(
-            [
-                "Advantages:",
-                f"- Revising {topic_label} in short blocks makes it faster to spot the main method, definition, or formula.",
-                f"- Linking {focus_one} to practice questions helps students remember how the idea is used in a real test.",
-                "",
-                "Disadvantages / cautions:",
-                f"- {topic_label} can feel harder than it is when students memorize steps without understanding when to use {focus_one}.",
-                f"- Skipping {focus_two} or example questions can make the topic look familiar without making it exam-ready.",
-            ]
-        ),
-    )
-    cleaned = append_section_if_missing(
-        cleaned,
-        "COMMON MISTAKES TO AVOID",
-        "\n".join(
-            [
-                f"- Do not jump straight to the final answer before checking the meaning of {focus_one}.",
-                "- Do not revise only the summary and ignore the worked example or practice question format.",
-                "- Do not mix up a definition, a rule, and an application step as if they are the same thing.",
-                "- Do a quick self-test after every revision block so weak areas show up early.",
-            ]
-        ),
-    )
-    cleaned = append_section_if_missing(
-        cleaned,
-        "QUICK REVISION PLAN",
-        "\n".join(
-            [
-                f"- First 5 minutes: read the short summary and highlight the words that define {topic_label}.",
-                f"- Next 10 minutes: rewrite {focus_one} and {focus_two} in your own words from memory.",
-                "- Next 10 minutes: answer two practice questions without looking at the notes.",
-                "- Final 5 minutes: check mistakes, correct them, and make one flashcard for anything still confusing.",
-            ]
-        ),
-    )
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
@@ -6837,6 +7108,82 @@ TEACHER_SOURCE_HEADING_HINTS = {
 TEACHER_CONTEXT_PRIORITY_TERMS = tuple(
     dict.fromkeys(term for terms in TEACHER_SOURCE_HEADING_HINTS.values() for term in terms)
 )
+TEACHER_SIMILARITY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "before",
+    "but",
+    "by",
+    "can",
+    "class",
+    "could",
+    "do",
+    "does",
+    "each",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "here",
+    "how",
+    "into",
+    "its",
+    "just",
+    "let",
+    "lets",
+    "lesson",
+    "like",
+    "may",
+    "might",
+    "more",
+    "most",
+    "much",
+    "next",
+    "now",
+    "our",
+    "out",
+    "over",
+    "really",
+    "same",
+    "should",
+    "some",
+    "still",
+    "student",
+    "students",
+    "teacher",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "through",
+    "topic",
+    "very",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "with",
+    "would",
+    "you",
+    "your",
+}
 TEACHER_SECTION_TARGET_SEGMENTS = {
     "LECTURE TITLE": 1,
     "SHORT SUMMARY": 2,
@@ -7062,6 +7409,138 @@ def build_teacher_section_outline(
     return sorted(sections, key=lambda item: teacher_heading_rank(item["section_heading"]))
 
 
+def normalize_teacher_similarity_text(text: str) -> str:
+    normalized = compact_text(text).lower()
+    if not normalized:
+        return ""
+    normalized = normalized.replace("let us", "lets")
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def teacher_content_tokens(text: str) -> set[str]:
+    normalized = normalize_teacher_similarity_text(text)
+    return {
+        token
+        for token in normalized.split()
+        if len(token) > 2 and not token.isdigit() and token not in TEACHER_SIMILARITY_STOPWORDS
+    }
+
+
+def teacher_text_similarity(left: str, right: str) -> float:
+    left_normalized = normalize_teacher_similarity_text(left)
+    right_normalized = normalize_teacher_similarity_text(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    if left_normalized == right_normalized:
+        return 1.0
+    if len(left_normalized) >= 80 and (left_normalized in right_normalized or right_normalized in left_normalized):
+        return 0.96
+
+    left_tokens = teacher_content_tokens(left_normalized)
+    right_tokens = teacher_content_tokens(right_normalized)
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    shared = len(left_tokens & right_tokens)
+    if not shared:
+        return 0.0
+
+    jaccard = shared / max(1, len(left_tokens | right_tokens))
+    overlap = shared / max(1, min(len(left_tokens), len(right_tokens)))
+    return max(jaccard, overlap)
+
+
+def clean_teacher_segment_text(text: str) -> str:
+    cleaned = compact_text(text)
+    if not cleaned:
+        return ""
+
+    sentences = [compact_text(item) for item in re.split(r"(?<=[.!?])\s+", cleaned) if compact_text(item)]
+    if len(sentences) <= 1:
+        return cleaned
+
+    filtered_sentences: list[str] = []
+    for sentence in sentences:
+        if not filtered_sentences:
+            filtered_sentences.append(sentence)
+            continue
+        if any(teacher_text_similarity(sentence, existing) >= 0.93 for existing in filtered_sentences[-3:]):
+            continue
+        filtered_sentences.append(sentence)
+
+    return compact_text(" ".join(filtered_sentences), cleaned)
+
+
+def is_teacher_segment_redundant(
+    section_heading: str,
+    text: str,
+    existing_segments: list[dict[str, Any]],
+) -> bool:
+    cleaned_heading = compact_text(section_heading)
+    cleaned_text = clean_teacher_segment_text(text)
+    if not cleaned_text:
+        return True
+
+    for existing in existing_segments:
+        existing_heading = compact_text(existing.get("section_heading"))
+        existing_text = compact_text(existing.get("text"))
+        if not existing_text:
+            continue
+        similarity = teacher_text_similarity(cleaned_text, existing_text)
+        threshold = 0.78 if existing_heading == cleaned_heading else 0.9
+        if similarity >= threshold:
+            return True
+    return False
+
+
+def dedupe_teacher_segments(
+    segments: list[dict[str, Any]],
+    allowed_headings: list[str] | None = None,
+    *,
+    preserve_required_sections: bool = False,
+) -> list[dict[str, Any]]:
+    if not segments:
+        return []
+
+    allowed = set(allowed_headings or [])
+    required_counts = TEACHER_REQUIRED_SECTION_COUNTS if preserve_required_sections else {}
+    filtered_segments: list[dict[str, Any]] = []
+    heading_counts: dict[str, int] = {}
+
+    for raw_segment in segments:
+        heading = compact_text(raw_segment.get("section_heading"))
+        if allowed and heading not in allowed:
+            continue
+        prompt = compact_text(raw_segment.get("prompt"))
+        text = clean_teacher_segment_text(raw_segment.get("text"))
+        if not text:
+            continue
+
+        is_redundant = is_teacher_segment_redundant(heading, text, filtered_segments)
+        if is_redundant and heading_counts.get(heading, 0) < required_counts.get(heading, 0):
+            is_redundant = False
+        if is_redundant:
+            continue
+
+        filtered_segments.append(
+            {
+                **raw_segment,
+                "index": len(filtered_segments) + 1,
+                "section_heading": heading,
+                "prompt": prompt,
+                "text": text,
+                "estimated_minutes": estimate_spoken_minutes(text),
+            }
+        )
+        heading_counts[heading] = heading_counts.get(heading, 0) + 1
+        if len(filtered_segments) >= TEACHER_SEGMENT_LIMIT:
+            break
+
+    return filtered_segments[:TEACHER_SEGMENT_LIMIT]
+
+
 def normalize_teacher_segments(
     raw_segments: Any,
     fallback_segments: list[dict[str, Any]],
@@ -7078,7 +7557,7 @@ def normalize_teacher_segments(
         if section_heading not in allowed:
             continue
         prompt = compact_text(raw_segment.get("prompt"))
-        text = compact_text(raw_segment.get("text"))
+        text = clean_teacher_segment_text(raw_segment.get("text"))
         if not text:
             continue
         for chunk_index, chunk in enumerate(split_podcast_text(text, max_chars=920, max_words=145), start=1):
@@ -7292,7 +7771,10 @@ def build_teacher_lesson_fallback(
             f"A warm teacher-style walkthrough of {topic} designed to run for about {TEACHER_TARGET_MINUTES} minutes or more, "
             "with reflective questions, gentle humor, extra attention on worked examples, and no flashcard or Q&A reading."
         ),
-        "segments": segments[:TEACHER_SEGMENT_LIMIT],
+        "segments": dedupe_teacher_segments(
+            segments[:TEACHER_SEGMENT_LIMIT],
+            [item["section_heading"] for item in outline] or ["SHORT SUMMARY"],
+        ),
     }
 
 
@@ -7347,30 +7829,22 @@ def ensure_teacher_section_coverage(
         return sort_teacher_segments_by_heading_order(segments, allowed_headings)
 
     extended_segments = list(segments)
-    seen = {
-        (
-            compact_text(segment.get("section_heading")),
-            compact_text(segment.get("text")),
-        )
-        for segment in extended_segments
-        if compact_text(segment.get("text"))
-    }
 
     for fallback_segment in fallback_segments:
         heading = compact_text(fallback_segment.get("section_heading"))
         if heading not in needed_headings:
             continue
-        key = (
-            heading,
-            compact_text(fallback_segment.get("text")),
-        )
-        if not key[1] or key in seen:
+        cleaned_text = clean_teacher_segment_text(fallback_segment.get("text"))
+        if not cleaned_text:
             continue
-        seen.add(key)
+        if is_teacher_segment_redundant(heading, cleaned_text, extended_segments):
+            continue
         extended_segments.append(
             {
                 **fallback_segment,
                 "index": len(extended_segments) + 1,
+                "text": cleaned_text,
+                "estimated_minutes": estimate_spoken_minutes(cleaned_text),
             }
         )
         heading_counts[heading] = heading_counts.get(heading, 0) + 1
@@ -7390,27 +7864,20 @@ def extend_teacher_segments_to_target(
         return segments[:TEACHER_SEGMENT_LIMIT]
 
     extended_segments = list(segments)
-    seen = {
-        (
-            compact_text(segment.get("section_heading")),
-            compact_text(segment.get("text")),
-        )
-        for segment in extended_segments
-        if compact_text(segment.get("text"))
-    }
 
     for fallback_segment in fallback_segments:
-        key = (
-            compact_text(fallback_segment.get("section_heading")),
-            compact_text(fallback_segment.get("text")),
-        )
-        if not key[1] or key in seen:
+        heading = compact_text(fallback_segment.get("section_heading"))
+        cleaned_text = clean_teacher_segment_text(fallback_segment.get("text"))
+        if not cleaned_text:
             continue
-        seen.add(key)
+        if is_teacher_segment_redundant(heading, cleaned_text, extended_segments):
+            continue
         extended_segments.append(
             {
                 **fallback_segment,
                 "index": len(extended_segments) + 1,
+                "text": cleaned_text,
+                "estimated_minutes": estimate_spoken_minutes(cleaned_text),
             }
         )
         if estimate_podcast_total_minutes(extended_segments) >= TEACHER_MINIMUM_MINUTES or len(extended_segments) >= TEACHER_SEGMENT_LIMIT:
@@ -7862,6 +8329,7 @@ async def generate_teacher_lesson_package(
                         "- Aim for about 24 to 36 teaching segments before any automatic chunk splitting.\n"
                         "- Explain the idea, why it matters, and how to think about it in an exam or problem-solving situation.\n"
                         "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
+                        "- Avoid repeating the same definition, example, or explanation unless you are adding a clearly new step, misconception fix, or application.\n"
                         "- Do not skip the opening lesson flow, top notes, or early definitions when the source starts with foundational explanations.\n"
                         "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing and when the formula applies.\n"
                         "- Do not create spoken segments for FLASHCARDS or PRACTICE QUESTIONS AND ANSWERS.\n"
@@ -7879,6 +8347,7 @@ async def generate_teacher_lesson_package(
                         "making one or two gentle jokes, and helping them reason through the content.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, and method steps very clear.\n"
+                        "Do not restate the same point in later segments unless the later segment adds a new angle or step.\n"
                         "Cover the beginning of the notes properly before moving deeper into the lesson.\n\n"
                         + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
                         + f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
@@ -7900,6 +8369,11 @@ async def generate_teacher_lesson_package(
         generated_package.get("segments"),
         fallback_package["segments"],
         allowed_headings,
+    )
+    normalized_segments = dedupe_teacher_segments(
+        normalized_segments,
+        allowed_headings,
+        preserve_required_sections=True,
     )
     normalized_segments = ensure_teacher_section_coverage(
         normalized_segments,
@@ -7925,6 +8399,11 @@ async def generate_teacher_lesson_package(
                 fallback_package["segments"],
                 allowed_headings,
             )
+            normalized_segments = dedupe_teacher_segments(
+                normalized_segments,
+                allowed_headings,
+                preserve_required_sections=True,
+            )
             normalized_segments = ensure_teacher_section_coverage(
                 normalized_segments,
                 fallback_package["segments"],
@@ -7941,6 +8420,23 @@ async def generate_teacher_lesson_package(
         fallback_package["segments"],
         allowed_headings,
     )
+    normalized_segments = dedupe_teacher_segments(
+        normalized_segments,
+        allowed_headings,
+        preserve_required_sections=True,
+    )
+    if estimate_podcast_total_minutes(normalized_segments) < TEACHER_MINIMUM_MINUTES:
+        normalized_segments = extend_teacher_segments_to_target(normalized_segments, fallback_package["segments"])
+        normalized_segments = ensure_teacher_section_coverage(
+            normalized_segments,
+            fallback_package["segments"],
+            allowed_headings,
+        )
+        normalized_segments = dedupe_teacher_segments(
+            normalized_segments,
+            allowed_headings,
+            preserve_required_sections=True,
+        )
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
 
