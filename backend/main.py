@@ -7836,6 +7836,82 @@ def clean_teacher_segment_text(text: str) -> str:
     return compact_text(" ".join(filtered_sentences), cleaned)
 
 
+TEACHER_REPEAT_SENTENCE_WORD_LIMIT = 28
+TEACHER_REPEAT_SENTENCE_WINDOW = 14
+TEACHER_REPEAT_STOCK_SNIPPETS = (
+    "if the answer still feels fuzzy",
+    "we are building understanding one clear step at a time",
+    "ask yourself what changed in your understanding compared with a few minutes ago",
+    "pause for a second ask yourself what should happen next",
+    "let us work through this like a real revision class",
+)
+
+
+def reduce_teacher_repetition_across_segments(
+    segments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not segments:
+        return []
+
+    recent_sentences: list[str] = []
+    stock_counts: dict[str, int] = {}
+    filtered_segments: list[dict[str, Any]] = []
+
+    for raw_segment in segments:
+        text = clean_teacher_segment_text(raw_segment.get("text"))
+        if not text:
+            continue
+
+        sentences = [compact_text(item) for item in re.split(r"(?<=[.!?])\s+", text) if compact_text(item)]
+        if not sentences:
+            continue
+
+        kept_sentences: list[str] = []
+        for sentence in sentences:
+            normalized_sentence = normalize_teacher_similarity_text(sentence)
+            if not normalized_sentence:
+                continue
+
+            word_count = len(re.findall(r"\b\w+\b", sentence))
+            repeated_recently = any(
+                teacher_text_similarity(sentence, existing) >= 0.93
+                for existing in recent_sentences[-TEACHER_REPEAT_SENTENCE_WINDOW:]
+            )
+            repeated_stock = False
+            for snippet in TEACHER_REPEAT_STOCK_SNIPPETS:
+                if snippet in normalized_sentence:
+                    repeated_stock = stock_counts.get(snippet, 0) >= 1
+                    stock_counts[snippet] = stock_counts.get(snippet, 0) + 1
+                    break
+
+            if repeated_recently and word_count <= TEACHER_REPEAT_SENTENCE_WORD_LIMIT:
+                continue
+            if repeated_stock:
+                continue
+
+            kept_sentences.append(sentence)
+            recent_sentences.append(sentence)
+            if len(recent_sentences) > 28:
+                recent_sentences = recent_sentences[-28:]
+
+        rebuilt_text = compact_text(" ".join(kept_sentences), text)
+        if not rebuilt_text:
+            continue
+
+        filtered_segments.append(
+            {
+                **raw_segment,
+                "index": len(filtered_segments) + 1,
+                "text": rebuilt_text,
+                "estimated_minutes": estimate_spoken_minutes(rebuilt_text),
+            }
+        )
+        if len(filtered_segments) >= TEACHER_SEGMENT_LIMIT:
+            break
+
+    return filtered_segments[:TEACHER_SEGMENT_LIMIT]
+
+
 def is_teacher_segment_redundant(
     section_heading: str,
     text: str,
@@ -8022,6 +8098,60 @@ def build_teacher_lesson_fallback(
         "EXAM TIPS": "This is where understanding gets converted into marks under time pressure.",
     }
 
+    section_reflections = {
+        "IMPORTANT DEFINITIONS": [
+            "Read the key technical word twice, because precision here protects marks.",
+            "Try saying the definition in your own words without losing the technical meaning.",
+            "This is easier to remember when you notice which word is doing the exact academic work.",
+        ],
+        "IMPORTANT FORMULAS": [
+            "Picture what happens when one term grows or shrinks, because that is often what exams test.",
+            "The formula becomes easier when you connect each symbol to a real job in the problem.",
+            "Do not memorize this as decoration. Use it to explain what changes and why.",
+        ],
+        "WORKED EXAMPLES": [
+            "Before moving on, predict the next step for yourself and check whether your reason matches the method.",
+            "The mark-scoring habit here is to justify the step, not just copy it.",
+            "Say the method out loud in order, because that is what turns an example into a skill.",
+        ],
+        "STEP-BY-STEP EXPLANATIONS": [
+            "Pause here and make sure each step makes sense before you let the process speed up again.",
+            "This becomes much stronger in memory when you can explain why each step had to happen next.",
+            "If one step feels shaky, repair that exact step now instead of carrying confusion forward.",
+        ],
+        "COMMON MISTAKES TO AVOID": [
+            "Students often lose marks here by rushing, so this is worth a deliberate second check.",
+            "A mistake like this is easier to avoid when you know the warning sign early.",
+            "Catch the trap at the setup stage and you save yourself from fixing it later.",
+        ],
+        "EXAM TIPS": [
+            "Under exam pressure, clear structure usually earns marks faster than long unfocused writing.",
+            "Think about what the examiner would need to see first to trust your answer.",
+            "This is one of those places where method and wording both matter.",
+        ],
+        "default": [
+            "Pause there and see if you can say that back in your own words.",
+            "If one part still feels weak, fix that small gap now before the next idea arrives.",
+            "The goal here is not speed first. It is clear reasoning.",
+            "Try linking this idea to the section we just covered so it sticks better in memory.",
+        ],
+    }
+    recap_reflections = [
+        "Check whether the pattern now feels clearer than it did on the first pass.",
+        "See if you can explain this part back to yourself in one clean sentence.",
+        "Notice what feels easier now, because that shows your understanding is becoming more stable.",
+    ]
+    fallback_reflections = [
+        "Pause and predict the next move before you let the answer continue.",
+        "Say the main idea back to yourself to check whether it really feels clear yet.",
+        "Keep your focus on the reason behind the step, not only on the final line.",
+    ]
+
+    def pick_teacher_variation(options: list[str], heading: str = "", extra_index: int = 0) -> str:
+        if not options:
+            return ""
+        return options[(teacher_heading_rank(heading) + extra_index) % len(options)]
+
     def next_transcript_chunk() -> str:
         nonlocal transcript_index
         if transcript_index >= len(transcript_chunks):
@@ -8065,10 +8195,17 @@ def build_teacher_lesson_fallback(
                 )
             if transcript_detail:
                 spoken_text += f"{transcript_detail} "
-            spoken_text += (
-                f"{section_questions.get(heading, 'What do you think is the key idea here?')} "
-                "If the answer still feels fuzzy, that is fine. We are building understanding one clear step at a time."
+            closing_lines: list[str] = []
+            if segment_number == 0:
+                closing_lines.append(section_questions.get(heading, "What do you think is the key idea here?"))
+            closing_lines.append(
+                pick_teacher_variation(
+                    section_reflections.get(heading, section_reflections["default"]),
+                    heading,
+                    segment_number,
+                )
             )
+            spoken_text += " ".join(line for line in closing_lines if line)
 
             for chunk_index, chunk in enumerate(split_podcast_text(spoken_text, max_chars=920, max_words=145), start=1):
                 prompt = section_prompts.get(heading, "What do you think is the key idea here?") if chunk_index == 1 and segment_number == 0 else ""
@@ -8106,7 +8243,7 @@ def build_teacher_lesson_fallback(
                 )
             if transcript_detail:
                 spoken_text += f"{transcript_detail} "
-            spoken_text += "Ask yourself what changed in your understanding compared with a few minutes ago."
+            spoken_text += pick_teacher_variation(recap_reflections, heading, recap_round)
             for chunk in split_podcast_text(spoken_text, max_chars=920, max_words=145):
                 segments.append(
                     {
@@ -8125,9 +8262,9 @@ def build_teacher_lesson_fallback(
         fallback_points = transcript_chunks[:12] or [compact_text(transcript[:700], "Let us revise the most important lecture ideas clearly and calmly.")]
         for point in fallback_points:
             spoken_text = (
-                "Let us work through this like a real revision class. "
+                "Let us work through this carefully like a real revision class. "
                 f"{point} "
-                "Pause for a second, ask yourself what should happen next, and then check whether your reasoning still fits the topic."
+                f"{pick_teacher_variation(fallback_reflections, 'SHORT SUMMARY', len(segments))}"
             )
             segments.append(
                 {
@@ -8716,6 +8853,7 @@ async def generate_teacher_lesson_package(
                         "- If the concept is easier, be concise and focus on high-yield details.\n"
                         "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
                         "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing, when the formula applies, and what assumption it depends on.\n"
+                        "- Never reuse the same reassurance sentence, transition sentence, or recap sentence across multiple segments.\n"
                         "- Occasionally point out common exam questions or common confusions when it fits.\n\n"
                         "Sync with the guide:\n"
                         "- Follow the guide section by section.\n"
@@ -8742,6 +8880,7 @@ async def generate_teacher_lesson_package(
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
                         "Do not restate the same point in later segments unless the later segment adds a new angle, deeper reason, or new application.\n"
+                        "Avoid repeated stock phrases and repeated reassurance lines across the lesson.\n"
                         "Cover the beginning of the notes properly before moving deeper into the lesson.\n"
                         "Think like an expert university tutor creating revision teaching before exams.\n\n"
                         + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
@@ -8775,6 +8914,7 @@ async def generate_teacher_lesson_package(
         fallback_package["segments"],
         allowed_headings,
     )
+    normalized_segments = reduce_teacher_repetition_across_segments(normalized_segments)
     estimated_minutes = estimate_podcast_total_minutes(normalized_segments)
     if normalized_segments and estimated_minutes < TEACHER_MINIMUM_MINUTES:
         update_job(job_id, status="processing", stage="Extending teacher lesson depth", progress=24)
@@ -8804,6 +8944,7 @@ async def generate_teacher_lesson_package(
                 fallback_package["segments"],
                 allowed_headings,
             )
+            normalized_segments = reduce_teacher_repetition_across_segments(normalized_segments)
         except Exception as exc:
             logger.warning("Teacher lesson rewrite for target length failed: %s", exc)
 
@@ -8820,6 +8961,7 @@ async def generate_teacher_lesson_package(
         allowed_headings,
         preserve_required_sections=True,
     )
+    normalized_segments = reduce_teacher_repetition_across_segments(normalized_segments)
     if estimate_podcast_total_minutes(normalized_segments) < TEACHER_MINIMUM_MINUTES:
         normalized_segments = extend_teacher_segments_to_target(normalized_segments, fallback_package["segments"])
         normalized_segments = ensure_teacher_section_coverage(
@@ -8832,6 +8974,7 @@ async def generate_teacher_lesson_package(
             allowed_headings,
             preserve_required_sections=True,
         )
+        normalized_segments = reduce_teacher_repetition_across_segments(normalized_segments)
     title = compact_text(generated_package.get("title"), fallback_package["title"])
     overview = compact_text(generated_package.get("overview"), fallback_package["overview"])
 
