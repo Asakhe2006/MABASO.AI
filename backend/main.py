@@ -7591,8 +7591,73 @@ def teacher_heading_rank(heading: str) -> int:
         return len(TEACHER_GUIDE_SECTION_HEADINGS)
 
 
-def split_teacher_source_passages(text: str) -> list[str]:
+TEACHER_SOURCE_NOISE_PHRASES = (
+    "durban university of technology",
+    "university of technology",
+    "department of",
+    "faculty of",
+    "school of",
+    "copyright",
+    "all rights reserved",
+    "confidential",
+    "slide deck",
+    "lecture slides",
+    "page number",
+)
+
+
+def is_teacher_source_noise(text: str) -> bool:
     cleaned = compact_text(text)
+    lowered = cleaned.lower()
+    if not lowered:
+        return True
+
+    word_count = len(re.findall(r"\b[\w'-]+\b", lowered))
+    has_slide_marker = bool(re.search(r"\b(?:slide|page)\s*\d{1,3}\b", lowered))
+    has_year = bool(re.search(r"\b20\d{2}\b", lowered))
+    has_institution = any(phrase in lowered for phrase in TEACHER_SOURCE_NOISE_PHRASES[:5])
+    has_admin_phrase = any(phrase in lowered for phrase in TEACHER_SOURCE_NOISE_PHRASES[5:])
+
+    if re.fullmatch(r"(?:slide|page)\s*\d{1,3}", lowered):
+        return True
+    if re.fullmatch(r"\d{1,3}", lowered) or re.fullmatch(r"20\d{2}", lowered):
+        return True
+    if has_admin_phrase:
+        return True
+    if has_slide_marker and (has_year or has_institution or word_count <= 6):
+        return True
+    if has_institution and (has_year or word_count <= 14):
+        return True
+    if has_year and word_count <= 5:
+        return True
+    return False
+
+
+def sanitize_teacher_source_text(text: str) -> str:
+    raw_text = (text or "").replace("\r\n", "\n")
+    if not raw_text.strip():
+        return ""
+
+    kept_lines: list[str] = []
+    for raw_line in raw_text.splitlines():
+        line = compact_text(raw_line)
+        if not line:
+            kept_lines.append("")
+            continue
+        line = re.sub(r"^\s*(?:slide|page)\s*\d{1,3}\s*[:\-–—]?\s*", "", line, flags=re.IGNORECASE).strip()
+        if not line or is_teacher_source_noise(line):
+            continue
+        kept_lines.append(line)
+
+    rebuilt = "\n".join(kept_lines)
+    sentences = [compact_text(item) for item in re.split(r"(?<=[.!?])\s+", rebuilt) if compact_text(item)]
+    if len(sentences) <= 1:
+        return compact_text(rebuilt)
+    return compact_text(" ".join(sentence for sentence in sentences if not is_teacher_source_noise(sentence)))
+
+
+def split_teacher_source_passages(text: str) -> list[str]:
+    cleaned = compact_text(sanitize_teacher_source_text(text))
     if not cleaned:
         return []
 
@@ -7731,7 +7796,7 @@ def extract_teacher_priority_excerpt(
 
 
 def build_teacher_context_block(label: str, value: str, limit: int) -> str:
-    cleaned = compact_text(value)
+    cleaned = compact_text(sanitize_teacher_source_text(value))
     if not cleaned:
         return ""
     if len(cleaned) <= limit:
@@ -7835,16 +7900,18 @@ def teacher_text_similarity(left: str, right: str) -> float:
 
 
 def clean_teacher_segment_text(text: str) -> str:
-    cleaned = compact_text(text)
+    cleaned = compact_text(sanitize_teacher_source_text(text))
     if not cleaned:
         return ""
 
     sentences = [compact_text(item) for item in re.split(r"(?<=[.!?])\s+", cleaned) if compact_text(item)]
     if len(sentences) <= 1:
-        return cleaned
+        return "" if is_teacher_source_noise(cleaned) else cleaned
 
     filtered_sentences: list[str] = []
     for sentence in sentences:
+        if is_teacher_source_noise(sentence):
+            continue
         if not filtered_sentences:
             filtered_sentences.append(sentence)
             continue
@@ -8865,6 +8932,9 @@ async def generate_teacher_lesson_package(
                         "- Teach like speaking to a real student, not like reading notes line by line.\n"
                         "- Use calm, clear, encouraging language.\n"
                         "- Focus on why concepts matter, where students get confused, and how the idea appears in exams.\n"
+                        "- Ignore non-learning slide noise such as slide numbers, page numbers, university or department names, lecturer/admin details, dates, years, copyright lines, headers, footers, and template text.\n"
+                        "- Never speak lines like 'Slide 8', institution names, 'Durban University of Technology', '2026', module footer text, or any source metadata unless that information is the actual academic concept being taught.\n"
+                        "- If a source line is not directly teaching the subject content, skip it silently.\n"
                         "- Use chunking, active recall, analogy, real-world examples, comparisons, and memory anchors when they genuinely help.\n"
                         "- Ask occasional reflective questions naturally.\n"
                         "- Reinforce important ideas with a new angle instead of repeating the same wording.\n"
@@ -8899,6 +8969,7 @@ async def generate_teacher_lesson_package(
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
                         "Do not restate the same point in later segments unless the later segment adds a new angle, deeper reason, or new application.\n"
+                        "Filter out slide footers, institution names, dates, slide numbers, page numbers, copyright text, and any unrelated template or metadata before writing the spoken lesson.\n"
                         "Avoid repeated stock phrases and repeated reassurance lines across the lesson.\n"
                         "Cover the beginning of the notes properly before moving deeper into the lesson.\n"
                         "Think like an expert university tutor creating revision teaching before exams.\n\n"

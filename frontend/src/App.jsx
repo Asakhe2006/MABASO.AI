@@ -287,6 +287,23 @@ function MobileFirstMarkdown({ children }) {
   return <ReactMarkdown>{convertMarkdownTablesToMobileCards(children || "")}</ReactMarkdown>;
 }
 
+function isTeacherSpeechNoise(text = "") {
+  const normalizedText = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalizedText) return true;
+  const wordCount = (normalizedText.match(/\b[\w'-]+\b/g) || []).length;
+  const hasSlideMarker = /\b(?:slide|page)\s*\d{1,3}\b/.test(normalizedText);
+  const hasYear = /\b20\d{2}\b/.test(normalizedText);
+  const hasInstitution = /durban university of technology|university of technology|department of|faculty of|school of/.test(normalizedText);
+  const hasAdminPhrase = /copyright|all rights reserved|confidential|lecture slides|slide deck|page number/.test(normalizedText);
+  if (/^(?:slide|page)\s*\d{1,3}$/.test(normalizedText)) return true;
+  if (/^\d{1,3}$/.test(normalizedText) || /^20\d{2}$/.test(normalizedText)) return true;
+  if (hasAdminPhrase) return true;
+  if (hasSlideMarker && (hasYear || hasInstitution || wordCount <= 6)) return true;
+  if (hasInstitution && (hasYear || wordCount <= 14)) return true;
+  if (hasYear && wordCount <= 5) return true;
+  return false;
+}
+
 function buildSpeechChunks(text = "", maxLength = 420) {
   const normalizedText = String(text || "")
     .replace(/[`*_#>|]+/g, " ")
@@ -299,8 +316,9 @@ function buildSpeechChunks(text = "", maxLength = 420) {
   const chunks = [];
   let current = "";
   sentences.forEach((sentence) => {
-    const cleanSentence = sentence.trim();
+    const cleanSentence = sentence.replace(/^\s*(?:slide|page)\s*\d{1,3}\s*[:\-]?\s*/i, "").trim();
     if (!cleanSentence) return;
+    if (isTeacherSpeechNoise(cleanSentence)) return;
     if ((current.length + cleanSentence.length + 1) <= maxLength) {
       current = [current, cleanSentence].filter(Boolean).join(" ");
       return;
