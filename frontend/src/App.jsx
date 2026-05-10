@@ -10433,7 +10433,7 @@ export default function App() {
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
           <div className="rounded-[28px] border border-white/10 bg-slate-950/70 px-8 py-10 text-center">
-            <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO.AI</p>
+            <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
             <p className="mt-4 text-sm text-slate-300">Checking your session...</p>
           </div>
         </div>
@@ -10458,7 +10458,7 @@ export default function App() {
               <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/40 p-4 sm:p-5">
                 <img src={BRAND_ART_URL} alt="Mabaso AI microphone and study logo" className="mx-auto w-full max-w-[320px] rounded-[24px]" />
               </div>
-              <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">MABASO</p>
+              <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">Mabaso AI</p>
               <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-[-0.04em] text-white sm:text-5xl">Mabaso AI turns lectures into a full study workspace for students.</h1>
               <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">Upload or record a lecture, add notes or slides, and build transcripts, guides, flashcards, tests, presentations, podcasts, and collaboration rooms.</p>
               <div className="mt-6 flex flex-wrap gap-3">
@@ -10469,7 +10469,7 @@ export default function App() {
             </section>
             <section className="rounded-[32px] border border-white/10 bg-slate-950/70 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Access</p>
-              <h2 className="mt-3 text-3xl font-semibold text-white">Continue into Mabaso</h2>
+              <h2 className="mt-3 text-3xl font-semibold text-white">Continue into Mabaso AI</h2>
               <div className="mt-8 space-y-5">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                   <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Study material language</label>
