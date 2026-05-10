@@ -95,6 +95,16 @@ const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
 const presentationDesigns = [
   {
+    id: "terracotta-atelier",
+    name: "Terracotta Atelier",
+    accent: "Editorial studio",
+    description: "Ivory paper slides with terracotta panels, copper accents, and a refined lecture-magazine look for standout academic storytelling.",
+    previewClassName: "bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.3),transparent_34%),linear-gradient(135deg,#fffaf4,#f7e4d3_56%,#efc7a4)]",
+    chipClassName: "border-orange-300/45 bg-white/80 text-orange-900",
+    previewTitleClassName: "text-stone-900",
+    previewDecorationClassName: "before:absolute before:inset-x-0 before:bottom-0 before:h-3 before:bg-[linear-gradient(90deg,#9a3412,#ea580c,#fdba74)] after:absolute after:right-4 after:top-4 after:h-24 after:w-24 after:rounded-[30px] after:bg-[linear-gradient(180deg,rgba(194,65,12,0.18),rgba(251,146,60,0.42))]",
+  },
+  {
     id: "emerald-scholar",
     name: "Emerald Scholar",
     accent: "Emerald focus",
@@ -207,6 +217,7 @@ const presentationDesigns = [
 ];
 
 function getPresentationDesignFamily(designId) {
+  if (designId === "terracotta-atelier") return "paper";
   if (["sunset-classroom", "glass-cube", "festival-pop", "clinical-blue", "summit-minimal"].includes(designId)) return "light";
   if (["midnight-grid", "aurora-waves", "celebration-night", "amber-lux"].includes(designId)) return "dark";
   return "emerald";
@@ -798,51 +809,74 @@ function buildQuizFeedbackPrompt(scoreValue, totalMarks) {
   const safeScore = Math.max(0, Number(scoreValue || 0));
   const percentage = Math.round((safeScore / safeTotal) * 100);
 
+  if (percentage >= 90) {
+    return {
+      percentage,
+      title: "Exceptional Performance",
+      accentClassName: "border-emerald-300/30 bg-emerald-400/15 text-emerald-50",
+      message: "This result reflects outstanding preparation, strong analytical ability, and a highly disciplined approach to learning. Your understanding of the material is evident across the assessment, and your performance demonstrates academic excellence of a very high standard. Continue refining the smaller areas identified below in order to maintain and strengthen this level of achievement.",
+    };
+  }
+
   if (percentage >= 80) {
     return {
       percentage,
-      title: "Excellence unlocked",
-      accentClassName: "border-emerald-300/30 bg-emerald-400/15 text-emerald-50",
-      message: "Excellent work. This is a strong performance. Keep that discipline, review the few mistakes below, and you can stay at the top level.",
+      title: "Excellent Achievement",
+      accentClassName: "border-cyan-300/30 bg-cyan-400/15 text-cyan-50",
+      message: "You have achieved an excellent result that reflects consistent effort and a solid understanding of the subject matter. Your performance shows confidence, accuracy, and effective preparation. With additional attention to the few remaining weaknesses, you are well positioned to achieve an even higher level of mastery.",
     };
   }
+
+  if (percentage >= 70) {
+    return {
+      percentage,
+      title: "Strong Academic Progress",
+      accentClassName: "border-sky-300/30 bg-sky-400/15 text-sky-50",
+      message: "This is a strong and commendable performance. Your result demonstrates meaningful progress and a developing depth of understanding in the subject. While there are still areas requiring improvement, your overall foundation is becoming increasingly stable and capable of supporting higher achievement.",
+    };
+  }
+
   if (percentage >= 50) {
     return {
       percentage,
-      title: "You passed",
-      accentClassName: "border-sky-300/30 bg-sky-400/15 text-sky-50",
-      message: "Well done, you passed. Now pull up your socks because you can do even more. Review the missed questions, tighten your definitions, and practise under time pressure.",
+      title: "Satisfactory Result",
+      accentClassName: "border-blue-300/30 bg-blue-400/15 text-blue-50",
+      message: "You have achieved a satisfactory outcome and successfully met the basic requirements of the assessment. This result confirms that the foundation for improvement already exists. Focused revision, greater consistency in practice, and careful review of the questions missed will significantly strengthen future performances.",
     };
   }
+
   if (percentage >= 40) {
     return {
       percentage,
-      title: "You are close",
+      title: "Close to the Required Standard",
       accentClassName: "border-amber-300/30 bg-amber-400/15 text-amber-50",
-      message: "You are closer than it looks. Focus on the questions you lost, rewrite the key ideas in your own words, and do one more timed revision round.",
+      message: "You were close to achieving a stronger result, and this performance suggests that improvement is within reach. A more structured revision approach, increased practice under assessment conditions, and deeper engagement with core concepts could make a substantial difference in your next attempt.",
     };
   }
+
   if (percentage >= 30) {
     return {
       percentage,
-      title: "Keep building",
+      title: "Further Development Required",
       accentClassName: "border-orange-300/30 bg-orange-400/15 text-orange-50",
-      message: "You have started the climb. Go back to the worked examples, learn the core terms properly, and practise short answers before you try the full test again.",
+      message: "This result indicates that additional development is necessary in several key areas of the subject. Although the outcome may feel discouraging, it also provides clear guidance on where improvement should be directed. Revisit the fundamental concepts carefully and focus on building a stronger understanding step by step.",
     };
   }
-  if (percentage >= 10) {
+
+  if (percentage >= 15) {
     return {
       percentage,
-      title: "Do not lose courage",
+      title: "Significant Improvement Needed",
       accentClassName: "border-rose-300/30 bg-rose-400/15 text-rose-50",
-      message: "This score is only a signal, not the end. Take courage, revisit the guide slowly, study one topic at a time, and practise with the model answers until the structure becomes natural.",
+      message: "This performance suggests that the current understanding of the material remains limited and requires substantial reinforcement. It is important not to become discouraged by this result. Academic improvement is often gradual, and consistent effort focused on foundational concepts can lead to meaningful progress over time.",
     };
   }
+
   return {
     percentage,
-    title: "One step at a time",
-    accentClassName: "border-rose-300/30 bg-rose-500/15 text-rose-50",
-    message: "Start again with the basics. Read the summary, definitions, and worked examples first, then come back and try the test after a calmer revision pass.",
+    title: "Foundation Requires Rebuilding",
+    accentClassName: "border-red-300/30 bg-red-500/15 text-red-50",
+    message: "This result reflects serious difficulty with the assessment material and indicates that the foundational concepts require careful revision. While the outcome may be disappointing, it should be viewed as an opportunity to restart with a more structured and patient approach. Concentrate first on understanding the basic principles before progressing to more advanced questions.",
   };
 }
 
@@ -3958,14 +3992,24 @@ export default function App() {
       ? "border-white/10 bg-slate-950/45 text-white"
       : activePresentationDesignFamily === "light"
         ? "border-slate-200 bg-white/90 text-slate-900"
-        : "border-emerald-200/15 bg-emerald-950/35 text-white";
+        : activePresentationDesignFamily === "paper"
+          ? "border-orange-200 bg-[linear-gradient(180deg,rgba(255,251,246,0.98),rgba(249,237,223,0.96))] text-stone-900"
+          : "border-emerald-200/15 bg-emerald-950/35 text-white";
     const cardClassName = activePresentationDesignFamily === "light"
       ? "border-slate-200 bg-slate-50/90 text-slate-700"
-      : "border-white/10 bg-white/10 text-slate-100";
-    const mutedClassName = activePresentationDesignFamily === "light" ? "text-slate-500" : "text-slate-200/65";
+      : activePresentationDesignFamily === "paper"
+        ? "border-orange-200 bg-white/92 text-stone-700"
+        : "border-white/10 bg-white/10 text-slate-100";
+    const mutedClassName = activePresentationDesignFamily === "light"
+      ? "text-slate-500"
+      : activePresentationDesignFamily === "paper"
+        ? "text-stone-500"
+        : "text-slate-200/65";
     const barClassName = activePresentationDesignFamily === "light"
       ? "bg-[linear-gradient(180deg,#60a5fa,#2563eb)]"
-      : "bg-[linear-gradient(180deg,#93c5fd,#38bdf8)]";
+      : activePresentationDesignFamily === "paper"
+        ? "bg-[linear-gradient(180deg,#f97316,#9a3412)]"
+        : "bg-[linear-gradient(180deg,#93c5fd,#38bdf8)]";
 
     if (visualType === "photo" && referenceImage) {
       return (
@@ -4122,24 +4166,37 @@ export default function App() {
       ? "border-white/10 bg-[radial-gradient(circle_at_top_right,rgba(96,165,250,0.16),transparent_34%),linear-gradient(135deg,rgba(9,16,32,0.98),rgba(15,23,42,0.98),rgba(30,41,59,0.96))] text-white"
       : activePresentationDesignFamily === "light"
         ? "border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(191,219,254,0.45),transparent_30%),linear-gradient(135deg,#ffffff,#f8fafc_56%,#eff6ff)] text-slate-900"
+        : activePresentationDesignFamily === "paper"
+          ? "border-orange-200 bg-[radial-gradient(circle_at_top_right,rgba(251,146,60,0.24),transparent_30%),linear-gradient(135deg,#fffaf5,#f8e7d8_56%,#f2d2b4)] text-stone-900"
         : "border-emerald-300/12 bg-[radial-gradient(circle_at_top_right,rgba(74,222,128,0.16),transparent_30%),linear-gradient(135deg,#061912,#0f2b20_52%,#15392a)] text-white";
-    const mutedClassName = activePresentationDesignFamily === "light" ? "text-slate-600" : "text-slate-200/72";
+    const mutedClassName = activePresentationDesignFamily === "light"
+      ? "text-slate-600"
+      : activePresentationDesignFamily === "paper"
+        ? "text-stone-600"
+        : "text-slate-200/72";
     const chipClassName = activePresentationDesignFamily === "light"
       ? "border-slate-200 bg-white/85 text-slate-700"
-      : "border-white/10 bg-white/10 text-slate-100";
+      : activePresentationDesignFamily === "paper"
+        ? "border-orange-200 bg-white/88 text-orange-900"
+        : "border-white/10 bg-white/10 text-slate-100";
     const bulletCardClassName = activePresentationDesignFamily === "light"
       ? "border-slate-200/90 bg-white/90 text-slate-700"
-      : "border-white/10 bg-slate-950/35 text-slate-100";
+      : activePresentationDesignFamily === "paper"
+        ? "border-orange-100 bg-white/88 text-stone-700"
+        : "border-white/10 bg-slate-950/35 text-slate-100";
     const visualType = (slide?.visualType || "cluster").toLowerCase();
 
     if (visualType === "title") {
       return (
         <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
           <div className="absolute inset-0 opacity-80">
-            <div className="absolute left-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
-            <div className="absolute bottom-0 right-0 h-40 w-72 rounded-full bg-current/10 blur-3xl" />
+            <div className={`absolute left-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/35" : "bg-white/10"} blur-3xl`} />
+            <div className={`absolute bottom-0 right-0 h-40 w-72 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-400/20" : "bg-current/10"} blur-3xl`} />
+            {activePresentationDesignFamily === "paper" ? <div className="absolute inset-x-0 bottom-0 h-4 bg-[linear-gradient(90deg,#9a3412,#ea580c,#fdba74)]" /> : null}
+            {activePresentationDesignFamily === "paper" ? <div className="absolute right-5 top-5 h-24 w-24 rounded-[28px] border border-orange-200/80 bg-white/45" /> : null}
           </div>
           <div className={`relative flex h-full flex-col justify-center ${thumbnail ? "gap-2 py-6" : "gap-4 py-14"}`}>
+            {activePresentationDesignFamily === "paper" ? <span className="w-fit rounded-full border border-orange-200 bg-white/88 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-900">Lecture deck</span> : null}
             <h5 className={`${thumbnail ? "text-xl" : "text-[3.2rem]"} font-semibold leading-tight`}>{slide?.title || "Lecture Presentation"}</h5>
             {slide?.bullets?.[0] ? <p className={`max-w-3xl ${thumbnail ? "text-[10px] leading-5" : "text-base leading-7"} ${mutedClassName}`}>{slide.bullets[0]}</p> : null}
           </div>
@@ -4151,8 +4208,9 @@ export default function App() {
       return (
         <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
           <div className="absolute inset-0 opacity-80">
-            <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
-            <div className="absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full bg-current/10 blur-3xl" />
+            <div className={`absolute right-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/30" : "bg-white/10"} blur-3xl`} />
+            <div className={`absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-400/18" : "bg-current/10"} blur-3xl`} />
+            {activePresentationDesignFamily === "paper" ? <div className="absolute inset-x-0 top-0 h-4 bg-[linear-gradient(90deg,#fdba74,#ea580c,#9a3412)]" /> : null}
           </div>
           <div className="relative flex h-full items-center justify-center text-center">
             <h5 className={`${thumbnail ? "text-xl" : "text-[3.4rem]"} font-semibold leading-none`}>{slide?.title || "THANK YOU"}</h5>
@@ -4164,8 +4222,9 @@ export default function App() {
     return (
       <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"} ${frameClassName}`}>
         <div className="absolute inset-0 opacity-80">
-          <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-white/10 blur-3xl" />
-          <div className="absolute bottom-0 right-0 h-28 w-56 rounded-[999px] bg-current/5" />
+          <div className={`absolute right-0 top-0 h-32 w-32 rounded-full ${activePresentationDesignFamily === "paper" ? "bg-orange-200/28" : "bg-white/10"} blur-3xl`} />
+          <div className={`absolute bottom-0 right-0 h-28 w-56 rounded-[999px] ${activePresentationDesignFamily === "paper" ? "bg-orange-400/12" : "bg-current/5"}`} />
+          {activePresentationDesignFamily === "paper" ? <div className="absolute left-6 top-6 h-[84%] w-1.5 rounded-full bg-[linear-gradient(180deg,#9a3412,#ea580c,#fdba74)]" /> : null}
         </div>
         <div className="relative">
           <div className="flex items-center justify-between gap-3">

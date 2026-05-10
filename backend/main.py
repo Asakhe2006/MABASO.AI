@@ -507,7 +507,7 @@ class PresentationGenerationRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
-    design_id: str = "emerald-scholar"
+    design_id: str = "terracotta-atelier"
     language: str = "English"
     reference_images: list[str] = []
 
@@ -8986,6 +8986,19 @@ async def generate_teacher_lesson_package(
 
 
 PRESENTATION_THEMES: dict[str, dict[str, str]] = {
+    "terracotta-atelier": {
+        "id": "terracotta-atelier",
+        "style_family": "terracotta-atelier",
+        "name": "Terracotta Atelier",
+        "background": "FFF9F3",
+        "surface": "F6E5D8",
+        "surface_alt": "EFCDB6",
+        "accent": "C65D1A",
+        "accent_soft": "FDE7D3",
+        "text": "7C2D12",
+        "muted": "9A3412",
+        "dark_text": "7C2D12",
+    },
     "emerald-scholar": {
         "id": "emerald-scholar",
         "style_family": "emerald-scholar",
@@ -9141,8 +9154,8 @@ def ensure_presentation_support():
 
 
 def normalize_presentation_design_id(value: str) -> str:
-    design_id = compact_text(value, "emerald-scholar").lower()
-    return design_id if design_id in PRESENTATION_THEMES else "emerald-scholar"
+    design_id = compact_text(value, "terracotta-atelier").lower()
+    return design_id if design_id in PRESENTATION_THEMES else "terracotta-atelier"
 
 
 def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
@@ -9431,6 +9444,10 @@ def get_presentation_style_family(theme: dict[str, str]) -> str:
     return compact_text(theme.get("style_family"), compact_text(theme.get("id"), "midnight-grid"))
 
 
+def presentation_style_uses_dark_text(style_family: str) -> bool:
+    return style_family in {"sunset-classroom", "terracotta-atelier"}
+
+
 def get_presentation_slide_layout(presentation: Any, *preferred_names: str, fallback_index: int = 6):
     layouts = list(getattr(presentation, "slide_layouts", []) or [])
     if not layouts:
@@ -9628,7 +9645,7 @@ def draw_presentation_visual_panel(
     )
 
     style_family = get_presentation_style_family(theme)
-    uses_dark_text = style_family == "sunset-classroom"
+    uses_dark_text = presentation_style_uses_dark_text(style_family)
     primary_fill = theme["surface"] if not uses_dark_text else theme["surface_alt"]
     secondary_fill = theme["surface_alt"] if not uses_dark_text else theme["surface"]
     primary_text = theme["text"] if not uses_dark_text else theme["dark_text"]
@@ -9969,6 +9986,15 @@ def decorate_presentation_slide(slide: Any, theme: dict[str, str], slide_index: 
         style_shape(orb, theme["accent"], transparency=0.72)
         ribbon = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(8.9), Inches(6.55), Inches(3.7), Inches(0.5))
         style_shape(ribbon, theme["surface_alt"])
+    elif style_family == "terracotta-atelier":
+        stripe = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.36))
+        style_shape(stripe, theme["accent"])
+        side_panel = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(10.92), Inches(0.78), Inches(1.7), Inches(5.84))
+        style_shape(side_panel, theme["surface_alt"], transparency=0.08)
+        orb = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(10.76), Inches(0.55), Inches(1.92), Inches(1.92))
+        style_shape(orb, theme["accent_soft"], transparency=0.18)
+        footer_band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(7.08), Inches(13.333), Inches(0.2))
+        style_shape(footer_band, theme["accent"])
     elif style_family == "sunset-classroom":
         panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(4.1), Inches(7.5))
         style_shape(panel, theme["surface_alt"], transparency=0.18)
@@ -10066,7 +10092,7 @@ def add_presentation_content_slide(
     if not use_custom_template:
         decorate_presentation_slide(slide, theme, slide_index)
     style_family = get_presentation_style_family(theme)
-    uses_dark_text = style_family == "sunset-classroom" and not use_custom_template
+    uses_dark_text = presentation_style_uses_dark_text(style_family) and not use_custom_template
     title_fill = "0F172A" if use_custom_template else theme["surface"]
     body_fill = "111827" if use_custom_template else (theme["surface_alt"] if uses_dark_text else theme["surface"])
     title_color = "FFFFFF" if use_custom_template else (theme["text"] if not uses_dark_text else theme["dark_text"])
@@ -11746,7 +11772,7 @@ async def create_presentation(
             lecture_notes=compact_text(form.get("lecture_notes")),
             lecture_slides=compact_text(form.get("lecture_slides")),
             past_question_papers=compact_text(form.get("past_question_papers")),
-            design_id=compact_text(form.get("design_id"), "emerald-scholar"),
+            design_id=compact_text(form.get("design_id"), "terracotta-atelier"),
             language=compact_text(form.get("language"), "English"),
             reference_images=[
                 compact_text(item)
