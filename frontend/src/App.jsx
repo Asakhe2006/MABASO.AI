@@ -216,11 +216,107 @@ const presentationDesigns = [
   },
 ];
 
+const defaultPresentationDesignId = presentationDesigns[0]?.id || "terracotta-atelier";
+const legacyPresentationDefaultIds = new Set(["emerald-scholar"]);
+
+function normalizePresentationDesignId(designId, { allowLegacyDefault = true } = {}) {
+  const normalizedDesignId = String(designId || "").trim().toLowerCase();
+  const matchingDesign = presentationDesigns.find((design) => design.id === normalizedDesignId);
+  if (!matchingDesign) return defaultPresentationDesignId;
+  if (!allowLegacyDefault && legacyPresentationDefaultIds.has(normalizedDesignId)) {
+    return defaultPresentationDesignId;
+  }
+  return matchingDesign.id;
+}
+
 function getPresentationDesignFamily(designId) {
   if (designId === "terracotta-atelier") return "paper";
   if (["sunset-classroom", "glass-cube", "festival-pop", "clinical-blue", "summit-minimal"].includes(designId)) return "light";
   if (["midnight-grid", "aurora-waves", "celebration-night", "amber-lux"].includes(designId)) return "dark";
   return "emerald";
+}
+
+function convertMarkdownTablesToMobileCards(markdown = "") {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const output = [];
+  const parseRow = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()).filter(Boolean);
+  const isSeparator = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || "");
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const nextLine = lines[index + 1] || "";
+    if (!line.trim().startsWith("|") || !isSeparator(nextLine)) {
+      output.push(line);
+      continue;
+    }
+
+    const headers = parseRow(line);
+    const rows = [];
+    index += 2;
+    while (index < lines.length && lines[index].trim().startsWith("|")) {
+      const row = parseRow(lines[index]);
+      if (row.length) rows.push(row);
+      index += 1;
+    }
+    index -= 1;
+
+    const tableIsTiny = headers.length <= 3
+      && rows.length <= 3
+      && rows.every((row) => row.every((cell) => cell.length <= 42));
+    if (tableIsTiny) {
+      output.push(line, nextLine, ...rows.map((row) => `| ${row.join(" | ")} |`));
+      continue;
+    }
+
+    output.push("");
+    rows.forEach((row, rowIndex) => {
+      const title = row[0] || `Item ${rowIndex + 1}`;
+      output.push(`### ${title}`);
+      headers.slice(1).forEach((header, cellIndex) => {
+        const value = row[cellIndex + 1];
+        if (value) output.push(`- **${header || `Point ${cellIndex + 1}`}:** ${value}`);
+      });
+      output.push("");
+    });
+  }
+
+  return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function MobileFirstMarkdown({ children }) {
+  return <ReactMarkdown>{convertMarkdownTablesToMobileCards(children || "")}</ReactMarkdown>;
+}
+
+function buildSpeechChunks(text = "", maxLength = 420) {
+  const normalizedText = String(text || "")
+    .replace(/[`*_#>|]+/g, " ")
+    .replace(/[•◆◇▪▫]/g, ". ")
+    .replace(/[–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedText) return [];
+  const sentences = normalizedText.match(/[^.!?]+[.!?]*/g) || [normalizedText];
+  const chunks = [];
+  let current = "";
+  sentences.forEach((sentence) => {
+    const cleanSentence = sentence.trim();
+    if (!cleanSentence) return;
+    if ((current.length + cleanSentence.length + 1) <= maxLength) {
+      current = [current, cleanSentence].filter(Boolean).join(" ");
+      return;
+    }
+    if (current) chunks.push(current);
+    if (cleanSentence.length <= maxLength) {
+      current = cleanSentence;
+      return;
+    }
+    for (let start = 0; start < cleanSentence.length; start += maxLength) {
+      chunks.push(cleanSentence.slice(start, start + maxLength).trim());
+    }
+    current = "";
+  });
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function getPresentationVisualTypeLabel(value) {
@@ -1856,7 +1952,7 @@ function createEmptyPresentationData() {
     jobId: "",
     title: "",
     subtitle: "",
-    designId: presentationDesigns[0].id,
+    designId: defaultPresentationDesignId,
     templateName: "",
     slides: [],
   };
@@ -1933,26 +2029,30 @@ function sanitizeTeacherLessonForHistory(value) {
 function normalizePresentationData(value) {
   const raw = value && typeof value === "object" ? value : {};
   const rawSlides = Array.isArray(raw.slides) ? raw.slides : Array.isArray(raw.presentation_slides) ? raw.presentation_slides : [];
+  const normalizedSlides = rawSlides
+    .filter((slide) => slide && typeof slide === "object")
+    .map((slide) => ({
+      title: slide.title || "",
+      bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean).slice(0, 5) : [],
+      visualTitle: slide.visual_title || slide.visualTitle || slide.note || "",
+      visualType: slide.visual_type || slide.visualType || "cluster",
+      visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
+      flowNote: slide.flow_note || slide.flowNote || "",
+      referenceImageIndex: Number.isFinite(Number(slide.reference_image_index ?? slide.referenceImageIndex))
+        ? Number(slide.reference_image_index ?? slide.referenceImageIndex)
+        : -1,
+    }))
+    .filter((slide) => slide.title || slide.bullets.length);
   return {
     jobId: raw.jobId || raw.job_id || "",
     title: raw.title || raw.presentation_title || "",
     subtitle: raw.subtitle || raw.presentation_subtitle || "",
-    designId: raw.designId || raw.design_id || raw.presentation_design_id || presentationDesigns[0].id,
+    designId: normalizePresentationDesignId(
+      raw.designId || raw.design_id || raw.presentation_design_id || defaultPresentationDesignId,
+      { allowLegacyDefault: normalizedSlides.length > 0 },
+    ),
     templateName: raw.templateName || raw.template_name || raw.presentation_template_name || "",
-    slides: rawSlides
-      .filter((slide) => slide && typeof slide === "object")
-      .map((slide) => ({
-        title: slide.title || "",
-        bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean).slice(0, 5) : [],
-        visualTitle: slide.visual_title || slide.visualTitle || slide.note || "",
-        visualType: slide.visual_type || slide.visualType || "cluster",
-        visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
-        flowNote: slide.flow_note || slide.flowNote || "",
-        referenceImageIndex: Number.isFinite(Number(slide.reference_image_index ?? slide.referenceImageIndex))
-          ? Number(slide.reference_image_index ?? slide.referenceImageIndex)
-          : -1,
-      }))
-      .filter((slide) => slide.title || slide.bullets.length),
+    slides: normalizedSlides,
   };
 }
 
@@ -2485,25 +2585,21 @@ function StudyGuideComparisonVisual({ prompt = "", labels = ["Left view", "Right
   const columns = labels.length === 2 ? labels : ["Left view", "Right view"];
   const rows = buildGuideComparisonRows(prompt, columns);
   return (
-    <div className="overflow-x-auto rounded-[20px] border border-slate-200 bg-white">
-      <table className="min-w-[760px] w-full border-collapse table-auto text-left">
-        <thead>
-          <tr className="bg-sky-50">
-            <th className="w-[140px] min-w-[140px] border-b border-slate-200 px-4 py-3 align-top text-xs uppercase tracking-[0.18em] text-slate-500">Aspect</th>
-            <th className="min-w-[260px] border-b border-slate-200 px-4 py-3 align-top text-sm font-semibold leading-7 text-slate-900">{columns[0]}</th>
-            <th className="min-w-[260px] border-b border-slate-200 px-4 py-3 align-top text-sm font-semibold leading-7 text-slate-900">{columns[1]}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.label}>
-              <td className="w-[140px] min-w-[140px] border-b border-slate-100 px-4 py-3 align-top text-sm font-semibold text-slate-700">{row.label}</td>
-              <td className="min-w-[260px] border-b border-slate-100 px-4 py-3 align-top text-sm leading-7 text-slate-600">{row.left}</td>
-              <td className="min-w-[260px] border-b border-slate-100 px-4 py-3 align-top text-sm leading-7 text-slate-600">{row.right}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="grid gap-3 md:grid-cols-2">
+      {columns.map((column, columnIndex) => (
+        <div key={column} className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_10px_24px_rgba(15,23,42,0.06)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">Compare</p>
+          <h6 className="mt-2 text-base font-semibold text-slate-900">{column}</h6>
+          <div className="mt-4 space-y-3">
+            {rows.map((row) => (
+              <div key={`${column}-${row.label}`} className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{row.label}</p>
+                <p className="mt-2 text-sm leading-7 text-slate-700">{columnIndex === 0 ? row.left : row.right}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2572,7 +2668,7 @@ function StudyGuideVisualGallery({ sectionHeading = "", content = "" }) {
       ) : null}
       {markdown ? (
         <div className="notes-markdown study-guide-markdown phone-safe-copy max-w-none">
-          <ReactMarkdown>{markdown}</ReactMarkdown>
+          <MobileFirstMarkdown>{markdown}</MobileFirstMarkdown>
         </div>
       ) : null}
     </div>
@@ -2661,7 +2757,7 @@ export default function App() {
   const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
   const [pastQuestionMemo, setPastQuestionMemo] = useState("");
   const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
-  const [selectedPresentationDesign, setSelectedPresentationDesign] = useState(presentationDesigns[0].id);
+  const [selectedPresentationDesign, setSelectedPresentationDesign] = useState(defaultPresentationDesignId);
   const [selectedPresentationSlideIndex, setSelectedPresentationSlideIndex] = useState(0);
   const [presentationTemplateFile, setPresentationTemplateFile] = useState(null);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
@@ -2771,6 +2867,7 @@ export default function App() {
   const teacherExamplesPanelRef = useRef(null);
   const teacherPlaybackRunRef = useRef(0);
   const teacherAutoTabRef = useRef("");
+  const teacherSpeechTimerRef = useRef(null);
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -2998,6 +3095,11 @@ export default function App() {
 
   const applyWorkspaceSnapshot = (snapshot = {}, { preserveStatus = false } = {}) => {
     if (!snapshot || typeof snapshot !== "object") return;
+    const restoredPresentationData = normalizePresentationData(snapshot.presentationData);
+    const restoredPresentationDesign = normalizePresentationDesignId(
+      snapshot.selectedPresentationDesign || restoredPresentationData.designId || defaultPresentationDesignId,
+      { allowLegacyDefault: restoredPresentationData.slides.length > 0 },
+    );
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     stopTeacherPlayback({ resetIndex: true });
@@ -3015,8 +3117,8 @@ export default function App() {
       setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
       setPastQuestionPaperSources(normalizeStudySourceEntries(snapshot.pastQuestionPaperSources, "", [], "PAST QUESTION PAPER"));
       setPastQuestionMemo(snapshot.pastQuestionMemo || "");
-      setPresentationData(normalizePresentationData(snapshot.presentationData));
-      setSelectedPresentationDesign(snapshot.selectedPresentationDesign || presentationDesigns[0].id);
+      setPresentationData(restoredPresentationData);
+      setSelectedPresentationDesign(restoredPresentationDesign);
       setPresentationView(snapshot.presentationView || "setup");
       setPodcastData(normalizePodcastData(snapshot.podcastData));
       setPodcastSpeakerCount(Number(snapshot.podcastSpeakerCount || 2) >= 3 ? 3 : 2);
@@ -3113,6 +3215,10 @@ export default function App() {
   const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
     teacherPlaybackRunRef.current += 1;
     teacherAutoTabRef.current = "";
+    if (teacherSpeechTimerRef.current) {
+      clearTimeout(teacherSpeechTimerRef.current);
+      teacherSpeechTimerRef.current = null;
+    }
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -3156,6 +3262,18 @@ export default function App() {
       setSelectedPresentationSlideIndex(0);
     }
   }, [presentationData.slides.length, presentationViewerSlides.length, selectedPresentationSlideIndex]);
+
+  useEffect(() => {
+    if (activeTab !== "presentation" || presentationView !== "viewer" || presentationViewerSlides.length <= 1 || isGeneratingPresentation) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      setSelectedPresentationSlideIndex((current) => (current + 1) % presentationViewerSlides.length);
+    }, 6500);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeTab, isGeneratingPresentation, presentationView, presentationViewerSlides.length]);
 
   const focusPresentationViewer = () => {
     if (!canOpenPresentationViewer) return;
@@ -3898,7 +4016,7 @@ export default function App() {
                     </div>
                   </div>
                   <div className="mt-4">
-                    {activeRoom.active_tab === "guide" ? <div className="notes-markdown phone-safe-copy rounded-2xl border border-white/10 bg-black/30 p-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><ReactMarkdown>{activeRoomFormattedGuide || "No shared study guide selected yet."}</ReactMarkdown></div> : null}
+                    {activeRoom.active_tab === "guide" ? <div className="notes-markdown phone-safe-copy rounded-2xl border border-white/10 bg-black/30 p-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><MobileFirstMarkdown>{activeRoomFormattedGuide || "No shared study guide selected yet."}</MobileFirstMarkdown></div> : null}
                     {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
                     {activeRoom.active_tab === "formulas" ? (activeRoomFormulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{activeRoomFormulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedFormula || "No shared formulas selected yet."}</div>) : null}
                     {activeRoom.active_tab === "examples" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedExample || "No shared worked examples selected yet."}</div> : null}
@@ -4693,7 +4811,7 @@ export default function App() {
           </div>
 
           <div className="notes-markdown phone-safe-copy rounded-[24px] border border-white/10 bg-black/60 p-5 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-amber-100 prose-li:text-slate-200">
-            <ReactMarkdown>{podcastData.script}</ReactMarkdown>
+            <MobileFirstMarkdown>{podcastData.script}</MobileFirstMarkdown>
           </div>
         </>
       ) : (
@@ -7962,7 +8080,7 @@ export default function App() {
       const nextPresentationData = normalizePresentationData(item.presentationData);
       setPresentationData(nextPresentationData);
       setPresentationView(nextPresentationData.slides.length ? "viewer" : "setup");
-      setSelectedPresentationDesign(nextPresentationData.designId || presentationDesigns[0].id);
+      setSelectedPresentationDesign(nextPresentationData.designId || defaultPresentationDesignId);
       setPodcastData(normalizePodcastData(item.podcastData));
       setTeacherLessonData(normalizeTeacherLessonData(item.teacherLessonData));
       setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
@@ -7998,7 +8116,7 @@ export default function App() {
     setStudyImages([]);
     setPresentationData(createEmptyPresentationData());
     setPresentationView("setup");
-    setSelectedPresentationDesign(presentationDesigns[0].id);
+    setSelectedPresentationDesign(defaultPresentationDesignId);
     setPodcastData(createEmptyPodcastData());
     setTeacherLessonData(createEmptyTeacherLessonData());
     setPodcastSpeakerCount(2);
@@ -8970,7 +9088,7 @@ export default function App() {
         setQuizSubmitted(false);
         setPresentationData(createEmptyPresentationData());
         setPresentationView("setup");
-        setSelectedPresentationDesign(presentationDesigns[0].id);
+        setSelectedPresentationDesign(defaultPresentationDesignId);
         setPodcastData(createEmptyPodcastData());
         setTeacherLessonData(createEmptyTeacherLessonData());
         setPodcastSpeakerCount(2);
@@ -9170,8 +9288,11 @@ export default function App() {
       setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
       setActiveTab("presentation");
       setCurrentPage("workspace");
-      setPresentationView("status");
+      setPresentationView("viewer");
       setProgress(100);
+      window.requestAnimationFrame(() => {
+        presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       const sourceLabel = getPrimarySourceLabel({
         fileName: file?.name || "",
         videoUrl,
@@ -9389,7 +9510,7 @@ export default function App() {
       || voices[0]
       || null;
 
-    const speakSegment = (segmentIndex) => {
+    const speakSegment = (segmentIndex, chunkIndex = 0) => {
       if (teacherPlaybackRunRef.current !== runId) return;
       if (segmentIndex >= normalizedLesson.segments.length) {
         setIsTeacherPlaying(false);
@@ -9401,25 +9522,45 @@ export default function App() {
       }
 
       const segment = normalizedLesson.segments[segmentIndex];
-      const utterance = new window.SpeechSynthesisUtterance([segment.prompt, segment.text].filter(Boolean).join(" "));
-      utterance.voice = selectedVoice;
-      utterance.lang = selectedVoice?.lang || "en-US";
-      utterance.rate = 0.94;
-      utterance.pitch = 0.92;
-      utterance.onstart = () => {
-        if (teacherPlaybackRunRef.current !== runId) return;
+      const speechChunks = buildSpeechChunks([segment.prompt, segment.text].filter(Boolean).join(". "));
+      if (!speechChunks.length) {
+        speakSegment(segmentIndex + 1);
+        return;
+      }
+
+      if (chunkIndex === 0) {
         setActiveTeacherSegmentIndex(segmentIndex);
         setIsTeacherPlaying(true);
         setIsTeacherPaused(false);
         syncTeacherSegmentToolView(segment.sectionHeading);
+      }
+
+      const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice?.lang || "en-US";
+      utterance.rate = 0.88;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.onstart = () => {
+        if (teacherPlaybackRunRef.current !== runId) return;
+        setIsTeacherPlaying(true);
+        setIsTeacherPaused(false);
       };
       utterance.onend = () => {
         if (teacherPlaybackRunRef.current !== runId) return;
-        speakSegment(segmentIndex + 1);
+        const nextSegmentIndex = chunkIndex + 1 < speechChunks.length ? segmentIndex : segmentIndex + 1;
+        const nextChunkIndex = chunkIndex + 1 < speechChunks.length ? chunkIndex + 1 : 0;
+        teacherSpeechTimerRef.current = window.setTimeout(() => {
+          teacherSpeechTimerRef.current = null;
+          speakSegment(nextSegmentIndex, nextChunkIndex);
+        }, 170);
       };
       utterance.onerror = () => {
         if (teacherPlaybackRunRef.current !== runId) return;
-        speakSegment(segmentIndex + 1);
+        teacherSpeechTimerRef.current = window.setTimeout(() => {
+          teacherSpeechTimerRef.current = null;
+          speakSegment(segmentIndex + 1);
+        }, 220);
       };
       window.speechSynthesis.speak(utterance);
     };
@@ -9427,11 +9568,18 @@ export default function App() {
     setCurrentPage("workspace");
     setActiveTab("guide");
     setStatus("Teacher mode is explaining the study guide.");
-    speakSegment(Math.max(0, Number(startIndex || 0)));
+    teacherSpeechTimerRef.current = window.setTimeout(() => {
+      teacherSpeechTimerRef.current = null;
+      speakSegment(Math.max(0, Number(startIndex || 0)));
+    }, 140);
   };
 
   const pauseTeacherLesson = () => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
+    if (teacherSpeechTimerRef.current) {
+      window.clearTimeout(teacherSpeechTimerRef.current);
+      teacherSpeechTimerRef.current = null;
+    }
     if (!window.speechSynthesis.speaking || window.speechSynthesis.paused) return;
     window.speechSynthesis.pause();
     setIsTeacherPlaying(false);
@@ -9741,7 +9889,8 @@ export default function App() {
           startTransition(() => {
             setPresentationData(nextPresentationData);
             setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
-            setPresentationView("status");
+            setPresentationView("viewer");
+            setSelectedPresentationSlideIndex(0);
             setCurrentPage("workspace");
             setActiveTab("presentation");
           });
@@ -11042,7 +11191,7 @@ export default function App() {
                       </div>
                       {guideSummarySection?.content ? (
                         <div className="notes-markdown study-guide-markdown phone-safe-copy mt-4 max-w-none">
-                          <ReactMarkdown>{guideSummarySection.content}</ReactMarkdown>
+                          <MobileFirstMarkdown>{guideSummarySection.content}</MobileFirstMarkdown>
                         </div>
                       ) : null}
                     </div>
@@ -11128,7 +11277,7 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                        <ReactMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</ReactMarkdown>
+                        <MobileFirstMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</MobileFirstMarkdown>
                       </div>
                     )}
 
@@ -11204,7 +11353,7 @@ export default function App() {
                       );
                     }) : (
                       <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                        <ReactMarkdown>{formattedExample || "Worked examples will appear here after study guide generation."}</ReactMarkdown>
+                        <MobileFirstMarkdown>{formattedExample || "Worked examples will appear here after study guide generation."}</MobileFirstMarkdown>
                       </div>
                     )}
                   </div>

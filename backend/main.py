@@ -257,7 +257,8 @@ Rules:
 - In ADVANTAGES AND DISADVANTAGES, give practical study-focused pros, limits, or caution points that help a student know when the idea is useful and where it becomes confusing.
 - In COMMON MISTAKES TO AVOID, list short warnings about misunderstandings, skipped steps, wrong formula use, or revision traps.
 - In QUICK REVISION PLAN, give a short sequence a student can follow before a class test or exam.
-- In VISUAL AIDS, include simple ASCII diagrams, neat comparison tables, flow layouts, or graph sketches when they help explain the topic.
+- In VISUAL AIDS, include simple ASCII diagrams, stacked comparison cards, flow layouts, or graph sketches when they help explain the topic.
+- Never generate large Markdown tables, wide comparison tables, or table cells with long paragraphs. Use phone-readable vertical cards and labeled bullet groups instead.
 - If the lecture covers concrete physical things, types, components, specimens, machines, instruments, valves, organs, or structures, name the important visual subtypes clearly and describe the visible features students should recognise.
 - In VISUAL AIDS, explicitly mention concrete objects or subtype names that would benefit from a real photo reference.
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
@@ -352,6 +353,24 @@ OUTPUT STYLE
 - Examples should appear only when genuinely useful.
 - Add Key Questions only when educationally valuable.
 
+MOBILE-FIRST READABILITY RULES
+- Assume the student is reading from a phone screen first.
+- Never generate large Markdown tables.
+- Never create tables with more than 3 columns.
+- Never place long paragraphs inside table cells.
+- Never generate wide comparison tables.
+- Avoid Markdown tables completely unless the information is extremely small and simple.
+- If a table would reduce readability, replace it with vertically stacked content blocks.
+- Prefer modern section cards, bullet groups, stacked comparison blocks, labeled vertical layouts, timelines, key-point containers, question-answer layouts, expandable-style topic sections, and structured note cards.
+- When comparing items, use a vertical format:
+  ### Item Name
+  - Definition:
+  - Formula:
+  - Example:
+  - Important Notes:
+- Use "Key Idea", "Exam Tip", "Common Mistake", and "Definition" blocks when they genuinely help revision.
+- Prioritize readability, mobile responsiveness, visual clarity, professional academic structure, and simple scanning over compactness.
+
 MANDATORY COMPATIBILITY RULES
 - Because the app builds formulas, worked-example, flashcard, quiz, teacher-mode, and presentation assets from the guide, keep these exact headings whenever the content supports them:
   - ## IMPORTANT FORMULAS
@@ -396,7 +415,7 @@ VISUAL LEARNING RULES
 - Make each suggested visual explicit enough for the app to render it. Include the main stages, compared sides, plotted signals, axes, or labels inside the suggestion itself.
 - Prefer render-friendly phrasing such as:
   - [Suggested Visual: Flowchart - Input -> Transform -> Output]
-  - [Suggested Visual: Comparison table - Continuous vs Discrete | formula, operation, output]
+  - [Suggested Visual: Stacked comparison cards - Continuous vs Discrete | formula, operation, output]
   - [Suggested Visual: Plot - x(t), h(t), y(t)]
 - If the lecture covers concrete physical things such as organs, instruments, valves, structures, machines, or components, mention the visual subtypes students should recognize.
 - Only include charts, graphs, axes, or trend sketches when the lecture discusses data or variable relationships. Do not invent fake numerical data.
@@ -416,7 +435,7 @@ QUALITY RULES
 - The output should feel intelligent, adaptive, academically useful, modern, polished, and revision-friendly.
 - Think like an expert university tutor creating revision notes for students before exams.
 - Write naturally like a highly organized top university student.
-- Use more comparison tables, process flows, and visual-learning suggestions when concepts are complex.
+- Use more stacked comparison cards, process flows, and visual-learning suggestions when concepts are complex.
 - Focus on conceptual understanding and intuitive explanations, not just memorization.
 - Do not include YouTube links or long export suggestions.
 """
@@ -10804,7 +10823,8 @@ async def generate_study_guide(
             "- Detect when the sources cover multiple distinct topics, chapters, or subtopics.\n"
             "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
             "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic.\n"
-            "- Label diagrams, tables, charts, and process visuals clearly inside the guide."
+            "- Label diagrams, stacked comparison cards, charts, and process visuals clearly inside the guide.\n"
+            "- Avoid wide Markdown tables. Use phone-readable vertical cards and labeled bullet groups when comparing ideas."
         )
     )
     combined_user_content = "\n\n".join(user_content_parts)
