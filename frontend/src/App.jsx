@@ -2845,11 +2845,21 @@ export default function App() {
     || "Study Guide";
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
-  const isAdminAccount = authAvailableModes.includes("admin");
-  const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
+  const resolveTeacherSectionKey = (sectionHeading = "") => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
-    return normalizedHeading.includes("worked example") || normalizedHeading.includes("step-by-step explanation") || normalizedHeading.includes("step by step explanation");
+    if (!normalizedHeading) return "";
+    const canonicalHeading = normalizeGuideHeading(getGuideCanonicalHeading(normalizedHeading) || normalizedHeading);
+    const matchingSection = guideSections.find((section) => section.normalizedHeading === canonicalHeading)
+      || guideSections.find((section) => canonicalHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(canonicalHeading))
+      || guideSections.find((section) => normalizedHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(normalizedHeading));
+    return matchingSection?.normalizedHeading || canonicalHeading || normalizedHeading;
   };
+  const activeTeacherSectionKey = resolveTeacherSectionKey(activeTeacherSegment?.sectionHeading || "");
+  const isTeacherOnGuideIntro = Boolean(
+    activeTeacherSectionKey
+    && [guideTitleSection?.normalizedHeading, guideSummarySection?.normalizedHeading].filter(Boolean).includes(activeTeacherSectionKey),
+  );
+  const isAdminAccount = authAvailableModes.includes("admin");
   const resetQuizSessionState = (questions = []) => {
     const estimatedSeconds = estimateQuizDurationMinutes(questions) * 60;
     setQuizSessionStage(questions.length ? "ready" : "idle");
@@ -2980,14 +2990,11 @@ export default function App() {
   };
 
   const scrollTeacherToSection = (sectionHeading = "") => {
-    const normalizedHeading = String(sectionHeading || "").trim().toLowerCase();
-    if (!normalizedHeading) return;
-    const matchingSection = guideSections.find((section) => section.normalizedHeading === normalizedHeading)
-      || guideSections.find((section) => normalizedHeading.includes(section.normalizedHeading) || section.normalizedHeading.includes(normalizedHeading));
-    const targetKey = matchingSection?.normalizedHeading || normalizedHeading;
+    const targetKey = resolveTeacherSectionKey(sectionHeading);
+    if (!targetKey) return;
     const targetNode = teacherSectionRefs.current[targetKey];
     if (targetNode?.scrollIntoView) {
-      targetNode.scrollIntoView({ behavior: "smooth", block: "center" });
+      targetNode.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
     }
   };
 
@@ -2996,18 +3003,13 @@ export default function App() {
     setActiveTab("guide");
     if (!sectionHeading || typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
-      scrollTeacherToSection(sectionHeading);
+      window.requestAnimationFrame(() => {
+        scrollTeacherToSection(sectionHeading);
+      });
     });
   };
 
-  const syncTeacherSegmentToolView = (sectionHeading = "") => {
-    if (formattedExample.trim() && isWorkedExampleTeacherSegment(sectionHeading)) {
-      teacherAutoTabRef.current = "examples";
-      setActiveTab("examples");
-      return;
-    }
-    returnTeacherToGuide(sectionHeading);
-  };
+  const syncTeacherSegmentToolView = (sectionHeading = "") => returnTeacherToGuide(sectionHeading);
 
   const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
     teacherPlaybackRunRef.current += 1;
@@ -10900,12 +10902,13 @@ export default function App() {
                         if (node && guideSummarySection) teacherSectionRefs.current[guideSummarySection.normalizedHeading] = node;
                         else if (guideSummarySection) delete teacherSectionRefs.current[guideSummarySection.normalizedHeading];
                       }}
-                      className="study-guide-title-card rounded-[24px] p-5"
+                      className={`study-guide-title-card rounded-[24px] p-5 transition ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
                     >
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <p className="study-guide-kicker">Lecture Topic</p>
                           <h4 className="study-guide-topic mt-2">{guideTopic}</h4>
+                          {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Teacher is explaining this section</p> : null}
                         </div>
                       </div>
                       {guideSummarySection?.content ? (
@@ -10971,9 +10974,10 @@ export default function App() {
                     {visibleGuideSections.length ? (
                       <div className="space-y-4">
                         {visibleGuideSections.map((section, index) => {
-                          const isActiveSection = activeTeacherSegment?.sectionHeading
-                            ? (activeTeacherSegment.sectionHeading || "").trim().toLowerCase() === section.normalizedHeading
-                              || (activeTeacherSegment.sectionHeading || "").trim().toLowerCase().includes(section.normalizedHeading)
+                          const isActiveSection = activeTeacherSectionKey
+                            ? activeTeacherSectionKey === section.normalizedHeading
+                              || activeTeacherSectionKey.includes(section.normalizedHeading)
+                              || section.normalizedHeading.includes(activeTeacherSectionKey)
                             : false;
                           return (
                             <article
@@ -10984,6 +10988,7 @@ export default function App() {
                               }}
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
+                              {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this section</p> : null}
                               <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                               <div className="phone-safe-copy mt-3 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />

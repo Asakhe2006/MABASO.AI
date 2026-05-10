@@ -7968,44 +7968,57 @@ def build_teacher_lesson_fallback(
     transcript_index = 0
 
     section_openers = {
-        "LECTURE TITLE": "Let us anchor the topic properly before the details start running around like they pay rent here.",
-        "SHORT SUMMARY": "Let us start with the big picture before this topic starts acting dramatic.",
-        "KEY CONCEPTS": "These are the ideas doing the real work behind the scenes.",
-        "IMPORTANT DEFINITIONS": "This is one of those parts where one word can save or lose marks.",
-        "IMPORTANT FORMULAS": "This formula looks serious, but let us make it behave.",
-        "WORKED EXAMPLES": "Examples are where the theory stops hiding and starts talking clearly.",
-        "STEP-BY-STEP EXPLANATIONS": "Let us slow the whole process down like a patient lecturer would.",
-        "COMMON MISTAKES TO AVOID": "This is the trap section, and exam questions love these traps.",
-        "REAL-WORLD EXAMPLES": "Here is where the topic leaves the page and becomes something you can picture.",
-        "EXAM TIPS": "Now let us turn understanding into marks.",
+        "LECTURE TITLE": "Let us anchor the topic first so every later detail has a clear home.",
+        "SHORT SUMMARY": "Let us start with the big picture before we dive into the detail.",
+        "KEY CONCEPTS": "These are the core ideas holding the rest of the topic together.",
+        "IMPORTANT DEFINITIONS": "This is one of those sections where precise wording protects marks.",
+        "IMPORTANT FORMULAS": "Let us make the formula intuitive before we try to use it.",
+        "WORKED EXAMPLES": "This is where the method becomes visible step by step.",
+        "STEP-BY-STEP EXPLANATIONS": "Let us slow the process down and make every step earn its place.",
+        "COMMON MISTAKES TO AVOID": "This is where we catch the traps before they catch your marks.",
+        "REAL-WORLD EXAMPLES": "This is where the topic becomes easier to picture in real situations.",
+        "EXAM TIPS": "Now let us translate understanding into marks.",
     }
 
     section_prompts = {
+        "LECTURE TITLE": "Topic purpose",
+        "SHORT SUMMARY": "Big-picture meaning",
+        "KEY CONCEPTS": "Core idea links",
+        "IMPORTANT DEFINITIONS": "Definition precision",
+        "IMPORTANT FORMULAS": "Formula intuition",
+        "WORKED EXAMPLES": "Next method step",
+        "STEP-BY-STEP EXPLANATIONS": "Hidden step check",
+        "COMMON MISTAKES TO AVOID": "Trap to avoid",
+        "REAL-WORLD EXAMPLES": "Real-world anchor",
+        "EXAM TIPS": "Marks strategy",
+    }
+
+    section_questions = {
         "LECTURE TITLE": "Before we even calculate anything, what kind of problem is this topic really helping you solve?",
-        "SHORT SUMMARY": "What do you think the lecturer was really trying to make you notice here?",
+        "SHORT SUMMARY": "What is the main message the lecturer wants you to keep in mind here?",
         "KEY CONCEPTS": "If one of these concepts disappeared, what would stop making sense first?",
         "IMPORTANT DEFINITIONS": "Which word in this definition would you not want to misread in a test?",
-        "IMPORTANT FORMULAS": "What do you think happens when one term in the formula changes?",
+        "IMPORTANT FORMULAS": "What changes in the result when one term in this formula changes?",
         "WORKED EXAMPLES": "Before I reveal the next move, what do you think the next step should be?",
-        "STEP-BY-STEP EXPLANATIONS": "Can you already see which step students usually rush too quickly?",
-        "COMMON MISTAKES TO AVOID": "Which mistake feels the easiest to make when you are under pressure?",
+        "STEP-BY-STEP EXPLANATIONS": "Can you see which step students most often rush past too quickly?",
+        "COMMON MISTAKES TO AVOID": "Which mistake feels easiest to make when you are under pressure?",
         "REAL-WORLD EXAMPLES": "Where would you actually see this outside the classroom?",
         "EXAM TIPS": "If this appeared for marks tomorrow, what would you write first?",
     }
 
     section_focus = {
-        "LECTURE TITLE": "I want you to connect the topic name to the kind of reasoning, calculation, or comparison that normally appears with it.",
+        "LECTURE TITLE": "Connect the topic name to the kind of reasoning, calculation, comparison, or argument it usually requires.",
         "SHORT SUMMARY": "Stay with the high-level meaning first so the later details have somewhere sensible to live.",
-        "KEY CONCEPTS": "Notice how the ideas connect instead of memorizing them like random cousins at a family reunion.",
+        "KEY CONCEPTS": "Notice how the ideas connect instead of memorizing them as isolated pieces.",
         "IMPORTANT DEFINITIONS": "Definitions become easier when you spot which words are doing the precise technical work.",
-        "IMPORTANT FORMULAS": "The goal is not to worship the formula. The goal is to know when it applies and what each part is telling you.",
-        "WORKED EXAMPLES": "This is the part to slow down properly because the method matters more than pretending the final answer arrived by magic.",
+        "IMPORTANT FORMULAS": "The goal is to know when the formula applies, what each term is doing, and what assumption is hiding inside it.",
+        "WORKED EXAMPLES": "This is where we slow down properly because method matters more than pretending the final answer appeared by itself.",
         "STEP-BY-STEP EXPLANATIONS": "Think of this as the careful road map that stops you from skipping hidden steps.",
-        "ADVANTAGES AND DISADVANTAGES": "This helps you judge when the idea is useful and when it starts causing confusion.",
+        "ADVANTAGES AND DISADVANTAGES": "This helps you judge when the idea is useful and where its limitations begin.",
         "COMMON MISTAKES TO AVOID": "If you can spot the trap early, you save both marks and stress.",
-        "QUICK REVISION PLAN": "A short plan is useful because panic is not a study strategy, even if it keeps trying to volunteer.",
-        "VISUAL AIDS": "Try to picture the structure, motion, or pattern so the concept feels visible rather than abstract only.",
-        "REAL-WORLD EXAMPLES": "Real examples make the topic feel less like a page of symbols and more like something you can actually recognise.",
+        "QUICK REVISION PLAN": "A short plan is useful because focused revision beats rushed revision.",
+        "VISUAL AIDS": "Picture the structure, motion, or pattern so the concept feels visible rather than abstract only.",
+        "REAL-WORLD EXAMPLES": "Real examples make the topic easier to recognize, remember, and explain.",
         "EXAM TIPS": "This is where understanding gets converted into marks under time pressure.",
     }
 
@@ -8053,7 +8066,7 @@ def build_teacher_lesson_fallback(
             if transcript_detail:
                 spoken_text += f"{transcript_detail} "
             spoken_text += (
-                f"{section_prompts.get(heading, 'What do you think is the key idea here?')} "
+                f"{section_questions.get(heading, 'What do you think is the key idea here?')} "
                 "If the answer still feels fuzzy, that is fine. We are building understanding one clear step at a time."
             )
 
@@ -8120,7 +8133,7 @@ def build_teacher_lesson_fallback(
                 {
                     "index": len(segments) + 1,
                     "section_heading": "SHORT SUMMARY",
-                    "prompt": "What do you think will happen next?",
+                    "prompt": "Next reasoning step",
                     "text": spoken_text,
                     "estimated_minutes": estimate_spoken_minutes(spoken_text),
                 }
@@ -8131,8 +8144,8 @@ def build_teacher_lesson_fallback(
     return {
         "title": f"{topic} Teacher Lesson",
         "overview": (
-            f"A warm teacher-style walkthrough of {topic} designed to run for about {TEACHER_TARGET_MINUTES} minutes or more, "
-            "with reflective questions, gentle humor, extra attention on worked examples, and no flashcard or Q&A reading."
+            f"A tutor-style walkthrough of {topic} designed for understanding, retention, and exam performance, "
+            f"running for about {TEACHER_TARGET_MINUTES} minutes or more while following the guide section by section."
         ),
         "segments": dedupe_teacher_segments(
             segments[:TEACHER_SEGMENT_LIMIT],
@@ -8680,21 +8693,40 @@ async def generate_teacher_lesson_package(
                 {
                     "role": "system",
                     "content": (
-                        "You are writing a spoken teacher-mode lesson for a study app. "
+                        "You are an elite AI teaching engine built for university-level learning. "
                         "Return strict JSON only with the keys title, overview, and segments.\n\n"
-                        "Rules:\n"
+                        "Final goal:\n"
+                        "- Teach for understanding, retention, engagement, exam performance, and long-term memory.\n"
+                        "- Feel like a top private tutor: highly intelligent but easy to understand, conversational, motivating, adaptive to learner difficulty, and visually synchronized with the study guide.\n\n"
+                        "JSON rules:\n"
                         "- `segments` must be an array of objects with `section_heading`, `prompt`, and `text` only.\n"
                         "- `section_heading` must be one of the provided guide headings.\n"
-                        "- Sound like one friendly lecturer teaching a real class, not reading notes line by line.\n"
-                        "- Use a warm, calm, supportive tone with occasional light humor.\n"
-                        "- Ask reflective questions such as 'what do you think will happen next' when it fits naturally.\n"
+                        "- `prompt` must be a short natural cue of about 4 to 10 words naming the live teaching focus for the UI, such as a definition, process step, comparison, misconception, or exam clue.\n"
+                        "- `overview` must be 1 to 2 sentences describing the lesson style and coverage.\n\n"
+                        "Teaching behavior:\n"
+                        "- Explain concepts step by step.\n"
+                        "- Introduce the idea simply, explain what it means, explain why it matters, give an intuitive example, connect it to previous concepts, and reinforce the key takeaway.\n"
+                        "- Teach like speaking to a real student, not like reading notes line by line.\n"
+                        "- Use calm, clear, encouraging language.\n"
+                        "- Focus on why concepts matter, where students get confused, and how the idea appears in exams.\n"
+                        "- Use chunking, active recall, analogy, real-world examples, comparisons, and memory anchors when they genuinely help.\n"
+                        "- Ask occasional reflective questions naturally.\n"
+                        "- Reinforce important ideas with a new angle instead of repeating the same wording.\n"
+                        "- If the concept is difficult, slow the pacing, use shorter sentences, and add more examples.\n"
+                        "- If the concept is easier, be concise and focus on high-yield details.\n"
+                        "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
+                        "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing, when the formula applies, and what assumption it depends on.\n"
+                        "- Occasionally point out common exam questions or common confusions when it fits.\n\n"
+                        "Sync with the guide:\n"
+                        "- Follow the guide section by section.\n"
+                        "- Make each segment clearly about the current section only.\n"
+                        "- Use `prompt` to name the exact teaching focus so the interface can sync the lesson to the guide.\n"
+                        "- When discussing definitions, processes, comparisons, theories, assumptions, criticisms, formulas, or key terms, make that focus obvious in the `prompt` and spoken explanation.\n\n"
+                        "Length and output rules:\n"
                         f"- The full lesson must land at roughly {TEACHER_MINIMUM_MINUTES:.0f} to {TEACHER_TARGET_MINUTES + 2} minutes and about {TEACHER_TARGET_WORDS} spoken words in total.\n"
                         "- Aim for about 24 to 36 teaching segments before any automatic chunk splitting.\n"
-                        "- Explain the idea, why it matters, and how to think about it in an exam or problem-solving situation.\n"
-                        "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
                         "- Avoid repeating the same definition, example, or explanation unless you are adding a clearly new step, misconception fix, or application.\n"
                         "- Do not skip the opening lesson flow, top notes, or early definitions when the source starts with foundational explanations.\n"
-                        "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing and when the formula applies.\n"
                         "- Do not create spoken segments for FLASHCARDS or PRACTICE QUESTIONS AND ANSWERS.\n"
                         "- Keep each segment between about 95 and 160 spoken words.\n"
                         "- Do not use bullet points, markdown, stage directions, or sound-effect text.\n"
@@ -8706,12 +8738,12 @@ async def generate_teacher_lesson_package(
                     "role": "user",
                     "content": (
                         "Build a teacher-mode lesson that follows the guide section by section.\n"
-                        "The student should feel like a warm teacher is teaching the topic, pausing to ask questions, "
-                        "making one or two gentle jokes, and helping them reason through the content.\n"
+                        "The student should feel personally guided by a premium AI tutor who teaches for true understanding, not just information delivery.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
-                        "Spend extra time making worked examples, definitions, and method steps very clear.\n"
-                        "Do not restate the same point in later segments unless the later segment adds a new angle or step.\n"
-                        "Cover the beginning of the notes properly before moving deeper into the lesson.\n\n"
+                        "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
+                        "Do not restate the same point in later segments unless the later segment adds a new angle, deeper reason, or new application.\n"
+                        "Cover the beginning of the notes properly before moving deeper into the lesson.\n"
+                        "Think like an expert university tutor creating revision teaching before exams.\n\n"
                         + (f"{revision_note.strip()}\n\n" if revision_note.strip() else "")
                         + f"Allowed section headings: {', '.join(allowed_headings)}\n\n"
                         + combined_source
