@@ -1608,7 +1608,9 @@ function getErrorHint(message) {
   if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
     return "Try another public video link, or upload the lecture file directly. YouTube links may also need public captions or working backend cookies.";
   }
-  if (text.includes("smtp")) return "Configure SMTP or MAIL variables on Render so verification codes can be sent.";
+  if (text.includes("smtp")) {
+    return "For Gmail, keep smtp.gmail.com with port 587, SMTP_USE_TLS=true, SMTP_USE_SSL=false, and set SMTP_PASSWORD to a Gmail app password instead of your normal Gmail password.";
+  }
   if (text.includes("timed out")) return "Try again or split a very long lecture into smaller sections.";
   return "Check the backend logs for the exact failing stage.";
 }
@@ -2010,6 +2012,9 @@ const GUIDE_SECTION_ALIAS_ENTRIES = [
   ["step by step explanation", "STEP-BY-STEP EXPLANATIONS"],
   ["real world examples", "REAL-WORLD EXAMPLES"],
   ["practice questions", "PRACTICE QUESTIONS AND ANSWERS"],
+  ["suggested visuals", "VISUAL AIDS"],
+  ["suggested visual", "VISUAL AIDS"],
+  ["visual learning suggestions", "VISUAL AIDS"],
   ["exam-focused takeaways", "EXAM TIPS"],
   ["exam focused takeaways", "EXAM TIPS"],
   ["quick recap", "EXAM TIPS"],
@@ -2188,6 +2193,339 @@ function getGuideSectionTone(heading) {
   if (/(concept|definition|theory|principle|framework|mechanism|process|stage|component|architecture|workflow|comparison)/.test(normalizedHeading)) return "concept";
   if (normalizedHeading === "lecture title" || normalizedHeading === "short summary") return "overview";
   return "info";
+}
+
+function compactGuideVisualText(value = "") {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function isVisualGuideHeading(heading = "") {
+  return /(visual|diagram|plot|graph|chart|table)/.test(normalizeGuideHeading(heading));
+}
+
+function stripSuggestedVisualPrefix(line = "") {
+  return compactGuideVisualText(
+    String(line || "")
+      .replace(/^\s*(?:[-*+]|\d+\.)\s*/, "")
+      .replace(/^\[?\s*suggested visuals?\s*:\s*/i, "")
+      .replace(/\]$/, ""),
+  );
+}
+
+function splitGuideVisualTerms(value = "") {
+  return compactGuideVisualText(value)
+    .replace(/\s+\band\b\s+/gi, ", ")
+    .split(/,|->|→|;|\||\//)
+    .map((item) => compactGuideVisualText(item.replace(/^[-–•]+/, "")))
+    .filter(Boolean);
+}
+
+function formatGuideVisualLabel(value = "") {
+  const cleaned = compactGuideVisualText(value);
+  if (!cleaned) return "";
+  if (/[()[\]=]/.test(cleaned)) return cleaned;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+function extractGuideVisualSequence(prompt = "") {
+  const parentheticalMatch = prompt.match(/\(([^)]+)\)/);
+  const showingMatch = prompt.match(/\b(?:showing|including|with|featuring|covering)\b\s*(.+?)(?:\.|$)/i);
+  const source = parentheticalMatch?.[1] || showingMatch?.[1] || "";
+  let terms = splitGuideVisualTerms(source);
+  if (!terms.length && /convolution/i.test(prompt)) {
+    terms = ["Input", "Shift response", "Multiply", "Combine", "Output"];
+  }
+  if (!terms.length) {
+    terms = ["Start", "Key transformation", "Check relationship", "Result"];
+  }
+  return terms.slice(0, 5).map(formatGuideVisualLabel);
+}
+
+function extractGuideComparisonLabels(prompt = "") {
+  const normalizedPrompt = compactGuideVisualText(prompt);
+  const compareMatch = normalizedPrompt.match(/\bcomparing?\s+(.+?)\s+and\s+(.+?)(?:\s+(?:formula|formulas|properties|process|steps|signals|systems|methods)\b|[.:]|$)/i);
+  if (compareMatch) {
+    return [formatGuideVisualLabel(compareMatch[1]), formatGuideVisualLabel(compareMatch[2])];
+  }
+  const versusMatch = normalizedPrompt.match(/\b(.+?)\s+vs\.?\s+(.+?)(?:[.:]|$)/i);
+  if (versusMatch) {
+    return [formatGuideVisualLabel(versusMatch[1]), formatGuideVisualLabel(versusMatch[2])];
+  }
+  return ["Left view", "Right view"];
+}
+
+function buildGuideComparisonRows(prompt = "", labels = ["Left view", "Right view"]) {
+  const normalizedPrompt = compactGuideVisualText(prompt).toLowerCase();
+  if (normalizedPrompt.includes("convolution") && labels.some((item) => /continuous/i.test(item)) && labels.some((item) => /discrete/i.test(item))) {
+    return [
+      { label: "Domain", left: "Continuous time variable t", right: "Sample index n" },
+      { label: "Combine rule", left: "Integration across overlap", right: "Summation across overlap" },
+      { label: "Shift view", left: "h(t - tau)", right: "h[n - k]" },
+      { label: "Output", left: "Produces y(t)", right: "Produces y[n]" },
+    ];
+  }
+  const sequence = extractGuideVisualSequence(prompt);
+  return [
+    { label: "Focus", left: labels[0], right: labels[1] },
+    { label: "Key feature", left: sequence[0] || "Main property", right: sequence[1] || "Main property" },
+    { label: "Operation", left: sequence[2] || "Core method", right: sequence[2] || "Core method" },
+    { label: "Outcome", left: sequence[3] || "Explain the result", right: sequence[3] || "Explain the result" },
+  ];
+}
+
+function extractGuidePlotSeries(prompt = "") {
+  const symbolMatches = Array.from(
+    new Set((compactGuideVisualText(prompt).match(/\b[a-zA-Z](?:\([^)]*\)|\[[^\]]+\])\b/g) || []).map((item) => item.trim())),
+  );
+  if (symbolMatches.length) return symbolMatches.slice(0, 3);
+  const fallbacks = [];
+  if (/input/i.test(prompt)) fallbacks.push("Input");
+  if (/impulse response|response/i.test(prompt)) fallbacks.push("Response");
+  if (/output|result|resulting/i.test(prompt)) fallbacks.push("Output");
+  return (fallbacks.length ? fallbacks : ["Signal A", "Signal B", "Signal C"]).slice(0, 3);
+}
+
+function inferGuideVisualLayout(prompt = "") {
+  const normalizedPrompt = compactGuideVisualText(prompt).toLowerCase();
+  if (/(table|compare|comparison|versus|\bvs\b)/.test(normalizedPrompt)) return "comparison";
+  if (/(plot|graph|curve|axis|axes|signal)/.test(normalizedPrompt)) return "plot";
+  if (/(cycle|loop)/.test(normalizedPrompt)) return "cycle";
+  if (/(component|structure|cluster|subtype|parts)/.test(normalizedPrompt)) return "cluster";
+  return "flow";
+}
+
+function extractGuideVisualItems(sectionHeading = "", content = "") {
+  const visualHeading = isVisualGuideHeading(sectionHeading);
+  const rawLines = String(content || "").split("\n");
+  const prompts = [];
+  const markdownLines = [];
+
+  rawLines.forEach((line) => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      markdownLines.push(line);
+      return;
+    }
+    const cleanedLine = stripSuggestedVisualPrefix(trimmedLine);
+    const markdownLikeLine = /^\|/.test(trimmedLine) || /^ascii sketch:?$/i.test(cleanedLine);
+    const looksVisualLine = /^\[?\s*suggested visual/i.test(trimmedLine)
+      || /^(diagram|flowchart|illustration|stepwise|table|plot|graph|chart|comparison|compare)\b/i.test(cleanedLine)
+      || (visualHeading && !markdownLikeLine);
+    if (looksVisualLine && cleanedLine) {
+      prompts.push(cleanedLine);
+    } else {
+      markdownLines.push(line);
+    }
+  });
+
+  const visualItems = prompts.map((prompt, index) => {
+    const layout = inferGuideVisualLayout(prompt);
+    return {
+      id: `${normalizeGuideHeading(sectionHeading)}-${index}-${prompt.slice(0, 24)}`,
+      prompt,
+      layout,
+      sequence: extractGuideVisualSequence(prompt),
+      comparisonLabels: extractGuideComparisonLabels(prompt),
+      plotSeries: extractGuidePlotSeries(prompt),
+    };
+  });
+
+  return {
+    visualItems: visualItems.slice(0, 6),
+    markdown: markdownLines.join("\n").trim(),
+  };
+}
+
+function splitSvgLabelLines(label = "", maxChars = 18) {
+  const cleaned = compactGuideVisualText(label);
+  if (!cleaned) return [];
+  if (cleaned.length <= maxChars) return [cleaned];
+  const words = cleaned.split(" ");
+  const lines = [];
+  let currentLine = "";
+  words.forEach((word) => {
+    const nextLine = currentLine ? `${currentLine} ${word}` : word;
+    if (nextLine.length <= maxChars || !currentLine) {
+      currentLine = nextLine;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  });
+  if (currentLine) lines.push(currentLine);
+  return lines.slice(0, 3);
+}
+
+function StudyGuideFlowVisual({ prompt = "", items = [] }) {
+  const nodes = (items.length ? items : extractGuideVisualSequence(prompt)).slice(0, 4);
+  const positions = [28, 196, 364, 532];
+  return (
+    <svg viewBox="0 0 680 180" className="h-[180px] w-full">
+      <defs>
+        <linearGradient id="study-flow-arrow" x1="0%" x2="100%" y1="0%" y2="0%">
+          <stop offset="0%" stopColor="#93c5fd" />
+          <stop offset="100%" stopColor="#3b82f6" />
+        </linearGradient>
+      </defs>
+      {nodes.map((item, index) => {
+        const lines = splitSvgLabelLines(item, 16);
+        const x = positions[index] || positions[positions.length - 1];
+        return (
+          <g key={`${item}-${index}`}>
+            {index < nodes.length - 1 ? (
+              <>
+                <line x1={x + 122} y1="86" x2={x + 156} y2="86" stroke="url(#study-flow-arrow)" strokeWidth="6" strokeLinecap="round" />
+                <polygon points={`${x + 156},86 ${x + 142},78 ${x + 142},94`} fill="#3b82f6" />
+              </>
+            ) : null}
+            <rect x={x} y="40" width="122" height="92" rx="24" fill="#eff6ff" stroke="#bfdbfe" strokeWidth="2" />
+            <circle cx={x + 22} cy="62" r="14" fill="#3b82f6" />
+            <text x={x + 22} y="67" fill="#ffffff" fontSize="12" fontWeight="700" textAnchor="middle">{index + 1}</text>
+            <text x={x + 61} y={lines.length > 1 ? 78 : 88} fill="#1f2937" fontSize="13" fontWeight="600" textAnchor="middle">
+              {lines.map((line, lineIndex) => (
+                <tspan key={`${line}-${lineIndex}`} x={x + 61} dy={lineIndex === 0 ? 0 : 18}>{line}</tspan>
+              ))}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function StudyGuidePlotVisual({ prompt = "", series = [] }) {
+  const labels = (series.length ? series : extractGuidePlotSeries(prompt)).slice(0, 3);
+  const templates = [
+    "M 26 134 L 76 134 L 112 96 L 158 62 L 206 94 L 250 120 L 304 120 L 354 76 L 412 98 L 472 132",
+    "M 26 140 L 94 140 L 136 58 L 172 140 L 242 140 L 286 104 L 334 140 L 472 140",
+    "M 26 140 C 92 140 112 118 158 104 C 216 86 256 66 314 74 C 374 84 412 102 472 120",
+  ];
+  const colors = ["#3b82f6", "#22c55e", "#7c3aed"];
+  return (
+    <div>
+      <svg viewBox="0 0 500 180" className="h-[180px] w-full">
+        <line x1="26" y1="20" x2="26" y2="148" stroke="#94a3b8" strokeWidth="2.5" />
+        <line x1="26" y1="148" x2="478" y2="148" stroke="#94a3b8" strokeWidth="2.5" />
+        <text x="10" y="28" fill="#64748b" fontSize="11">y</text>
+        <text x="470" y="166" fill="#64748b" fontSize="11">t / n</text>
+        {Array.from({ length: 3 }).map((_, index) => (
+          <line key={index} x1="26" y1={44 + (index * 34)} x2="478" y2={44 + (index * 34)} stroke="#e2e8f0" strokeDasharray="4 7" />
+        ))}
+        {labels.map((label, index) => (
+          <g key={`${label}-${index}`}>
+            <path d={templates[index] || templates[templates.length - 1]} fill="none" stroke={colors[index % colors.length]} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+            <text x={382} y={42 + (index * 20)} fill={colors[index % colors.length]} fontSize="12" fontWeight="700">{label}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {labels.map((label, index) => (
+          <span key={label} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+            <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle" style={{ backgroundColor: ["#3b82f6", "#22c55e", "#7c3aed"][index % 3] }} />
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StudyGuideComparisonVisual({ prompt = "", labels = ["Left view", "Right view"] }) {
+  const columns = labels.length === 2 ? labels : ["Left view", "Right view"];
+  const rows = buildGuideComparisonRows(prompt, columns);
+  return (
+    <div className="overflow-x-auto rounded-[20px] border border-slate-200 bg-white">
+      <table className="min-w-full border-collapse text-left">
+        <thead>
+          <tr className="bg-sky-50">
+            <th className="border-b border-slate-200 px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-500">Aspect</th>
+            <th className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{columns[0]}</th>
+            <th className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">{columns[1]}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">{row.label}</td>
+              <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">{row.left}</td>
+              <td className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">{row.right}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StudyGuideClusterVisual({ prompt = "", items = [] }) {
+  const nodes = (items.length ? items : extractGuideVisualSequence(prompt)).slice(0, 4);
+  const centerLabel = formatGuideVisualLabel(compactGuideVisualText(prompt).replace(/^(diagram|illustration|visual)\s+(showing|of)\s+/i, "")) || "Core idea";
+  const positions = [
+    { x: 250, y: 26 },
+    { x: 426, y: 94 },
+    { x: 250, y: 160 },
+    { x: 74, y: 94 },
+  ];
+  return (
+    <svg viewBox="0 0 500 220" className="h-[220px] w-full">
+      <circle cx="250" cy="110" r="54" fill="#ede9fe" stroke="#c4b5fd" strokeWidth="2" />
+      <text x="250" y="102" fill="#1f2937" fontSize="14" fontWeight="700" textAnchor="middle">
+        {splitSvgLabelLines(centerLabel, 18).slice(0, 2).map((line, index) => (
+          <tspan key={`${line}-${index}`} x="250" dy={index === 0 ? 0 : 18}>{line}</tspan>
+        ))}
+      </text>
+      {nodes.map((item, index) => {
+        const position = positions[index] || positions[positions.length - 1];
+        return (
+          <g key={`${item}-${index}`}>
+            <line x1="250" y1="110" x2={position.x + 42} y2={position.y + 20} stroke="#cbd5e1" strokeWidth="2.5" />
+            <rect x={position.x} y={position.y} width="112" height="52" rx="18" fill="#f8fafc" stroke="#dbeafe" strokeWidth="2" />
+            <text x={position.x + 56} y={splitSvgLabelLines(item, 14).length > 1 ? position.y + 22 : position.y + 30} fill="#334155" fontSize="12" fontWeight="600" textAnchor="middle">
+              {splitSvgLabelLines(item, 14).slice(0, 2).map((line, lineIndex) => (
+                <tspan key={`${line}-${lineIndex}`} x={position.x + 56} dy={lineIndex === 0 ? 0 : 16}>{line}</tspan>
+              ))}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function StudyGuideVisualGallery({ sectionHeading = "", content = "" }) {
+  const { visualItems, markdown } = extractGuideVisualItems(sectionHeading, content);
+  if (!visualItems.length && !markdown) return null;
+
+  return (
+    <div className="space-y-4">
+      {visualItems.length ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {visualItems.map((item) => (
+            <div key={item.id} className="rounded-[22px] border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.98),rgba(241,245,249,0.92))] p-4 shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase tracking-[0.24em] text-violet-600">Rendered Visual</p>
+                  <h5 className="mt-2 text-base font-semibold text-slate-900">{item.prompt}</h5>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{item.layout}</span>
+              </div>
+              <div className="mt-4 rounded-[20px] border border-slate-200 bg-white p-3">
+                {item.layout === "comparison" ? <StudyGuideComparisonVisual prompt={item.prompt} labels={item.comparisonLabels} /> : null}
+                {item.layout === "plot" ? <StudyGuidePlotVisual prompt={item.prompt} series={item.plotSeries} /> : null}
+                {item.layout === "cluster" ? <StudyGuideClusterVisual prompt={item.prompt} items={item.sequence} /> : null}
+                {["flow", "cycle"].includes(item.layout) ? <StudyGuideFlowVisual prompt={item.prompt} items={item.sequence} /> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {markdown ? (
+        <div className="notes-markdown study-guide-markdown phone-safe-copy max-w-none">
+          <ReactMarkdown>{markdown}</ReactMarkdown>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function getPodcastEstimatedMinutes(podcast) {
@@ -10647,8 +10985,8 @@ export default function App() {
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
                               <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
-                              <div className="notes-markdown study-guide-markdown phone-safe-copy mt-3 max-w-none">
-                                <ReactMarkdown>{section.content}</ReactMarkdown>
+                              <div className="phone-safe-copy mt-3 max-w-none">
+                                <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                               </div>
                             </article>
                           );

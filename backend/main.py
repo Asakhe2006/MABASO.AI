@@ -393,6 +393,11 @@ VISUAL LEARNING RULES
   - [Suggested Visual: Flowchart of cellular respiration]
   - [Suggested Visual: Diagram comparing Functionalism vs Conflict Theory]
 - Only suggest visuals that improve understanding.
+- Make each suggested visual explicit enough for the app to render it. Include the main stages, compared sides, plotted signals, axes, or labels inside the suggestion itself.
+- Prefer render-friendly phrasing such as:
+  - [Suggested Visual: Flowchart - Input -> Transform -> Output]
+  - [Suggested Visual: Comparison table - Continuous vs Discrete | formula, operation, output]
+  - [Suggested Visual: Plot - x(t), h(t), y(t)]
 - If the lecture covers concrete physical things such as organs, instruments, valves, structures, machines, or components, mention the visual subtypes students should recognize.
 - Only include charts, graphs, axes, or trend sketches when the lecture discusses data or variable relationships. Do not invent fake numerical data.
 
@@ -461,6 +466,9 @@ GUIDE_SECTION_ALIASES = {
     "common mistakes to avoid": "COMMON MISTAKES TO AVOID",
     "quick revision plan": "QUICK REVISION PLAN",
     "visual aids": "VISUAL AIDS",
+    "suggested visuals": "VISUAL AIDS",
+    "suggested visual": "VISUAL AIDS",
+    "visual learning suggestions": "VISUAL AIDS",
     "real-world examples": "REAL-WORLD EXAMPLES",
     "real world examples": "REAL-WORLD EXAMPLES",
     "practice questions and answers": "PRACTICE QUESTIONS AND ANSWERS",
