@@ -507,6 +507,57 @@ function MobileFirstMarkdown({ children }) {
   return <ReactMarkdown>{convertMarkdownTablesToMobileCards(children || "")}</ReactMarkdown>;
 }
 
+function StudyToolMarkdownCard({ content = "", emptyMessage = "" }) {
+  return (
+    <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+      <MobileFirstMarkdown>{content || emptyMessage}</MobileFirstMarkdown>
+    </div>
+  );
+}
+
+function StudyToolFormulaPanel({ rows = [], content = "", emptyMessage = "" }) {
+  return (
+    <div className="study-guide-shell min-w-0 rounded-[28px] p-1">
+      {rows.length ? (
+        <div className="study-guide-section-card study-guide-markdown overflow-hidden rounded-[24px] bg-white">
+          <div className="grid grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] border-b border-slate-200/90 bg-slate-100/90 text-sm font-semibold text-slate-700">
+            <div className="border-r border-slate-200/90 px-4 py-3">Expression</div>
+            <div className="px-4 py-3">Readable Result</div>
+          </div>
+          {rows.map((row, index) => (
+            <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] border-t border-slate-200/80 text-[15px] leading-7 text-slate-700 first:border-t-0">
+              <div className="border-r border-slate-200/80 px-4 py-4 font-semibold text-slate-900">{row.expression}</div>
+              <div className="px-4 py-4 text-slate-700">{row.result}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <StudyToolMarkdownCard content={content} emptyMessage={emptyMessage} />
+      )}
+    </div>
+  );
+}
+
+function StudyToolFlashcardsPanel({ cards = [], emptyMessage = "" }) {
+  return (
+    <div className="study-guide-shell min-w-0 rounded-[28px] p-1">
+      <div className="grid gap-4 md:grid-cols-2">
+        {cards.length ? cards.map((card, index) => (
+          <article key={`${card.question}-${index}`} className="study-guide-section-card study-guide-markdown rounded-[24px] bg-white p-5">
+            <p className="study-guide-kicker">Flashcard {index + 1}</p>
+            <p className="phone-safe-copy mt-3 text-lg font-semibold leading-8 text-slate-900">{card.question}</p>
+            <p className="phone-safe-copy mt-4 whitespace-pre-wrap text-[15px] leading-7 text-slate-700">{card.answer}</p>
+          </article>
+        )) : (
+          <div className="study-guide-section-card study-guide-markdown rounded-[24px] bg-white p-5 text-sm leading-7 text-slate-500 md:col-span-2">
+            {emptyMessage}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function isTeacherSpeechNoise(text = "") {
   const normalizedText = String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
   if (!normalizedText) return true;
@@ -1540,9 +1591,9 @@ function getQuizAnswerImageLabel(files) {
 
 function parseFormulaRows(text) {
   return (text || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => line.replace(/^- /, "").trim()).map((line) => {
-    if (line.includes("->")) {
-      const [expression, result] = line.split("->");
-      return { expression: expression.trim(), result: result.trim() };
+    const arrowMatch = line.match(/^(.*?)(?:->|\u2192|\u00e2\u2020\u2019)(.*)$/);
+    if (arrowMatch) {
+      return { expression: arrowMatch[1].trim(), result: arrowMatch[2].trim() };
     }
     if (line.includes("=")) {
       const [expression, ...rest] = line.split("=");
@@ -1554,14 +1605,14 @@ function parseFormulaRows(text) {
 
 function normalizeRenderedMathText(value) {
   return (value || "")
-    .replace(/\u2265/g, "\u2265")
-    .replace(/\u2264/g, "\u2264")
-    .replace(/\u2260/g, "\u2260")
-    .replace(/\u2192/g, "\u2192");
+    .replace(/\u00e2\u2030\u00a5/g, "\u2265")
+    .replace(/\u00e2\u2030\u00a4/g, "\u2264")
+    .replace(/\u00e2\u2030\u00a0/g, "\u2260")
+    .replace(/\u00e2\u2020\u2019/g, "\u2192");
 }
 
 function prettifyMathText(value) {
-  return (value || "").replace(/>=/g, "≥").replace(/<=/g, "≤").replace(/!=/g, "≠").replace(/->/g, "→");
+  return (value || "").replace(/>=/g, "\u2265").replace(/<=/g, "\u2264").replace(/!=/g, "\u2260").replace(/->/g, "\u2192");
 }
 
 function formatBytes(bytes) {
@@ -4256,9 +4307,25 @@ export default function App() {
                   <div className="mt-4">
                     {activeRoom.active_tab === "guide" ? <div className="notes-markdown phone-safe-copy rounded-2xl border border-white/10 bg-black/30 p-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><MobileFirstMarkdown>{activeRoomFormattedGuide || "No shared study guide selected yet."}</MobileFirstMarkdown></div> : null}
                     {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
-                    {activeRoom.active_tab === "formulas" ? (activeRoomFormulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{activeRoomFormulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedFormula || "No shared formulas selected yet."}</div>) : null}
-                    {activeRoom.active_tab === "examples" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoomFormattedExample || "No shared worked examples selected yet."}</div> : null}
-                    {activeRoom.active_tab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{(activeRoom.flashcards || []).length ? activeRoom.flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-300 md:col-span-2">No shared flashcards selected yet.</div>}</div> : null}
+                    {activeRoom.active_tab === "formulas" ? (
+                      <StudyToolFormulaPanel
+                        rows={activeRoomFormulaRows}
+                        content={activeRoomFormattedFormula}
+                        emptyMessage="No shared formulas selected yet."
+                      />
+                    ) : null}
+                    {activeRoom.active_tab === "examples" ? (
+                      <StudyToolMarkdownCard
+                        content={activeRoomFormattedExample}
+                        emptyMessage="No shared worked examples selected yet."
+                      />
+                    ) : null}
+                    {activeRoom.active_tab === "flashcards" ? (
+                      <StudyToolFlashcardsPanel
+                        cards={activeRoom.flashcards || []}
+                        emptyMessage="No shared flashcards selected yet."
+                      />
+                    ) : null}
                     {activeRoom.active_tab === "quiz" ? renderQuizSection({
                       questions: activeRoomQuizQuestions,
                       answers: roomQuizAnswers,
@@ -11587,8 +11654,19 @@ export default function App() {
                     )}
                   </div>
                 ) : null}
-                {activeTab === "formulas" ? (formulaRows.length ? <div className="overflow-x-auto rounded-2xl border border-white/10"><div className="min-w-[520px]"><div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] bg-emerald-300/10 text-sm font-semibold text-emerald-50"><div className="border-r border-white/10 px-4 py-3">Expression</div><div className="px-4 py-3">Readable Result</div></div>{formulaRows.map((row, index) => <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] border-t border-white/10 text-sm"><div className="border-r border-white/10 px-4 py-3 font-semibold text-white">{row.expression}</div><div className="px-4 py-3 font-mono text-slate-200">{row.result}</div></div>)}</div></div> : <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{formattedFormula || "Detected formulas will appear here after study guide generation."}</div>) : null}
-                {activeTab === "flashcards" ? <div className="grid gap-4 md:grid-cols-2">{flashcards.length ? flashcards.map((card, index) => <div key={`${card.question}-${index}`} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard {index + 1}</p><p className="phone-safe-copy mt-3 font-semibold text-white">{card.question}</p><p className="phone-safe-copy mt-4 text-sm leading-7 text-slate-300">{card.answer}</p></div>) : <div className="text-sm text-slate-300">Flashcards will appear here after study guide generation.</div>}</div> : null}
+                {activeTab === "formulas" ? (
+                  <StudyToolFormulaPanel
+                    rows={formulaRows}
+                    content={formattedFormula}
+                    emptyMessage="Detected formulas will appear here after study guide generation."
+                  />
+                ) : null}
+                {activeTab === "flashcards" ? (
+                  <StudyToolFlashcardsPanel
+                    cards={flashcards}
+                    emptyMessage="Flashcards will appear here after study guide generation."
+                  />
+                ) : null}
                 {activeTab === "quiz" ? (
                   selectedQuizQuestions.length
                     ? (quizSessionStage === "ready"

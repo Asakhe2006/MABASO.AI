@@ -440,6 +440,30 @@ QUALITY RULES
 - Do not include YouTube links or long export suggestions.
 """
 
+WORKED_EXAMPLE_ASSET_PROMPT = """
+WORKED EXAMPLE ENGINE RULES
+- Treat the `worked_example` field as a premium educational walkthrough, not a short note.
+- Never reuse one rigid explanation structure every time.
+- Adapt the teaching style, layout, reasoning depth, and flow to the subject, difficulty, question type, calculation style, and learner needs.
+- Teach the reasoning, explain why each step happens, show how formulas are selected, reveal common mistakes, and build intuition.
+- If the supplied notes, slides, transcript, or study guide contain a derivation, include that derivation clearly inside the worked example.
+- If formulas are present, explain when the formula applies, what each term is doing, and why that formula is the correct choice.
+- Keep paragraphs short and visually structured in markdown.
+- Use modern educational formatting such as short headings, step dividers, warnings, checkpoints, summaries, and a boxed-style final answer.
+- Do not always use the same order. Dynamically choose a suitable flow such as:
+  * Analytical Flow: Problem Breakdown, Known Information, Hidden Clues, Formula Selection, Step-by-Step Derivation, Final Verification, Interpretation.
+  * Tutor Style: What the Question Wants, Strategy Discussion, Why This Method Works, Solve Slowly, Quick Mental Checks, Final Answer, Exam Tip.
+  * Engineering Style: System Inputs, Assumptions, Governing Equation, Unit Analysis, Calculation Stages, Practical Interpretation, Engineering Insight.
+  * Mathematical Reasoning: Identify Pattern, Transform Equation, Apply Theorem, Intermediate Simplification, Symbolic Reasoning, Final Expression.
+  * Science Investigation Style: Observation, Physical Principle, Variable Relationships, Substitution, Result Analysis, Real-World Meaning.
+- For mathematics, focus on transformations, theorem selection, symbolic logic, and simplification reasoning.
+- For physics and engineering, explain physical meaning before equations and include unit checks when useful.
+- For statistics, explain why a method or test is selected and how to interpret the result.
+- For programming, explain algorithm thinking, execution flow, and why the code or logic works.
+- Always include a clear final answer, a final verification, a key takeaway, and one exam insight or real-world insight.
+- The output must feel dynamic, human-tutored, visually structured, and significantly better than a generic templated answer.
+"""
+
 GUIDE_SECTION_HEADINGS = [
     "LECTURE TITLE",
     "SHORT SUMMARY",
@@ -6834,19 +6858,264 @@ def extract_section(markdown: str, heading: str) -> str:
     return ""
 
 
-def parse_flashcards(section_text: str) -> list[dict[str, str]]:
-    lines = [line.strip() for line in section_text.splitlines() if line.strip()]
-    cards: list[dict[str, str]] = []
-    current_question = ""
+def normalize_multiline_block(text: str) -> str:
+    cleaned = (text or "").replace("\r\n", "\n")
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
+
+def strip_list_prefix(line: str) -> str:
+    return re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", (line or "").strip()).strip()
+
+
+def looks_like_formula_line(line: str) -> bool:
+    cleaned = strip_list_prefix(line)
+    lowered = cleaned.lower()
+    if not cleaned or len(cleaned) < 3:
+        return False
+    if lowered.startswith(("q:", "a:", "question:", "answer:")):
+        return False
+    symbol_markers = ("=", "->", "→", "∫", "√", "≈", "≤", "≥", "≠", "Δ", "Σ", "θ", "λ", "ω")
+    keyword_markers = ("formula", "equation", "identity", "law", "theorem", "transform pair", "rule:")
+    if any(marker in cleaned for marker in symbol_markers):
+        return True
+    if any(marker in lowered for marker in keyword_markers):
+        return True
+    return bool(re.search(r"\b[A-Za-z][A-Za-z0-9_]*\s*\([^)]*\)\s*[:=]", cleaned))
+
+
+def looks_like_formula_support_line(line: str) -> bool:
+    cleaned = strip_list_prefix(line)
+    lowered = cleaned.lower()
+    if not cleaned:
+        return False
+    support_prefixes = (
+        "where ",
+        "let ",
+        "thus ",
+        "therefore ",
+        "hence ",
+        "substitute ",
+        "rearrange ",
+        "derive ",
+        "derivation",
+        "units:",
+        "given ",
+    )
+    return lowered.startswith(support_prefixes) or bool(
+        re.search(r"\b(where|therefore|hence|substitute|rearrange|derive|derivation|units)\b", lowered)
+    )
+
+
+def collect_formula_candidate_lines(text: str, limit: int = 14) -> list[str]:
+    if not compact_text(text):
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    support_window = 0
+
+    for raw_line in (text or "").replace("\r\n", "\n").splitlines():
+        cleaned = compact_text(strip_list_prefix(raw_line))
+        if not cleaned:
+            support_window = 0
+            continue
+
+        normalized = re.sub(r"\s+", " ", cleaned).strip()
+        if looks_like_formula_line(normalized):
+            key = normalized.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(normalized)
+            support_window = 2
+        elif support_window and looks_like_formula_support_line(normalized):
+            key = normalized.lower()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(normalized)
+            support_window -= 1
+        else:
+            support_window = 0
+
+        if len(candidates) >= limit:
+            break
+
+    return candidates[:limit]
+
+
+def split_source_passages(text: str) -> list[str]:
+    cleaned = normalize_multiline_block(text)
+    if not cleaned:
+        return []
+
+    paragraphs = [normalize_multiline_block(item) for item in re.split(r"\n\s*\n+", cleaned) if compact_text(item)]
+    if paragraphs:
+        return paragraphs
+
+    lines = [compact_text(line) for line in cleaned.splitlines() if compact_text(line)]
+    grouped: list[str] = []
+    current: list[str] = []
     for line in lines:
-        if line.startswith("- "):
-            line = line[2:].strip()
-        if line.startswith("Q:"):
-            current_question = line[2:].strip()
-        elif line.startswith("A:") and current_question:
-            cards.append({"question": current_question, "answer": line[2:].strip()})
-            current_question = ""
+        current.append(line)
+        joined = " ".join(current).strip()
+        if len(joined) >= 320 or line.endswith((".", ":", ";", "?", "!")):
+            grouped.append(joined)
+            current = []
+    if current:
+        grouped.append(" ".join(current).strip())
+    return grouped or [cleaned]
+
+
+def collect_keyword_passages(text: str, keywords: tuple[str, ...], limit: int = 3) -> list[str]:
+    passages = split_source_passages(text)
+    if not passages:
+        return []
+
+    scored: list[tuple[int, int, str]] = []
+    for index, passage in enumerate(passages):
+        lowered = passage.lower()
+        score = sum(2 if " " in keyword else 1 for keyword in keywords if keyword in lowered)
+        if looks_like_formula_line(passage):
+            score += 2
+        if score > 0:
+            scored.append((score, index, passage))
+
+    selected: list[str] = []
+    for _, _, passage in sorted(scored, key=lambda item: (-item[0], item[1])):
+        if any(passage == existing or passage in existing or existing in passage for existing in selected):
+            continue
+        selected.append(passage)
+        if len(selected) >= limit:
+            break
+    return selected[:limit]
+
+
+def recover_formula_section(
+    summary: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    transcript: str = "",
+    past_question_papers: str = "",
+) -> str:
+    explicit_section = normalize_multiline_block(extract_section(summary, "IMPORTANT FORMULAS"))
+    if explicit_section and "no formula section was detected" not in explicit_section.lower():
+        return explicit_section
+
+    candidate_lines: list[str] = []
+    seen: set[str] = set()
+    candidate_blocks = [
+        extract_section(summary, "WORKED EXAMPLES"),
+        extract_section(summary, "STEP-BY-STEP EXPLANATIONS"),
+        extract_section(summary, "KEY CONCEPTS"),
+        extract_section(summary, "IMPORTANT DEFINITIONS"),
+        summary,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+        transcript,
+    ]
+
+    for block in candidate_blocks:
+        for line in collect_formula_candidate_lines(block, limit=10):
+            key = line.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate_lines.append(line)
+            if len(candidate_lines) >= 12:
+                return "\n".join(candidate_lines).strip()
+
+    return "\n".join(candidate_lines[:12]).strip()
+
+
+def recover_derivation_excerpt(
+    summary: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    transcript: str = "",
+    past_question_papers: str = "",
+) -> str:
+    derivation_keywords = (
+        "derive",
+        "derivation",
+        "rearrange",
+        "substitute",
+        "substitution",
+        "simplify",
+        "therefore",
+        "hence",
+        "worked example",
+        "calculate",
+        "solve",
+        "step",
+    )
+    candidate_blocks = [
+        extract_section(summary, "WORKED EXAMPLES"),
+        extract_section(summary, "STEP-BY-STEP EXPLANATIONS"),
+        summary,
+        lecture_notes,
+        lecture_slides,
+        past_question_papers,
+        transcript,
+    ]
+
+    collected: list[str] = []
+    for block in candidate_blocks:
+        for passage in collect_keyword_passages(block, derivation_keywords, limit=2):
+            if any(passage == existing or passage in existing or existing in passage for existing in collected):
+                continue
+            collected.append(passage)
+            if len(collected) >= 3:
+                return "\n\n".join(collected).strip()
+    return "\n\n".join(collected).strip()
+
+
+def parse_flashcards(section_text: str) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    question_lines: list[str] = []
+    answer_lines: list[str] = []
+    mode = ""
+
+    def flush_card() -> None:
+        question = normalize_multiline_block("\n".join(question_lines))
+        answer = normalize_multiline_block("\n".join(answer_lines))
+        if question and answer:
+            cards.append({"question": question, "answer": answer})
+
+    for raw_line in (section_text or "").replace("\r\n", "\n").splitlines():
+        stripped = compact_text(raw_line)
+        normalized = strip_list_prefix(stripped)
+        if not normalized:
+            if mode == "answer" and answer_lines and answer_lines[-1] != "":
+                answer_lines.append("")
+            continue
+
+        question_match = re.match(r"^Q\s*:\s*(.*)$", normalized, re.IGNORECASE)
+        answer_match = re.match(r"^A\s*:\s*(.*)$", normalized, re.IGNORECASE)
+
+        if question_match:
+            if question_lines or answer_lines:
+                flush_card()
+            question_lines = [question_match.group(1).strip()] if question_match.group(1).strip() else []
+            answer_lines = []
+            mode = "question"
+            continue
+
+        if answer_match:
+            if not question_lines:
+                continue
+            answer_lines = [answer_match.group(1).strip()] if answer_match.group(1).strip() else []
+            mode = "answer"
+            continue
+
+        if mode == "question":
+            question_lines.append(normalized)
+        elif mode == "answer":
+            answer_lines.append(normalized)
+
+    if question_lines or answer_lines:
+        flush_card()
 
     return cards
 
@@ -7002,9 +7271,68 @@ def build_missing_step_by_step_section(summary: str) -> str:
     )
 
 
-def add_student_support_sections(summary: str) -> str:
+def build_flashcard_fallbacks(summary: str) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    seen_questions: set[str] = set()
+
+    definition_points = extract_bullet_points(extract_section(summary, "IMPORTANT DEFINITIONS"))
+    concept_points = extract_bullet_points(extract_section(summary, "KEY CONCEPTS"))
+    formula_points = collect_formula_candidate_lines(extract_section(summary, "IMPORTANT FORMULAS"), limit=4)
+    mistake_points = extract_bullet_points(extract_section(summary, "COMMON MISTAKES TO AVOID"))
+
+    def add_card(question: str, answer: str) -> None:
+        cleaned_question = compact_text(question)
+        cleaned_answer = compact_text(answer)
+        if not cleaned_question or not cleaned_answer:
+            return
+        key = cleaned_question.lower()
+        if key in seen_questions:
+            return
+        seen_questions.add(key)
+        cards.append({"question": cleaned_question, "answer": cleaned_answer})
+
+    for point in definition_points[:4]:
+        if ":" in point:
+            term, meaning = point.split(":", 1)
+            add_card(f"What is {term.strip()}?", meaning.strip())
+        else:
+            add_card("Which definition should you remember from this lecture?", point)
+
+    for point in concept_points[:4]:
+        add_card("What is one key concept from this lecture?", point)
+
+    for point in formula_points[:3]:
+        add_card("Which formula or rule should you recall here?", point)
+
+    for point in mistake_points[:2]:
+        add_card("Which common mistake should you avoid?", point)
+
+    return cards[:12]
+
+
+def add_student_support_sections(
+    summary: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    transcript: str = "",
+    past_question_papers: str = "",
+) -> str:
     cleaned = (summary or "").strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    recovered_formula_section = recover_formula_section(
+        cleaned,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
+    if recovered_formula_section and not compact_text(extract_section(cleaned, "IMPORTANT FORMULAS")):
+        cleaned = upsert_guide_section(
+            cleaned,
+            "IMPORTANT FORMULAS",
+            recovered_formula_section,
+            after_heading="IMPORTANT DEFINITIONS",
+        )
     if not compact_text(extract_section(cleaned, "STEP-BY-STEP EXPLANATIONS")):
         cleaned = upsert_guide_section(
             cleaned,
@@ -7383,23 +7711,56 @@ def tidy_study_guide_layout(summary: str) -> str:
     return cleaned.strip()
 
 
-def extract_study_assets(summary: str) -> dict:
-    formula_section = extract_section(summary, "IMPORTANT FORMULAS")
+def extract_study_assets(
+    summary: str,
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    transcript: str = "",
+    past_question_papers: str = "",
+) -> dict:
+    formula_section = recover_formula_section(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
     flashcard_section = extract_section(summary, "FLASHCARDS")
     quiz_section = extract_section(summary, "PRACTICE QUESTIONS AND ANSWERS")
+    parsed_flashcards = parse_flashcards(flashcard_section)
 
     return {
         "formula": formula_section or "No formula section was detected in the notes.",
-        "worked_example": build_worked_example_asset(summary),
-        "flashcards": parse_flashcards(flashcard_section),
+        "worked_example": build_worked_example_asset(
+            summary,
+            lecture_notes=lecture_notes,
+            lecture_slides=lecture_slides,
+            transcript=transcript,
+            past_question_papers=past_question_papers,
+        ),
+        "flashcards": parsed_flashcards or build_flashcard_fallbacks(summary),
         "quiz_questions": parse_quiz_questions(quiz_section),
     }
 
 
-def build_worked_example_asset(summary: str, generated_worked_example: str = "") -> str:
+def build_worked_example_asset(
+    summary: str,
+    generated_worked_example: str = "",
+    lecture_notes: str = "",
+    lecture_slides: str = "",
+    transcript: str = "",
+    past_question_papers: str = "",
+) -> str:
     example_section = compact_text(extract_section(summary, "WORKED EXAMPLES"))
     step_section = compact_text(extract_section(summary, "STEP-BY-STEP EXPLANATIONS"))
     generated_section = compact_text(generated_worked_example)
+    derivation_section = recover_derivation_excerpt(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
     sections: list[str] = []
 
     if example_section:
@@ -7408,9 +7769,19 @@ def build_worked_example_asset(summary: str, generated_worked_example: str = "")
     if step_section:
         sections.append(f"**STEP-BY-STEP EXPLANATIONS**\n\n{step_section}")
 
+    combined_so_far = "\n\n".join(sections).lower()
+    if generated_section and generated_section.lower() not in combined_so_far:
+        followup_heading = "STEP-BY-STEP WALKTHROUGH" if sections else "WORKED EXAMPLES"
+        sections.append(f"**{followup_heading}**\n\n{generated_section}")
+        combined_so_far = "\n\n".join(sections).lower()
+
+    if derivation_section:
+        if not sections:
+            sections.append(f"**WORKED EXAMPLES**\n\n{derivation_section}")
+        elif "derive" not in combined_so_far and "derivation" not in combined_so_far:
+            sections.append(f"**FORMULA DERIVATION**\n\n{derivation_section}")
+
     if sections:
-        if generated_section and not step_section:
-            sections.append(f"**STEP-BY-STEP WALKTHROUGH**\n\n{generated_section}")
         return "\n\n".join(section.strip() for section in sections if section.strip()).strip()
 
     return generated_section or "No worked example section was detected in the notes."
@@ -10872,7 +11243,13 @@ async def generate_structured_study_assets(
     job_id: str,
     output_language: str,
 ) -> dict[str, Any]:
-    fallback_assets = extract_study_assets(summary)
+    fallback_assets = extract_study_assets(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
     source_blocks = [
         trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
         trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
@@ -10895,14 +11272,17 @@ async def generate_structured_study_assets(
                         "Rules:\n"
                         "- Do not mention how a student should feel.\n"
                         "- Use plain readable formulas, never LaTeX.\n"
-                        "- `formula` should be a compact markdown study sheet or a short note when no formula is relevant.\n"
+                        "- If formulas appear anywhere in the study guide, notes, slides, transcript, or past-paper reference, `formula` must extract them and must not claim that no formula exists.\n"
+                        "- `formula` should be a compact markdown study sheet with readable formulas, important rearrangements, and derived forms when the supplied material shows them.\n"
                         "- `worked_example` should explain every example that appears in the study guide WORKED EXAMPLES section.\n"
-                        "- For each worked example, write the method step by step in markdown, using labels like Step 1, Step 2, and so on.\n"
+                        "- If the supplied material contains a derivation, rearrangement, or formula build-up, include that derivation clearly inside `worked_example`.\n"
+                        "- `worked_example` must explain why each step happens, why the formula fits, and how the result is checked.\n"
                         "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"
                         "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
                         "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
                         f"- Write every returned field in {output_language}.\n"
-                        "- Return JSON only, with no markdown code fence."
+                        "- Return JSON only, with no markdown code fence.\n\n"
+                        f"{WORKED_EXAMPLE_ASSET_PROMPT.strip()}"
                     ),
                 },
                 {"role": "user", "content": combined_source},
@@ -10922,6 +11302,10 @@ async def generate_structured_study_assets(
         "worked_example": build_worked_example_asset(
             summary,
             compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
+            lecture_notes=lecture_notes,
+            lecture_slides=lecture_slides,
+            transcript=transcript,
+            past_question_papers=past_question_papers,
         ),
         "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
     }
@@ -10934,7 +11318,13 @@ def build_quiz_generation_source_text(
     lecture_slides: str,
     past_question_papers: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    fallback_assets = extract_study_assets(summary)
+    fallback_assets = extract_study_assets(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
     total_marks = determine_quiz_total_marks(
         summary,
         transcript,
@@ -11090,7 +11480,13 @@ async def generate_study_guide(
         update_job(job_id, status="processing", stage="Generating study guide", progress=55)
         summary = await asyncio.to_thread(_generate)
         cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(summary))
-        return add_student_support_sections(cleaned_summary), False
+        return add_student_support_sections(
+            cleaned_summary,
+            lecture_notes=lecture_notes,
+            lecture_slides=lecture_slides,
+            transcript=transcript,
+            past_question_papers=past_question_papers,
+        ), False
     except Exception as exc:
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
@@ -11100,7 +11496,13 @@ async def generate_study_guide(
             if part
         )
         cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source)))
-        return add_student_support_sections(cleaned_summary), True
+        return add_student_support_sections(
+            cleaned_summary,
+            lecture_notes=lecture_notes,
+            lecture_slides=lecture_slides,
+            transcript=transcript,
+            past_question_papers=past_question_papers,
+        ), True
 
 
 async def run_transcription_job(job_id: str, file_path: Path):
