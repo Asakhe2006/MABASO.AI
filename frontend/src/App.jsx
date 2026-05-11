@@ -79,6 +79,36 @@ const outputLanguageOptions = [
   { value: "French", label: "French" },
   { value: "Portuguese", label: "Portuguese" },
 ];
+
+function resolveSpeechLocale(language = "English") {
+  const normalized = String(language || "").trim().toLowerCase();
+  if (normalized === "isizulu") return "zu-ZA";
+  if (normalized === "afrikaans") return "af-ZA";
+  if (normalized === "isixhosa") return "xh-ZA";
+  if (normalized === "sesotho") return "st-ZA";
+  if (normalized === "setswana") return "tn-ZA";
+  if (normalized === "french") return "fr-FR";
+  if (normalized === "portuguese") return "pt-PT";
+  return "en-US";
+}
+
+function resolveTeacherVoice(voices = [], selectedVoiceName = "", language = "English") {
+  const preferredLocale = resolveSpeechLocale(language).toLowerCase();
+  const preferredLanguageCode = preferredLocale.split("-")[0];
+  return voices.find((voice) => voice.name === selectedVoiceName)
+    || voices.find((voice) => String(voice.lang || "").toLowerCase() === preferredLocale)
+    || voices.find((voice) => String(voice.lang || "").toLowerCase().startsWith(`${preferredLanguageCode}-`))
+    || voices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
+    || voices.find((voice) => /google|microsoft|natural|english/i.test(voice.name))
+    || voices[0]
+    || null;
+}
+
+function getSpeechRecognitionConstructor() {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
 const tabs = [
   { id: "guide", label: "Study Guide" },
   { id: "transcript", label: "Transcript" },
@@ -3157,6 +3187,12 @@ export default function App() {
   const teacherPlaybackRunRef = useRef(0);
   const teacherAutoTabRef = useRef("");
   const teacherSpeechTimerRef = useRef(null);
+  const teacherSpeechRecognitionRef = useRef(null);
+  const teacherPlaybackCursorRef = useRef({ segmentIndex: 0, chunkIndex: 0 });
+  const teacherResumeStateRef = useRef({ shouldResume: false, segmentIndex: 0, chunkIndex: 0 });
+  const teacherAnswerRunRef = useRef(0);
+  const teacherQuestionRequestRunRef = useRef(0);
+  const teacherRecognitionRunRef = useRef(0);
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -3166,6 +3202,12 @@ export default function App() {
   const [activeTeacherSegmentIndex, setActiveTeacherSegmentIndex] = useState(-1);
   const [isTeacherPlaying, setIsTeacherPlaying] = useState(false);
   const [isTeacherPaused, setIsTeacherPaused] = useState(false);
+  const [isTeacherListening, setIsTeacherListening] = useState(false);
+  const [isTeacherQuestionLoading, setIsTeacherQuestionLoading] = useState(false);
+  const [isTeacherAnswering, setIsTeacherAnswering] = useState(false);
+  const [teacherQuestionDraft, setTeacherQuestionDraft] = useState("");
+  const [teacherQuestionAnswer, setTeacherQuestionAnswer] = useState("");
+  const [teacherQuestionStatus, setTeacherQuestionStatus] = useState("");
 
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
@@ -3286,6 +3328,7 @@ export default function App() {
     || "Study Guide";
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
+  const isTeacherQuestionBusy = isTeacherListening || isTeacherQuestionLoading || isTeacherAnswering;
   const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
     return normalizedHeading.includes("worked example") || normalizedHeading.includes("step-by-step explanation") || normalizedHeading.includes("step by step explanation");
@@ -3503,6 +3546,7 @@ export default function App() {
 
   const stopTeacherPlayback = ({ resetIndex = false } = {}) => {
     teacherPlaybackRunRef.current += 1;
+    teacherAnswerRunRef.current += 1;
     teacherAutoTabRef.current = "";
     if (teacherSpeechTimerRef.current) {
       clearTimeout(teacherSpeechTimerRef.current);
@@ -3515,6 +3559,85 @@ export default function App() {
     setIsTeacherPaused(false);
     if (resetIndex) setActiveTeacherSegmentIndex(-1);
   };
+
+  const stopTeacherVoiceRecognition = ({ finishListening = false, preserveHandlers = false } = {}) => {
+    const recognition = teacherSpeechRecognitionRef.current;
+    if (!recognition) return;
+    teacherSpeechRecognitionRef.current = null;
+    if (!preserveHandlers) {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+    }
+    try {
+      if (finishListening && typeof recognition.stop === "function") recognition.stop();
+      else if (typeof recognition.abort === "function") recognition.abort();
+      else if (typeof recognition.stop === "function") recognition.stop();
+    } catch {
+      // Ignore browsers that throw while shutting down recognition.
+    }
+  };
+
+  const rememberTeacherResumeState = () => {
+    const fallbackSegmentIndex = activeTeacherSegmentIndex >= 0 ? activeTeacherSegmentIndex : 0;
+    teacherResumeStateRef.current = {
+      shouldResume: Boolean(
+        teacherLessonData.segments.length
+        && (isTeacherPlaying || isTeacherPaused || teacherSpeechTimerRef.current || activeTeacherSegmentIndex >= 0),
+      ),
+      segmentIndex: Math.max(0, Number(teacherPlaybackCursorRef.current.segmentIndex ?? fallbackSegmentIndex) || 0),
+      chunkIndex: Math.max(0, Number(teacherPlaybackCursorRef.current.chunkIndex || 0) || 0),
+    };
+  };
+
+  const resetTeacherQuestionFlow = ({ clearResume = false, clearTranscript = false } = {}) => {
+    stopTeacherVoiceRecognition();
+    teacherAnswerRunRef.current += 1;
+    teacherQuestionRequestRunRef.current += 1;
+    teacherRecognitionRunRef.current += 1;
+    setIsTeacherListening(false);
+    setIsTeacherQuestionLoading(false);
+    setIsTeacherAnswering(false);
+    setTeacherQuestionStatus("");
+    if (clearTranscript) {
+      setTeacherQuestionDraft("");
+      setTeacherQuestionAnswer("");
+    }
+    if (clearResume) {
+      teacherResumeStateRef.current = { shouldResume: false, segmentIndex: 0, chunkIndex: 0 };
+    }
+  };
+
+  const resumeTeacherLessonAfterQuestion = ({ statusMessage = "" } = {}) => {
+    const resumeState = teacherResumeStateRef.current;
+    teacherResumeStateRef.current = { shouldResume: false, segmentIndex: 0, chunkIndex: 0 };
+    setIsTeacherQuestionLoading(false);
+    setIsTeacherAnswering(false);
+    if (resumeState.shouldResume && teacherLessonData.segments.length) {
+      playTeacherLesson(teacherLessonData, {
+        startIndex: resumeState.segmentIndex,
+        startChunkIndex: resumeState.chunkIndex,
+      });
+      if (statusMessage) setStatus(statusMessage);
+      return;
+    }
+    if (statusMessage) setStatus(statusMessage);
+  };
+
+  useEffect(() => () => {
+    stopTeacherVoiceRecognition();
+    teacherPlaybackRunRef.current += 1;
+    teacherAnswerRunRef.current += 1;
+    teacherQuestionRequestRunRef.current += 1;
+    teacherRecognitionRunRef.current += 1;
+    if (teacherSpeechTimerRef.current) {
+      clearTimeout(teacherSpeechTimerRef.current);
+      teacherSpeechTimerRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
 
   useEffect(() => {
     if (activeTab !== "examples" || teacherAutoTabRef.current !== "examples" || typeof window === "undefined") {
@@ -7162,9 +7285,7 @@ export default function App() {
         : [];
       setTeacherVoiceOptions(nextVoices);
       if (!selectedTeacherVoiceName && nextVoices.length) {
-        const preferredVoice = nextVoices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
-          || nextVoices.find((voice) => /google|microsoft|natural|english/i.test(voice.name))
-          || nextVoices[0];
+        const preferredVoice = resolveTeacherVoice(nextVoices, "", outputLanguage);
         if (preferredVoice?.name) setSelectedTeacherVoiceName(preferredVoice.name);
       }
     };
@@ -9784,7 +9905,7 @@ export default function App() {
     }
   };
 
-  const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0 } = {}) => {
+  const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {
     const normalizedLesson = normalizeTeacherLessonData(lesson);
     if (!normalizedLesson.segments.length) {
       setError("Generate teacher mode first so the lesson has something to explain.");
@@ -9801,10 +9922,7 @@ export default function App() {
     const lastSectionHeading = normalizedLesson.segments[normalizedLesson.segments.length - 1]?.sectionHeading || "";
 
     const voices = window.speechSynthesis.getVoices();
-    const selectedVoice = voices.find((voice) => voice.name === selectedTeacherVoiceName)
-      || voices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
-      || voices[0]
-      || null;
+    const selectedVoice = resolveTeacherVoice(voices, selectedTeacherVoiceName, outputLanguage);
 
     const speakSegment = (segmentIndex, chunkIndex = 0) => {
       if (teacherPlaybackRunRef.current !== runId) return;
@@ -9820,7 +9938,13 @@ export default function App() {
       const segment = normalizedLesson.segments[segmentIndex];
       const speechChunks = buildSpeechChunks([segment.prompt, segment.text].filter(Boolean).join(". "));
       if (!speechChunks.length) {
+        teacherPlaybackCursorRef.current = { segmentIndex: segmentIndex + 1, chunkIndex: 0 };
         speakSegment(segmentIndex + 1);
+        return;
+      }
+      if (chunkIndex >= speechChunks.length) {
+        teacherPlaybackCursorRef.current = { segmentIndex: segmentIndex + 1, chunkIndex: 0 };
+        speakSegment(segmentIndex + 1, 0);
         return;
       }
 
@@ -9830,10 +9954,11 @@ export default function App() {
         setIsTeacherPaused(false);
         syncTeacherSegmentToolView(segment.sectionHeading);
       }
+      teacherPlaybackCursorRef.current = { segmentIndex, chunkIndex };
 
       const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
       utterance.voice = selectedVoice;
-      utterance.lang = selectedVoice?.lang || "en-US";
+      utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
       utterance.rate = 0.88;
       utterance.pitch = 1;
       utterance.volume = 1;
@@ -9846,6 +9971,7 @@ export default function App() {
         if (teacherPlaybackRunRef.current !== runId) return;
         const nextSegmentIndex = chunkIndex + 1 < speechChunks.length ? segmentIndex : segmentIndex + 1;
         const nextChunkIndex = chunkIndex + 1 < speechChunks.length ? chunkIndex + 1 : 0;
+        teacherPlaybackCursorRef.current = { segmentIndex: nextSegmentIndex, chunkIndex: nextChunkIndex };
         teacherSpeechTimerRef.current = window.setTimeout(() => {
           teacherSpeechTimerRef.current = null;
           speakSegment(nextSegmentIndex, nextChunkIndex);
@@ -9853,6 +9979,7 @@ export default function App() {
       };
       utterance.onerror = () => {
         if (teacherPlaybackRunRef.current !== runId) return;
+        teacherPlaybackCursorRef.current = { segmentIndex: segmentIndex + 1, chunkIndex: 0 };
         teacherSpeechTimerRef.current = window.setTimeout(() => {
           teacherSpeechTimerRef.current = null;
           speakSegment(segmentIndex + 1);
@@ -9866,7 +9993,7 @@ export default function App() {
     setStatus("Teacher mode is explaining the study guide.");
     teacherSpeechTimerRef.current = window.setTimeout(() => {
       teacherSpeechTimerRef.current = null;
-      speakSegment(Math.max(0, Number(startIndex || 0)));
+      speakSegment(Math.max(0, Number(startIndex || 0)), Math.max(0, Number(startChunkIndex || 0)));
     }, 140);
   };
 
@@ -9897,6 +10024,7 @@ export default function App() {
 
   const stopTeacherLessonAndReturnToGuide = ({ resetIndex = true } = {}) => {
     const sectionHeading = activeTeacherSegment?.sectionHeading || "";
+    resetTeacherQuestionFlow({ clearResume: true });
     stopTeacherPlayback({ resetIndex });
     returnTeacherToGuide(sectionHeading);
   };
@@ -9906,6 +10034,7 @@ export default function App() {
       return setError("Generate a study guide or add lecture material before opening teacher mode.");
     }
 
+    resetTeacherQuestionFlow({ clearResume: true, clearTranscript: true });
     stopTeacherPlayback({ resetIndex: true });
     setIsGeneratingTeacherLesson(true);
     setError("");
@@ -10322,6 +10451,35 @@ export default function App() {
     };
   }, [authChecked, authEmail, authToken]);
 
+  const requestStudyAssistantAnswer = async ({
+    question,
+    history = chatMessages.slice(-6),
+    referenceImages = [],
+    deliveryMode = "chat",
+    currentSection = "",
+  } = {}) => {
+    const response = await authFetch("/ask-study-assistant/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        transcript,
+        summary,
+        lecture_notes: lectureNotes,
+        lecture_slides: lectureSlides,
+        past_question_papers: pastQuestionPapers,
+        history,
+        reference_images: referenceImages,
+        language: outputLanguage,
+        delivery_mode: deliveryMode,
+        current_section: currentSection,
+      }),
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Study chat failed.");
+    return data.answer || "No answer returned.";
+  };
+
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
     if (!question) return setError("Ask a question first.");
@@ -10329,25 +10487,13 @@ export default function App() {
     setIsAskingChat(true);
     setError("");
     try {
-      const response = await authFetch("/ask-study-assistant/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question,
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
-          history: chatMessages.slice(-6),
-          reference_images: chatReferenceImages.map((item) => item.dataUrl),
-          language: outputLanguage,
-        }),
+      const answer = await requestStudyAssistantAnswer({
+        question,
+        history: chatMessages.slice(-6),
+        referenceImages: chatReferenceImages.map((item) => item.dataUrl),
       });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Study chat failed.");
       const userMessage = chatReferenceImages.length ? `${question}\n\n[Reference images attached: ${chatReferenceImages.length}]` : question;
-      setChatMessages((current) => [...current, { role: "user", content: userMessage }, { role: "assistant", content: data.answer || "No answer returned." }]);
+      setChatMessages((current) => [...current, { role: "user", content: userMessage }, { role: "assistant", content: answer }]);
       setChatQuestion("");
       setChatReferenceImages([]);
       setStatus("MABASO answered your question.");
@@ -10357,6 +10503,218 @@ export default function App() {
     } finally {
       setIsAskingChat(false);
     }
+  };
+
+  const speakTeacherQuestionAnswer = (answerText = "", { onComplete } = {}) => {
+    const cleanedAnswer = String(answerText || "").trim();
+    if (!cleanedAnswer) {
+      onComplete?.();
+      return;
+    }
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      onComplete?.();
+      return;
+    }
+
+    const runId = teacherAnswerRunRef.current + 1;
+    teacherAnswerRunRef.current = runId;
+    window.speechSynthesis.cancel();
+
+    const voices = window.speechSynthesis.getVoices();
+    const selectedVoice = resolveTeacherVoice(voices, selectedTeacherVoiceName, outputLanguage);
+    const speechChunks = buildSpeechChunks(cleanedAnswer, 360);
+    if (!speechChunks.length) {
+      onComplete?.();
+      return;
+    }
+
+    const speakChunk = (chunkIndex = 0) => {
+      if (teacherAnswerRunRef.current !== runId) return;
+      if (chunkIndex >= speechChunks.length) {
+        setIsTeacherAnswering(false);
+        onComplete?.();
+        return;
+      }
+
+      const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.onstart = () => {
+        if (teacherAnswerRunRef.current !== runId) return;
+        setIsTeacherAnswering(true);
+        setTeacherQuestionStatus("Teacher is answering your question...");
+        setStatus("Teacher is answering your question.");
+      };
+      utterance.onend = () => {
+        if (teacherAnswerRunRef.current !== runId) return;
+        teacherSpeechTimerRef.current = window.setTimeout(() => {
+          teacherSpeechTimerRef.current = null;
+          speakChunk(chunkIndex + 1);
+        }, 150);
+      };
+      utterance.onerror = () => {
+        if (teacherAnswerRunRef.current !== runId) return;
+        setIsTeacherAnswering(false);
+        onComplete?.();
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+
+    speakChunk(0);
+  };
+
+  const submitTeacherQuestion = async (heardQuestion = "") => {
+    const question = heardQuestion.trim();
+    if (!question) {
+      setTeacherQuestionStatus("I did not catch a clear question.");
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed because no question was captured." });
+      return;
+    }
+
+    setTeacherQuestionDraft(question);
+    setTeacherQuestionAnswer("");
+    setTeacherQuestionStatus("Teacher is thinking through your question...");
+    setIsTeacherQuestionLoading(true);
+    setError("");
+    const requestRunId = teacherQuestionRequestRunRef.current + 1;
+    teacherQuestionRequestRunRef.current = requestRunId;
+
+    try {
+      const currentSection = [activeTeacherSegment?.sectionHeading, activeTeacherSegment?.prompt].filter(Boolean).join(" - ");
+      const answer = await requestStudyAssistantAnswer({
+        question,
+        history: [
+          ...chatMessages.slice(-4),
+          ...(currentSection ? [{ role: "assistant", content: `Teacher was currently explaining: ${currentSection}` }] : []),
+        ],
+        deliveryMode: "teacher_interrupt",
+        currentSection,
+      });
+      if (teacherQuestionRequestRunRef.current !== requestRunId) return;
+      setTeacherQuestionAnswer(answer);
+      setChatMessages((current) => [
+        ...current,
+        { role: "user", content: `[Teacher question] ${question}` },
+        { role: "assistant", content: answer },
+      ]);
+      setIsTeacherQuestionLoading(false);
+      speakTeacherQuestionAnswer(answer, {
+        onComplete: () => {
+          setTeacherQuestionStatus("Question answered. Returning to the lesson...");
+          resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher answered your question and continued the lesson." });
+        },
+      });
+    } catch (err) {
+      if (teacherQuestionRequestRunRef.current !== requestRunId) return;
+      setIsTeacherQuestionLoading(false);
+      setTeacherQuestionStatus("Teacher could not answer that question right now.");
+      setError(err.message || "Teacher question failed.");
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher returned to the lesson after a question error." });
+    }
+  };
+
+  const startTeacherQuestionCapture = () => {
+    if (!teacherLessonData.segments.length) {
+      setError("Build teacher mode first so the lesson can pause and answer questions.");
+      return;
+    }
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (!SpeechRecognitionCtor) {
+      setError("Voice questions are not supported in this browser.");
+      return;
+    }
+
+    rememberTeacherResumeState();
+    resetTeacherQuestionFlow({ clearTranscript: false });
+    stopTeacherPlayback({ resetIndex: false });
+    setTeacherQuestionDraft("");
+    setTeacherQuestionAnswer("");
+    setTeacherQuestionStatus("Listening to your question...");
+    setStatus("Teacher is listening to your question.");
+    setError("");
+
+    const recognition = new SpeechRecognitionCtor();
+    const selectedVoice = resolveTeacherVoice(
+      typeof window !== "undefined" && window.speechSynthesis ? window.speechSynthesis.getVoices() : [],
+      selectedTeacherVoiceName,
+      outputLanguage,
+    );
+    const recognitionRunId = teacherRecognitionRunRef.current + 1;
+    teacherRecognitionRunRef.current = recognitionRunId;
+    let capturedTranscript = "";
+    let recognitionError = "";
+    let didSubmit = false;
+
+    teacherSpeechRecognitionRef.current = recognition;
+    recognition.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (event) => {
+      if (teacherRecognitionRunRef.current !== recognitionRunId) return;
+      const transcriptText = Array.from(event.results || [])
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!transcriptText) return;
+      capturedTranscript = transcriptText;
+      setTeacherQuestionDraft(transcriptText);
+      setTeacherQuestionStatus("Listening to your question...");
+    };
+    recognition.onerror = (event) => {
+      if (teacherRecognitionRunRef.current !== recognitionRunId) return;
+      recognitionError = event?.error || "unknown";
+      if (recognitionError === "no-speech") {
+        setTeacherQuestionStatus("I did not hear a question. Returning to the lesson...");
+        return;
+      }
+      if (recognitionError === "aborted") {
+        setTeacherQuestionStatus("Question listening stopped.");
+        return;
+      }
+      setTeacherQuestionStatus("Teacher could not hear that question clearly.");
+      setError("Voice question capture failed.");
+    };
+    recognition.onend = () => {
+      if (teacherRecognitionRunRef.current !== recognitionRunId) return;
+      teacherSpeechRecognitionRef.current = null;
+      setIsTeacherListening(false);
+      const finalQuestion = capturedTranscript.trim();
+      if (finalQuestion && !didSubmit) {
+        didSubmit = true;
+        submitTeacherQuestion(finalQuestion);
+        return;
+      }
+      if (recognitionError && recognitionError !== "aborted" && recognitionError !== "no-speech") {
+        resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed after a voice capture problem." });
+        return;
+      }
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed the lesson." });
+    };
+
+    try {
+      recognition.start();
+      setIsTeacherListening(true);
+    } catch (err) {
+      teacherSpeechRecognitionRef.current = null;
+      setTeacherQuestionStatus("Teacher could not start listening.");
+      setError(err.message || "Voice question capture failed.");
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed the lesson." });
+    }
+  };
+
+  const handleTeacherQuestionButtonClick = () => {
+    if (isTeacherListening) {
+      setTeacherQuestionStatus("Finishing your question...");
+      setStatus("Teacher is finishing your question.");
+      stopTeacherVoiceRecognition({ finishListening: true, preserveHandlers: true });
+      return;
+    }
+    startTeacherQuestionCapture();
   };
 
   const createCollaborationRoom = async () => {
@@ -11261,17 +11619,18 @@ export default function App() {
                         <div className="min-w-0">
                           <p className="text-xs uppercase tracking-[0.24em] text-emerald-700">Teacher Mode</p>
                           <h4 className="mt-2 text-2xl font-semibold text-slate-900">Friendly lesson walkthrough that stays with the guide.</h4>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">This gives a longer 15+ minute explanation, spends extra time on worked examples, skips flashcards and Q&amp;A, and follows the guide while it speaks.</p>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">This gives a longer 15+ minute explanation, spends extra time on worked examples, listens for student questions mid-lesson, and follows the guide while it speaks.</p>
                         </div>
                         <div className="force-mobile-stack flex flex-wrap gap-3">
                           <div className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-700 shadow-sm">
                             {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min lesson` : "15+ min target"}
                           </div>
                           <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Build Teacher Lesson"}</button>
-                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play</button>
-                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause</button>
-                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume</button>
-                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Stop</button>
+                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play</button>
+                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause</button>
+                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume</button>
+                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Finish Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Question"}</button>
+                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused && !isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Stop</button>
                         </div>
                       </div>
                       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
@@ -11285,6 +11644,29 @@ export default function App() {
                             {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Browser default voice</option>}
                           </select>
                         </div>
+                      </div>
+                      <div className="mt-4 rounded-[22px] border border-emerald-200 bg-white/92 p-4 shadow-sm">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-xs uppercase tracking-[0.22em] text-emerald-700">Student Question</p>
+                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Question while the teacher is speaking, say your question, and the lesson will pause, answer, then continue."}</p>
+                          </div>
+                          <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-slate-600">
+                            {isTeacherListening ? "Listening" : isTeacherQuestionLoading ? "Thinking" : isTeacherAnswering ? "Answering" : "Ready"}
+                          </div>
+                        </div>
+                        {teacherQuestionDraft ? (
+                          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Heard Question</p>
+                            <p className="mt-2 text-sm leading-7 text-slate-800">{teacherQuestionDraft}</p>
+                          </div>
+                        ) : null}
+                        {teacherQuestionAnswer ? (
+                          <div className="mt-4">
+                            <p className="mb-3 text-xs uppercase tracking-[0.2em] text-slate-500">Teacher Answer</p>
+                            <StudyToolMarkdownCard content={teacherQuestionAnswer} emptyMessage="" />
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 

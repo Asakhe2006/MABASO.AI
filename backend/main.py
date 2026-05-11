@@ -643,6 +643,8 @@ class StudyChatRequest(BaseModel):
     history: list[ChatTurn] = []
     reference_images: list[str] = []
     language: str = "English"
+    delivery_mode: str = "chat"
+    current_section: str = ""
 
 
 class SessionModeRequest(BaseModel):
@@ -2793,6 +2795,8 @@ def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
 def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     section_limit = max(2000, MAX_CHAT_CONTEXT_CHARS // 4)
     output_language = normalize_output_language(payload.language)
+    delivery_mode = compact_text(getattr(payload, "delivery_mode", ""), "chat").lower()
+    current_section = compact_text(getattr(payload, "current_section", ""))
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
         cleaned = (value or "").strip()
@@ -2814,26 +2818,38 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
         context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
 
-    messages: list[dict[str, object]] = [
-        {
-            "role": "system",
-            "content": (
-                "You are MABASO.AI, a lecture study assistant. "
-                "Answer only from the provided lecture context. "
-                "If the material does not support an answer, say that it was not clearly covered. "
-                "Be helpful, concise, and use bullets when they make the answer easier to study. "
-                "After every answer, end with exactly one short follow-up question that is tailored to the exact concept, "
-                "formula, worked example, or confusion the student just asked about. "
-                "The follow-up should feel like a real tutor guiding the next step, not a generic closing line. "
-                "For calculations or derivations, prefer offering to show the next step or the full step-by-step method. "
-                "Put that follow-up question in its own final paragraph. "
-                f"Reply in {output_language}."
-            ),
-        }
-    ]
+    if delivery_mode == "teacher_interrupt":
+        system_prompt = (
+            "You are MABASO.AI in live teacher mode. "
+            "A student has interrupted a spoken lesson with a question. "
+            "Answer only from the provided lecture context. "
+            "If the material does not support an answer, say that it was not clearly covered. "
+            "Sound like a strong tutor speaking aloud: direct, clear, and easy to follow. "
+            "Keep the answer compact but still explain the key reasoning, formula choice, or misconception when needed. "
+            "Do not ask a follow-up question. "
+            "Avoid heavy markdown and avoid sounding like a chatbot. "
+            f"Reply in {output_language}."
+        )
+    else:
+        system_prompt = (
+            "You are MABASO.AI, a lecture study assistant. "
+            "Answer only from the provided lecture context. "
+            "If the material does not support an answer, say that it was not clearly covered. "
+            "Be helpful, concise, and use bullets when they make the answer easier to study. "
+            "After every answer, end with exactly one short follow-up question that is tailored to the exact concept, "
+            "formula, worked example, or confusion the student just asked about. "
+            "The follow-up should feel like a real tutor guiding the next step, not a generic closing line. "
+            "For calculations or derivations, prefer offering to show the next step or the full step-by-step method. "
+            "Put that follow-up question in its own final paragraph. "
+            f"Reply in {output_language}."
+        )
+
+    messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
 
     if context_text:
         messages.append({"role": "system", "content": f"Lecture context:\n\n{context_text}"})
+    if current_section:
+        messages.append({"role": "system", "content": f"Current teacher section:\n{current_section}"})
 
     for turn in payload.history[-6:]:
         role = "assistant" if turn.role == "assistant" else "user"
@@ -2858,8 +2874,10 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     return messages
 
 
-def ensure_study_chat_follow_up(answer: str, question: str) -> str:
+def ensure_study_chat_follow_up(answer: str, question: str, delivery_mode: str = "chat") -> str:
     cleaned = (answer or "").strip()
+    if compact_text(delivery_mode, "chat").lower() == "teacher_interrupt":
+        return cleaned or "That exact point was not clearly covered in the lecture material."
     if not cleaned:
         return "I could not form a clear answer from the lecture context.\n\nWould you like me to narrow it down and walk through that exact part step by step?"
 
@@ -12605,7 +12623,7 @@ async def ask_study_assistant(
         return (response.choices[0].message.content or "").strip()
 
     answer = await asyncio.to_thread(_ask)
-    answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question)
+    answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question, payload.delivery_mode)
     return {"answer": make_formulas_human_readable(answer_with_follow_up)}
 
 
