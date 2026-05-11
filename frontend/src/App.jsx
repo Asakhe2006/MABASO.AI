@@ -11491,6 +11491,12 @@ export default function App() {
                     </div>
                     <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Public captions help most, and some YouTube links still need backend cookies or a proxy when the server cannot read the link directly.</p>
                   </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
+                    <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
+                    {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
+                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}</div> : null}
+                  </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
                       <span className="block text-base font-semibold">Transcribe Lecture</span>
@@ -11553,13 +11559,6 @@ export default function App() {
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing teacher" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
-
-              <div className="mt-5 rounded-2xl border border-white/10 bg-slate-950/75 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
-                <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
-                {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
-                {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}</div> : null}
-              </div>
             </aside>
         </section> : null}
 
