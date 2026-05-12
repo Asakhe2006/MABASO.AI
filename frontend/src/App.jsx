@@ -4764,7 +4764,7 @@ export default function App() {
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-4">
-          {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
+          {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Help & About</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">How the website works and what students should notice.</h2>
@@ -4829,7 +4829,7 @@ export default function App() {
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="border-b border-white/10 pb-5">
         <div className="flex items-start gap-4">
-          {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
+          {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support and Contact</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">How to contact Mabaso AI.</h2>
@@ -12805,9 +12805,9 @@ export default function App() {
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
-              <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
+              <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
-              <button type="button" onClick={() => setCurrentPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
+              <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
@@ -12824,9 +12824,9 @@ export default function App() {
           </div>
         </header>
         <div className="mb-6 grid grid-cols-2 gap-3 sm:hidden">
-          <button type="button" onClick={() => setCurrentPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
+          <button type="button" onClick={() => openProtectedAppPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
-          <button type="button" onClick={() => setCurrentPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
+          <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
@@ -12957,7 +12957,7 @@ export default function App() {
         {currentPage === "workspace" ? <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
           <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
             <div className="flex items-start gap-4">
-              {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
+              {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
             <div className="overflow-x-auto pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
