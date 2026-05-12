@@ -136,11 +136,16 @@ function CtaButton({ cta, onAction }) {
 
 function AuthOverlayButtons({
   onSignIn,
+  onPrepareSignIn,
   googleButtonRef,
   isGoogleSigningIn,
 }) {
   return (
-    <div className="relative">
+    <div
+      className="relative"
+      onPointerDownCapture={() => onPrepareSignIn?.()}
+      onClickCapture={() => onPrepareSignIn?.()}
+    >
       <button
         type="button"
         onClick={onSignIn}
@@ -158,6 +163,7 @@ function LoginWall({
   description,
   benefits = [],
   onSignIn,
+  onPrepareSignIn,
   googleButtonRef,
   isGoogleSigningIn,
 }) {
@@ -183,6 +189,7 @@ function LoginWall({
         <div className="mt-6">
           <AuthOverlayButtons
             onSignIn={onSignIn}
+            onPrepareSignIn={onPrepareSignIn}
             googleButtonRef={googleButtonRef}
             isGoogleSigningIn={isGoogleSigningIn}
           />
@@ -457,6 +464,7 @@ export function EnterpriseSiteShell({
   onNavigate,
   onOpenApp,
   onOpenSignIn,
+  onPrepareSignIn,
   onOpenCreateAccount,
   onStartApple,
   googleButtonRef,
@@ -529,6 +537,7 @@ export function EnterpriseSiteShell({
                       return;
                     }
                     if (item.action === "open-signin") {
+                      onPrepareSignIn?.(page.route);
                       onOpenSignIn();
                       return;
                     }
@@ -755,6 +764,7 @@ export function EnterpriseSiteShell({
               description={page.lockedPreview?.description || "This route contains protected Mabaso AI content that becomes available after authentication."}
               benefits={page.lockedPreview?.benefits || []}
               onSignIn={onOpenSignIn}
+              onPrepareSignIn={() => onPrepareSignIn?.(page.route)}
               googleButtonRef={googleButtonRef}
               isGoogleSigningIn={isGoogleSigningIn}
             />
@@ -774,6 +784,7 @@ export function ProtectedWorkspacePreview({
   onNavigate,
   onOpenApp,
   onOpenSignIn,
+  onPrepareSignIn,
   onOpenCreateAccount,
   onStartApple,
   googleButtonRef,
@@ -870,6 +881,7 @@ export function ProtectedWorkspacePreview({
       onNavigate={onNavigate}
       onOpenApp={onOpenApp}
       onOpenSignIn={onOpenSignIn}
+      onPrepareSignIn={onPrepareSignIn}
       onOpenCreateAccount={onOpenCreateAccount}
       onStartApple={onStartApple}
       googleButtonRef={googleButtonRef}

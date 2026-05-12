@@ -47,6 +47,15 @@ function detectSupportDevice() {
   return "Web device";
 }
 
+function normalizePostAuthRedirectPath(path = "") {
+  const normalized = normalizeRoutePath(path);
+  if (!normalized || normalized === "/") return "";
+  const routeInfo = resolveEnterpriseRoute(normalized);
+  if (routeInfo.protectedWorkspaceRoute) return normalized;
+  if (routeInfo.sitePage && routeInfo.sitePage.access !== "public") return normalized;
+  return "";
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
@@ -74,6 +83,7 @@ const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
+const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
@@ -3262,6 +3272,7 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const enterpriseGoogleButtonRef = useRef(null);
+  const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const answerSyncTimersRef = useRef({});
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
@@ -3297,6 +3308,52 @@ export default function App() {
   const [teacherQuestionDraft, setTeacherQuestionDraft] = useState("");
   const [teacherQuestionAnswer, setTeacherQuestionAnswer] = useState("");
   const [teacherQuestionStatus, setTeacherQuestionStatus] = useState("");
+
+  const persistPostAuthRedirectPath = (path = "") => {
+    const normalized = normalizePostAuthRedirectPath(path);
+    pendingAuthRedirectPathRef.current = normalized;
+    if (typeof window !== "undefined") {
+      if (normalized) {
+        window.localStorage.setItem(AUTH_REDIRECT_PATH_KEY, normalized);
+      } else {
+        window.localStorage.removeItem(AUTH_REDIRECT_PATH_KEY);
+      }
+    }
+    return normalized;
+  };
+
+  const readPendingPostAuthRedirectPath = () => normalizePostAuthRedirectPath(
+    pendingAuthRedirectPathRef.current
+      || (typeof window !== "undefined" ? window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || "" : ""),
+  );
+
+  const consumePendingPostAuthRedirectPath = () => {
+    const targetPath = readPendingPostAuthRedirectPath();
+    persistPostAuthRedirectPath("");
+    return targetPath;
+  };
+
+  const completePendingPostAuthRedirect = (sessionMode = "user") => {
+    const targetPath = readPendingPostAuthRedirectPath();
+    if (!targetPath) return false;
+
+    const normalizedSessionMode = sessionMode === "admin" ? "admin" : "user";
+    const routeInfo = resolveEnterpriseRoute(targetPath);
+    if (normalizedSessionMode === "admin") {
+      if (targetPath !== "/admin/dashboard") return false;
+      setCurrentPage("admin");
+      navigateToPath(targetPath, { replace: true });
+      consumePendingPostAuthRedirectPath();
+      return true;
+    }
+
+    const routedPage = resolveCurrentPageFromRoute(targetPath);
+    if (!routeInfo.protectedWorkspaceRoute || !routedPage) return false;
+    setCurrentPage(routedPage);
+    navigateToPath(targetPath, { replace: true });
+    consumePendingPostAuthRedirectPath();
+    return true;
+  };
 
   const navigateToPath = (path, { replace = false } = {}) => {
     const normalized = normalizeRoutePath(path);
@@ -7467,6 +7524,7 @@ export default function App() {
     setIsPodcastAutoPlaying(false);
     setTeacherLessonData(createEmptyTeacherLessonData());
     setSelectedTeacherVoiceName("");
+    persistPostAuthRedirectPath("");
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
     window.localStorage.removeItem(AUTH_MODE_KEY);
@@ -7849,6 +7907,9 @@ export default function App() {
     }
     if (promptForMode && nextAvailableModes.includes("admin")) {
       setCurrentPage("mode-select");
+      return;
+    }
+    if (completePendingPostAuthRedirect(nextMode)) {
       return;
     }
     setCurrentPage("capture");
@@ -8293,7 +8354,8 @@ export default function App() {
     setAuthMessage("Enter your email and we will send a verification code.");
   };
 
-  const openAuthLanding = (mode = "login") => {
+  const openAuthLanding = (mode = "login", redirectPath = "") => {
+    persistPostAuthRedirectPath(redirectPath);
     if (mode === "register") {
       openRegisterMode();
       setAuthMessage("Create your Mabaso AI account by continuing with Google or Apple.");
@@ -8309,6 +8371,7 @@ export default function App() {
     const nextPath = normalizedTarget === "admin"
       ? "/admin/dashboard"
       : `/app/${normalizedTarget}`;
+    persistPostAuthRedirectPath(authToken ? "" : nextPath);
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
@@ -8559,7 +8622,9 @@ export default function App() {
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
     if (targetMode === "user" && authSessionMode === "user") {
-      setCurrentPage("capture");
+      if (!completePendingPostAuthRedirect("user")) {
+        setCurrentPage("capture");
+      }
       if (!silent) setStatus("User mode opened.");
       return;
     }
@@ -8574,7 +8639,13 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not switch session mode.");
       const nextToken = data.token || authToken;
       applyAuthResponse({ ...data, token: nextToken }, authEmail, { promptForMode: false });
+      if (targetMode === "user") {
+        completePendingPostAuthRedirect("user");
+      }
       if (targetMode === "admin") {
+        if (completePendingPostAuthRedirect("admin")) {
+          hasLoadedAdminDashboardRef.current = false;
+        }
         await loadAdminDashboard(true, nextToken);
       }
       if (!silent) setStatus(targetMode === "admin" ? "Admin mode opened." : "User mode opened.");
@@ -11800,8 +11871,9 @@ export default function App() {
           isAuthenticated={false}
           onNavigate={(route) => navigateToPath(route)}
           onOpenApp={(target) => openProtectedAppRoute(target)}
-          onOpenSignIn={() => openAuthLanding("login")}
-          onOpenCreateAccount={() => openAuthLanding("register")}
+          onOpenSignIn={() => openAuthLanding("login", activeSitePage.route)}
+          onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeSitePage.route)}
+          onOpenCreateAccount={() => openAuthLanding("register", activeSitePage.route)}
           onStartApple={startAppleLogin}
           googleButtonRef={enterpriseGoogleButtonRef}
           isGoogleSigningIn={isGoogleSigningIn}
@@ -11828,8 +11900,9 @@ export default function App() {
           route={activeProtectedWorkspaceRoute}
           onNavigate={(route) => navigateToPath(route)}
           onOpenApp={(target) => openProtectedAppRoute(target)}
-          onOpenSignIn={() => openAuthLanding("login")}
-          onOpenCreateAccount={() => openAuthLanding("register")}
+          onOpenSignIn={() => openAuthLanding("login", activeProtectedWorkspaceRoute.route)}
+          onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeProtectedWorkspaceRoute.route)}
+          onOpenCreateAccount={() => openAuthLanding("register", activeProtectedWorkspaceRoute.route)}
           onStartApple={startAppleLogin}
           googleButtonRef={enterpriseGoogleButtonRef}
           isGoogleSigningIn={isGoogleSigningIn}
@@ -11879,7 +11952,11 @@ export default function App() {
                     Last used on this device: {authEmailInput}
                   </div>
                 ) : null}
-                <div className="relative w-full max-w-[360px]">
+                <div
+                  className="relative w-full max-w-[360px]"
+                  onPointerDownCapture={() => persistPostAuthRedirectPath("")}
+                  onClickCapture={() => persistPostAuthRedirectPath("")}
+                >
                   <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5 shadow-[0_24px_70px_rgba(2,8,23,0.35)]">
                     <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">AI Tools for Students</p>
                     <h3 className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.03em] text-white">Study smarter from your very first lecture.</h3>
@@ -11968,8 +12045,9 @@ export default function App() {
         adminBlocked={activeSitePage.access === "admin" && authSessionMode !== "admin"}
         onNavigate={(route) => navigateToPath(route)}
         onOpenApp={(target) => openProtectedAppRoute(target)}
-        onOpenSignIn={() => openAuthLanding("login")}
-        onOpenCreateAccount={() => openAuthLanding("register")}
+        onOpenSignIn={() => openAuthLanding("login", activeSitePage.route)}
+        onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeSitePage.route)}
+        onOpenCreateAccount={() => openAuthLanding("register", activeSitePage.route)}
         onStartApple={startAppleLogin}
         googleButtonRef={enterpriseGoogleButtonRef}
         isGoogleSigningIn={isGoogleSigningIn}
