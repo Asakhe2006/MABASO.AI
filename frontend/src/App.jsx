@@ -3376,6 +3376,7 @@ export default function App() {
   const hasRestoredWorkspaceDraftRef = useRef("");
   const hasRestoredRecoveredRecordingRef = useRef("");
   const hasResumedPendingJobRef = useRef("");
+  const currentPageRef = useRef("capture");
   const teacherSectionRefs = useRef({});
   const teacherExamplesPanelRef = useRef(null);
   const teacherPlaybackRunRef = useRef(0);
@@ -3498,10 +3499,25 @@ export default function App() {
   };
 
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
-    setCurrentPage(pageId);
-    if (!authToken) return;
-    const targetRoute = resolveAppRouteForPage(pageId, authSessionMode);
+    const normalizedPageId = normalizeAppPageId(pageId, "capture");
+    if (!authToken) {
+      currentPageRef.current = normalizedPageId;
+      setCurrentPage(normalizedPageId);
+      return;
+    }
+    const targetRoute = resolveAppRouteForPage(normalizedPageId, authSessionMode);
+    if (targetRoute && browserPath === targetRoute && currentPageRef.current === normalizedPageId) return;
+    currentPageRef.current = normalizedPageId;
+    setCurrentPage(normalizedPageId);
     if (targetRoute) navigateToPath(targetRoute, { replace });
+  };
+
+  const revealWorkspacePage = (tabId = "guide", { forcePage = false } = {}) => {
+    const normalizedTabId = normalizeWorkspaceTabId(tabId || "guide");
+    setActiveTab(normalizedTabId);
+    if (forcePage || !["materials", "about", "support"].includes(currentPageRef.current)) {
+      openProtectedAppPage("workspace");
+    }
   };
 
   const openCollaborationPage = ({ replace = false, refresh = true } = {}) => {
@@ -3528,6 +3544,10 @@ export default function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
 
   useEffect(() => {
     const nextInviteRoomId = parseRoomInviteIdFromLocation();
@@ -4179,7 +4199,7 @@ export default function App() {
         <div className="flex items-start gap-4">
           <button
             type="button"
-            onClick={() => setCurrentPage(hasResults ? "workspace" : "capture")}
+            onClick={() => openProtectedAppPage(hasResults ? "workspace" : "capture")}
             aria-label="Back from my materials"
             className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
           >
@@ -8846,7 +8866,8 @@ export default function App() {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
       } else if (["capture", "workspace", "materials", "collaboration"].includes(normalizedTarget)) {
-        setCurrentPage(normalizedTarget);
+        openProtectedAppPage(normalizedTarget);
+        return;
       }
     }
     navigateToPath(nextPath);
@@ -9590,8 +9611,8 @@ export default function App() {
       setChatReferenceImages([]);
       setActiveHistoryId(item.id);
       setActiveTab("guide");
-      setCurrentPage("workspace");
     });
+    openProtectedAppPage("workspace");
     setStatus(`Loaded ${item.title} from history.`);
   };
 
@@ -10687,8 +10708,7 @@ export default function App() {
       });
       clearPendingJob();
       setUsedFallbackSummary(Boolean(job.used_fallback));
-      setActiveTab("guide");
-      setCurrentPage("workspace");
+      revealWorkspacePage("guide");
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
     } catch (err) {
@@ -10846,8 +10866,7 @@ export default function App() {
       setPresentationData(nextPresentationData);
       setSelectedPresentationSlideIndex(0);
       setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
-      setActiveTab("presentation");
-      setCurrentPage("workspace");
+      revealWorkspacePage("presentation");
       setPresentationView("viewer");
       setProgress(100);
       window.requestAnimationFrame(() => {
@@ -11001,8 +11020,7 @@ export default function App() {
       });
       setPodcastData(nextPodcastData);
       await loadPodcastAudioTrack(data.job_id, job.podcast_segments || []);
-      setActiveTab("podcast");
-      setCurrentPage("workspace");
+      revealWorkspacePage("podcast");
       setProgress(100);
       const sourceLabel = getPrimarySourceLabel({
         fileName: file?.name || "",
@@ -11181,7 +11199,7 @@ export default function App() {
     stopTeacherPlayback({ resetIndex: true });
     setIsGeneratingTeacherLesson(true);
     setError("");
-    setCurrentPage("workspace");
+    openProtectedAppPage("workspace");
     setActiveTab("guide");
     setStatus("Preparing teacher mode...");
     setProgress(0);
@@ -11252,7 +11270,7 @@ export default function App() {
       clearPendingJob();
       setStatus("Teacher mode is ready.");
       setProgress(100);
-      if (autoplay) {
+      if (autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
         window.setTimeout(() => {
           playTeacherLesson(nextTeacherLessonData);
         }, 0);
@@ -11369,9 +11387,8 @@ export default function App() {
             setFlashcards(resumedJob.flashcards || []);
             setStudyImages(Array.isArray(resumedJob.study_images) ? resumedJob.study_images : []);
             setTeacherLessonData(createEmptyTeacherLessonData());
-            setActiveTab("guide");
-            setCurrentPage("workspace");
           });
+          revealWorkspacePage("guide");
           addHistoryItem({
             id: activeHistoryId || "",
             title: extractHistoryTitle(resumedJob.summary || "", sourceLabel),
@@ -11412,9 +11429,8 @@ export default function App() {
             setQuizResults({});
             setQuizSubmitted(false);
             resetQuizSessionState(nextQuizQuestions);
-            setActiveTab("quiz");
-            setCurrentPage("workspace");
           });
+          revealWorkspacePage("quiz");
           addHistoryItem({
             id: activeHistoryId || "",
             title: extractHistoryTitle(summary || "", sourceLabel),
@@ -11460,9 +11476,8 @@ export default function App() {
             setSelectedPresentationDesign(nextPresentationData.designId || selectedPresentationDesign);
             setPresentationView("viewer");
             setSelectedPresentationSlideIndex(0);
-            setCurrentPage("workspace");
-            setActiveTab("presentation");
           });
+          revealWorkspacePage("presentation");
           addHistoryItem({
             id: activeHistoryId || "",
             title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
@@ -11506,8 +11521,7 @@ export default function App() {
           });
           setPodcastData(nextPodcastData);
           await loadPodcastAudioTrack(pendingJob.jobId, resumedJob.podcast_segments || []);
-          setCurrentPage("workspace");
-          setActiveTab("podcast");
+          revealWorkspacePage("podcast");
           addHistoryItem({
             id: activeHistoryId || "",
             title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
@@ -11575,7 +11589,7 @@ export default function App() {
           });
           clearPendingJob();
           setStatus("Recovered teacher mode after refresh.");
-          if (pendingJob.autoplay) {
+          if (pendingJob.autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
             window.setTimeout(() => {
               playTeacherLesson(nextTeacherLessonData);
             }, 0);
