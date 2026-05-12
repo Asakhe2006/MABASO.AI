@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from openai import APIStatusError, InternalServerError, OpenAI
@@ -161,6 +161,7 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
 ADMIN_DASHBOARD_AUDIT_LOG_LIMIT = int(os.getenv("ADMIN_DASHBOARD_AUDIT_LOG_LIMIT", "8000"))
 ADMIN_DASHBOARD_HISTORY_LIMIT = int(os.getenv("ADMIN_DASHBOARD_HISTORY_LIMIT", "1200"))
+ADMIN_DASHBOARD_DEFAULT_RANGE = os.getenv("ADMIN_DASHBOARD_DEFAULT_RANGE", "7d").strip().lower() or "7d"
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 ADMIN_EMAILS_RAW = os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")).strip()
@@ -179,7 +180,6 @@ PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
 PODCAST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PRESENTATION_OUTPUT_DIR = UPLOAD_DIR / "presentations"
 PRESENTATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = Path(__file__).with_name("mabaso_ai.db")
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 SESSION_TOKEN_PREFIX = "mabaso.v1"
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
@@ -242,6 +242,55 @@ BLOCKED_UPLOAD_EXTENSIONS = {
 
 jobs: dict[str, dict] = {}
 apple_jwk_client = PyJWKClient(APPLE_JWKS_URL) if PyJWKClient is not None else None
+
+ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
+    "1d": {
+        "key": "1d",
+        "label": "Last 1 day",
+        "short_label": "1 day",
+        "badge_label": "1D",
+        "days": 1,
+        "timeline_granularity": "hour",
+        "timeline_points": 24,
+    },
+    "7d": {
+        "key": "7d",
+        "label": "Last 7 days",
+        "short_label": "7 days",
+        "badge_label": "7D",
+        "days": 7,
+        "timeline_granularity": "day",
+        "timeline_points": 7,
+    },
+    "30d": {
+        "key": "30d",
+        "label": "Last 30 days",
+        "short_label": "1 month",
+        "badge_label": "30D",
+        "days": 30,
+        "timeline_granularity": "day",
+        "timeline_points": 30,
+    },
+    "365d": {
+        "key": "365d",
+        "label": "Last 1 year",
+        "short_label": "1 year",
+        "badge_label": "1Y",
+        "days": 365,
+        "timeline_granularity": "month",
+        "timeline_points": 12,
+    },
+}
+
+
+def resolve_database_path() -> Path:
+    configured = os.getenv("SQLITE_DB_PATH", "").strip()
+    db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return db_path
+
+
+DB_PATH = resolve_database_path()
 
 
 def resolve_cors_allow_origins() -> list[str]:
@@ -3324,6 +3373,7 @@ def load_audit_logs(limit: int = 400, *, days: int = 30) -> list[dict[str, Any]]
                 "status": row["status"],
                 "metadata": metadata if isinstance(metadata, dict) else {},
                 "created_at": row["created_at"],
+                "created_at_dt": parse_history_datetime(row["created_at"], utc_now()),
             }
         )
     return logs
@@ -3348,8 +3398,59 @@ def load_history_items_with_owners(limit: int = 240) -> list[dict[str, Any]]:
         except (json.JSONDecodeError, HTTPException):
             continue
         payload["owner_email"] = normalize_email(row["email"])
+        payload["_updated_at_dt"] = parse_history_datetime(
+            compact_text(payload.get("updatedAt")) or row["updated_at"],
+            utc_now(),
+        )
         items.append(payload)
     return items
+
+
+def normalize_admin_dashboard_range(range_key: str | None) -> str:
+    normalized = compact_text(range_key).lower()
+    if normalized in ADMIN_DASHBOARD_RANGE_CONFIGS:
+        return normalized
+    if ADMIN_DASHBOARD_DEFAULT_RANGE in ADMIN_DASHBOARD_RANGE_CONFIGS:
+        return ADMIN_DASHBOARD_DEFAULT_RANGE
+    return "7d"
+
+
+def get_admin_dashboard_range_config(range_key: str | None) -> dict[str, Any]:
+    return ADMIN_DASHBOARD_RANGE_CONFIGS[normalize_admin_dashboard_range(range_key)]
+
+
+def shift_month_start(base: datetime, months: int) -> datetime:
+    month_index = (base.month - 1) + months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    return base.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def build_dashboard_time_window(now: datetime, range_key: str | None) -> dict[str, Any]:
+    config = get_admin_dashboard_range_config(range_key)
+    started_at = now - timedelta(days=config["days"])
+    return {
+        **config,
+        "started_at": started_at.replace(microsecond=0).isoformat(),
+        "ended_at": now.replace(microsecond=0).isoformat(),
+    }
+
+
+def filter_admin_logs_by_start(logs: list[dict[str, Any]], start_at: datetime) -> list[dict[str, Any]]:
+    return [log for log in logs if log["created_at_dt"] >= start_at]
+
+
+def filter_admin_history_by_start(history_items: list[dict[str, Any]], start_at: datetime) -> list[dict[str, Any]]:
+    filtered_items: list[dict[str, Any]] = []
+    for item in history_items:
+        updated_at = item.get("_updated_at_dt")
+        if isinstance(updated_at, datetime):
+            timestamp = updated_at
+        else:
+            timestamp = parse_history_datetime(compact_text(item.get("updatedAt")) or compact_text(item.get("createdAt")), utc_now())
+        if timestamp >= start_at:
+            filtered_items.append(item)
+    return filtered_items
 
 
 def classify_audit_feature(log: dict[str, Any]) -> str:
@@ -3465,6 +3566,8 @@ def compute_session_analytics(
     session_rows: list[sqlite3.Row],
     last_login_by_email: dict[str, dict[str, str]],
     now: datetime,
+    *,
+    window: dict[str, Any],
 ) -> dict[str, Any]:
     active_sessions_by_email: dict[str, list[datetime]] = {}
     for row in session_rows:
@@ -3476,7 +3579,7 @@ def compute_session_analytics(
 
     session_gap = timedelta(minutes=30)
     session_logs_by_email: dict[str, list[dict[str, Any]]] = {}
-    for log in sorted(logs, key=lambda entry: parse_history_datetime(entry["created_at"], now)):
+    for log in sorted(logs, key=lambda entry: entry["created_at_dt"]):
         email = normalize_email(log.get("email", ""))
         if not email:
             continue
@@ -3490,10 +3593,10 @@ def compute_session_analytics(
         previous_timestamp: datetime | None = None
 
         for log in email_logs:
-            timestamp = parse_history_datetime(log["created_at"], now)
+            timestamp = log["created_at_dt"]
             if previous_timestamp and timestamp - previous_timestamp > session_gap and current_logs:
-                session_start = parse_history_datetime(current_logs[0]["created_at"], now)
-                session_end = parse_history_datetime(current_logs[-1]["created_at"], now)
+                session_start = current_logs[0]["created_at_dt"]
+                session_end = current_logs[-1]["created_at_dt"]
                 session_record = {
                     "email": email,
                     "started_at": session_start.isoformat(),
@@ -3510,8 +3613,8 @@ def compute_session_analytics(
             previous_timestamp = timestamp
 
         if current_logs:
-            session_start = parse_history_datetime(current_logs[0]["created_at"], now)
-            session_end = parse_history_datetime(current_logs[-1]["created_at"], now)
+            session_start = current_logs[0]["created_at_dt"]
+            session_end = current_logs[-1]["created_at_dt"]
             session_record = {
                 "email": email,
                 "started_at": session_start.isoformat(),
@@ -3530,25 +3633,73 @@ def compute_session_analytics(
     bounce_rate_percent = round((bounce_sessions / total_sessions) * 100, 1) if total_sessions else 0.0
 
     session_timeline: list[dict[str, Any]] = []
-    for day_offset in range(6, -1, -1):
-        day_start = (now - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-        matching_sessions = [
-            session
-            for session in completed_sessions
-            if day_start <= parse_history_datetime(session["started_at"], now) < day_end
-        ]
-        day_total = len(matching_sessions)
-        day_bounce = sum(1 for session in matching_sessions if session["is_bounce"])
-        day_avg = round(sum(session["duration_seconds"] for session in matching_sessions) / day_total, 1) if day_total else 0.0
-        session_timeline.append(
-            {
-                "date": day_start.date().isoformat(),
-                "sessions": day_total,
-                "avg_duration_seconds": day_avg,
-                "bounce_rate_percent": round((day_bounce / day_total) * 100, 1) if day_total else 0.0,
-            }
-        )
+    timeline_granularity = window["timeline_granularity"]
+    timeline_points = int(window["timeline_points"])
+
+    if timeline_granularity == "hour":
+        for hour_offset in range(timeline_points - 1, -1, -1):
+            day_start = (now - timedelta(hours=hour_offset)).replace(minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(hours=1)
+            matching_sessions = [
+                session
+                for session in completed_sessions
+                if day_start <= parse_history_datetime(session["started_at"], now) < day_end
+            ]
+            day_total = len(matching_sessions)
+            day_bounce = sum(1 for session in matching_sessions if session["is_bounce"])
+            day_avg = round(sum(session["duration_seconds"] for session in matching_sessions) / day_total, 1) if day_total else 0.0
+            session_timeline.append(
+                {
+                    "date": day_start.isoformat(),
+                    "label": day_start.strftime("%H:%M"),
+                    "sessions": day_total,
+                    "avg_duration_seconds": day_avg,
+                    "bounce_rate_percent": round((day_bounce / day_total) * 100, 1) if day_total else 0.0,
+                }
+            )
+    elif timeline_granularity == "month":
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        for month_offset in range(timeline_points - 1, -1, -1):
+            day_start = shift_month_start(current_month_start, -month_offset)
+            day_end = shift_month_start(day_start, 1)
+            matching_sessions = [
+                session
+                for session in completed_sessions
+                if day_start <= parse_history_datetime(session["started_at"], now) < day_end
+            ]
+            day_total = len(matching_sessions)
+            day_bounce = sum(1 for session in matching_sessions if session["is_bounce"])
+            day_avg = round(sum(session["duration_seconds"] for session in matching_sessions) / day_total, 1) if day_total else 0.0
+            session_timeline.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "label": day_start.strftime("%b %Y"),
+                    "sessions": day_total,
+                    "avg_duration_seconds": day_avg,
+                    "bounce_rate_percent": round((day_bounce / day_total) * 100, 1) if day_total else 0.0,
+                }
+            )
+    else:
+        for day_offset in range(timeline_points - 1, -1, -1):
+            day_start = (now - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            matching_sessions = [
+                session
+                for session in completed_sessions
+                if day_start <= parse_history_datetime(session["started_at"], now) < day_end
+            ]
+            day_total = len(matching_sessions)
+            day_bounce = sum(1 for session in matching_sessions if session["is_bounce"])
+            day_avg = round(sum(session["duration_seconds"] for session in matching_sessions) / day_total, 1) if day_total else 0.0
+            session_timeline.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "label": day_start.strftime("%b %d"),
+                    "sessions": day_total,
+                    "avg_duration_seconds": day_avg,
+                    "bounce_rate_percent": round((day_bounce / day_total) * 100, 1) if day_total else 0.0,
+                }
+            )
 
     expiring_soon_cutoff = now + timedelta(minutes=20)
     expiring_soon = []
@@ -3571,6 +3722,7 @@ def compute_session_analytics(
                 "latest_timeout_at": latest_timeout.isoformat() if latest_timeout else "",
                 "avg_session_duration_seconds": user_avg_duration,
                 "bounce_rate_percent": user_bounce_rate,
+                "total_sessions_in_range": len(user_sessions),
                 "total_sessions_30d": len(user_sessions),
                 "total_actions": total_actions,
             }
@@ -3598,6 +3750,7 @@ def compute_session_analytics(
     return {
         "totals": {
             "active_sessions": len(session_rows),
+            "tracked_sessions_in_range": total_sessions,
             "tracked_sessions_30d": total_sessions,
             "avg_session_duration_seconds": avg_duration_seconds,
             "bounce_rate_percent": bounce_rate_percent,
@@ -3610,10 +3763,15 @@ def compute_session_analytics(
     }
 
 
-def build_admin_dashboard_snapshot() -> dict[str, Any]:
+def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, Any]:
     now = utc_now()
-    logs = load_audit_logs(limit=ADMIN_DASHBOARD_AUDIT_LOG_LIMIT, days=35)
-    history_items = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
+    time_window = build_dashboard_time_window(now, range_key)
+    range_start = parse_history_datetime(time_window["started_at"], now)
+    retention_lookback_days = max(int(time_window["days"]) + 35, 365)
+    logs_all = load_audit_logs(limit=ADMIN_DASHBOARD_AUDIT_LOG_LIMIT, days=retention_lookback_days)
+    logs = filter_admin_logs_by_start(logs_all, range_start)
+    history_items_all = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
+    history_items = filter_admin_history_by_start(history_items_all, range_start)
 
     with get_db_connection() as connection:
         user_rows = connection.execute(
@@ -3707,7 +3865,7 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         feature = classify_audit_feature(log)
         feature_counts[feature] = feature_counts.get(feature, 0) + 1
 
-    session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email, now)
+    session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email, now, window=time_window)
     session_table_by_email = {
         normalize_email(item.get("email", "")): item
         for item in session_analytics.get("table_full", [])
@@ -3749,44 +3907,56 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         )
 
     total_users = len(user_records)
+    new_users_in_range = sum(
+        1 for row in user_rows if parse_history_datetime(row["created_at"], now) >= range_start
+    )
     new_users_7d = sum(
         1 for row in user_rows if parse_history_datetime(row["created_at"], now) >= now - timedelta(days=7)
     )
-    active_1h = {
+    active_in_range = {
         log["email"]
         for log in logs
-        if log["email"] and parse_history_datetime(log["created_at"], now) >= now - timedelta(hours=1)
+        if log["email"]
+    }
+    active_1h = {
+        log["email"]
+        for log in logs_all
+        if log["email"] and log["created_at_dt"] >= now - timedelta(hours=1)
     }
     active_24h = {
         log["email"]
-        for log in logs
-        if log["email"] and parse_history_datetime(log["created_at"], now) >= now - timedelta(hours=24)
+        for log in logs_all
+        if log["email"] and log["created_at_dt"] >= now - timedelta(hours=24)
     }
     active_7d = {
         log["email"]
-        for log in logs
-        if log["email"] and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=7)
+        for log in logs_all
+        if log["email"] and log["created_at_dt"] >= now - timedelta(days=7)
     }
 
+    lectures_in_range = sum(1 for log in logs if log["action"] in upload_actions)
     lectures_today = sum(
         1
-        for log in logs
-        if log["action"] in upload_actions and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=1)
+        for log in logs_all
+        if log["action"] in upload_actions and log["created_at_dt"] >= now - timedelta(days=1)
     )
     lectures_week = sum(
         1
-        for log in logs
-        if log["action"] in upload_actions and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=7)
+        for log in logs_all
+        if log["action"] in upload_actions and log["created_at_dt"] >= now - timedelta(days=7)
+    )
+    transcriptions_in_range = sum(
+        1 for log in logs if log["action"] == "transcription.completed" and log["status"] == "success"
     )
     transcriptions_total = sum(
-        1 for log in logs if log["action"] == "transcription.completed" and log["status"] == "success"
+        1 for log in logs_all if log["action"] == "transcription.completed" and log["status"] == "success"
     )
     transcriptions_week = sum(
         1
-        for log in logs
+        for log in logs_all
         if log["action"] == "transcription.completed"
         and log["status"] == "success"
-        and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=7)
+        and log["created_at_dt"] >= now - timedelta(days=7)
     )
 
     guide_count = len(history_items)
@@ -3808,9 +3978,7 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         if log["duration_ms"] > 0 and log["status"] == "success" and log["action"].endswith(".completed")
     ]
     avg_processing_time = round(sum(processing_durations) / len(processing_durations), 1) if processing_durations else 0
-    recent_logs_24h = [
-        log for log in logs if parse_history_datetime(log["created_at"], now) >= now - timedelta(days=1)
-    ]
+    recent_logs_24h = [log for log in logs_all if log["created_at_dt"] >= now - timedelta(days=1)]
     failed_logs_24h = [log for log in recent_logs_24h if log["status"] != "success"]
     error_rate = round((len(failed_logs_24h) / len(recent_logs_24h)) * 100, 1) if recent_logs_24h else 0.0
     current_jobs = list(jobs.values())
@@ -3823,17 +3991,23 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         "processing": sum(1 for job in transcription_jobs if job.get("status") == "processing"),
         "completed_7d": sum(
             1
-            for log in logs
+            for log in logs_all
             if log["action"] == "transcription.completed"
             and log["status"] == "success"
-            and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=7)
+            and log["created_at_dt"] >= now - timedelta(days=7)
         ),
         "failed_7d": sum(
             1
-            for log in logs
+            for log in logs_all
             if log["action"] == "transcription.completed"
             and log["status"] != "success"
-            and parse_history_datetime(log["created_at"], now) >= now - timedelta(days=7)
+            and log["created_at_dt"] >= now - timedelta(days=7)
+        ),
+        "completed_in_range": sum(
+            1 for log in logs if log["action"] == "transcription.completed" and log["status"] == "success"
+        ),
+        "failed_in_range": sum(
+            1 for log in logs if log["action"] == "transcription.completed" and log["status"] != "success"
         ),
     }
     system_state = "green" if error_rate < 10 and len(processing_jobs) <= 6 else "yellow" if error_rate < 25 else "red"
@@ -3848,32 +4022,79 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
                 "count": sum(
                     1
                     for log in logs
-                    if bucket_start <= parse_history_datetime(log["created_at"], now) < bucket_end
+                    if bucket_start <= log["created_at_dt"] < bucket_end
                 ),
             }
         )
 
     daily_activity: list[dict[str, Any]] = []
-    for day_offset in range(29, -1, -1):
-        day_start = (now - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-        active_emails = {
-            log["email"]
-            for log in logs
-            if log["email"] and day_start <= parse_history_datetime(log["created_at"], now) < day_end
-        }
-        new_user_count = sum(
-            1
-            for row in user_rows
-            if day_start <= parse_history_datetime(row["created_at"], now) < day_end
-        )
-        daily_activity.append(
-            {
-                "date": day_start.date().isoformat(),
-                "active_users": len(active_emails),
-                "new_users": new_user_count,
+    if time_window["timeline_granularity"] == "hour":
+        for hour_offset in range(time_window["timeline_points"] - 1, -1, -1):
+            day_start = (now - timedelta(hours=hour_offset)).replace(minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(hours=1)
+            active_emails = {
+                log["email"]
+                for log in logs
+                if log["email"] and day_start <= log["created_at_dt"] < day_end
             }
-        )
+            new_user_count = sum(
+                1
+                for row in user_rows
+                if day_start <= parse_history_datetime(row["created_at"], now) < day_end
+            )
+            daily_activity.append(
+                {
+                    "date": day_start.isoformat(),
+                    "label": day_start.strftime("%H:%M"),
+                    "active_users": len(active_emails),
+                    "new_users": new_user_count,
+                }
+            )
+    elif time_window["timeline_granularity"] == "month":
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        for month_offset in range(time_window["timeline_points"] - 1, -1, -1):
+            day_start = shift_month_start(current_month_start, -month_offset)
+            day_end = shift_month_start(day_start, 1)
+            active_emails = {
+                log["email"]
+                for log in logs
+                if log["email"] and day_start <= log["created_at_dt"] < day_end
+            }
+            new_user_count = sum(
+                1
+                for row in user_rows
+                if day_start <= parse_history_datetime(row["created_at"], now) < day_end
+            )
+            daily_activity.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "label": day_start.strftime("%b %Y"),
+                    "active_users": len(active_emails),
+                    "new_users": new_user_count,
+                }
+            )
+    else:
+        for day_offset in range(time_window["timeline_points"] - 1, -1, -1):
+            day_start = (now - timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            active_emails = {
+                log["email"]
+                for log in logs
+                if log["email"] and day_start <= log["created_at_dt"] < day_end
+            }
+            new_user_count = sum(
+                1
+                for row in user_rows
+                if day_start <= parse_history_datetime(row["created_at"], now) < day_end
+            )
+            daily_activity.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "label": day_start.strftime("%b %d"),
+                    "active_users": len(active_emails),
+                    "new_users": new_user_count,
+                }
+            )
 
     upload_count = sum(1 for log in logs if log["action"] in upload_actions)
     processed_count = sum(
@@ -3969,7 +4190,7 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         {
             "hour": f"{hour:02d}:00",
             "actions": sum(
-                1 for log in logs if parse_history_datetime(log["created_at"], now).hour == hour
+                1 for log in logs if log["created_at_dt"].hour == hour
             ),
         }
         for hour in range(24)
@@ -4010,19 +4231,26 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
     return {
         "overview": {
             "kpis": {
+                "selected_range_key": time_window["key"],
+                "selected_range_label": time_window["label"],
                 "total_users": total_users,
+                "active_users_in_range": len(active_in_range),
                 "active_users_1h": len(active_1h),
                 "active_users_24h": len(active_24h),
                 "active_users_7d": len(active_7d),
+                "new_users_in_range": new_users_in_range,
                 "new_users_7d": new_users_7d,
                 "lectures_uploaded_today": lectures_today,
                 "lectures_uploaded_week": lectures_week,
+                "lectures_uploaded_in_range": lectures_in_range,
                 "lectures_transcribed": transcriptions_total,
                 "lectures_transcribed_week": transcriptions_week,
+                "lectures_transcribed_in_range": transcriptions_in_range,
                 "study_guides_generated": guide_count,
                 "study_materials_generated": study_material_count,
                 "tests_generated": test_count,
                 "storage_used_bytes": storage_usage_breakdown["total_bytes"],
+                "storage_used_bytes_in_range": storage_usage_breakdown["total_bytes"],
                 "active_sessions": session_analytics["totals"]["active_sessions"],
                 "avg_session_duration_seconds": session_analytics["totals"]["avg_session_duration_seconds"],
                 "bounce_rate_percent": session_analytics["totals"]["bounce_rate_percent"],
@@ -4095,9 +4323,9 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
         "analytics": {
             "session_heatmap": session_heatmap,
             "retention": {
-                "day_1": compute_retention_rate(logs, 1),
-                "day_7": compute_retention_rate(logs, 7),
-                "day_30": compute_retention_rate(logs, 30),
+                "day_1": compute_retention_rate(logs_all, 1),
+                "day_7": compute_retention_rate(logs_all, 7),
+                "day_30": compute_retention_rate(logs_all, 30),
             },
             "most_used_tools": [
                 {"label": label, "count": count}
@@ -4110,7 +4338,7 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
             "performance": {
                 "avg_response_time_ms": avg_processing_time,
                 "actions_per_session": round(
-                    len(logs) / max(1, session_analytics["totals"]["tracked_sessions_30d"]),
+                    len(logs) / max(1, session_analytics["totals"]["tracked_sessions_in_range"]),
                     1,
                 ),
             },
@@ -4174,6 +4402,25 @@ def build_admin_dashboard_snapshot() -> dict[str, Any]:
                 "collaboration": True,
             },
         },
+        "time_window": {
+            "key": time_window["key"],
+            "label": time_window["label"],
+            "short_label": time_window["short_label"],
+            "badge_label": time_window["badge_label"],
+            "days": time_window["days"],
+            "timeline_granularity": time_window["timeline_granularity"],
+            "started_at": time_window["started_at"],
+            "ended_at": time_window["ended_at"],
+        },
+        "available_ranges": [
+            {
+                "key": config["key"],
+                "label": config["label"],
+                "short_label": config["short_label"],
+                "badge_label": config["badge_label"],
+            }
+            for config in ADMIN_DASHBOARD_RANGE_CONFIGS.values()
+        ],
         "generated_at": now.isoformat(),
     }
 
@@ -5107,16 +5354,19 @@ async def sync_study_history(
 @app.get("/admin/dashboard")
 async def get_admin_dashboard(
     request: Request,
+    time_range: str = Query(default=ADMIN_DASHBOARD_DEFAULT_RANGE),
     current_admin: str = Depends(require_admin_user),
 ):
     started_at = utc_now()
-    snapshot = build_admin_dashboard_snapshot()
+    selected_range = normalize_admin_dashboard_range(time_range)
+    snapshot = build_admin_dashboard_snapshot(selected_range)
     record_audit_log(
         action="admin.dashboard.view",
         email=current_admin,
         request=request,
         resource_type="admin",
         resource_name="dashboard",
+        metadata={"time_range": selected_range},
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
     return snapshot

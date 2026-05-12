@@ -36,6 +36,7 @@ const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
+const ADMIN_DASHBOARD_RANGE_STORAGE_KEY = "mabaso-admin-dashboard-range-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
@@ -80,6 +81,12 @@ const PRESENTATION_TEMPLATE_ACCEPT = ".pptx,application/vnd.openxmlformats-offic
 const RUNTIME_DB_NAME = "mabaso-runtime";
 const RUNTIME_DB_VERSION = 1;
 const RUNTIME_DB_RECORDING_STORE = "recordings";
+const ADMIN_DASHBOARD_RANGE_OPTIONS = [
+  { key: "1d", label: "1 Day", shortLabel: "1 day", badgeLabel: "1D" },
+  { key: "7d", label: "7 Days", shortLabel: "7 days", badgeLabel: "7D" },
+  { key: "30d", label: "1 Month", shortLabel: "1 month", badgeLabel: "30D" },
+  { key: "365d", label: "1 Year", shortLabel: "1 year", badgeLabel: "1Y" },
+];
 const outputLanguageOptions = [
   { value: "English", label: "English" },
   { value: "isiZulu", label: "isiZulu" },
@@ -1057,6 +1064,30 @@ function saveAdminDashboardCache(snapshot = null) {
     window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(snapshot));
   } catch {
     // Ignore cache write failures.
+  }
+}
+
+function normalizeAdminDashboardRangeKey(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ADMIN_DASHBOARD_RANGE_OPTIONS.some((option) => option.key === normalized) ? normalized : "7d";
+}
+
+function loadAdminDashboardRangePreference() {
+  try {
+    const storedValue = window.localStorage.getItem(ADMIN_DASHBOARD_RANGE_STORAGE_KEY) || "";
+    if (storedValue) return normalizeAdminDashboardRangeKey(storedValue);
+  } catch {
+    // Ignore local preference read failures.
+  }
+  const cachedDashboard = loadAdminDashboardCache();
+  return normalizeAdminDashboardRangeKey(cachedDashboard?.time_window?.key || "7d");
+}
+
+function saveAdminDashboardRangePreference(rangeKey = "7d") {
+  try {
+    window.localStorage.setItem(ADMIN_DASHBOARD_RANGE_STORAGE_KEY, normalizeAdminDashboardRangeKey(rangeKey));
+  } catch {
+    // Ignore preference write failures.
   }
 }
 
@@ -3163,6 +3194,7 @@ export default function App() {
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [presentationView, setPresentationView] = useState("setup");
   const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache());
+  const [adminDashboardRange, setAdminDashboardRange] = useState(loadAdminDashboardRangePreference);
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
@@ -6089,6 +6121,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">{activeSidebarItem.group}</span>
                       <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${getAdminHealthTone(systemHealth.state || "green")}`}>{titleCaseWords(systemHealth.state || "green")} system</span>
+                      <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">{selectedAdminRange.label}</span>
                     </div>
                     <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-4xl">{activeSidebarItem.label}</h1>
                     <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Welcome back, {authEmail || "admin"}. This view turns your audit logs, saved workspaces, and system jobs into the analytics-heavy dashboard layout you asked for.</p>
@@ -6096,16 +6129,30 @@ export default function App() {
 
                   <div className="flex flex-col gap-3 xl:items-end">
                     <div className="flex flex-wrap items-center gap-3">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">Last 30 days</div>
+                      <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-slate-200 bg-slate-50 p-2">
+                        {availableAdminRanges.map((option) => (
+                          <button
+                            key={option.key}
+                            type="button"
+                            onClick={() => handleAdminDashboardRangeChange(option.key)}
+                            disabled={isLoadingAdminDashboard && adminDashboardRange === option.key}
+                            className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${adminDashboardRange === option.key ? "bg-slate-900 text-white shadow-[0_12px_24px_rgba(15,23,42,0.12)]" : "text-slate-700 hover:bg-white"} disabled:opacity-60`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
                       <input
                         value={adminSearchQuery}
                         onChange={(event) => setAdminSearchQuery(event.target.value)}
                         className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
                         placeholder="Search users, files, or logs"
                       />
-                      <button type="button" onClick={() => loadAdminDashboard()} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
+                      <button type="button" onClick={() => loadAdminDashboard(false, "", adminDashboardRange)} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
+                      <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{dashboardDateRangeLabel}</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">Updated {dashboardGeneratedAt}</span>
                       <span className="rounded-full bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{formatAdminInteger(failedLoginCount)} security alerts</span>
                       <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{authEmail}</span>
                       <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-full bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100">Student View</button>
@@ -6187,15 +6234,28 @@ export default function App() {
       groups[item.group].push(item);
       return groups;
     }, {});
-    const dashboardDateRangeLabel = `${formatAdminDate(Date.now() - (6 * 24 * 60 * 60 * 1000))} - ${formatAdminDate(Date.now())}`;
+    const activeTimeWindow = dashboard.time_window || {};
+    const availableAdminRanges = (dashboard.available_ranges || ADMIN_DASHBOARD_RANGE_OPTIONS).map((option) => ({
+      key: normalizeAdminDashboardRangeKey(option.key),
+      label: option.label || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.label || option.key,
+      shortLabel: option.short_label || option.shortLabel || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.shortLabel || option.key,
+      badgeLabel: option.badge_label || option.badgeLabel || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.badgeLabel || option.key.toUpperCase(),
+    }));
+    const selectedAdminRange = availableAdminRanges.find((option) => option.key === adminDashboardRange)
+      || availableAdminRanges.find((option) => option.key === normalizeAdminDashboardRangeKey(activeTimeWindow.key || ""))
+      || availableAdminRanges[1]
+      || ADMIN_DASHBOARD_RANGE_OPTIONS[1];
+    const dashboardDateRangeLabel = activeTimeWindow.started_at && activeTimeWindow.ended_at
+      ? `${formatAdminDate(activeTimeWindow.started_at)} - ${formatAdminDate(activeTimeWindow.ended_at)}`
+      : selectedAdminRange.label;
     const dashboardGeneratedAt = dashboard.generated_at ? formatAdminDateTime(dashboard.generated_at) : "Waiting for data";
     const dailyActivitySeries = (overviewCharts.daily_active_users || []).map((item) => ({
-      label: formatAdminDate(item.date),
+      label: item.label || formatAdminDate(item.date),
       active_users: item.active_users,
       new_users: item.new_users,
     }));
     const sessionTimelineSeries = (overviewCharts.user_sessions || sessions.timeline || []).map((item) => ({
-      label: formatAdminDate(item.date),
+      label: item.label || formatAdminDate(item.date),
       value: item.sessions,
     }));
     const featureUsageItems = (overviewCharts.feature_usage_breakdown || analytics.most_used_tools || [])
@@ -6219,8 +6279,8 @@ export default function App() {
     const queueBreakdownItems = [
       { label: "In Queue", value: transcriptionQueue.in_queue ?? 0, color: ADMIN_CHART_COLORS[3] },
       { label: "Processing", value: transcriptionQueue.processing ?? 0, color: ADMIN_CHART_COLORS[0] },
-      { label: "Completed (7D)", value: transcriptionQueue.completed_7d ?? 0, color: ADMIN_CHART_COLORS[2] },
-      { label: "Failed (7D)", value: transcriptionQueue.failed_7d ?? 0, color: ADMIN_CHART_COLORS[4] },
+      { label: `Completed (${selectedAdminRange.badgeLabel})`, value: transcriptionQueue.completed_in_range ?? transcriptionQueue.completed_7d ?? 0, color: ADMIN_CHART_COLORS[2] },
+      { label: `Failed (${selectedAdminRange.badgeLabel})`, value: transcriptionQueue.failed_in_range ?? transcriptionQueue.failed_7d ?? 0, color: ADMIN_CHART_COLORS[4] },
     ];
     const sessionHeatmapPreview = (analytics.session_heatmap || []).slice(0, 24);
     const maxSessionHeat = Math.max(...sessionHeatmapPreview.map((item) => toFiniteNumber(item.actions)), 1);
@@ -6233,28 +6293,28 @@ export default function App() {
       {
         label: "Total Users",
         value: formatAdminInteger(overviewKpis.total_users ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.new_users_7d ?? 0)} new in the last 7 days`,
+        detail: `${formatAdminInteger(overviewKpis.new_users_in_range ?? overviewKpis.new_users_7d ?? 0)} new in ${selectedAdminRange.shortLabel}`,
         icon: "U",
         accentClass: "bg-blue-50 text-blue-700",
       },
       {
-        label: "Active Users (7D)",
-        value: formatAdminInteger(overviewKpis.active_users_7d ?? 0),
+        label: `Active Users (${selectedAdminRange.badgeLabel})`,
+        value: formatAdminInteger(overviewKpis.active_users_in_range ?? overviewKpis.active_users_7d ?? 0),
         detail: `${formatAdminInteger(overviewKpis.active_users_24h ?? 0)} active in the last 24 hours`,
         icon: "A",
         accentClass: "bg-emerald-50 text-emerald-700",
       },
       {
         label: "Lectures Transcribed",
-        value: formatAdminInteger(overviewKpis.lectures_transcribed ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.lectures_transcribed_week ?? 0)} completed in the last 7 days`,
+        value: formatAdminInteger(overviewKpis.lectures_transcribed_in_range ?? overviewKpis.lectures_transcribed ?? 0),
+        detail: `${formatAdminInteger(overviewKpis.lectures_uploaded_in_range ?? overviewKpis.lectures_uploaded_week ?? 0)} lecture requests in ${selectedAdminRange.shortLabel}`,
         icon: "T",
         accentClass: "bg-violet-50 text-violet-700",
       },
       {
         label: "Study Materials Generated",
         value: formatAdminInteger(overviewKpis.study_materials_generated ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.study_guides_generated ?? 0)} saved guides`,
+        detail: `${formatAdminInteger(overviewKpis.study_guides_generated ?? 0)} saved guides in ${selectedAdminRange.shortLabel}`,
         icon: "M",
         accentClass: "bg-amber-50 text-amber-700",
       },
@@ -6287,7 +6347,7 @@ export default function App() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Activity Overview</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Active and new users across the last month</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Active and new users across {selectedAdminRange.shortLabel}</h2>
               </div>
               <div className="flex flex-wrap gap-2">
                 <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">WAU {formatAdminInteger(overviewCharts.wau ?? 0)}</span>
@@ -6317,13 +6377,13 @@ export default function App() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Sessions</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Sessions, duration, and bounce rate</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">Sessions, duration, and bounce rate for {selectedAdminRange.shortLabel}</h2>
               </div>
               <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">{formatAdminInteger(sessionTotals.expiring_soon_count ?? 0)} expiring soon</span>
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
               {[
-                { label: "Total Sessions", value: formatAdminInteger(sessionTotals.tracked_sessions_30d ?? 0) },
+                { label: `Total Sessions (${selectedAdminRange.badgeLabel})`, value: formatAdminInteger(sessionTotals.tracked_sessions_in_range ?? sessionTotals.tracked_sessions_30d ?? 0) },
                 { label: "Avg. Session Duration", value: formatAdminSecondsDuration(sessionTotals.avg_session_duration_seconds ?? 0) },
                 { label: "Bounce Rate", value: formatAdminPercent(sessionTotals.bounce_rate_percent ?? 0) },
               ].map((item) => (
@@ -6567,7 +6627,7 @@ export default function App() {
                 <h2 className="mt-2 text-2xl font-semibold text-slate-950">Session volume and timeout behaviour</h2>
                 <div className="mt-5 grid gap-3 sm:grid-cols-3">
                   {[
-                    { label: "Tracked Sessions (30D)", value: formatAdminInteger(sessionTotals.tracked_sessions_30d ?? 0) },
+                    { label: `Tracked Sessions (${selectedAdminRange.badgeLabel})`, value: formatAdminInteger(sessionTotals.tracked_sessions_in_range ?? sessionTotals.tracked_sessions_30d ?? 0) },
                     { label: "Avg Session Duration", value: formatAdminSecondsDuration(sessionTotals.avg_session_duration_seconds ?? 0) },
                     { label: "Bounce Rate", value: formatAdminPercent(sessionTotals.bounce_rate_percent ?? 0) },
                   ].map((item) => (
@@ -6617,7 +6677,7 @@ export default function App() {
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredSessions.length)} visible</span>
               </div>
               {renderSimpleTable(
-                ["User", "Active Sessions", "Last Login", "Next Timeout", "Avg Duration", "Bounce Rate", "Sessions (30D)", "Actions (30D)"],
+                ["User", "Active Sessions", "Last Login", "Next Timeout", "Avg Duration", "Bounce Rate", `Sessions (${selectedAdminRange.badgeLabel})`, `Actions (${selectedAdminRange.badgeLabel})`],
                 filteredSessions.map((item) => (
                   <tr key={item.email} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
                     <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">{item.email}</td>
@@ -6626,7 +6686,7 @@ export default function App() {
                     <td className="px-3 py-4 text-sm text-slate-700">{item.next_timeout_at ? formatAdminDateTime(item.next_timeout_at) : "No timeout"}</td>
                     <td className="px-3 py-4 text-sm text-slate-700">{formatAdminSecondsDuration(item.avg_session_duration_seconds ?? 0)}</td>
                     <td className="px-3 py-4 text-sm text-slate-700">{formatAdminPercent(item.bounce_rate_percent ?? 0)}</td>
-                    <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(item.total_sessions_30d ?? 0)}</td>
+                    <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(item.total_sessions_in_range ?? item.total_sessions_30d ?? 0)}</td>
                     <td className="rounded-r-[24px] px-3 py-4 text-sm text-slate-700">{formatAdminInteger(item.total_actions ?? 0)}</td>
                   </tr>
                 )),
@@ -7049,6 +7109,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">{activeSidebarItem.group}</span>
                       <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${getAdminHealthTone(systemHealth.state || "green")}`}>{titleCaseWords(systemHealth.state || "green")} system</span>
+                      <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">{selectedAdminRange.label}</span>
                     </div>
                     <h1 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-4xl">{activeSidebarItem.label}</h1>
                     <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Welcome back, {authEmail || "admin"}. This view tracks users, logins, session timeouts, saved study packs, queue activity, and recent failures from your backend.</p>
@@ -7056,17 +7117,30 @@ export default function App() {
 
                   <div className="flex flex-col gap-3 xl:items-end">
                     <div className="flex flex-wrap items-center gap-3">
-                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">{dashboardDateRangeLabel}</div>
+                      <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-slate-200 bg-slate-50 p-2">
+                        {availableAdminRanges.map((option) => (
+                          <button
+                            key={option.key}
+                            type="button"
+                            onClick={() => handleAdminDashboardRangeChange(option.key)}
+                            disabled={isLoadingAdminDashboard && adminDashboardRange === option.key}
+                            className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${adminDashboardRange === option.key ? "bg-slate-900 text-white shadow-[0_12px_24px_rgba(15,23,42,0.12)]" : "text-slate-700 hover:bg-white"} disabled:opacity-60`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
                       <input
                         value={adminSearchQuery}
                         onChange={(event) => setAdminSearchQuery(event.target.value)}
                         className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
                         placeholder="Search users, sessions, files, or logs"
                       />
-                      <button type="button" onClick={() => loadAdminDashboard()} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
+                      <button type="button" onClick={() => loadAdminDashboard(false, "", adminDashboardRange)} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="rounded-full bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{formatAdminInteger(failedLoginCount)} security alerts</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{dashboardDateRangeLabel}</span>
                       <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">Updated {dashboardGeneratedAt}</span>
                       <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-full bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100">Student View</button>
                       <button type="button" onClick={logout} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Sign Out</button>
@@ -7316,6 +7390,16 @@ export default function App() {
     if (!adminDashboard) return;
     saveAdminDashboardCache(adminDashboard);
   }, [adminDashboard]);
+
+  useEffect(() => {
+    saveAdminDashboardRangePreference(adminDashboardRange);
+  }, [adminDashboardRange]);
+
+  useEffect(() => {
+    const snapshotRange = normalizeAdminDashboardRangeKey(adminDashboard?.time_window?.key || "");
+    if (!adminDashboard?.time_window?.key || snapshotRange === adminDashboardRange) return;
+    setAdminDashboardRange(snapshotRange);
+  }, [adminDashboard, adminDashboardRange]);
 
   useEffect(() => {
     if (!authChecked || !authEmail) return;
@@ -8335,15 +8419,17 @@ export default function App() {
     return normalizeHistoryItems(data.items || []);
   };
 
-  const loadAdminDashboard = async (silent = false, tokenOverride = "") => {
+  const loadAdminDashboard = async (silent = false, tokenOverride = "", rangeOverride = "") => {
     if (!(tokenOverride || authToken)) return;
+    const selectedRange = normalizeAdminDashboardRangeKey(rangeOverride || adminDashboardRange);
     const shouldShowLoader = !silent || !hasLoadedAdminDashboardRef.current;
     if (shouldShowLoader) setIsLoadingAdminDashboard(true);
     try {
-      const response = await authFetch("/admin/dashboard", { tokenOverride });
+      const response = await authFetch(`/admin/dashboard?time_range=${encodeURIComponent(selectedRange)}`, { tokenOverride });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load the admin dashboard.");
       hasLoadedAdminDashboardRef.current = true;
+      setAdminDashboardRange(normalizeAdminDashboardRangeKey(data?.time_window?.key || selectedRange));
       setAdminDashboard(data);
     } catch (err) {
       if (!silent) setError(err.message || "Could not load the admin dashboard.");
@@ -8353,6 +8439,13 @@ export default function App() {
     } finally {
       if (shouldShowLoader) setIsLoadingAdminDashboard(false);
     }
+  };
+
+  const handleAdminDashboardRangeChange = (nextRangeKey) => {
+    const normalizedRange = normalizeAdminDashboardRangeKey(nextRangeKey);
+    if (normalizedRange === adminDashboardRange) return;
+    hasLoadedAdminDashboardRef.current = false;
+    setAdminDashboardRange(normalizedRange);
   };
 
   const updateAdminUserStatus = async (email, statusValue) => {
@@ -8498,13 +8591,13 @@ export default function App() {
 
   useEffect(() => {
     if (!authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
-    loadAdminDashboard(true);
+    loadAdminDashboard(true, "", adminDashboardRange);
     const intervalId = window.setInterval(() => {
-      loadAdminDashboard(true);
+      loadAdminDashboard(true, "", adminDashboardRange);
     }, ADMIN_DASHBOARD_REFRESH_MS);
     const handleDashboardRefresh = () => {
       if (document.visibilityState === "hidden") return;
-      loadAdminDashboard(true);
+      loadAdminDashboard(true, "", adminDashboardRange);
     };
     window.addEventListener("focus", handleDashboardRefresh);
     document.addEventListener("visibilitychange", handleDashboardRefresh);
@@ -8513,7 +8606,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleDashboardRefresh);
       window.clearInterval(intervalId);
     };
-  }, [authSessionMode, authToken, currentPage]);
+  }, [adminDashboardRange, authSessionMode, authToken, currentPage]);
 
   useEffect(() => {
     if (!followRoomView || !activeRoom?.active_tab) return;
@@ -11531,14 +11624,6 @@ export default function App() {
                     </div>
                   </div>
                   <div ref={googleButtonRef} className="absolute inset-x-5 bottom-5 h-[58px] overflow-hidden opacity-0" aria-hidden="true" />
-                </div>
-                <div className="grid max-w-[360px] gap-3 sm:grid-cols-2">
-                  <button type="button" onClick={startAppleLogin} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]">
-                    {isAppleSigningIn ? "Connecting Apple..." : "Continue with Apple"}
-                  </button>
-                  <button type="button" onClick={() => openAuthLanding("register")} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15">
-                    Create Account
-                  </button>
                 </div>
                 {isGoogleSigningIn ? <div className="max-w-[360px] rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">Finishing Google sign-in and opening your capture page...</div> : null}
                 {showAuthMessageBanner ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
