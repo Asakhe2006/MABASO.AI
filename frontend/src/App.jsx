@@ -1,5 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import termsAndConditionsMarkdown from "./content/terms-and-conditions.md?raw";
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -34,6 +35,7 @@ const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
+const PUBLIC_TERMS_PATH = "/terms-and-conditions";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
@@ -653,6 +655,12 @@ function getPresentationVisualTypeLabel(value) {
   if (normalized === "closing") return "Closing";
   return "Cluster";
 }
+
+function resolveInitialPublicPage() {
+  if (typeof window === "undefined") return "auth";
+  return window.location.pathname === PUBLIC_TERMS_PATH ? "terms" : "auth";
+}
+
 const helpAboutSections = [
   {
     kicker: "How It Works",
@@ -3028,6 +3036,7 @@ function buildCollaborationPreview(room) {
 }
 
 export default function App() {
+  const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
   const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
@@ -3208,6 +3217,39 @@ export default function App() {
   const [teacherQuestionDraft, setTeacherQuestionDraft] = useState("");
   const [teacherQuestionAnswer, setTeacherQuestionAnswer] = useState("");
   const [teacherQuestionStatus, setTeacherQuestionStatus] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handlePopState = () => {
+      setPublicPage(window.location.pathname === PUBLIC_TERMS_PATH ? "terms" : "auth");
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (!authToken || typeof window === "undefined") return;
+    if (window.location.pathname === PUBLIC_TERMS_PATH) {
+      window.history.replaceState({}, "", "/");
+    }
+    setPublicPage("auth");
+  }, [authToken]);
+
+  const openPublicTermsPage = () => {
+    if (typeof window !== "undefined" && window.location.pathname !== PUBLIC_TERMS_PATH) {
+      window.history.pushState({}, "", PUBLIC_TERMS_PATH);
+    }
+    setPublicPage("terms");
+  };
+
+  const closePublicTermsPage = () => {
+    if (typeof window !== "undefined" && window.location.pathname !== "/") {
+      window.history.pushState({}, "", "/");
+    }
+    setPublicPage("auth");
+  };
 
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
@@ -11304,6 +11346,48 @@ export default function App() {
   }
 
   if (!authToken) {
+    if (publicPage === "terms") {
+      return (
+        <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="hero-glow hero-glow-left" />
+            <div className="hero-glow hero-glow-right" />
+            <div className="hero-grid" />
+          </div>
+          <main className="relative mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+            <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/75 p-5 shadow-[0_28px_80px_rgba(2,8,23,0.55)] backdrop-blur xl:p-6">
+              <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-4">
+                  <button
+                    type="button"
+                    onClick={closePublicTermsPage}
+                    aria-label="Back to sign in"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                      <path d="M15 6 9 12l6 6M9 12h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                    </svg>
+                  </button>
+                  <div className="min-w-0">
+                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Legal</p>
+                    <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">About Mabaso AI and Terms and Conditions</h1>
+                    <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Review how Mabaso AI works, what the platform is designed to do, and the terms that apply before signing in.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={closePublicTermsPage} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">
+                  Back to Sign In
+                </button>
+              </div>
+
+              <div className="notes-markdown phone-safe-copy mt-6 rounded-[28px] bg-white p-5 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)] sm:p-6">
+                <MobileFirstMarkdown>{termsAndConditionsMarkdown}</MobileFirstMarkdown>
+              </div>
+            </section>
+          </main>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -11350,6 +11434,13 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">AI Tools for Students</p>
                     <h3 className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.03em] text-white">Study smarter from your very first lecture.</h3>
                     <p className="mt-3 text-sm leading-7 text-slate-300">Dynamic practice questions, interactive study guides, citation-based AI help, and more in one workspace.</p>
+                    <p className="mt-5 text-xs leading-6 text-slate-400">
+                      By signing in, you agree to our{" "}
+                      <button type="button" onClick={openPublicTermsPage} className="font-semibold text-emerald-200 underline underline-offset-2 transition hover:text-white">
+                        Terms and Conditions
+                      </button>
+                      .
+                    </p>
                     <div className="mt-6 flex items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-white">
                       <span className="text-lg font-semibold">Get Started</span>
                       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">

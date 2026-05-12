@@ -7,6 +7,7 @@ import html
 import hashlib
 import hmac
 from http.cookiejar import MozillaCookieJar
+import ipaddress
 from io import BytesIO
 import json
 import logging
@@ -143,6 +144,15 @@ MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 *
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
+MAX_SUPPORT_MESSAGE_CHARS = int(os.getenv("MAX_SUPPORT_MESSAGE_CHARS", "4000"))
+MAX_REFERENCE_IMAGE_INPUT_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_INPUT_CHARS", "220000"))
+MAX_REFERENCE_IMAGE_URL_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_URL_CHARS", "2400"))
+MAX_CHAT_REFERENCE_IMAGES = int(os.getenv("MAX_CHAT_REFERENCE_IMAGES", "4"))
+MAX_GENERATION_REFERENCE_IMAGES = int(os.getenv("MAX_GENERATION_REFERENCE_IMAGES", "6"))
+MAX_QUIZ_ANSWER_IMAGES = int(os.getenv("MAX_QUIZ_ANSWER_IMAGES", "6"))
+MAX_ZIP_UPLOAD_ENTRIES = int(os.getenv("MAX_ZIP_UPLOAD_ENTRIES", "5000"))
+MAX_ZIP_UNCOMPRESSED_BYTES = int(os.getenv("MAX_ZIP_UNCOMPRESSED_BYTES", str(250 * 1024 * 1024)))
+MAX_ZIP_COMPRESSION_RATIO = float(os.getenv("MAX_ZIP_COMPRESSION_RATIO", "120"))
 LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 REGISTRATION_TOKEN_TTL_MINUTES = int(os.getenv("REGISTRATION_TOKEN_TTL_MINUTES", str(LOGIN_CODE_TTL_MINUTES)))
 SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
@@ -201,9 +211,49 @@ YOUTUBE_WEBSHARE_PROXY_LOCATIONS = tuple(
 )
 YOUTUBE_COOKIES_FILE = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
 YOUTUBE_COOKIES_TXT = os.getenv("YOUTUBE_COOKIES_TXT", "").strip()
+ALLOWED_VIDEO_LINK_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.getenv(
+        "ALLOWED_VIDEO_LINK_HOSTS",
+        "youtube.com,www.youtube.com,m.youtube.com,music.youtube.com,youtu.be,vimeo.com,www.vimeo.com,player.vimeo.com",
+    ).split(",")
+    if host.strip()
+)
+DEFAULT_CORS_ALLOW_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "https://mabaso-ai-web.onrender.com",
+)
+
+ALLOWED_AUDIO_VIDEO_EXTENSIONS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
+    ".mp4", ".m4v", ".mov", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".3gp",
+}
+ALLOWED_TEXT_EXTENSIONS = {".txt", ".md", ".text"}
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+ALLOWED_STUDY_SOURCE_EXTENSIONS = ALLOWED_TEXT_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS | {".pdf", ".pptx", ".docx"}
+BLOCKED_UPLOAD_EXTENSIONS = {
+    ".exe", ".dll", ".js", ".mjs", ".cjs", ".sh", ".bat", ".cmd", ".com", ".msi",
+    ".ps1", ".scr", ".jar", ".vbs", ".apk", ".ipa", ".dmg", ".iso", ".rar", ".7z",
+    ".tar", ".gz", ".tgz", ".xz",
+}
 
 jobs: dict[str, dict] = {}
 apple_jwk_client = PyJWKClient(APPLE_JWKS_URL) if PyJWKClient is not None else None
+
+
+def resolve_cors_allow_origins() -> list[str]:
+    configured = [
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+        if origin.strip() and origin.strip() != "*"
+    ]
+    return configured or list(DEFAULT_CORS_ALLOW_ORIGINS)
+
+
+CORS_ALLOW_ORIGINS = resolve_cors_allow_origins()
 
 LEGACY_STUDY_GUIDE_PROMPT = """
 You are an expert academic assistant for university students.
@@ -704,11 +754,25 @@ class AdminUserStatusRequest(BaseModel):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOW_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(), payment=()")
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if request.url.path.startswith("/auth/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 def utc_now() -> datetime:
@@ -930,6 +994,22 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_support_messages_created_at
             ON support_messages (created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_rate_limits (
+                bucket_key TEXT PRIMARY KEY,
+                request_count INTEGER NOT NULL,
+                window_started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_request_rate_limits_updated_at
+            ON request_rate_limits (updated_at DESC)
             """
         )
 
@@ -1165,6 +1245,71 @@ def get_client_ip(request: Request | None) -> str:
 
     client_host = getattr(request.client, "host", "") or ""
     return client_host[:120]
+
+
+def build_rate_limit_bucket_key(scope: str, request: Request | None, identity: str = "") -> str:
+    ip_address = get_client_ip(request) or "unknown-ip"
+    normalized_identity = normalize_email(identity) if "@" in (identity or "") else (identity or "").strip().lower()
+    return f"{scope}|{ip_address}|{normalized_identity or 'anonymous'}"
+
+
+def enforce_rate_limit(
+    *,
+    scope: str,
+    request: Request | None,
+    limit: int,
+    window_seconds: int,
+    identity: str = "",
+):
+    if limit <= 0 or window_seconds <= 0:
+        return
+
+    now = utc_now()
+    bucket_key = build_rate_limit_bucket_key(scope, request, identity)
+    window_started_at = now
+    request_count = 1
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT request_count, window_started_at
+            FROM request_rate_limits
+            WHERE bucket_key = ?
+            """,
+            (bucket_key,),
+        ).fetchone()
+
+        if row:
+            stored_window_started_at = datetime.fromisoformat(row["window_started_at"])
+            expires_at = stored_window_started_at + timedelta(seconds=window_seconds)
+            if expires_at > now:
+                request_count = int(row["request_count"] or 0) + 1
+                if request_count > limit:
+                    retry_after_seconds = max(1, int((expires_at - now).total_seconds()))
+                    raise HTTPException(
+                        status_code=429,
+                        detail=(
+                            f"Too many requests for {scope.replace('_', ' ')}. "
+                            f"Please wait about {retry_after_seconds} seconds and try again."
+                        ),
+                    )
+                window_started_at = stored_window_started_at
+
+        connection.execute(
+            """
+            INSERT INTO request_rate_limits (bucket_key, request_count, window_started_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(bucket_key) DO UPDATE SET
+                request_count = excluded.request_count,
+                window_started_at = excluded.window_started_at,
+                updated_at = excluded.updated_at
+            """,
+            (bucket_key, request_count, window_started_at.isoformat(), now.isoformat()),
+        )
+        connection.execute(
+            "DELETE FROM request_rate_limits WHERE updated_at < ?",
+            ((now - timedelta(days=2)).isoformat(),),
+        )
 
 
 def record_audit_log(
@@ -4064,6 +4209,98 @@ def is_docx_upload(filename: str, content_type: str | None) -> bool:
     return suffix == ".docx" or content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
+def get_upload_extension(filename: str) -> str:
+    return Path(filename or "").suffix.lower()
+
+
+def ensure_safe_upload_filename(filename: str, *, allowed_extensions: set[str] | None = None):
+    cleaned = (filename or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="The uploaded file must have a filename.")
+    if "/" in cleaned or "\\" in cleaned or cleaned.startswith("."):
+        raise HTTPException(status_code=400, detail="The uploaded filename is not allowed.")
+    suffix = get_upload_extension(cleaned)
+    if suffix in BLOCKED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="That file type is blocked for security reasons.")
+    if allowed_extensions is not None and suffix not in allowed_extensions:
+        allowed_list = ", ".join(sorted(allowed_extensions))
+        raise HTTPException(status_code=400, detail=f"That file type is not supported here. Allowed types: {allowed_list}.")
+
+
+def ensure_allowed_audio_video_upload(filename: str, content_type: str | None):
+    ensure_safe_upload_filename(filename, allowed_extensions=ALLOWED_AUDIO_VIDEO_EXTENSIONS)
+    guessed_type = content_type or mimetypes.guess_type(filename)[0] or ""
+    if guessed_type and not (guessed_type.startswith("audio/") or guessed_type.startswith("video/")):
+        raise HTTPException(status_code=400, detail="Upload an audio or video lecture file.")
+
+
+def ensure_allowed_study_source_upload(filename: str, content_type: str | None):
+    ensure_safe_upload_filename(filename, allowed_extensions=ALLOWED_STUDY_SOURCE_EXTENSIONS)
+    guessed_type = content_type or mimetypes.guess_type(filename)[0] or ""
+    if guessed_type and not (
+        guessed_type.startswith("image/")
+        or guessed_type.startswith("text/")
+        or guessed_type in {
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a slide image, .pdf, .pptx, .docx, or a text-based slide file such as .txt or .md.",
+        )
+
+
+def ensure_allowed_image_upload(filename: str, content_type: str | None):
+    ensure_safe_upload_filename(filename, allowed_extensions=ALLOWED_IMAGE_EXTENSIONS)
+    guessed_type = content_type or mimetypes.guess_type(filename)[0] or ""
+    if guessed_type and not guessed_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+
+
+def ensure_safe_zip_upload(file_bytes: bytes, filename: str):
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_ZIP_UPLOAD_ENTRIES:
+                raise HTTPException(status_code=400, detail="The uploaded Office file is too complex to process safely.")
+
+            total_uncompressed_bytes = 0
+            for member in members:
+                member_name = member.filename or ""
+                if member_name.startswith("/") or ".." in PurePosixPath(member_name).parts:
+                    raise HTTPException(status_code=400, detail="The uploaded Office file contains an unsafe path.")
+
+                total_uncompressed_bytes += max(int(member.file_size or 0), 0)
+                if total_uncompressed_bytes > MAX_ZIP_UNCOMPRESSED_BYTES:
+                    raise HTTPException(status_code=413, detail="The uploaded Office file expands beyond the safe processing limit.")
+
+                compressed_size = max(int(member.compress_size or 0), 1)
+                if member.file_size and (member.file_size / compressed_size) > MAX_ZIP_COMPRESSION_RATIO:
+                    raise HTTPException(status_code=400, detail="The uploaded Office file is compressed in an unsafe way.")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail=f"{filename} could not be opened as a valid Office file.") from exc
+
+
+def sanitize_reference_images(values: list[str] | None, *, limit: int) -> list[str]:
+    sanitized: list[str] = []
+    for raw_value in values or []:
+        value = (raw_value or "").strip()
+        if not value:
+            continue
+        if value.startswith("data:image/"):
+            if len(value) <= MAX_REFERENCE_IMAGE_INPUT_CHARS:
+                sanitized.append(value)
+        else:
+            parsed = urlparse(value)
+            if parsed.scheme == "https" and len(value) <= MAX_REFERENCE_IMAGE_URL_CHARS:
+                sanitized.append(value)
+        if len(sanitized) >= limit:
+            break
+    return sanitized
+
+
 def build_data_url(file_bytes: bytes, content_type: str | None, filename: str = "") -> str:
     mime_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = base64.b64encode(file_bytes).decode("ascii")
@@ -4471,6 +4708,7 @@ async def health_check():
 async def request_login_code(payload: RequestCodeRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_request_code", request=request, limit=5, window_seconds=15 * 60, identity=email)
     ensure_user_account_is_active(email)
     code = create_login_code(email)
     await asyncio.to_thread(send_verification_email, email, code)
@@ -4489,6 +4727,7 @@ async def request_login_code(payload: RequestCodeRequest, request: Request):
 async def verify_login(payload: VerifyCodeRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_verify_code", request=request, limit=10, window_seconds=15 * 60, identity=email)
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
@@ -4508,6 +4747,7 @@ async def verify_login(payload: VerifyCodeRequest, request: Request):
 async def request_email_password_login_code(payload: EmailPasswordAuthRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_password_code_request", request=request, limit=5, window_seconds=15 * 60, identity=email)
     code = await asyncio.to_thread(request_email_password_code, email, payload.password, payload.mode)
     await asyncio.to_thread(send_verification_email, email, code)
     record_audit_log(
@@ -4525,6 +4765,7 @@ async def request_email_password_login_code(payload: EmailPasswordAuthRequest, r
 async def request_email_password_registration_code_route(payload: RequestCodeRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_register_code_request", request=request, limit=5, window_seconds=15 * 60, identity=email)
     code = await asyncio.to_thread(request_email_password_registration_code, email)
     await asyncio.to_thread(send_verification_email, email, code)
     record_audit_log(
@@ -4542,6 +4783,7 @@ async def request_email_password_registration_code_route(payload: RequestCodeReq
 async def verify_email_password_registration_code_route(payload: VerifyCodeRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_register_code_verify", request=request, limit=10, window_seconds=15 * 60, identity=email)
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
@@ -4561,6 +4803,7 @@ async def verify_email_password_registration_code_route(payload: VerifyCodeReque
 async def complete_email_password_registration_route(payload: EmailPasswordRegistrationCompleteRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_register_complete", request=request, limit=5, window_seconds=60 * 60, identity=email)
     session_token = await asyncio.to_thread(
         complete_email_password_registration,
         email,
@@ -4582,6 +4825,7 @@ async def complete_email_password_registration_route(payload: EmailPasswordRegis
 async def login_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_password_login", request=request, limit=10, window_seconds=15 * 60, identity=email)
     if normalize_email_password_auth_mode(payload.mode) != "login":
         raise HTTPException(status_code=400, detail="Direct sign-in is only available for login mode.")
     ip_address = get_client_ip(request)
@@ -4647,6 +4891,7 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
 async def register_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_password_register", request=request, limit=5, window_seconds=60 * 60, identity=email)
     if normalize_email_password_auth_mode(payload.mode) != "register":
         raise HTTPException(status_code=400, detail="Direct account creation is only available for register mode.")
 
@@ -4666,6 +4911,7 @@ async def register_with_email_password_route(payload: EmailPasswordAuthRequest, 
 async def verify_email_password_login(payload: EmailPasswordVerifyRequest, request: Request):
     started_at = utc_now()
     email = validate_email_address(payload.email)
+    enforce_rate_limit(scope="auth_password_verify", request=request, limit=10, window_seconds=15 * 60, identity=email)
     code = payload.code.strip()
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
@@ -4684,6 +4930,7 @@ async def verify_email_password_login(payload: EmailPasswordVerifyRequest, reque
 @app.post("/auth/google")
 async def google_login(payload: GoogleAuthRequest, request: Request):
     started_at = utc_now()
+    enforce_rate_limit(scope="auth_google_login", request=request, limit=10, window_seconds=15 * 60)
     credential = payload.credential.strip()
     if not credential:
         raise HTTPException(status_code=400, detail="Google credential is required.")
@@ -4702,6 +4949,7 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
 @app.post("/auth/apple")
 async def apple_login(payload: AppleAuthRequest, request: Request):
     started_at = utc_now()
+    enforce_rate_limit(scope="auth_apple_login", request=request, limit=10, window_seconds=15 * 60)
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
         raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
     session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
@@ -4789,10 +5037,9 @@ async def submit_support_request(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
-    message = (payload.message or "").strip()
+    enforce_rate_limit(scope="support_contact", request=request, limit=6, window_seconds=60 * 60, identity=current_user)
+    message = validate_support_message_text(payload.message)
     page = compact_text(payload.page, "unknown-page")[:120]
-    if not message:
-        raise HTTPException(status_code=400, detail="Support message cannot be empty.")
 
     support_message = await asyncio.to_thread(
         create_or_load_support_message,
@@ -5004,32 +5251,49 @@ async def save_upload_to_disk(file: UploadFile, job_id: str | None = None) -> Pa
 
     def _write_file() -> Path:
         total_written = 0
+        temp_path: Path | None = None
         update_points = {
             1 * 1024 * 1024: 2,
             5 * 1024 * 1024: 4,
             10 * 1024 * 1024: 6,
             20 * 1024 * 1024: 8,
         }
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=suffix,
-            prefix="lecture_",
-            dir=UPLOAD_DIR,
-        ) as temp_file:
-            file.file.seek(0)
-            while chunk := file.file.read(1024 * 1024):
-                temp_file.write(chunk)
-                total_written += len(chunk)
-                if job_id:
-                    for threshold, progress in update_points.items():
-                        if total_written >= threshold:
-                            update_job(
-                                job_id,
-                                status="processing",
-                                stage="Uploading lecture file",
-                                progress=progress,
-                            )
-            return Path(temp_file.name)
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=suffix,
+                prefix="lecture_",
+                dir=UPLOAD_DIR,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                file.file.seek(0)
+                while chunk := file.file.read(1024 * 1024):
+                    temp_file.write(chunk)
+                    total_written += len(chunk)
+                    if total_written > MAX_FILE_SIZE_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"File is too large ({total_written / (1024 * 1024):.1f} MB). "
+                                f"Please upload a file smaller than {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB."
+                            ),
+                        )
+                    if job_id:
+                        for threshold, progress in update_points.items():
+                            if total_written >= threshold:
+                                update_job(
+                                    job_id,
+                                    status="processing",
+                                    stage="Uploading lecture file",
+                                    progress=progress,
+                                )
+            if temp_path is None:
+                raise HTTPException(status_code=400, detail="The uploaded lecture file could not be saved.")
+            return temp_path
+        except Exception:
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
+            raise
 
     return await asyncio.to_thread(_write_file)
 
@@ -5038,11 +5302,48 @@ def get_file_size(file_path: Path) -> int:
     return file_path.stat().st_size
 
 
+def validate_support_message_text(message: str) -> str:
+    cleaned = (message or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Support message cannot be empty.")
+    if len(cleaned) > MAX_SUPPORT_MESSAGE_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Support messages must stay under {MAX_SUPPORT_MESSAGE_CHARS} characters.",
+        )
+    return cleaned
+
+
 def normalize_video_url(value: str) -> str:
     cleaned = (value or "").strip()
     parsed = urlparse(cleaned)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("Paste a full video link that starts with http:// or https://.")
+    if parsed.username or parsed.password:
+        raise ValueError("Video links must not include embedded usernames or passwords.")
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        raise ValueError("Video links must include a valid host.")
+    if host in {"localhost", "127.0.0.1"} or host.endswith(".local"):
+        raise ValueError("Local or internal video links are not allowed.")
+    try:
+        host_ip = ipaddress.ip_address(host)
+        if (
+            host_ip.is_private
+            or host_ip.is_loopback
+            or host_ip.is_link_local
+            or host_ip.is_multicast
+            or host_ip.is_reserved
+            or host_ip.is_unspecified
+        ):
+            raise ValueError("Local or internal video links are not allowed.")
+        raise ValueError("Use an approved public video host instead of a direct IP address.")
+    except ValueError:
+        pass
+    if host not in ALLOWED_VIDEO_LINK_HOSTS and not any(host.endswith(f".{allowed}") for allowed in ALLOWED_VIDEO_LINK_HOSTS):
+        raise ValueError("Only approved public video hosts are allowed on this server.")
+    if parsed.port and parsed.port not in {80, 443}:
+        raise ValueError("Use a standard public video link without a custom port.")
     return cleaned
 
 
@@ -12089,6 +12390,8 @@ async def upload_audio(
     started_at = utc_now()
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
+    enforce_rate_limit(scope="upload_audio", request=request, limit=18, window_seconds=60 * 60, identity=current_user)
+    ensure_allowed_audio_video_upload(file.filename, file.content_type)
 
     job_id = create_job("transcription", owner_email=current_user)
     update_job(job_id, status="processing", stage="Starting upload", progress=1)
@@ -12131,6 +12434,7 @@ async def transcribe_video_url(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="transcribe_video_url", request=request, limit=12, window_seconds=60 * 60, identity=current_user)
     try:
         video_url = normalize_video_url(payload.video_url)
     except ValueError as exc:
@@ -12164,6 +12468,8 @@ async def extract_slide_text(
     started_at = utc_now()
     if not file.filename:
         raise HTTPException(status_code=400, detail="No study source file selected.")
+    enforce_rate_limit(scope="extract_slide_text", request=request, limit=40, window_seconds=60 * 60, identity=current_user)
+    ensure_allowed_study_source_upload(file.filename, file.content_type)
 
     ensure_openai_key()
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
@@ -12198,6 +12504,7 @@ async def extract_slide_text(
             return {"text": text, "image_urls": reference_images}
 
         if is_pptx_upload(file.filename, content_type):
+            ensure_safe_zip_upload(file_bytes, file.filename)
             try:
                 text = await asyncio.to_thread(extract_slide_text_from_pptx, file_bytes)
                 reference_images = await asyncio.to_thread(extract_reference_images_from_pptx, file_bytes, limit=6)
@@ -12209,6 +12516,7 @@ async def extract_slide_text(
             return {"text": text, "image_urls": reference_images}
 
         if is_docx_upload(file.filename, content_type):
+            ensure_safe_zip_upload(file_bytes, file.filename)
             try:
                 text = await asyncio.to_thread(extract_text_from_docx, file_bytes)
             except zipfile.BadZipFile as exc:
@@ -12224,6 +12532,7 @@ async def extract_slide_text(
                 detail="Upload a slide image, .pdf, .pptx, .docx, or a text-based slide file such as .txt or .md.",
             )
 
+        ensure_allowed_image_upload(file.filename, content_type)
         image_data_url = build_data_url(file_bytes, content_type, file.filename)
         text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
         if not text:
@@ -12248,16 +12557,13 @@ async def create_study_guide(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="generate_study_guide", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
     transcript = payload.transcript.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
-    reference_images = [
-        compact_text(item)
-        for item in (getattr(payload, "reference_images", []) or [])
-        if compact_text(item)
-    ][:6]
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_GENERATION_REFERENCE_IMAGES)
     if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
@@ -12297,6 +12603,7 @@ async def create_quiz(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="generate_quiz", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -12343,6 +12650,7 @@ async def create_teacher_lesson(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="generate_teacher_lesson", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -12389,6 +12697,7 @@ async def create_podcast(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="generate_podcast", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -12438,6 +12747,7 @@ async def create_presentation(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
+    enforce_rate_limit(scope="generate_presentation", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
     template_file_bytes: bytes | None = None
     template_file_name = ""
     content_type = (request.headers.get("content-type") or "").lower()
@@ -12447,9 +12757,19 @@ async def create_presentation(
         if isinstance(template_upload, UploadFile) and compact_text(template_upload.filename):
             if not is_pptx_upload(template_upload.filename, template_upload.content_type):
                 raise HTTPException(status_code=400, detail="Upload a PowerPoint template in .pptx format.")
+            ensure_safe_upload_filename(template_upload.filename, allowed_extensions={".pptx"})
             template_file_bytes = await template_upload.read()
             if not template_file_bytes:
                 raise HTTPException(status_code=400, detail="The selected PowerPoint template is empty.")
+            if len(template_file_bytes) > MAX_SLIDE_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"The PowerPoint template is too large ({len(template_file_bytes) / (1024 * 1024):.1f} MB). "
+                        f"Please keep it below {MAX_SLIDE_UPLOAD_BYTES / (1024 * 1024):.0f} MB."
+                    ),
+                )
+            ensure_safe_zip_upload(template_file_bytes, template_upload.filename)
             template_file_name = compact_text(template_upload.filename)
         payload = PresentationGenerationRequest(
             transcript=compact_text(form.get("transcript")),
@@ -12459,11 +12779,7 @@ async def create_presentation(
             past_question_papers=compact_text(form.get("past_question_papers")),
             design_id=compact_text(form.get("design_id"), "quantum-black"),
             language=compact_text(form.get("language"), "English"),
-            reference_images=[
-                compact_text(item)
-                for item in form.getlist("reference_images")
-                if compact_text(item)
-            ][:6],
+            reference_images=sanitize_reference_images(form.getlist("reference_images"), limit=MAX_GENERATION_REFERENCE_IMAGES),
         )
     else:
         payload = PresentationGenerationRequest(**(await request.json()))
@@ -12473,7 +12789,7 @@ async def create_presentation(
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
-    reference_images = [compact_text(item) for item in (getattr(payload, "reference_images", []) or []) if compact_text(item)][:6]
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_GENERATION_REFERENCE_IMAGES)
 
     if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
@@ -12526,6 +12842,7 @@ async def create_presentation(
 
 @app.post("/mark-quiz-answer/")
 async def mark_quiz_answer(
+    request: Request,
     question: str = Form(...),
     expected_answer: str = Form(...),
     student_answer: str = Form(""),
@@ -12538,6 +12855,7 @@ async def mark_quiz_answer(
     answer_images: list[UploadFile] | None = File(None),
     current_user: str = Depends(require_authenticated_user),
 ):
+    enforce_rate_limit(scope="mark_quiz_answer", request=request, limit=90, window_seconds=15 * 60, identity=current_user)
     resolved_question_type = compact_text(question_type, "short_answer").lower()
     resolved_max_score = max(1, clamp_score(max_score, 100))
 
@@ -12551,6 +12869,11 @@ async def mark_quiz_answer(
     uploaded_images = [file for file in (answer_images or []) if file is not None]
     if answer_image is not None:
         uploaded_images.insert(0, answer_image)
+    if len(uploaded_images) > MAX_QUIZ_ANSWER_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You can upload up to {MAX_QUIZ_ANSWER_IMAGES} answer images for one question.",
+        )
 
     if not student_answer.strip() and not uploaded_images:
         return {
@@ -12566,8 +12889,7 @@ async def mark_quiz_answer(
     try:
         for index, uploaded_image in enumerate(uploaded_images, start=1):
             content_type = uploaded_image.content_type or mimetypes.guess_type(uploaded_image.filename or "")[0] or ""
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail="Please upload an image for answer-photo marking.")
+            ensure_allowed_image_upload(uploaded_image.filename or f"answer-image-{index}.png", content_type)
 
             image_bytes = await uploaded_image.read()
             if not image_bytes:
@@ -12607,18 +12929,21 @@ async def mark_quiz_answer(
 @app.post("/ask-study-assistant/")
 async def ask_study_assistant(
     payload: StudyChatRequest,
+    request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
+    enforce_rate_limit(scope="study_chat", request=request, limit=60, window_seconds=10 * 60, identity=current_user)
     ensure_openai_key()
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="A question is required.")
+    reference_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
 
     def _ask() -> str:
-        use_vision = bool(payload.reference_images)
+        use_vision = bool(reference_images)
         response = client.with_options(timeout=VISION_REQUEST_TIMEOUT if use_vision else 45).chat.completions.create(
             model=VISION_MODEL if use_vision else STUDY_CHAT_MODEL,
             max_completion_tokens=1200,
-            messages=build_chat_messages(payload),
+            messages=build_chat_messages(payload.model_copy(update={"reference_images": reference_images})),
         )
         return (response.choices[0].message.content or "").strip()
 
