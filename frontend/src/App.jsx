@@ -1,6 +1,15 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import termsAndConditionsMarkdown from "./content/terms-and-conditions.md?raw";
+import { EnterpriseFooter, EnterpriseSiteShell, ProtectedWorkspacePreview } from "./EnterpriseSiteShell";
+import { findSitePageByRoute } from "./sitePageConfig";
+import {
+  normalizeRoutePath,
+  resolveAppRouteForPage,
+  resolveBrowserPath,
+  resolveCurrentPageFromRoute,
+  resolveEnterpriseRoute,
+  resolveMetadataForRoute,
+} from "./siteRouting";
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -3037,6 +3046,7 @@ function buildCollaborationPreview(room) {
 
 export default function App() {
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
+  const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
   const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
@@ -3182,6 +3192,7 @@ export default function App() {
   const recordingStopReasonRef = useRef("");
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
+  const enterpriseGoogleButtonRef = useRef(null);
   const answerSyncTimersRef = useRef({});
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
@@ -3218,11 +3229,22 @@ export default function App() {
   const [teacherQuestionAnswer, setTeacherQuestionAnswer] = useState("");
   const [teacherQuestionStatus, setTeacherQuestionStatus] = useState("");
 
+  const navigateToPath = (path, { replace = false } = {}) => {
+    const normalized = normalizeRoutePath(path);
+    if (typeof window !== "undefined" && window.location.pathname !== normalized) {
+      window.history[replace ? "replaceState" : "pushState"]({}, "", normalized);
+    }
+    setBrowserPath(normalized);
+    setPublicPage(normalized === PUBLIC_TERMS_PATH ? "terms" : "auth");
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
 
     const handlePopState = () => {
-      setPublicPage(window.location.pathname === PUBLIC_TERMS_PATH ? "terms" : "auth");
+      const nextPath = resolveBrowserPath();
+      setBrowserPath(nextPath);
+      setPublicPage(nextPath === PUBLIC_TERMS_PATH ? "terms" : "auth");
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -3230,26 +3252,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!authToken || typeof window === "undefined") return;
-    if (window.location.pathname === PUBLIC_TERMS_PATH) {
-      window.history.replaceState({}, "", "/");
-    }
+    if (!authToken) return;
     setPublicPage("auth");
   }, [authToken]);
 
-  const openPublicTermsPage = () => {
-    if (typeof window !== "undefined" && window.location.pathname !== PUBLIC_TERMS_PATH) {
-      window.history.pushState({}, "", PUBLIC_TERMS_PATH);
-    }
-    setPublicPage("terms");
-  };
+  const openPublicTermsPage = () => navigateToPath("/company/terms");
 
-  const closePublicTermsPage = () => {
-    if (typeof window !== "undefined" && window.location.pathname !== "/") {
-      window.history.pushState({}, "", "/");
-    }
-    setPublicPage("auth");
-  };
+  const closePublicTermsPage = () => navigateToPath("/");
 
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
@@ -3407,6 +3416,9 @@ export default function App() {
     && [guideTitleSection?.normalizedHeading, guideSummarySection?.normalizedHeading].filter(Boolean).includes(activeTeacherSectionKey),
   );
   const isAdminAccount = authAvailableModes.includes("admin");
+  const enterpriseRoute = resolveEnterpriseRoute(browserPath);
+  const activeSitePage = enterpriseRoute.sitePage;
+  const activeProtectedWorkspaceRoute = enterpriseRoute.protectedWorkspaceRoute;
   const resetQuizSessionState = (questions = []) => {
     const estimatedSeconds = estimateQuizDurationMinutes(questions) * 60;
     setQuizSessionStage(questions.length ? "ready" : "idle");
@@ -8039,6 +8051,32 @@ export default function App() {
     setAuthMessage("Enter your email and we will send a verification code.");
   };
 
+  const openAuthLanding = (mode = "login") => {
+    if (mode === "register") {
+      openRegisterMode();
+      setAuthMessage("Create your Mabaso AI account by continuing with Google or Apple.");
+    } else {
+      openLoginMode();
+      setAuthMessage("Continue with Google or Apple to sign in securely.");
+    }
+    navigateToPath("/");
+  };
+
+  const openProtectedAppRoute = (target = "capture") => {
+    const normalizedTarget = String(target || "capture").trim().toLowerCase();
+    const nextPath = normalizedTarget === "admin"
+      ? "/admin/dashboard"
+      : `/app/${normalizedTarget}`;
+    if (authToken) {
+      if (normalizedTarget === "admin" && authSessionMode === "admin") {
+        setCurrentPage("admin");
+      } else if (["capture", "workspace", "materials", "collaboration"].includes(normalizedTarget)) {
+        setCurrentPage(normalizedTarget);
+      }
+    }
+    navigateToPath(nextPath);
+  };
+
   const startAppleLogin = async () => {
     setAuthMessage("");
     if (!APPLE_CLIENT_ID) {
@@ -8091,6 +8129,54 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    const metadata = resolveMetadataForRoute({
+      path: browserPath,
+      authToken,
+      currentPage,
+      authSessionMode,
+    });
+    document.title = metadata.title;
+
+    const ensureMetaTag = (selector, attributes = {}) => {
+      let tag = document.head.querySelector(selector);
+      if (!tag) {
+        tag = document.createElement("meta");
+        Object.entries(attributes).forEach(([key, value]) => tag.setAttribute(key, value));
+        document.head.appendChild(tag);
+      }
+      return tag;
+    };
+
+    ensureMetaTag('meta[name="description"]', { name: "description" }).setAttribute("content", metadata.description);
+    ensureMetaTag('meta[property="og:title"]', { property: "og:title" }).setAttribute("content", metadata.title);
+    ensureMetaTag('meta[property="og:description"]', { property: "og:description" }).setAttribute("content", metadata.description);
+  }, [authSessionMode, authToken, browserPath, currentPage]);
+
+  useEffect(() => {
+    if (!authChecked || !authToken) return;
+    if (browserPath === "/admin/dashboard") {
+      if (authSessionMode === "admin" && currentPage !== "admin") {
+        setCurrentPage("admin");
+      }
+      return;
+    }
+    const routedPage = resolveCurrentPageFromRoute(browserPath);
+    if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
+    setCurrentPage(routedPage);
+  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
+
+  useEffect(() => {
+    if (!authChecked || !authToken) return;
+    const targetRoute = resolveAppRouteForPage(currentPage, authSessionMode);
+    const routeShouldMirrorApp = browserPath === "/"
+      || browserPath.startsWith("/app/")
+      || (browserPath === "/admin/dashboard" && currentPage === "admin" && authSessionMode === "admin");
+    if (!targetRoute || !routeShouldMirrorApp || browserPath === targetRoute) return;
+    navigateToPath(targetRoute, { replace: true });
+  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
+
+  useEffect(() => {
     if (authToken || !authChecked) return;
     if (!GOOGLE_CLIENT_ID) {
       return;
@@ -8098,9 +8184,9 @@ export default function App() {
 
     let cancelled = false;
     const renderGoogleButton = () => {
-      if (cancelled || !googleButtonRef.current || !window.google?.accounts?.id) return;
-      googleButtonRef.current.innerHTML = "";
-      const buttonWidth = Math.min(320, googleButtonRef.current.clientWidth || googleButtonRef.current.parentElement?.clientWidth || 320);
+      if (cancelled || !window.google?.accounts?.id) return;
+      const containers = [googleButtonRef.current, enterpriseGoogleButtonRef.current].filter(Boolean);
+      if (!containers.length) return;
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: async (response) => {
@@ -8111,12 +8197,16 @@ export default function App() {
           await finishGoogleLogin(response.credential);
         },
       });
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: "filled_black",
-        size: "large",
-        text: "continue_with",
-        shape: "pill",
-        width: buttonWidth,
+      containers.forEach((container) => {
+        container.innerHTML = "";
+        const buttonWidth = Math.min(320, container.clientWidth || container.parentElement?.clientWidth || 320);
+        window.google.accounts.id.renderButton(container, {
+          theme: "filled_black",
+          size: "large",
+          text: "continue_with",
+          shape: "pill",
+          width: buttonWidth,
+        });
       });
     };
 
@@ -8147,7 +8237,7 @@ export default function App() {
       cancelled = true;
       script.removeEventListener("load", handleLoad);
     };
-  }, [authChecked, authToken]);
+  }, [authChecked, authToken, browserPath]);
 
   useEffect(() => {
     if (authToken || !authChecked || !APPLE_CLIENT_ID || !isAppleWebSigninSupported()) return;
@@ -11346,45 +11436,37 @@ export default function App() {
   }
 
   if (!authToken) {
-    if (publicPage === "terms") {
+    if (activeSitePage) {
       return (
-        <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="hero-glow hero-glow-left" />
-            <div className="hero-glow hero-glow-right" />
-            <div className="hero-grid" />
-          </div>
-          <main className="relative mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-            <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/75 p-5 shadow-[0_28px_80px_rgba(2,8,23,0.55)] backdrop-blur xl:p-6">
-              <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex items-start gap-4">
-                  <button
-                    type="button"
-                    onClick={closePublicTermsPage}
-                    aria-label="Back to sign in"
-                    className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                      <path d="M15 6 9 12l6 6M9 12h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                    </svg>
-                  </button>
-                  <div className="min-w-0">
-                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Legal</p>
-                    <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">About Mabaso AI and Terms and Conditions</h1>
-                    <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Review how Mabaso AI works, what the platform is designed to do, and the terms that apply before signing in.</p>
-                  </div>
-                </div>
-                <button type="button" onClick={closePublicTermsPage} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">
-                  Back to Sign In
-                </button>
-              </div>
+        <EnterpriseSiteShell
+          page={activeSitePage}
+          currentRoute={activeSitePage.route}
+          isAuthenticated={false}
+          onNavigate={(route) => navigateToPath(route)}
+          onOpenApp={(target) => openProtectedAppRoute(target)}
+          onOpenSignIn={() => openAuthLanding("login")}
+          onOpenCreateAccount={() => openAuthLanding("register")}
+          onStartApple={startAppleLogin}
+          googleButtonRef={enterpriseGoogleButtonRef}
+          isGoogleSigningIn={isGoogleSigningIn}
+          isAppleSigningIn={isAppleSigningIn}
+        />
+      );
+    }
 
-              <div className="notes-markdown phone-safe-copy mt-6 rounded-[28px] bg-white p-5 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)] sm:p-6">
-                <MobileFirstMarkdown>{termsAndConditionsMarkdown}</MobileFirstMarkdown>
-              </div>
-            </section>
-          </main>
-        </div>
+    if (activeProtectedWorkspaceRoute) {
+      return (
+        <ProtectedWorkspacePreview
+          route={activeProtectedWorkspaceRoute}
+          onNavigate={(route) => navigateToPath(route)}
+          onOpenApp={(target) => openProtectedAppRoute(target)}
+          onOpenSignIn={() => openAuthLanding("login")}
+          onOpenCreateAccount={() => openAuthLanding("register")}
+          onStartApple={startAppleLogin}
+          googleButtonRef={enterpriseGoogleButtonRef}
+          isGoogleSigningIn={isGoogleSigningIn}
+          isAppleSigningIn={isAppleSigningIn}
+        />
       );
     }
 
@@ -11395,8 +11477,8 @@ export default function App() {
           <div className="hero-glow hero-glow-right" />
           <div className="hero-grid" />
         </div>
-        <main className="relative mx-auto flex min-h-screen max-w-6xl items-center px-4 py-10 sm:px-6 lg:px-8">
-          <div className="grid w-full gap-8 xl:grid-cols-[1fr_0.95fr]">
+        <main className="relative mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+          <div className="grid min-h-[70vh] items-center gap-8 xl:grid-cols-[1fr_0.95fr]">
             <section className="rounded-[32px] border border-white/10 bg-slate-900/70 p-6 shadow-[0_30px_90px_rgba(2,8,23,0.45)] backdrop-blur xl:p-8">
               <div className="flex flex-wrap gap-3">
                 {progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === 0 ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}
@@ -11450,13 +11532,89 @@ export default function App() {
                   </div>
                   <div ref={googleButtonRef} className="absolute inset-x-5 bottom-5 h-[58px] overflow-hidden opacity-0" aria-hidden="true" />
                 </div>
+                <div className="grid max-w-[360px] gap-3 sm:grid-cols-2">
+                  <button type="button" onClick={startAppleLogin} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]">
+                    {isAppleSigningIn ? "Connecting Apple..." : "Continue with Apple"}
+                  </button>
+                  <button type="button" onClick={() => openAuthLanding("register")} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15">
+                    Create Account
+                  </button>
+                </div>
                 {isGoogleSigningIn ? <div className="max-w-[360px] rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">Finishing Google sign-in and opening your capture page...</div> : null}
                 {showAuthMessageBanner ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
           </div>
+          <section className="mt-10 rounded-[32px] border border-white/10 bg-slate-950/68 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.38)] backdrop-blur xl:p-6">
+            <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Platform Pages</p>
+                <h2 className="mt-3 text-3xl font-semibold text-white">Explore the full Mabaso AI platform architecture.</h2>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button type="button" onClick={() => navigateToPath("/product/study-workspace")} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]">
+                  Product Pages
+                </button>
+                <button type="button" onClick={() => navigateToPath("/company/security")} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15">
+                  Security & Trust
+                </button>
+              </div>
+            </div>
+            <div className="mt-6 grid gap-4 xl:grid-cols-4">
+              {[
+                "/product/study-workspace",
+                "/resources/study-workflow",
+                "/company/security",
+                "/developers/api-documentation",
+              ].map((route) => {
+                const page = findSitePageByRoute(route);
+                if (!page) return null;
+                return (
+                  <button
+                    key={route}
+                    type="button"
+                    onClick={() => navigateToPath(route)}
+                    className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5 text-left transition hover:bg-white/[0.08]"
+                  >
+                    <p className="text-xs uppercase tracking-[0.26em] text-slate-500">{page.category}</p>
+                    <h3 className="mt-3 text-xl font-semibold text-white">{page.title}</h3>
+                    <p className="mt-3 text-sm leading-7 text-slate-300">{page.metadata?.description}</p>
+                    <div className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-cyan-100">
+                      Open page
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                        <path d="M7 17 17 7M9 7h8v8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                      </svg>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+          <EnterpriseFooter currentRoute={browserPath} onNavigate={(route) => navigateToPath(route)} />
         </main>
       </div>
+    );
+  }
+
+  if (authToken && activeSitePage) {
+    if (activeSitePage.access === "admin" && authSessionMode === "admin") {
+      return renderAdminDashboardPage();
+    }
+    return (
+      <EnterpriseSiteShell
+        page={activeSitePage}
+        currentRoute={activeSitePage.route}
+        isAuthenticated
+        adminBlocked={activeSitePage.access === "admin" && authSessionMode !== "admin"}
+        onNavigate={(route) => navigateToPath(route)}
+        onOpenApp={(target) => openProtectedAppRoute(target)}
+        onOpenSignIn={() => openAuthLanding("login")}
+        onOpenCreateAccount={() => openAuthLanding("register")}
+        onStartApple={startAppleLogin}
+        googleButtonRef={enterpriseGoogleButtonRef}
+        isGoogleSigningIn={isGoogleSigningIn}
+        isAppleSigningIn={isAppleSigningIn}
+      />
     );
   }
 
