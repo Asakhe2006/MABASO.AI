@@ -3709,7 +3709,9 @@ export default function App() {
     || activeRoom?.title
     || "Shared Study Guide";
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
-  const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
+  const activeTeacherSegment = activeTeacherSegmentIndex >= 0
+    ? teacherLessonData.segments[activeTeacherSegmentIndex] || null
+    : null;
   const isTeacherQuestionBusy = isTeacherListening || isTeacherQuestionLoading || isTeacherAnswering;
   const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
@@ -3921,7 +3923,27 @@ export default function App() {
     });
   };
 
+  const openTeacherWorkedExamples = (sectionHeading = "") => {
+    teacherAutoTabRef.current = "examples";
+    setActiveTab("examples");
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const targetKey = resolveTeacherExampleSectionKey(sectionHeading);
+        if (targetKey) {
+          teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+          return;
+        }
+        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  };
+
   const syncTeacherSegmentToolView = (sectionHeading = "") => {
+    if (resolveTeacherExampleSectionKey(sectionHeading)) {
+      openTeacherWorkedExamples(sectionHeading);
+      return;
+    }
     returnTeacherToGuide(sectionHeading);
   };
 
@@ -4023,6 +4045,18 @@ export default function App() {
       window.speechSynthesis.cancel();
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "guide" || teacherAutoTabRef.current !== "guide" || typeof window === "undefined") {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      scrollTeacherToSection(activeTeacherSegment?.sectionHeading || "", [guideSections]);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeTab, activeTeacherSegment?.sectionHeading, formattedGuide]);
 
   useEffect(() => {
     if (activeTab !== "examples" || teacherAutoTabRef.current !== "examples" || typeof window === "undefined") {
@@ -8897,7 +8931,7 @@ export default function App() {
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
     setCurrentPage(routedPage);
-  }, [authChecked, authSessionMode, authToken, browserPath]);
+  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
 
   useEffect(() => {
     if (!authChecked || !authToken) return;
@@ -9288,7 +9322,6 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not join this collaboration room.");
       setHighlightedInviteRoomId(normalizedRoomId);
       persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
-      await refreshCollaborationRooms(true);
       if (openBoard) {
         openCollaborationPage({ refresh: false });
         setActiveRoomId(normalizedRoomId);
@@ -9298,6 +9331,7 @@ export default function App() {
       } else if (!silent) {
         setStatus(`Added ${data.room?.title || "the collaboration room"} to your collaboration list.`);
       }
+      void refreshCollaborationRooms(true);
       return data.room || null;
     } catch (err) {
       if (!silent) setError(err.message || "Could not join this collaboration room.");
@@ -9351,13 +9385,10 @@ export default function App() {
 
     let cancelled = false;
     (async () => {
-      const room = await acceptCollaborationInvite(pendingRoomId, { silent: true, openBoard: false });
+      const room = await acceptCollaborationInvite(pendingRoomId, { silent: true, openBoard: true });
       if (cancelled || !room) return;
       consumePendingRoomInviteId();
       clearRoomInviteHashFromLocation();
-      openCollaborationPage({ replace: true, refresh: false });
-      setHighlightedInviteRoomId(pendingRoomId);
-      setStatus(`Your collaboration invite for ${room.title || "this room"} is ready.`);
     })();
 
     return () => {
