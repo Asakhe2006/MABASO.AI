@@ -48,6 +48,13 @@ function actionButtonClass(variant = "secondary") {
 function WorkspacePreview({ page }) {
   const previewTabs = page.hero?.preview?.tabs || [];
   const previewRows = page.hero?.preview?.rows || [];
+  const previewHighlights = (page.contains || page.layout || [])
+    .slice(0, 3)
+    .map((item, index) => ({
+      title: item.title || `Core surface ${index + 1}`,
+      description: item.description || page.hero?.description || "This page explains how the feature works inside Mabaso AI.",
+      badge: index === 0 ? "Primary" : "Linked",
+    }));
 
   return (
     <div className="relative overflow-hidden rounded-[30px] border border-cyan-300/15 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.24),transparent_32%),radial-gradient(circle_at_bottom_right,rgba(56,189,248,0.22),transparent_28%),linear-gradient(160deg,rgba(2,6,23,0.98),rgba(15,23,42,0.92),rgba(8,47,73,0.92))] p-5 shadow-[0_32px_90px_rgba(8,15,35,0.45)] backdrop-blur-xl">
@@ -74,29 +81,26 @@ function WorkspacePreview({ page }) {
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(260px,0.75fr)]">
         <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-4">
-          <div className="grid gap-3">
-            {[0, 1, 2].map((row) => (
+          <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Live product surface</p>
+          <div className="mt-4 grid gap-3">
+            {previewHighlights.map((item, index) => (
               <motion.div
-                key={`${page.route}-preview-row-${row}`}
+                key={`${page.route}-preview-highlight-${item.title}`}
                 className="rounded-[22px] border border-white/8 bg-slate-950/50 p-4"
-                initial={{ opacity: 0.35, x: row * 18 }}
+                initial={{ opacity: 0.35, x: index * 18 }}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.6, delay: row * 0.08 }}
+                transition={{ duration: 0.6, delay: index * 0.08 }}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Module {row + 1}</p>
-                    <div className="mt-3 h-3 w-36 rounded-full bg-white/80" />
+                    <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Workspace focus</p>
+                    <p className="mt-3 text-base font-semibold text-white">{item.title}</p>
                   </div>
                   <div className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-cyan-100">
-                    Live
+                    {item.badge}
                   </div>
                 </div>
-                <div className="mt-4 grid gap-2">
-                  <div className="h-2 rounded-full bg-white/20" />
-                  <div className="h-2 w-11/12 rounded-full bg-white/10" />
-                  <div className="h-2 w-4/5 rounded-full bg-white/10" />
-                </div>
+                <p className="mt-4 text-sm leading-7 text-slate-300">{item.description}</p>
               </motion.div>
             ))}
           </div>
@@ -132,44 +136,19 @@ function CtaButton({ cta, onAction }) {
 
 function AuthOverlayButtons({
   onSignIn,
-  onCreateAccount,
-  onStartApple,
   googleButtonRef,
   isGoogleSigningIn,
-  isAppleSigningIn,
 }) {
   return (
-    <div className="grid gap-3">
+    <div className="relative">
       <button
         type="button"
         onClick={onSignIn}
-        className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white shadow-[0_20px_60px_rgba(37,99,235,0.32)] transition hover:shadow-[0_24px_70px_rgba(37,99,235,0.38)]"
+        className="w-full rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white shadow-[0_20px_60px_rgba(37,99,235,0.32)] transition hover:shadow-[0_24px_70px_rgba(37,99,235,0.38)]"
       >
-        Sign In
+        {isGoogleSigningIn ? "Finishing Google Sign-In..." : "Get Started"}
       </button>
-      <div className="relative">
-        <button
-          type="button"
-          className="w-full rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-        >
-          {isGoogleSigningIn ? "Finishing Google Sign-In..." : "Continue with Google"}
-        </button>
-        <div ref={googleButtonRef} className="absolute inset-0 z-20 overflow-hidden opacity-0" aria-hidden="true" />
-      </div>
-      <button
-        type="button"
-        onClick={onStartApple}
-        className="rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
-      >
-        {isAppleSigningIn ? "Connecting to Apple..." : "Continue with Apple"}
-      </button>
-      <button
-        type="button"
-        onClick={onCreateAccount}
-        className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-5 py-3 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15"
-      >
-        Create Account
-      </button>
+      <div ref={googleButtonRef} className="absolute inset-0 z-20 overflow-hidden opacity-0" aria-hidden="true" />
     </div>
   );
 }
@@ -179,11 +158,8 @@ function LoginWall({
   description,
   benefits = [],
   onSignIn,
-  onCreateAccount,
-  onStartApple,
   googleButtonRef,
   isGoogleSigningIn,
-  isAppleSigningIn,
 }) {
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/55 px-4 py-8 backdrop-blur-sm">
@@ -207,15 +183,110 @@ function LoginWall({
         <div className="mt-6">
           <AuthOverlayButtons
             onSignIn={onSignIn}
-            onCreateAccount={onCreateAccount}
-            onStartApple={onStartApple}
             googleButtonRef={googleButtonRef}
             isGoogleSigningIn={isGoogleSigningIn}
-            isAppleSigningIn={isAppleSigningIn}
           />
         </div>
       </div>
     </div>
+  );
+}
+
+function ContactSupportForm({
+  supportForm,
+  onSupportFieldChange,
+  onSupportSubmit,
+  isAuthenticated = false,
+}) {
+  if (!supportForm) return null;
+  const feedbackTone = /^support message (sent|saved)/i.test((supportForm.feedback || "").trim())
+    ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"
+    : "border-rose-300/20 bg-rose-500/10 text-rose-100";
+
+  return (
+    <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Live Support Form</p>
+          <h2 className="mt-3 text-2xl font-semibold text-white">Send feedback directly to the Mabaso AI admin inbox</h2>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+            Describe what went wrong, what you expected to happen, and the browser or device you used. The admin dashboard stores these messages so they can be reviewed later.
+          </p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200">
+          {isAuthenticated ? "Signed-in support flow" : "Public support flow"}
+        </span>
+      </div>
+      <div className="mt-6 grid gap-4 xl:grid-cols-2">
+        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Reply Email</span>
+          <input
+            value={supportForm.email || ""}
+            onChange={(event) => onSupportFieldChange?.("email", event.target.value)}
+            placeholder="you@example.com"
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
+          />
+        </label>
+        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Issue Category</span>
+          <select
+            value={supportForm.category || ""}
+            onChange={(event) => onSupportFieldChange?.("category", event.target.value)}
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
+          >
+            {(supportForm.categories || []).map((item) => (
+              <option key={item} value={item} className="bg-slate-950 text-white">
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Device</span>
+          <input
+            value={supportForm.device || ""}
+            onChange={(event) => onSupportFieldChange?.("device", event.target.value)}
+            placeholder="Windows PC, iPhone, MacBook..."
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
+          />
+        </label>
+        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Browser</span>
+          <input
+            value={supportForm.browser || ""}
+            onChange={(event) => onSupportFieldChange?.("browser", event.target.value)}
+            placeholder="Chrome, Safari, Edge..."
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
+          />
+        </label>
+      </div>
+      <label className="mt-4 block rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+        <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Message</span>
+        <textarea
+          value={supportForm.message || ""}
+          onChange={(event) => onSupportFieldChange?.("message", event.target.value)}
+          rows={10}
+          placeholder="Tell us what happened, what page you were on, and what you expected to happen."
+          className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4 text-sm leading-7 text-white outline-none"
+        />
+      </label>
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => onSupportSubmit?.()}
+          disabled={supportForm.isSubmitting}
+          className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white transition disabled:opacity-60"
+        >
+          {supportForm.isSubmitting ? "Sending..." : "Send Support Message"}
+        </button>
+        <p className="text-sm text-slate-300">New messages appear in the admin dashboard Contact Support tab.</p>
+      </div>
+      {supportForm.feedback ? (
+        <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${feedbackTone}`}>
+          {supportForm.feedback}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -391,6 +462,9 @@ export function EnterpriseSiteShell({
   googleButtonRef,
   isGoogleSigningIn = false,
   isAppleSigningIn = false,
+  supportForm,
+  onSupportFieldChange,
+  onSupportSubmit,
 }) {
   const [faqQuery, setFaqQuery] = useState("");
   const [activeFaqIndex, setActiveFaqIndex] = useState(0);
@@ -592,6 +666,15 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
+            {page.route === "/support/contact-support" ? (
+              <ContactSupportForm
+                supportForm={supportForm}
+                onSupportFieldChange={onSupportFieldChange}
+                onSupportSubmit={onSupportSubmit}
+                isAuthenticated={isAuthenticated}
+              />
+            ) : null}
+
             {page.faq?.length ? (
               <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -672,11 +755,8 @@ export function EnterpriseSiteShell({
               description={page.lockedPreview?.description || "This route contains protected Mabaso AI content that becomes available after authentication."}
               benefits={page.lockedPreview?.benefits || []}
               onSignIn={onOpenSignIn}
-              onCreateAccount={onOpenCreateAccount}
-              onStartApple={onStartApple}
               googleButtonRef={googleButtonRef}
               isGoogleSigningIn={isGoogleSigningIn}
-              isAppleSigningIn={isAppleSigningIn}
             />
           ) : null}
         </div>
@@ -798,4 +878,3 @@ export function ProtectedWorkspacePreview({
     />
   );
 }
-

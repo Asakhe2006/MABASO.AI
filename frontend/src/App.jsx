@@ -23,11 +23,44 @@ function resolveApiBaseUrl() {
   return "https://mabaso-ai-api.onrender.com";
 }
 
+function detectSupportBrowser() {
+  if (typeof navigator === "undefined") return "";
+  const userAgent = navigator.userAgent || "";
+  if (/edg/i.test(userAgent)) return "Microsoft Edge";
+  if (/chrome|crios/i.test(userAgent) && !/edg/i.test(userAgent)) return "Google Chrome";
+  if (/firefox|fxios/i.test(userAgent)) return "Mozilla Firefox";
+  if (/safari/i.test(userAgent) && !/chrome|crios|edg/i.test(userAgent)) return "Safari";
+  if (/opr|opera/i.test(userAgent)) return "Opera";
+  return navigator.platform || "Web browser";
+}
+
+function detectSupportDevice() {
+  if (typeof navigator === "undefined") return "";
+  const userAgent = navigator.userAgent || "";
+  if (/iphone/i.test(userAgent)) return "iPhone";
+  if (/ipad/i.test(userAgent)) return "iPad";
+  if (/android/i.test(userAgent) && /mobile/i.test(userAgent)) return "Android phone";
+  if (/android/i.test(userAgent)) return "Android tablet";
+  if (/mac/i.test(navigator.platform || "")) return "Mac";
+  if (/win/i.test(navigator.platform || "")) return "Windows PC";
+  if (/linux/i.test(navigator.platform || "")) return "Linux PC";
+  return "Web device";
+}
+
 const API_BASE_URL = resolveApiBaseUrl();
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
 const APPLE_REDIRECT_URI = (import.meta.env.VITE_APPLE_REDIRECT_URI || "").trim();
 const JOB_POLL_INTERVAL_MS = 2000;
+const SUPPORT_CONTACT_CATEGORIES = [
+  "Bug report",
+  "Account issue",
+  "Upload problem",
+  "Study generation issue",
+  "Transcription issue",
+  "Feature request",
+  "General feedback",
+];
 const ROOM_REFRESH_INTERVAL_MS = 5000;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
@@ -3191,6 +3224,10 @@ export default function App() {
   const [supportMessageDraft, setSupportMessageDraft] = useState("");
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
+  const [supportContactEmail, setSupportContactEmail] = useState("");
+  const [supportContactCategory, setSupportContactCategory] = useState(SUPPORT_CONTACT_CATEGORIES[0]);
+  const [supportContactDevice, setSupportContactDevice] = useState(() => detectSupportDevice());
+  const [supportContactBrowser, setSupportContactBrowser] = useState(() => detectSupportBrowser());
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [presentationView, setPresentationView] = useState("setup");
   const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache());
@@ -3287,6 +3324,21 @@ export default function App() {
     if (!authToken) return;
     setPublicPage("auth");
   }, [authToken]);
+
+  useEffect(() => {
+    if (supportContactEmail.trim()) return;
+    const fallbackEmail = authEmail || authEmailInput || "";
+    if (fallbackEmail) setSupportContactEmail(fallbackEmail);
+  }, [authEmail, authEmailInput, supportContactEmail]);
+
+  useEffect(() => {
+    if (!supportContactDevice.trim()) {
+      setSupportContactDevice(detectSupportDevice());
+    }
+    if (!supportContactBrowser.trim()) {
+      setSupportContactBrowser(detectSupportBrowser());
+    }
+  }, [supportContactBrowser, supportContactDevice]);
 
   const openPublicTermsPage = () => navigateToPath("/company/terms");
 
@@ -6025,6 +6077,100 @@ export default function App() {
         );
       }
 
+      if (adminSidebarTab === "support") {
+        return (
+          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+            <article className={sectionCardClass}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Contact Support</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Saved support feedback and issue reports</h2>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredSupportMessages.length)} visible</span>
+                  <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">{formatAdminInteger(unreadSupportCount)} new</span>
+                </div>
+              </div>
+              <div className="mt-5 space-y-4">
+                {filteredSupportMessages.length ? filteredSupportMessages.map((item) => (
+                  <div key={item.id} className={`rounded-[24px] border px-4 py-4 ${item.admin_seen_at ? "border-slate-200 bg-slate-50" : "border-rose-100 bg-rose-50/80"}`}>
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="phone-safe-copy text-sm font-semibold text-slate-950">{item.email}</p>
+                          <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white">{item.category || "General"}</span>
+                          {!item.admin_seen_at ? <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">New</span> : null}
+                        </div>
+                        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">{item.page || "unknown-page"} / {formatAdminDateTime(item.created_at)}</p>
+                      </div>
+                      {!item.admin_seen_at ? (
+                        <button type="button" onClick={() => reviewSupportMessage(item.id)} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
+                          Mark Reviewed
+                        </button>
+                      ) : (
+                        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                          Reviewed {item.admin_seen_by ? `by ${item.admin_seen_by}` : ""}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{item.message}</p>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Device</p>
+                        <p className="mt-2 text-sm text-slate-900">{item.device || "Not provided"}</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Browser</p>
+                        <p className="mt-2 text-sm text-slate-900">{item.browser || "Not provided"}</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Delivery</p>
+                        <p className="mt-2 text-sm text-slate-900">{titleCaseWords(item.email_delivery_status || "queued")}</p>
+                      </div>
+                    </div>
+                  </div>
+                )) : emptyPanel("Support feedback will appear here after users send messages from the public Contact Support page or the in-app support page.")}
+              </div>
+            </article>
+
+            <div className="space-y-5">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Inbox Health</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">What needs attention right now</h2>
+                <div className="mt-5 grid gap-3">
+                  {[
+                    { label: "Unread messages", value: formatAdminInteger(unreadSupportCount) },
+                    { label: `Unread in ${selectedAdminRange.shortLabel}`, value: formatAdminInteger(support.unread_count_in_range ?? 0) },
+                    { label: "Latest message", value: support.latest_message_at ? formatAdminDateTime(support.latest_message_at) : "No messages yet" },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
+                      <p className="mt-3 text-lg font-semibold text-slate-950">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Admin Notes</p>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">How support messages are stored</h2>
+                <div className="mt-5 space-y-3">
+                  {[
+                    "Messages are saved in the backend database so they remain visible inside the dashboard.",
+                    "Public Contact Support and signed-in in-app support both feed into this same admin inbox.",
+                    "New feedback stays highlighted until an admin marks it as reviewed.",
+                  ].map((item) => (
+                    <div key={item} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-700">
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </div>
+        );
+      }
+
       if (adminSidebarTab === "billing") {
         return (
           <article className={sectionCardClass}>
@@ -6082,7 +6228,7 @@ export default function App() {
                 <div className="flex items-center gap-3">
                   <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
                   <div className="min-w-0">
-                    <p className="truncate text-base font-semibold text-white">StudyMate AI</p>
+                    <p className="truncate text-base font-semibold text-white">Mabaso AI</p>
                     <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Admin Dashboard</p>
                   </div>
                 </div>
@@ -6100,7 +6246,14 @@ export default function App() {
                           onClick={() => setAdminSidebarTab(item.id)}
                           className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${adminSidebarTab === item.id ? "bg-[linear-gradient(135deg,#5b6bff,#7c8bff)] text-white shadow-[0_12px_30px_rgba(91,107,255,0.35)]" : "text-slate-200 hover:bg-white/10"}`}
                         >
-                          {item.label}
+                          <span className="flex items-center justify-between gap-3">
+                            <span>{item.label}</span>
+                            {item.id === "support" && unreadSupportCount > 0 ? (
+                              <span className="rounded-full bg-rose-400/20 px-2.5 py-1 text-[11px] font-semibold text-rose-100">
+                                {unreadSupportCount}
+                              </span>
+                            ) : null}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -6197,6 +6350,7 @@ export default function App() {
       { id: "analytics", label: "Usage Analytics", group: "Analytics" },
       { id: "health", label: "System Health", group: "System" },
       { id: "security", label: "Security", group: "System" },
+      { id: "support", label: "Contact Support", group: "System" },
       { id: "billing", label: "Billing", group: "System" },
       { id: "settings", label: "Settings", group: "System" },
     ];
@@ -6216,18 +6370,22 @@ export default function App() {
     const systemHealth = dashboard.system_health || {};
     const transcriptionQueue = systemHealth.transcription_queue || {};
     const security = dashboard.security || {};
+    const support = dashboard.support || {};
     const users = dashboard.users || [];
     const activityLogs = dashboard.activity_logs || [];
+    const supportMessages = support.messages || [];
     const failedJobs = aiGeneration.failed_jobs || [];
     const topUsersByUsage = storageInsights.top_users || [];
     const storageBreakdown = storageInsights.breakdown || {};
     const failedLoginCount = (security.failed_logins || []).length;
+    const unreadSupportCount = support.unread_count ?? 0;
     const normalizedSearchQuery = adminSearchQuery.toLowerCase().trim();
     const matchesSearch = (value) => !normalizedSearchQuery || String(value || "").toLowerCase().includes(normalizedSearchQuery);
     const filteredUsers = users.filter((user) => matchesSearch(`${user.email} ${user.role} ${user.status} ${user.next_timeout_at}`));
     const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address}`));
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
+    const filteredSupportMessages = supportMessages.filter((item) => matchesSearch(`${item.email} ${item.page} ${item.category} ${item.device} ${item.browser} ${item.message}`));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -7070,7 +7228,7 @@ export default function App() {
                 <div className="flex items-center gap-3">
                   <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
                   <div className="min-w-0">
-                    <p className="truncate text-base font-semibold text-white">StudyMate AI</p>
+                    <p className="truncate text-base font-semibold text-white">Mabaso AI</p>
                     <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Admin Dashboard</p>
                   </div>
                 </div>
@@ -8248,7 +8406,7 @@ export default function App() {
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
     setCurrentPage(routedPage);
-  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
+  }, [authChecked, authSessionMode, authToken, browserPath]);
 
   useEffect(() => {
     if (!authChecked || !authToken) return;
@@ -8374,6 +8532,30 @@ export default function App() {
     }
   };
 
+  const publicJsonWithTransientRetries = async (path, options = {}, { timeoutMs = 30000, retries = 0 } = {}) => {
+    let attempt = 0;
+    while (true) {
+      try {
+        const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, options, timeoutMs);
+        const data = await parseJsonSafe(response);
+        if (!response.ok) {
+          const requestError = new Error(data.detail || "Request failed.");
+          requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
+          requestError.response = response;
+          requestError.data = data;
+          throw requestError;
+        }
+        return { response, data };
+      } catch (err) {
+        const message = String(err?.message || "");
+        const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+        if (!isTransient || attempt >= retries) throw new Error(getReadableRequestError(err));
+        attempt += 1;
+        await wait(1200 * attempt);
+      }
+    }
+  };
+
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
     if (targetMode === "user" && authSessionMode === "user") {
@@ -8475,6 +8657,21 @@ export default function App() {
       await loadAdminDashboard(true);
     } catch (err) {
       setError(err.message || "Could not force logout for this user.");
+    }
+  };
+
+  const reviewSupportMessage = async (messageId) => {
+    if (!messageId) return;
+    try {
+      const response = await authFetch(`/admin/support-messages/${encodeURIComponent(messageId)}/review`, {
+        method: "POST",
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not review this support message.");
+      setStatus(data.message || "Support message marked as reviewed.");
+      await loadAdminDashboard(true, "", adminDashboardRange);
+    } catch (err) {
+      setError(err.message || "Could not update this support message.");
     }
   };
 
@@ -8792,31 +8989,97 @@ export default function App() {
     }
   };
 
-  const submitSupportMessage = async () => {
-    const message = supportMessageDraft.trim();
-    if (!message) {
-      setSupportFeedback("Write your message before sending it.");
-      return;
+  const submitSupportRequest = async ({
+    page = currentPage,
+    message = supportMessageDraft,
+    email = supportContactEmail || authEmail || authEmailInput,
+    category = supportContactCategory,
+    device = supportContactDevice || detectSupportDevice(),
+    browser = supportContactBrowser || detectSupportBrowser(),
+  } = {}) => {
+    const normalizedMessage = String(message || "").trim();
+    if (!normalizedMessage) {
+      throw new Error("Write your message before sending it.");
     }
 
+    const payload = {
+      email: String(email || "").trim(),
+      message: normalizedMessage,
+      page: String(page || "").trim() || "unknown-page",
+      category: String(category || "").trim() || SUPPORT_CONTACT_CATEGORIES[0],
+      device: String(device || "").trim() || detectSupportDevice(),
+      browser: String(browser || "").trim() || detectSupportBrowser(),
+      client_request_id: buildClientRequestId("support"),
+    };
+    const requestOptions = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    };
+    if (authToken) {
+      return authJsonWithTransientRetries("/support/contact", requestOptions, { timeoutMs: 90000, retries: 2 });
+    }
+    if (!payload.email) {
+      throw new Error("Enter your email address so the support team can reply.");
+    }
+    return publicJsonWithTransientRetries("/support/public-contact", requestOptions, { timeoutMs: 90000, retries: 2 });
+  };
+
+  const submitSupportMessage = async () => {
     setIsSendingSupport(true);
     setSupportFeedback("");
     try {
-      const { data } = await authJsonWithTransientRetries("/support/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message,
-          page: currentPage,
-          client_request_id: buildClientRequestId("support"),
-        }),
-      }, { timeoutMs: 90000, retries: 2 });
+      const { data } = await submitSupportRequest({ page: currentPage });
       setSupportMessageDraft("");
       setSupportFeedback(data.message || "Support message sent.");
     } catch (err) {
       setSupportFeedback(err.message || "Your support message could not be sent.");
     } finally {
       setIsSendingSupport(false);
+    }
+  };
+
+  const submitEnterpriseSupportForm = async () => {
+    setIsSendingSupport(true);
+    setSupportFeedback("");
+    try {
+      const { data } = await submitSupportRequest({ page: browserPath || "/support/contact-support" });
+      setSupportMessageDraft("");
+      setSupportFeedback(data.message || "Support message sent.");
+    } catch (err) {
+      setSupportFeedback(err.message || "Your support message could not be sent.");
+    } finally {
+      setIsSendingSupport(false);
+    }
+  };
+
+  const updateSupportContactField = (field, value) => {
+    const nextValue = typeof value === "string" ? value : String(value || "");
+    if (field !== "feedback" && supportFeedback) {
+      setSupportFeedback("");
+    }
+    if (field === "email") {
+      setSupportContactEmail(nextValue);
+      return;
+    }
+    if (field === "category") {
+      setSupportContactCategory(nextValue || SUPPORT_CONTACT_CATEGORIES[0]);
+      return;
+    }
+    if (field === "device") {
+      setSupportContactDevice(nextValue);
+      return;
+    }
+    if (field === "browser") {
+      setSupportContactBrowser(nextValue);
+      return;
+    }
+    if (field === "message") {
+      setSupportMessageDraft(nextValue);
+      return;
+    }
+    if (field === "feedback") {
+      setSupportFeedback(nextValue);
     }
   };
 
@@ -11543,6 +11806,18 @@ export default function App() {
           googleButtonRef={enterpriseGoogleButtonRef}
           isGoogleSigningIn={isGoogleSigningIn}
           isAppleSigningIn={isAppleSigningIn}
+          supportForm={{
+            email: supportContactEmail || authEmailInput || "",
+            category: supportContactCategory,
+            device: supportContactDevice,
+            browser: supportContactBrowser,
+            message: supportMessageDraft,
+            feedback: supportFeedback,
+            isSubmitting: isSendingSupport,
+            categories: SUPPORT_CONTACT_CATEGORIES,
+          }}
+          onSupportFieldChange={updateSupportContactField}
+          onSupportSubmit={submitEnterpriseSupportForm}
         />
       );
     }
@@ -11699,6 +11974,18 @@ export default function App() {
         googleButtonRef={enterpriseGoogleButtonRef}
         isGoogleSigningIn={isGoogleSigningIn}
         isAppleSigningIn={isAppleSigningIn}
+        supportForm={{
+          email: supportContactEmail || authEmail || authEmailInput || "",
+          category: supportContactCategory,
+          device: supportContactDevice,
+          browser: supportContactBrowser,
+          message: supportMessageDraft,
+          feedback: supportFeedback,
+          isSubmitting: isSendingSupport,
+          categories: SUPPORT_CONTACT_CATEGORIES,
+        }}
+        onSupportFieldChange={updateSupportContactField}
+        onSupportSubmit={submitEnterpriseSupportForm}
       />
     );
   }

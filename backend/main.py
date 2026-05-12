@@ -145,6 +145,7 @@ MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 *
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 MAX_SUPPORT_MESSAGE_CHARS = int(os.getenv("MAX_SUPPORT_MESSAGE_CHARS", "4000"))
+MAX_SUPPORT_CONTEXT_CHARS = int(os.getenv("MAX_SUPPORT_CONTEXT_CHARS", "180"))
 MAX_REFERENCE_IMAGE_INPUT_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_INPUT_CHARS", "220000"))
 MAX_REFERENCE_IMAGE_URL_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_URL_CHARS", "2400"))
 MAX_CHAT_REFERENCE_IMAGES = int(os.getenv("MAX_CHAT_REFERENCE_IMAGES", "4"))
@@ -161,6 +162,7 @@ SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
 ADMIN_DASHBOARD_AUDIT_LOG_LIMIT = int(os.getenv("ADMIN_DASHBOARD_AUDIT_LOG_LIMIT", "8000"))
 ADMIN_DASHBOARD_HISTORY_LIMIT = int(os.getenv("ADMIN_DASHBOARD_HISTORY_LIMIT", "1200"))
+ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT = int(os.getenv("ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT", "240"))
 ADMIN_DASHBOARD_DEFAULT_RANGE = os.getenv("ADMIN_DASHBOARD_DEFAULT_RANGE", "7d").strip().lower() or "7d"
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
@@ -718,8 +720,12 @@ class AppleAuthRequest(BaseModel):
 
 
 class SupportMessageRequest(BaseModel):
+    email: str = ""
     message: str
     page: str = ""
+    category: str = ""
+    device: str = ""
+    browser: str = ""
     client_request_id: str = ""
 
 
@@ -1045,6 +1051,22 @@ def init_db():
             ON support_messages (created_at DESC)
             """
         )
+        support_message_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(support_messages)").fetchall()
+        }
+        support_message_column_defaults = {
+            "category": "TEXT NOT NULL DEFAULT ''",
+            "device": "TEXT NOT NULL DEFAULT ''",
+            "browser": "TEXT NOT NULL DEFAULT ''",
+            "admin_seen_at": "TEXT NOT NULL DEFAULT ''",
+            "admin_seen_by": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in support_message_column_defaults.items():
+            if column_name not in support_message_columns:
+                connection.execute(
+                    f"ALTER TABLE support_messages ADD COLUMN {column_name} {column_definition}"
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS request_rate_limits (
@@ -1939,7 +1961,23 @@ def send_verification_email(email: str, code: str):
     send_smtp_message(message)
 
 
-def send_support_email(reply_email: str, message_text: str, page: str = ""):
+def normalize_support_context_value(value: str, max_chars: int = MAX_SUPPORT_CONTEXT_CHARS) -> str:
+    return compact_text(value)[:max(20, max_chars)]
+
+
+def normalize_support_category(value: str) -> str:
+    return normalize_support_context_value(value or "General", 80) or "General"
+
+
+def send_support_email(
+    reply_email: str,
+    message_text: str,
+    page: str = "",
+    *,
+    category: str = "",
+    device: str = "",
+    browser: str = "",
+):
     cleaned_message = compact_text(message_text)
     if not cleaned_message:
         raise HTTPException(status_code=400, detail="Support message cannot be empty.")
@@ -1956,6 +1994,9 @@ def send_support_email(reply_email: str, message_text: str, page: str = ""):
             "A new support request was sent from MABASO.\n\n"
             f"From: {reply_email}\n"
             f"Page: {page or 'unknown'}\n"
+            f"Category: {category or 'General'}\n"
+            f"Device: {device or 'Not provided'}\n"
+            f"Browser: {browser or 'Not provided'}\n"
             f"Sent at (UTC): {utc_now().isoformat()}\n\n"
             "Message:\n"
             f"{message_text.strip()}\n"
@@ -1977,9 +2018,14 @@ def serialize_support_message_row(row: sqlite3.Row | None) -> dict[str, Any]:
         "client_request_id": row["client_request_id"],
         "email": row["email"],
         "page": row["page"],
+        "category": row["category"],
+        "device": row["device"],
+        "browser": row["browser"],
         "message": row["message"],
         "email_delivery_status": row["email_delivery_status"],
         "email_error": row["email_error"],
+        "admin_seen_at": row["admin_seen_at"],
+        "admin_seen_by": row["admin_seen_by"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -1990,6 +2036,10 @@ def create_or_load_support_message(
     message_text: str,
     page: str = "",
     client_request_id: str = "",
+    *,
+    category: str = "",
+    device: str = "",
+    browser: str = "",
 ) -> dict[str, Any]:
     normalized_email = validate_email_address(reply_email)
     cleaned_message = compact_text(message_text)
@@ -1998,6 +2048,9 @@ def create_or_load_support_message(
 
     normalized_request_id = normalize_client_request_id(client_request_id)
     cleaned_page = compact_text(page, "unknown-page")[:120]
+    cleaned_category = normalize_support_category(category)
+    cleaned_device = normalize_support_context_value(device)
+    cleaned_browser = normalize_support_context_value(browser)
 
     with get_db_connection() as connection:
         existing_row = connection.execute(
@@ -2012,18 +2065,23 @@ def create_or_load_support_message(
         connection.execute(
             """
             INSERT INTO support_messages (
-                id, client_request_id, email, page, message, email_delivery_status,
-                email_error, created_at, updated_at
+                id, client_request_id, email, page, category, device, browser, message,
+                email_delivery_status, email_error, admin_seen_at, admin_seen_by, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_id,
                 normalized_request_id,
                 normalized_email,
                 cleaned_page,
+                cleaned_category,
+                cleaned_device,
+                cleaned_browser,
                 cleaned_message,
                 "queued",
+                "",
+                "",
                 "",
                 created_at,
                 created_at,
@@ -2053,9 +2111,21 @@ async def deliver_support_message_email(
     reply_email: str,
     message_text: str,
     page: str,
+    *,
+    category: str = "",
+    device: str = "",
+    browser: str = "",
 ) -> dict[str, str]:
     try:
-        await asyncio.to_thread(send_support_email, reply_email, message_text, page)
+        await asyncio.to_thread(
+            send_support_email,
+            reply_email,
+            message_text,
+            page,
+            category=category,
+            device=device,
+            browser=browser,
+        )
     except HTTPException as exc:
         logger.warning("Support email delivery failed for %s: %s", message_id, exc.detail)
         await asyncio.to_thread(update_support_message_delivery, message_id, "email_failed", str(exc.detail))
@@ -2067,6 +2137,51 @@ async def deliver_support_message_email(
     else:
         await asyncio.to_thread(update_support_message_delivery, message_id, "sent", "")
         return {"status": "sent", "error": ""}
+
+
+def load_support_messages(limit: int = ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT), 500))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM support_messages
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    messages: list[dict[str, Any]] = []
+    for row in rows:
+        payload = serialize_support_message_row(row)
+        payload["created_at_dt"] = parse_history_datetime(payload.get("created_at"), utc_now())
+        payload["is_new"] = not compact_text(payload.get("admin_seen_at"))
+        messages.append(payload)
+    return messages
+
+
+def mark_support_message_reviewed(message_id: str, admin_email: str) -> dict[str, Any]:
+    normalized_message_id = compact_text(message_id)
+    if not normalized_message_id:
+        return {}
+    normalized_admin_email = validate_email_address(admin_email)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE support_messages
+            SET admin_seen_at = CASE WHEN admin_seen_at = '' THEN ? ELSE admin_seen_at END,
+                admin_seen_by = CASE WHEN admin_seen_by = '' THEN ? ELSE admin_seen_by END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, normalized_admin_email, now_iso, normalized_message_id),
+        )
+        row = connection.execute(
+            "SELECT * FROM support_messages WHERE id = ?",
+            (normalized_message_id,),
+        ).fetchone()
+    return serialize_support_message_row(row)
 
 
 def create_login_code(email: str) -> str:
@@ -3772,6 +3887,12 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     logs = filter_admin_logs_by_start(logs_all, range_start)
     history_items_all = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
     history_items = filter_admin_history_by_start(history_items_all, range_start)
+    support_messages_all = load_support_messages(limit=ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT)
+    support_messages = [
+        message
+        for message in support_messages_all
+        if message["created_at_dt"] >= range_start
+    ]
 
     with get_db_connection() as connection:
         user_rows = connection.execute(
@@ -4143,6 +4264,12 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         ),
         reverse=True,
     )[:10]
+    unread_support_count = sum(
+        1 for message in support_messages_all if not compact_text(message.get("admin_seen_at"))
+    )
+    unread_support_count_in_range = sum(
+        1 for message in support_messages if not compact_text(message.get("admin_seen_at"))
+    )
 
     content_items = []
     for item in history_items[:120]:
@@ -4387,6 +4514,19 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 {"device": device, "actions": count}
                 for device, count in sorted(device_activity.items(), key=lambda item: item[1], reverse=True)[:20]
             ],
+        },
+        "support": {
+            "messages": [
+                {
+                    key: value
+                    for key, value in message.items()
+                    if key != "created_at_dt"
+                }
+                for message in support_messages[:80]
+            ],
+            "unread_count": unread_support_count,
+            "unread_count_in_range": unread_support_count_in_range,
+            "latest_message_at": support_messages_all[0]["created_at"] if support_messages_all else "",
         },
         "billing": {
             "subscriptions": [],
@@ -5277,34 +5417,56 @@ async def logout(request: Request, authorization: str | None = Header(None)):
     return {"message": "Logged out."}
 
 
-@app.post("/support/contact")
-async def submit_support_request(
+async def process_support_request_submission(
+    *,
+    reply_email: str,
     payload: SupportMessageRequest,
     request: Request,
-    current_user: str = Depends(require_authenticated_user),
+    audit_action: str,
+    rate_limit_scope: str,
+    rate_limit_limit: int,
 ):
     started_at = utc_now()
-    enforce_rate_limit(scope="support_contact", request=request, limit=6, window_seconds=60 * 60, identity=current_user)
+    normalized_email = validate_email_address(reply_email)
+    enforce_rate_limit(
+        scope=rate_limit_scope,
+        request=request,
+        limit=rate_limit_limit,
+        window_seconds=60 * 60,
+        identity=normalized_email,
+    )
     message = validate_support_message_text(payload.message)
     page = compact_text(payload.page, "unknown-page")[:120]
+    category = normalize_support_category(payload.category)
+    device = normalize_support_context_value(payload.device)
+    browser = normalize_support_context_value(payload.browser)
 
     support_message = await asyncio.to_thread(
         create_or_load_support_message,
-        current_user,
+        normalized_email,
         message,
         page,
         payload.client_request_id,
+        category=category,
+        device=device,
+        browser=browser,
     )
     saved_message = compact_text(support_message.get("message"), message)
     saved_page = compact_text(support_message.get("page"), page)[:120]
+    saved_category = normalize_support_category(support_message.get("category") or category)
+    saved_device = normalize_support_context_value(support_message.get("device") or device)
+    saved_browser = normalize_support_context_value(support_message.get("browser") or browser)
     delivery_status = compact_text(support_message.get("email_delivery_status"), "queued")
     email_error = compact_text(support_message.get("email_error"))
     if delivery_status != "sent":
         delivery_result = await deliver_support_message_email(
             support_message["id"],
-            current_user,
+            normalized_email,
             saved_message,
             saved_page,
+            category=saved_category,
+            device=saved_device,
+            browser=saved_browser,
         )
         delivery_status = compact_text(delivery_result.get("status"), delivery_status)
         email_error = compact_text(delivery_result.get("error"), email_error)
@@ -5315,9 +5477,9 @@ async def submit_support_request(
         else "Support message was saved, but the support inbox email could not be sent right now."
     )
     record_audit_log(
-        action="support.contact",
+        action=audit_action,
         status="success" if delivery_status == "sent" else "error",
-        email=current_user,
+        email=normalized_email,
         request=request,
         resource_type="support",
         resource_name=page or "unknown-page",
@@ -5327,6 +5489,9 @@ async def submit_support_request(
             "client_request_id": support_message.get("client_request_id", ""),
             "delivery_status": delivery_status,
             "email_error": email_error,
+            "category": saved_category,
+            "device": saved_device,
+            "browser": saved_browser,
         },
     )
     return {
@@ -5335,6 +5500,39 @@ async def submit_support_request(
         "support_message_id": support_message.get("id", ""),
         "email_error": email_error,
     }
+
+
+@app.post("/support/contact")
+async def submit_support_request(
+    payload: SupportMessageRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return await process_support_request_submission(
+        reply_email=current_user,
+        payload=payload,
+        request=request,
+        audit_action="support.contact",
+        rate_limit_scope="support_contact",
+        rate_limit_limit=6,
+    )
+
+
+@app.post("/support/public-contact")
+async def submit_public_support_request(
+    payload: SupportMessageRequest,
+    request: Request,
+):
+    if not compact_text(payload.email):
+        raise HTTPException(status_code=400, detail="Your email address is required for support replies.")
+    return await process_support_request_submission(
+        reply_email=payload.email,
+        payload=payload,
+        request=request,
+        audit_action="support.public_contact",
+        rate_limit_scope="support_public_contact",
+        rate_limit_limit=4,
+    )
 
 
 @app.get("/history")
@@ -5370,6 +5568,29 @@ async def get_admin_dashboard(
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
     return snapshot
+
+
+@app.post("/admin/support-messages/{message_id}/review")
+async def review_admin_support_message(
+    message_id: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    reviewed_message = await asyncio.to_thread(mark_support_message_reviewed, message_id, current_admin)
+    if not reviewed_message:
+        raise HTTPException(status_code=404, detail="Support message not found.")
+    record_audit_log(
+        action="admin.support.review",
+        email=current_admin,
+        request=request,
+        resource_type="support",
+        resource_name=compact_text(reviewed_message.get("id"), message_id)[:120],
+        metadata={"support_message_id": compact_text(reviewed_message.get("id"), message_id)[:120]},
+    )
+    return {
+        "message": "Support message marked as reviewed.",
+        "support_message": reviewed_message,
+    }
 
 
 @app.post("/admin/users/{target_email}/status")
