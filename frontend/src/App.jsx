@@ -241,6 +241,18 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "collaboration"];
+
+function normalizeWorkspaceTabId(tabId = "") {
+  const normalized = String(tabId || "").trim().toLowerCase();
+  return workspaceTabs.some((tab) => tab.id === normalized) ? normalized : "guide";
+}
+
+function normalizeAppPageId(pageId = "", fallback = "workspace") {
+  const normalized = String(pageId || "").trim().toLowerCase();
+  return APP_PAGE_IDS.includes(normalized) ? normalized : fallback;
+}
+
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
 const premiumPresentationDesigns = [
   {
@@ -1603,6 +1615,23 @@ function sanitizeStudyImagesForStorage(images) {
       query: image?.query || "",
       image_url: sanitizeStoredImageUrl(image?.image_url || ""),
       source_url: sanitizeStoredImageUrl(image?.source_url || ""),
+      source_type: image?.source_type || "",
+      visual_type: image?.visual_type || "",
+      matched_section: image?.matched_section || "",
+      key_highlight: truncateStoredText(image?.key_highlight || "", 260),
+      diagram_label: image?.diagram_label || "",
+    }))
+    .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
+    .slice(0, 6);
+}
+
+function sanitizeStudyImagesForCollaboration(images) {
+  return (images || [])
+    .map((image) => ({
+      title: image?.title || "",
+      query: image?.query || "",
+      image_url: sanitizeStoredImageUrl(image?.image_url || "", { allowInlineDataUrl: true }),
+      source_url: sanitizeStoredImageUrl(image?.source_url || "", { allowInlineDataUrl: true }),
       source_type: image?.source_type || "",
       visual_type: image?.visual_type || "",
       matched_section: image?.matched_section || "",
@@ -3286,11 +3315,14 @@ export default function App() {
   const [highlightedInviteRoomId, setHighlightedInviteRoomId] = useState(() => loadStoredRoomInviteId());
   const [dismissedRoomInviteIds, setDismissedRoomInviteIds] = useState(loadDismissedRoomInviteIds);
   const [roomMessageDraft, setRoomMessageDraft] = useState("");
+  const [selectedRoomBoardImageId, setSelectedRoomBoardImageId] = useState("");
   const [followRoomView, setFollowRoomView] = useState(true);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isRoomLoading, setIsRoomLoading] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
+  const [isUploadingRoomBoardImage, setIsUploadingRoomBoardImage] = useState(false);
+  const [deletingRoomBoardImageId, setDeletingRoomBoardImageId] = useState("");
   const [supportMessageDraft, setSupportMessageDraft] = useState("");
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
@@ -3311,6 +3343,7 @@ export default function App() {
   const pastQuestionPaperFileInputRef = useRef(null);
   const bulkLectureFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
+  const roomBoardImageInputRef = useRef(null);
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -3461,6 +3494,18 @@ export default function App() {
     }
     setBrowserPath(normalized);
     setPublicPage(normalized === PUBLIC_TERMS_PATH ? "terms" : "auth");
+  };
+
+  const openProtectedAppPage = (pageId, { replace = false } = {}) => {
+    setCurrentPage(pageId);
+    if (!authToken) return;
+    const targetRoute = resolveAppRouteForPage(pageId, authSessionMode);
+    if (targetRoute) navigateToPath(targetRoute, { replace });
+  };
+
+  const openCollaborationPage = ({ replace = false, refresh = true } = {}) => {
+    openProtectedAppPage("collaboration", { replace });
+    if (refresh) refreshCollaborationRooms(true);
   };
 
   const buildCollaborationInviteUrl = (roomId = "") => {
@@ -3641,6 +3686,7 @@ export default function App() {
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
+  const activeRoomGuideSections = extractGuideSections(activeRoomFormattedGuide || activeRoom?.summary || "");
   const rawExampleSections = extractGuideSections(formattedExample || example);
   const exampleSections = rawExampleSections.length === 1 && rawExampleSections[0]?.normalizedHeading === "study guide" && compactGuideVisualText(formattedExample || example)
     ? [toGuideSectionRecord("WORKED EXAMPLES", rawExampleSections[0].content, "WORKED EXAMPLES")]
@@ -3650,10 +3696,18 @@ export default function App() {
   const visibleGuideSections = guideSections.filter(
     (section) => !["lecture title", "short summary"].includes(section.normalizedHeading),
   );
+  const activeRoomGuideTitleSection = getGuideSectionByHeading(activeRoomGuideSections, "LECTURE TITLE");
+  const activeRoomGuideSummarySection = getGuideSectionByHeading(activeRoomGuideSections, "SHORT SUMMARY");
+  const activeRoomVisibleGuideSections = activeRoomGuideSections.filter(
+    (section) => !["lecture title", "short summary"].includes(section.normalizedHeading),
+  );
   const guideTopic = ((guideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || extractHistoryTitle(formattedGuide || summary, workspaceFileLabel)
     || workspaceFileLabel
     || "Study Guide";
+  const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
+    || activeRoom?.title
+    || "Shared Study Guide";
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
   const isTeacherQuestionBusy = isTeacherListening || isTeacherQuestionLoading || isTeacherAnswering;
@@ -3692,6 +3746,11 @@ export default function App() {
     activeTeacherSectionKey
     && [guideTitleSection?.normalizedHeading, guideSummarySection?.normalizedHeading].filter(Boolean).includes(activeTeacherSectionKey),
   );
+  const activeRoomBoardImages = Array.isArray(activeRoom?.board_images) ? activeRoom.board_images : [];
+  const selectedRoomBoardImage = activeRoomBoardImages.find((image) => image.id === selectedRoomBoardImageId)
+    || activeRoomBoardImages[activeRoomBoardImages.length - 1]
+    || activeRoomBoardImages[0]
+    || null;
   const isAdminAccount = authAvailableModes.includes("admin");
   const enterpriseRoute = resolveEnterpriseRoute(browserPath);
   const activeSitePage = enterpriseRoute.sitePage;
@@ -3726,7 +3785,7 @@ export default function App() {
     savedAt: new Date().toISOString(),
     activeHistoryId: overrides.activeHistoryId ?? activeHistoryId ?? "",
     currentPage: overrides.currentPage ?? (currentPage === "admin" ? "capture" : currentPage),
-    activeTab: overrides.activeTab ?? activeTab,
+    activeTab: normalizeWorkspaceTabId(overrides.activeTab ?? activeTab),
     videoUrl: overrides.videoUrl ?? videoUrl,
     transcript: overrides.transcript ?? transcript,
     summary: overrides.summary ?? summary,
@@ -3756,12 +3815,24 @@ export default function App() {
     saveWorkspaceDraft(ownerEmail, buildWorkspaceSnapshot(overrides));
   };
 
-  const applyWorkspaceSnapshot = (snapshot = {}, { preserveStatus = false } = {}) => {
+  const applyWorkspaceSnapshot = (
+    snapshot = {},
+    {
+      preserveStatus = false,
+      currentPageOverride = "",
+      activeTabOverride = "",
+    } = {},
+  ) => {
     if (!snapshot || typeof snapshot !== "object") return;
     const restoredPresentationData = normalizePresentationData(snapshot.presentationData);
     const restoredPresentationDesign = normalizePresentationDesignId(
       snapshot.selectedPresentationDesign || restoredPresentationData.designId || defaultPresentationDesignId,
       { allowLegacyDefault: restoredPresentationData.slides.length > 0 },
+    );
+    const restoredActiveTab = normalizeWorkspaceTabId(activeTabOverride || snapshot.activeTab || "guide");
+    const restoredCurrentPage = normalizeAppPageId(
+      currentPageOverride || snapshot.currentPage || "workspace",
+      "workspace",
     );
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
@@ -3790,8 +3861,8 @@ export default function App() {
       setOutputLanguage(snapshot.outputLanguage || outputLanguage);
       setVideoUrl(snapshot.videoUrl || "");
       setActiveHistoryId(snapshot.activeHistoryId || "");
-      setActiveTab(snapshot.activeTab || "guide");
-      setCurrentPage(snapshot.currentPage || "workspace");
+      setActiveTab(restoredActiveTab);
+      setCurrentPage(restoredCurrentPage);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
       setActiveTeacherSegmentIndex(-1);
@@ -3850,28 +3921,7 @@ export default function App() {
     });
   };
 
-  const openTeacherExamples = (sectionHeading = "") => {
-    teacherAutoTabRef.current = "examples";
-    setActiveTab("examples");
-    if (typeof window === "undefined") return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const targetKey = resolveTeacherExampleSectionKey(sectionHeading);
-        if (targetKey) {
-          const targetNode = teacherSectionRefs.current[targetKey];
-          targetNode?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
-        } else {
-          teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      });
-    });
-  };
-
   const syncTeacherSegmentToolView = (sectionHeading = "") => {
-    if (formattedExample.trim() && isWorkedExampleTeacherSegment(sectionHeading)) {
-      openTeacherExamples(sectionHeading);
-      return;
-    }
     returnTeacherToGuide(sectionHeading);
   };
 
@@ -4159,6 +4209,108 @@ export default function App() {
       </svg>
     </button>
   );
+
+  const renderStudyGuideContent = ({
+    topic = "Study Guide",
+    titleSection = null,
+    summarySection = null,
+    visibleSections = [],
+    formattedContent = "",
+    studyImageList = [],
+    emptyMessage = "Your study guide will appear here after generation.",
+    activeSectionKey = "",
+    showTeacherActivity = false,
+    registerTeacherRefs = false,
+  }) => {
+    const introKeys = [titleSection?.normalizedHeading, summarySection?.normalizedHeading].filter(Boolean);
+    const isIntroActive = Boolean(showTeacherActivity && activeSectionKey && introKeys.includes(activeSectionKey));
+    const titleCardRef = registerTeacherRefs
+      ? (node) => {
+        if (node && titleSection) teacherSectionRefs.current[titleSection.normalizedHeading] = node;
+        else if (titleSection) delete teacherSectionRefs.current[titleSection.normalizedHeading];
+        if (node && summarySection) teacherSectionRefs.current[summarySection.normalizedHeading] = node;
+        else if (summarySection) delete teacherSectionRefs.current[summarySection.normalizedHeading];
+      }
+      : undefined;
+
+    return (
+      <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
+        <div
+          ref={titleCardRef}
+          className={`study-guide-title-card rounded-[24px] p-5 transition ${isIntroActive ? "study-guide-section-active" : ""}`}
+        >
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="study-guide-kicker">Lecture Topic</p>
+              <h4 className="study-guide-topic mt-2">{topic}</h4>
+              {isIntroActive ? <p className="study-guide-focus-badge mt-4">Teacher is explaining this section</p> : null}
+            </div>
+          </div>
+          {summarySection?.content ? (
+            <div className="notes-markdown study-guide-markdown phone-safe-copy mt-4 max-w-none">
+              <MobileFirstMarkdown>{summarySection.content}</MobileFirstMarkdown>
+            </div>
+          ) : null}
+        </div>
+
+        {studyImageList.length ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Study Photos</p>
+              <p className="mt-2 text-sm leading-7 text-slate-300">Visual references matched to the guide so the notes can feel closer to the lecture material.</p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {studyImageList.map((image, index) => (
+                <article key={`${image.image_url || image.source_url || image.title}-${index}`} className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/75">
+                  <img src={image.image_url} alt={image.title || image.query || `Study photo ${index + 1}`} className="h-48 w-full object-cover" loading="lazy" />
+                  <div className="space-y-2 p-4">
+                    <p className="text-sm font-semibold text-white">{image.title || image.query || `Study photo ${index + 1}`}</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Study reference"}</p>
+                    <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor while revising this section."}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {visibleSections.length ? (
+          <div className="space-y-4">
+            {visibleSections.map((section, index) => {
+              const isActiveSection = activeSectionKey
+                ? activeSectionKey === section.normalizedHeading
+                  || activeSectionKey.includes(section.normalizedHeading)
+                  || section.normalizedHeading.includes(activeSectionKey)
+                : false;
+              const sectionRef = registerTeacherRefs
+                ? (node) => {
+                  if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
+                  else delete teacherSectionRefs.current[section.normalizedHeading];
+                }
+                : undefined;
+              return (
+                <article
+                  key={`${section.heading}-${index}`}
+                  ref={sectionRef}
+                  className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                >
+                  {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this section</p> : null}
+                  <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                  <div className="phone-safe-copy mt-3 max-w-none">
+                    <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+            <MobileFirstMarkdown>{formattedContent || emptyMessage}</MobileFirstMarkdown>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const buildCaptureActionMeta = (target) => {
     const progressLabel = loading && progress > 0 ? `${Math.round(progress)}%` : "";
@@ -4707,7 +4859,7 @@ export default function App() {
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-start gap-4">
-          {renderBackButton(() => setCurrentPage("workspace"), "Back to study workspace")}
+          {renderBackButton(() => openProtectedAppPage("workspace"), "Back to study workspace")}
           <div>
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 4 of 4</div>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration</p>
@@ -4890,7 +5042,15 @@ export default function App() {
                     </div>
                   </div>
                   <div className="mt-4">
-                    {activeRoom.active_tab === "guide" ? <div className="notes-markdown phone-safe-copy rounded-2xl border border-white/10 bg-black/30 p-4 prose prose-invert max-w-none prose-headings:text-white prose-p:text-slate-200 prose-strong:text-emerald-100 prose-li:text-slate-200"><MobileFirstMarkdown>{activeRoomFormattedGuide || "No shared study guide selected yet."}</MobileFirstMarkdown></div> : null}
+                    {activeRoom.active_tab === "guide" ? renderStudyGuideContent({
+                      topic: activeRoomGuideTopic,
+                      titleSection: activeRoomGuideTitleSection,
+                      summarySection: activeRoomGuideSummarySection,
+                      visibleSections: activeRoomVisibleGuideSections,
+                      formattedContent: activeRoomFormattedGuide,
+                      studyImageList: activeRoom?.study_images || [],
+                      emptyMessage: "No shared study guide selected yet.",
+                    }) : null}
                     {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
                     {activeRoom.active_tab === "formulas" ? (
                       <StudyToolFormulaPanel
@@ -4935,17 +5095,117 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid gap-5 xl:grid-cols-2">
-                <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
-                  <div className="force-mobile-stack flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p>
-                      <h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4>
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                <div className="min-w-0">
+                  <input
+                    ref={roomBoardImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      uploadRoomBoardImages(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <div className="-mx-1 flex gap-4 overflow-x-auto px-1 pb-2 snap-x snap-mandatory md:mx-0 md:flex-col md:overflow-visible md:px-0 md:pb-0">
+                    <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(2,6,23,0.98))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.38)] md:min-w-0">
+                      <div className="force-mobile-stack flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 1</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-white">Large shared notes board</h4>
+                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">A clear square canvas for the whole group. Use it for section plans, reminders, definitions, or the lecturer's key steps.</p>
+                        </div>
+                        <div className="force-mobile-stack flex flex-wrap gap-3">
+                          <button type="button" onClick={() => saveRoomNotes()} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync board"}</button>
+                          <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
+                        </div>
+                      </div>
+                      <div className="mt-4 aspect-square min-h-[420px] overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] bg-[size:30px_30px,30px_30px,auto]">
+                        <textarea
+                          value={roomSharedNotesDraft}
+                          onChange={(event) => {
+                            roomNotesLastEditedAtRef.current = Date.now();
+                            setRoomSharedNotesDraft(event.target.value);
+                          }}
+                          rows={18}
+                          className="h-full w-full resize-none bg-transparent px-5 py-5 text-base leading-8 text-slate-50 outline-none placeholder:text-slate-500"
+                          placeholder="Write the next section the teacher must follow, add sentence-by-sentence key points, note formulas, or plan how the group will revise this lecture..."
+                        />
+                      </div>
+                      <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, the board stays square on larger screens, and on phones you can swipe to the next page for board photos.</p>
                     </div>
-                    <button type="button" onClick={() => saveRoomNotes()} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync shared notes"}</button>
+
+                    <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-white/[0.04] p-5 md:min-w-0">
+                      <div className="force-mobile-stack flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 2</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-white">Uploaded board photos</h4>
+                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Photos uploaded in the room appear large here so the group can inspect diagrams, handwritten work, or classroom board captures clearly.</p>
+                        </div>
+                        <div className="force-mobile-stack flex flex-wrap gap-3">
+                          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{activeRoomBoardImages.length} photo{activeRoomBoardImages.length === 1 ? "" : "s"}</div>
+                          <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
+                        </div>
+                      </div>
+
+                      {selectedRoomBoardImage ? (
+                        <>
+                          <article className="mt-5 overflow-hidden rounded-[28px] border border-white/10 bg-slate-950/85 shadow-[0_22px_70px_rgba(2,8,23,0.34)]">
+                            <img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Collaboration board upload"} className="aspect-[4/3] w-full bg-black/30 object-contain md:aspect-[16/11]" loading="lazy" />
+                            <div className="space-y-3 p-4">
+                              <div className="force-mobile-stack flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="phone-safe-copy text-lg font-semibold text-white">{selectedRoomBoardImage.name || "Board photo"}</p>
+                                  <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedRoomBoardImage.uploaded_by || "Room member"}{selectedRoomBoardImage.created_at ? ` - ${new Date(selectedRoomBoardImage.created_at).toLocaleString()}` : ""}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteRoomBoardImage(selectedRoomBoardImage.id)}
+                                  disabled={deletingRoomBoardImageId === selectedRoomBoardImage.id}
+                                  className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 disabled:opacity-50"
+                                >
+                                  {deletingRoomBoardImageId === selectedRoomBoardImage.id ? "Removing..." : "Remove"}
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+
+                          {activeRoomBoardImages.length > 1 ? (
+                            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                              {activeRoomBoardImages.map((image) => (
+                                <article key={image.id} className={`relative overflow-hidden rounded-[22px] border transition ${selectedRoomBoardImage?.id === image.id ? "border-sky-300/35 bg-sky-400/10" : "border-white/10 bg-slate-950/75"}`}>
+                                  <button type="button" onClick={() => setSelectedRoomBoardImageId(image.id)} className="block w-full text-left">
+                                    <img src={image.image_url} alt={image.name || "Board photo"} className="h-36 w-full object-cover" loading="lazy" />
+                                    <div className="p-3">
+                                      <p className="phone-safe-copy text-sm font-semibold text-white">{image.name || "Board photo"}</p>
+                                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{image.uploaded_by || "Room member"}</p>
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      deleteRoomBoardImage(image.id);
+                                    }}
+                                    disabled={deletingRoomBoardImageId === image.id}
+                                    className="absolute right-3 top-3 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[11px] text-white disabled:opacity-50"
+                                  >
+                                    {deletingRoomBoardImageId === image.id ? "..." : "Remove"}
+                                  </button>
+                                </article>
+                              ))}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] p-8 text-sm leading-7 text-slate-300">
+                          No board photo uploaded yet. Add a photo of the board, notebook, or worked solution and it will appear large here for the whole room.
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <textarea value={roomSharedNotesDraft} onChange={(event) => { roomNotesLastEditedAtRef.current = Date.now(); setRoomSharedNotesDraft(event.target.value); }} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." />
-                  <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, and the button above forces an immediate sync.</p>
                 </div>
 
                 <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
@@ -7900,9 +8160,15 @@ export default function App() {
       || teacherLessonData.segments.length
     );
     if (hasLiveWorkspace) return;
-    applyWorkspaceSnapshot(snapshot, { preserveStatus: true });
+    const routedPage = authToken ? resolveCurrentPageFromRoute(browserPath) : "";
+    applyWorkspaceSnapshot(snapshot, {
+      preserveStatus: true,
+      currentPageOverride: routedPage || "",
+    });
   }, [
     authChecked,
+    authToken,
+    browserPath,
     authEmail,
     example,
     flashcards.length,
@@ -9024,7 +9290,7 @@ export default function App() {
       persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
       await refreshCollaborationRooms(true);
       if (openBoard) {
-        setCurrentPage("collaboration");
+        openCollaborationPage({ refresh: false });
         setActiveRoomId(normalizedRoomId);
         setActiveRoom(data.room || null);
         syncRoomNotesDraftFromRoom(data.room, { force: true });
@@ -9049,7 +9315,7 @@ export default function App() {
     const normalizedRoomId = normalizeCollaborationRoomId(roomId);
     if (!normalizedRoomId) return;
     persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
-    setCurrentPage("collaboration");
+    openCollaborationPage({ refresh: false });
     await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true, ...options });
   };
 
@@ -9059,6 +9325,7 @@ export default function App() {
       setActiveRoomId("");
       setActiveRoom(null);
       setRoomSharedNotesDraft("");
+      setSelectedRoomBoardImageId("");
       roomNotesLastSyncedValueRef.current = "";
       roomNotesLastEditedAtRef.current = 0;
       return;
@@ -9088,7 +9355,7 @@ export default function App() {
       if (cancelled || !room) return;
       consumePendingRoomInviteId();
       clearRoomInviteHashFromLocation();
-      setCurrentPage("collaboration");
+      openCollaborationPage({ replace: true, refresh: false });
       setHighlightedInviteRoomId(pendingRoomId);
       setStatus(`Your collaboration invite for ${room.title || "this room"} is ready.`);
     })();
@@ -9130,6 +9397,7 @@ export default function App() {
 
   useEffect(() => {
     if (!activeRoom?.id) {
+      setSelectedRoomBoardImageId("");
       roomNotesLastSyncedValueRef.current = "";
       roomNotesLastEditedAtRef.current = 0;
       setRoomQuizAnswers({});
@@ -9153,6 +9421,18 @@ export default function App() {
     setRoomQuizResults({});
     setRoomQuizSubmitted(false);
   }, [activeRoom?.id, authEmail]);
+
+  useEffect(() => {
+    if (!activeRoomBoardImages.length) {
+      setSelectedRoomBoardImageId("");
+      return;
+    }
+    setSelectedRoomBoardImageId((current) => (
+      activeRoomBoardImages.some((image) => image.id === current)
+        ? current
+        : activeRoomBoardImages[activeRoomBoardImages.length - 1]?.id || activeRoomBoardImages[0]?.id || ""
+    ));
+  }, [activeRoomBoardImages]);
 
   useEffect(() => {
     if (!authToken || !activeRoomId || !activeRoom) return undefined;
@@ -11604,6 +11884,7 @@ export default function App() {
           lecture_notes: lectureNotes,
           lecture_slides: lectureSlides,
           shared_notes: roomSharedNotesDraft,
+          study_images: sanitizeStudyImagesForCollaboration(studyImages),
           flashcards,
           quiz_questions: selectedQuizQuestions,
           invited_emails: parseInviteEmails(roomInviteInput),
@@ -11619,7 +11900,7 @@ export default function App() {
       syncRoomNotesDraftFromRoom(data.room, { force: true });
       setRoomTitleInput(resolvedTitle);
       setRoomMessageDraft("");
-      setCurrentPage("collaboration");
+      openCollaborationPage({ refresh: false });
       if (data.room?.active_tab) setActiveTab(data.room.active_tab);
       refreshCollaborationRooms(true);
       setStatus(`Collaboration room "${resolvedTitle}" is ready.`);
@@ -11652,6 +11933,60 @@ export default function App() {
       if (!silent) setError(err.message || "Could not save shared notes.");
     } finally {
       setIsSavingRoomNotes(false);
+    }
+  };
+
+  const uploadRoomBoardImages = async (files) => {
+    if (!activeRoomId) return;
+    const fileList = Array.from(files || []).filter(Boolean);
+    if (!fileList.length) return;
+    setIsUploadingRoomBoardImage(true);
+    setError("");
+    try {
+      let latestRoom = activeRoom;
+      for (const selectedFile of fileList) {
+        const formData = new FormData();
+        formData.append("image", selectedFile);
+        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-images`, {
+          method: "POST",
+          body: formData,
+          timeoutMs: Math.max(45000, getAdaptiveFileUploadTimeoutMs(selectedFile)),
+        });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not upload the board photo.");
+        latestRoom = data.room || latestRoom;
+        setActiveRoom(latestRoom || null);
+      }
+      if (latestRoom?.board_images?.length) {
+        const latestImage = latestRoom.board_images[latestRoom.board_images.length - 1];
+        setSelectedRoomBoardImageId(latestImage?.id || "");
+      }
+      await refreshCollaborationRooms(true);
+      setStatus(fileList.length === 1 ? "Board photo uploaded." : `${fileList.length} board photos uploaded.`);
+    } catch (err) {
+      setError(err.message || "Could not upload the board photo.");
+    } finally {
+      setIsUploadingRoomBoardImage(false);
+    }
+  };
+
+  const deleteRoomBoardImage = async (imageId) => {
+    if (!activeRoomId || !imageId) return;
+    setDeletingRoomBoardImageId(imageId);
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-images/${encodeURIComponent(imageId)}`, {
+        method: "DELETE",
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not remove the board photo.");
+      setActiveRoom(data.room || null);
+      await refreshCollaborationRooms(true);
+      setStatus("Board photo removed.");
+    } catch (err) {
+      setError(err.message || "Could not remove the board photo.");
+    } finally {
+      setDeletingRoomBoardImageId("");
     }
   };
 
@@ -12429,9 +12764,9 @@ export default function App() {
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
               <button type="button" onClick={() => setCurrentPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
-              <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
+              <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => setCurrentPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
-              <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+              <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
@@ -12448,9 +12783,9 @@ export default function App() {
         </header>
         <div className="mb-6 grid grid-cols-2 gap-3 sm:hidden">
           <button type="button" onClick={() => setCurrentPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
-          <button type="button" onClick={() => setCurrentPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
+          <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => setCurrentPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
-          <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
+          <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
         {collaborationInvitePrompt}
@@ -12583,7 +12918,7 @@ export default function App() {
               {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
-            <div className="overflow-x-auto pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
+            <div className="overflow-x-auto pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
           </div>
 
           <div className="mt-6 space-y-5">
@@ -12599,7 +12934,7 @@ export default function App() {
                   {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
                 </div>
                 {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
-                <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
+                <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
               </div>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>

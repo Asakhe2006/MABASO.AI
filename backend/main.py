@@ -142,6 +142,7 @@ VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "1200"))
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_COLLABORATION_BOARD_IMAGES = int(os.getenv("MAX_COLLABORATION_BOARD_IMAGES", "8"))
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 MAX_SUPPORT_MESSAGE_CHARS = int(os.getenv("MAX_SUPPORT_MESSAGE_CHARS", "4000"))
@@ -775,6 +776,7 @@ class CollaborationRoomCreateRequest(BaseModel):
     lecture_notes: str = ""
     lecture_slides: str = ""
     shared_notes: str = ""
+    study_images: list[dict[str, Any]] = []
     flashcards: list[dict[str, str]] = []
     quiz_questions: list[dict[str, Any]] = []
     invited_emails: list[str] = []
@@ -878,6 +880,8 @@ def init_db():
                 lecture_notes TEXT NOT NULL,
                 lecture_slides TEXT NOT NULL,
                 shared_notes TEXT NOT NULL,
+                study_images_json TEXT NOT NULL DEFAULT '[]',
+                board_images_json TEXT NOT NULL DEFAULT '[]',
                 flashcards_json TEXT NOT NULL,
                 quiz_questions_json TEXT NOT NULL,
                 active_tab TEXT NOT NULL,
@@ -887,6 +891,19 @@ def init_db():
             )
             """
         )
+        collaboration_room_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(collaboration_rooms)").fetchall()
+        }
+        collaboration_room_column_defaults = {
+            "study_images_json": "TEXT NOT NULL DEFAULT '[]'",
+            "board_images_json": "TEXT NOT NULL DEFAULT '[]'",
+        }
+        for column_name, column_definition in collaboration_room_column_defaults.items():
+            if column_name not in collaboration_room_columns:
+                connection.execute(
+                    f"ALTER TABLE collaboration_rooms ADD COLUMN {column_name} {column_definition}"
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS collaboration_room_members (
@@ -3434,6 +3451,55 @@ def get_collaboration_room_by_id(room_id: str) -> sqlite3.Row:
     return row
 
 
+def normalize_collaboration_study_images(images: Any) -> list[dict[str, str]]:
+    normalized_images: list[dict[str, str]] = []
+    for item in images if isinstance(images, list) else []:
+        if not isinstance(item, dict):
+            continue
+        image_url = compact_text(item.get("image_url"))
+        source_url = compact_text(item.get("source_url"))
+        if not any([image_url, source_url, compact_text(item.get("title")), compact_text(item.get("query"))]):
+            continue
+        normalized_images.append(
+            {
+                "title": compact_text(item.get("title")),
+                "query": compact_text(item.get("query")),
+                "image_url": image_url,
+                "source_url": source_url,
+                "source_type": compact_text(item.get("source_type")),
+                "visual_type": compact_text(item.get("visual_type")),
+                "matched_section": compact_text(item.get("matched_section")),
+                "key_highlight": compact_text(item.get("key_highlight")),
+                "diagram_label": compact_text(item.get("diagram_label")),
+            }
+        )
+        if len(normalized_images) >= MAX_STUDY_IMAGES:
+            break
+    return normalized_images
+
+
+def normalize_collaboration_board_images(images: Any) -> list[dict[str, str]]:
+    normalized_images: list[dict[str, str]] = []
+    for item in images if isinstance(images, list) else []:
+        if not isinstance(item, dict):
+            continue
+        image_url = compact_text(item.get("image_url"))
+        if not image_url:
+            continue
+        normalized_images.append(
+            {
+                "id": compact_text(item.get("id"), uuid4().hex),
+                "name": compact_text(item.get("name"), "Board photo"),
+                "image_url": image_url,
+                "uploaded_by": compact_text(item.get("uploaded_by")),
+                "created_at": compact_text(item.get("created_at")),
+            }
+        )
+        if len(normalized_images) >= MAX_COLLABORATION_BOARD_IMAGES:
+            break
+    return normalized_images
+
+
 def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> dict:
     room_id = room_row["id"]
     test_visibility = normalize_test_visibility(room_row["test_visibility"])
@@ -3450,6 +3516,8 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "lecture_notes": room_row["lecture_notes"],
         "lecture_slides": room_row["lecture_slides"],
         "shared_notes": room_row["shared_notes"],
+        "study_images": normalize_collaboration_study_images(load_json_list(room_row["study_images_json"])),
+        "board_images": normalize_collaboration_board_images(load_json_list(room_row["board_images_json"])),
         "flashcards": load_json_list(room_row["flashcards_json"]),
         "quiz_questions": load_json_list(room_row["quiz_questions_json"]),
         "active_tab": sanitize_collaboration_tab(room_row["active_tab"]),
@@ -3473,6 +3541,7 @@ def serialize_collaboration_room_card(room_row: sqlite3.Row) -> dict:
         "updated_at": room_row["updated_at"],
         "active_tab": sanitize_collaboration_tab(room_row["active_tab"]),
         "test_visibility": normalize_test_visibility(room_row["test_visibility"]),
+        "board_image_count": len(normalize_collaboration_board_images(load_json_list(room_row["board_images_json"]))),
         "member_count": len(members),
         "members": members,
     }
@@ -10114,6 +10183,7 @@ async def generate_teacher_lesson_package(
                         "- Teach like speaking to a real student, not like reading notes line by line.\n"
                         "- Use calm, clear, encouraging language.\n"
                         "- Focus on why concepts matter, where students get confused, and how the idea appears in exams.\n"
+                        "- When a section is dense, procedural, or formula-heavy, slow down and teach sentence by sentence with one main idea at a time.\n"
                         "- Ignore non-learning slide noise such as slide numbers, page numbers, university or department names, lecturer/admin details, dates, years, copyright lines, headers, footers, and template text.\n"
                         "- Never speak lines like 'Slide 8', institution names, 'Durban University of Technology', '2026', module footer text, or any source metadata unless that information is the actual academic concept being taught.\n"
                         "- If a source line is not directly teaching the subject content, skip it silently.\n"
@@ -10128,6 +10198,7 @@ async def generate_teacher_lesson_package(
                         "- Occasionally point out common exam questions or common confusions when it fits.\n\n"
                         "Sync with the guide:\n"
                         "- Follow the guide section by section.\n"
+                        "- Do not jump to a later section until the current section has been explained clearly enough to stand on its own.\n"
                         "- Make each segment clearly about the current section only.\n"
                         "- Use `prompt` to name the exact teaching focus so the interface can sync the lesson to the guide.\n"
                         "- When discussing definitions, processes, comparisons, theories, assumptions, criticisms, formulas, or key terms, make that focus obvious in the `prompt` and spoken explanation.\n\n"
@@ -10150,6 +10221,7 @@ async def generate_teacher_lesson_package(
                         "The student should feel personally guided by a premium AI tutor who teaches for true understanding, not just information delivery.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
+                        "When a section is difficult, slow down to sentence-by-sentence teaching rather than rushing through it.\n"
                         "Do not restate the same point in later segments unless the later segment adds a new angle, deeper reason, or new application.\n"
                         "Filter out slide footers, institution names, dates, slide numbers, page numbers, copyright text, and any unrelated template or metadata before writing the spoken lesson.\n"
                         "Avoid repeated stock phrases and repeated reassurance lines across the lesson.\n"
@@ -13487,10 +13559,11 @@ async def create_collaboration_room(
             """
             INSERT INTO collaboration_rooms (
                 id, owner_email, title, transcript, summary, formula, example,
-                lecture_notes, lecture_slides, shared_notes, flashcards_json,
-                quiz_questions_json, active_tab, test_visibility, created_at, updated_at
+                lecture_notes, lecture_slides, shared_notes, study_images_json,
+                board_images_json, flashcards_json, quiz_questions_json, active_tab,
+                test_visibility, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 room_id,
@@ -13503,6 +13576,8 @@ async def create_collaboration_room(
                 lecture_notes,
                 lecture_slides,
                 payload.shared_notes.strip(),
+                dump_json(normalize_collaboration_study_images(payload.study_images)),
+                dump_json([]),
                 dump_json(payload.flashcards or []),
                 dump_json(payload.quiz_questions or []),
                 sanitize_collaboration_tab(payload.active_tab),
@@ -13616,6 +13691,100 @@ async def save_collaboration_notes(
             WHERE id = ?
             """,
             (payload.shared_notes.strip(), now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/board-images")
+async def upload_collaboration_board_image(
+    room_id: str,
+    request: Request,
+    image: UploadFile = File(...),
+    current_user: str = Depends(require_authenticated_user),
+):
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="Choose an image before uploading to the board.")
+    enforce_rate_limit(
+        scope="collaboration_board_image_upload",
+        request=request,
+        limit=80,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    room = get_accessible_collaboration_room(room_id, current_user)
+    content_type = image.content_type or mimetypes.guess_type(image.filename)[0] or ""
+    ensure_allowed_image_upload(image.filename, content_type)
+
+    try:
+        image_bytes = await image.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="The selected board image is empty.")
+        if len(image_bytes) > MAX_IMAGE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Board image is too large ({len(image_bytes) / (1024 * 1024):.1f} MB). "
+                    f"Please keep it below {MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024):.0f} MB."
+                ),
+            )
+
+        current_images = normalize_collaboration_board_images(load_json_list(room["board_images_json"]))
+        if len(current_images) >= MAX_COLLABORATION_BOARD_IMAGES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This room already has {MAX_COLLABORATION_BOARD_IMAGES} board images. Remove one before uploading another.",
+            )
+
+        now_iso = utc_now().isoformat()
+        current_images.append(
+            {
+                "id": uuid4().hex,
+                "name": compact_text(Path(image.filename).stem, f"Board photo {len(current_images) + 1}"),
+                "image_url": build_data_url(image_bytes, content_type, image.filename),
+                "uploaded_by": current_user,
+                "created_at": now_iso,
+            }
+        )
+
+        with get_db_connection() as connection:
+            connection.execute(
+                """
+                UPDATE collaboration_rooms
+                SET board_images_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (dump_json(current_images), now_iso, room["id"]),
+            )
+    finally:
+        await image.close()
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.delete("/collaboration/rooms/{room_id}/board-images/{image_id}")
+async def delete_collaboration_board_image(
+    room_id: str,
+    image_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    current_images = normalize_collaboration_board_images(load_json_list(room["board_images_json"]))
+    remaining_images = [item for item in current_images if compact_text(item.get("id")) != compact_text(image_id)]
+    if len(remaining_images) == len(current_images):
+        raise HTTPException(status_code=404, detail="That board image was not found in this room.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET board_images_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (dump_json(remaining_images), now_iso, room["id"]),
         )
 
     updated_room = get_accessible_collaboration_room(room_id, current_user)
