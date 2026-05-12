@@ -3373,13 +3373,14 @@ export default function App() {
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
-  const hasRestoredWorkspaceDraftRef = useRef(false);
-  const hasRestoredRecoveredRecordingRef = useRef(false);
-  const hasResumedPendingJobRef = useRef(false);
+  const hasRestoredWorkspaceDraftRef = useRef("");
+  const hasRestoredRecoveredRecordingRef = useRef("");
+  const hasResumedPendingJobRef = useRef("");
   const teacherSectionRefs = useRef({});
   const teacherExamplesPanelRef = useRef(null);
   const teacherPlaybackRunRef = useRef(0);
   const teacherAutoTabRef = useRef("");
+  const teacherViewportSyncRef = useRef("");
   const teacherSpeechTimerRef = useRef(null);
   const teacherSpeechRecognitionRef = useRef(null);
   const roomSharedNotesDraftRef = useRef("");
@@ -3905,38 +3906,23 @@ export default function App() {
 
   const scrollTeacherToSection = (sectionHeading = "", sectionCollections = [guideSections]) => {
     const targetKey = resolveTeacherSectionKey(sectionHeading, sectionCollections);
-    if (!targetKey) return;
+    if (!targetKey) return false;
     const targetNode = teacherSectionRefs.current[targetKey];
-    if (targetNode?.scrollIntoView) {
-      targetNode.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-    }
+    if (!targetNode?.scrollIntoView) return false;
+    targetNode.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+    return true;
   };
 
   const returnTeacherToGuide = (sectionHeading = "") => {
+    teacherViewportSyncRef.current = "";
     teacherAutoTabRef.current = "guide";
     setActiveTab("guide");
-    if (!sectionHeading || typeof window === "undefined") return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        scrollTeacherToSection(sectionHeading, [guideSections]);
-      });
-    });
   };
 
   const openTeacherWorkedExamples = (sectionHeading = "") => {
+    teacherViewportSyncRef.current = "";
     teacherAutoTabRef.current = "examples";
     setActiveTab("examples");
-    if (typeof window === "undefined") return;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const targetKey = resolveTeacherExampleSectionKey(sectionHeading);
-        if (targetKey) {
-          teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
-          return;
-        }
-        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-    });
   };
 
   const syncTeacherSegmentToolView = (sectionHeading = "") => {
@@ -3951,6 +3937,7 @@ export default function App() {
     teacherPlaybackRunRef.current += 1;
     teacherAnswerRunRef.current += 1;
     teacherAutoTabRef.current = "";
+    teacherViewportSyncRef.current = "";
     if (teacherSpeechTimerRef.current) {
       clearTimeout(teacherSpeechTimerRef.current);
       teacherSpeechTimerRef.current = null;
@@ -4047,33 +4034,51 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!(isTeacherPlaying || isTeacherPaused || activeTeacherSegmentIndex >= 0)) {
+      teacherViewportSyncRef.current = "";
+      return undefined;
+    }
     if (activeTab !== "guide" || teacherAutoTabRef.current !== "guide" || typeof window === "undefined") {
       return undefined;
     }
+    const targetKey = resolveMountedTeacherSectionKey(activeTeacherSegment?.sectionHeading || "", guideSections);
+    if (!targetKey) return undefined;
+    const viewportKey = `guide:${targetKey}`;
+    if (teacherViewportSyncRef.current === viewportKey) return undefined;
     const frameId = window.requestAnimationFrame(() => {
-      scrollTeacherToSection(activeTeacherSegment?.sectionHeading || "", [guideSections]);
-    });
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [activeTab, activeTeacherSegment?.sectionHeading, formattedGuide]);
-
-  useEffect(() => {
-    if (activeTab !== "examples" || teacherAutoTabRef.current !== "examples" || typeof window === "undefined") {
-      return undefined;
-    }
-    const frameId = window.requestAnimationFrame(() => {
-      const targetKey = resolveTeacherExampleSectionKey(activeTeacherSegment?.sectionHeading || "");
-      if (targetKey) {
-        teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
-      } else {
-        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (scrollTeacherToSection(activeTeacherSegment?.sectionHeading || "", [guideSections])) {
+        teacherViewportSyncRef.current = viewportKey;
       }
     });
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeTab, activeTeacherSegment?.sectionHeading, formattedExample]);
+  }, [activeTab, activeTeacherSegment?.sectionHeading, activeTeacherSegmentIndex, formattedGuide, isTeacherPaused, isTeacherPlaying]);
+
+  useEffect(() => {
+    if (!(isTeacherPlaying || isTeacherPaused || activeTeacherSegmentIndex >= 0)) {
+      teacherViewportSyncRef.current = "";
+      return undefined;
+    }
+    if (activeTab !== "examples" || teacherAutoTabRef.current !== "examples" || typeof window === "undefined") {
+      return undefined;
+    }
+    const targetKey = resolveTeacherExampleSectionKey(activeTeacherSegment?.sectionHeading || "");
+    const viewportKey = targetKey ? `examples:${targetKey}` : "examples:panel";
+    if (teacherViewportSyncRef.current === viewportKey) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      if (targetKey) {
+        teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+        teacherViewportSyncRef.current = viewportKey;
+      } else {
+        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        teacherViewportSyncRef.current = viewportKey;
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeTab, activeTeacherSegment?.sectionHeading, activeTeacherSegmentIndex, formattedExample, isTeacherPaused, isTeacherPlaying]);
 
   useEffect(() => {
     setSelectedPresentationSlideIndex(0);
@@ -8083,9 +8088,10 @@ export default function App() {
   }, [authChecked, authEmail]);
 
   useEffect(() => {
-    hasRestoredWorkspaceDraftRef.current = false;
-    hasRestoredRecoveredRecordingRef.current = false;
-    hasResumedPendingJobRef.current = false;
+    if (normalizeHistoryOwnerEmail(authEmail)) return;
+    hasRestoredWorkspaceDraftRef.current = "";
+    hasRestoredRecoveredRecordingRef.current = "";
+    hasResumedPendingJobRef.current = "";
   }, [authEmail]);
 
   useEffect(() => {
@@ -8175,9 +8181,10 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!authChecked || !authEmail || hasRestoredWorkspaceDraftRef.current) return;
-    hasRestoredWorkspaceDraftRef.current = true;
-    const snapshot = loadWorkspaceDraft(authEmail);
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
+    if (!authChecked || !ownerEmail || hasRestoredWorkspaceDraftRef.current === ownerEmail) return;
+    hasRestoredWorkspaceDraftRef.current = ownerEmail;
+    const snapshot = loadWorkspaceDraft(ownerEmail);
     if (!snapshot) return;
     const hasLiveWorkspace = Boolean(
       transcript.trim()
@@ -8219,9 +8226,10 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!authChecked || !authEmail || hasRestoredRecoveredRecordingRef.current) return;
-    hasRestoredRecoveredRecordingRef.current = true;
-    loadRecoveredRecordingFromDb(authEmail).then((record) => {
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
+    if (!authChecked || !ownerEmail || hasRestoredRecoveredRecordingRef.current === ownerEmail) return;
+    hasRestoredRecoveredRecordingRef.current = ownerEmail;
+    loadRecoveredRecordingFromDb(ownerEmail).then((record) => {
       if (!record?.blob || file?.name) return;
       const recoveredFile = new File([record.blob], record.fileName || "mabaso-lecture.wav", { type: record.type || "audio/wav" });
       startTransition(() => {
@@ -9422,9 +9430,11 @@ export default function App() {
   }, [adminSidebarTab]);
 
   useEffect(() => {
-    if (!followRoomView || !activeRoom?.active_tab) return;
+    if (!followRoomView || !activeRoom?.active_tab || currentPage !== "workspace") return;
+    if (activeTab === "collaboration" || activeTab === activeRoom.active_tab) return;
+    if (isTeacherPlaying || isTeacherPaused || teacherAutoTabRef.current) return;
     setActiveTab(activeRoom.active_tab);
-  }, [activeRoom?.active_tab, activeTab, followRoomView]);
+  }, [activeRoom?.active_tab, activeTab, currentPage, followRoomView, isTeacherPaused, isTeacherPlaying]);
 
   useEffect(() => {
     if (!activeRoom?.id) {
@@ -11309,9 +11319,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!authChecked || !authToken || !authEmail || hasResumedPendingJobRef.current !== false) return;
-    const pendingJob = loadPendingJobSnapshot(authEmail);
-    hasResumedPendingJobRef.current = true;
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
+    if (!authChecked || !authToken || !ownerEmail || hasResumedPendingJobRef.current === ownerEmail) return;
+    const pendingJob = loadPendingJobSnapshot(ownerEmail);
+    hasResumedPendingJobRef.current = ownerEmail;
     if (!pendingJob?.jobId) return undefined;
 
     let cancelled = false;
@@ -11332,7 +11343,7 @@ export default function App() {
             });
           }
           clearPendingJob();
-          clearRecoveredRecordingFromDb(authEmail);
+          clearRecoveredRecordingFromDb(ownerEmail);
           if (pendingJob.autoGenerateGuide && recoveredTranscript) {
             setStatus("Recovered the transcript. Rebuilding the study guide...");
             await generateStudyGuide(recoveredTranscript);
