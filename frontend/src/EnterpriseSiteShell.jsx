@@ -200,55 +200,76 @@ function LoginWall({
 }
 
 function ContactSupportForm({
-  supportForm,
-  onSupportFieldChange,
-  onSupportSubmit,
   isAuthenticated = false,
 }) {
-  if (!supportForm) return null;
-  const feedbackTone = /^support message (sent|saved)/i.test((supportForm.feedback || "").trim())
-    ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"
-    : "border-rose-300/20 bg-rose-500/10 text-rose-100";
+  const supportEmail = "mabasoasakhe10@gmail.com";
+  const supportPhone = "0717020081";
 
   return (
     <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Live Support Form</p>
-          <h2 className="mt-3 text-2xl font-semibold text-white">Send feedback directly to the Mabaso AI admin inbox</h2>
+          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Contact Mabaso AI</p>
+          <h2 className="mt-3 text-2xl font-semibold text-white">Reach Mabaso AI through direct support channels.</h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-            Describe what went wrong, what you expected to happen, and where it happened in the platform. Mabaso AI attaches account and browser context automatically when it is available.
+            Whether you need help with your account, lecture capture, study generation, or collaboration, you can contact Mabaso AI directly by email or phone.
           </p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200">
-          {isAuthenticated ? "Signed-in support flow" : "Public support flow"}
+          {isAuthenticated ? "Signed-in access available" : "Public support information"}
         </span>
       </div>
-      <label className="mt-6 block rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-        <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Message</span>
-        <textarea
-          value={supportForm.message || ""}
-          onChange={(event) => onSupportFieldChange?.("message", event.target.value)}
-          rows={10}
-          placeholder="Tell us what happened, what page you were on, and what you expected to happen."
-          className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4 text-sm leading-7 text-white outline-none"
-        />
-      </label>
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => onSupportSubmit?.()}
-          disabled={supportForm.isSubmitting}
-          className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white transition disabled:opacity-60"
-        >
-          {supportForm.isSubmitting ? "Sending..." : "Send Support Message"}
-        </button>
-      </div>
-      {supportForm.feedback ? (
-        <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${feedbackTone}`}>
-          {supportForm.feedback}
+      <div className="mt-6 overflow-hidden rounded-[26px] border border-white/10 bg-white/[0.04]">
+        <div className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 bg-white/[0.05] text-sm font-semibold text-white">
+          <div className="px-4 py-3">Support Channel</div>
+          <div className="border-l border-white/10 px-4 py-3">Availability</div>
+          <div className="border-l border-white/10 px-4 py-3">Details</div>
         </div>
-      ) : null}
+        {[
+          ["Email Support", "All users", supportEmail],
+          ["In-App Messaging", "Signed-in users", supportPhone],
+          ["Phone Call", "Direct contact", supportPhone],
+        ].map(([channel, availability, detail]) => (
+          <div key={channel} className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 text-sm text-slate-200 last:border-b-0">
+            <div className="px-4 py-4 font-semibold text-white">{channel}</div>
+            <div className="border-l border-white/10 px-4 py-4">{availability}</div>
+            <div className="border-l border-white/10 px-4 py-4">{detail}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 grid gap-4 xl:grid-cols-3">
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Email Support</p>
+          <p className="mt-3 text-sm leading-7 text-slate-300">For all enquiries, send an email directly to Mabaso AI support.</p>
+          <a href={`mailto:${supportEmail}`} className="mt-4 inline-flex rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15">
+            {supportEmail}
+          </a>
+        </article>
+
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">In-App Messaging</p>
+          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-7 text-slate-300">
+            <li>Signed-in users can ask for support while using Mabaso AI.</li>
+            <li>Use <span className="font-semibold text-white">{supportPhone}</span> as the contact number for in-app support guidance.</li>
+          </ul>
+        </article>
+
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Phone Support</p>
+          <p className="mt-3 text-sm leading-7 text-slate-300">For direct phone calls, contact Mabaso AI using the number below.</p>
+          <a href={`tel:${supportPhone}`} className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
+            {supportPhone}
+          </a>
+        </article>
+      </div>
+
+      <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+        <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Response Notes</p>
+        <p className="mt-3 text-sm leading-7 text-slate-300">
+          Response times may vary depending on support volume. For the clearest help, include the page you were using, what you clicked, and what you expected to happen.
+        </p>
+      </div>
     </section>
   );
 }

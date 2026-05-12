@@ -4641,42 +4641,63 @@ export default function App() {
           {renderBackButton(() => setCurrentPage("capture"), "Back to capture page")}
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support and Contact</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Send a complaint or support message.</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Type what went wrong, what device you used, and what you expected to happen. You can return to the capture page with the back arrow when you are done.</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">How to contact Mabaso AI.</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Use the support details below for enquiries, in-app messaging guidance, and direct phone calls instead of sending support tickets inside the dashboard.</p>
           </div>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-5">
-          <label className="block text-xs uppercase tracking-[0.24em] text-emerald-200/70">Message</label>
-          <textarea
-            value={supportMessageDraft}
-            onChange={(event) => setSupportMessageDraft(event.target.value)}
-            rows={12}
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none"
-            placeholder="Write your complaint, bug report, or support request here..."
-          />
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button type="button" onClick={submitSupportMessage} disabled={isSendingSupport} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
-              {isSendingSupport ? "Sending..." : "Send Message"}
-            </button>
-            <button type="button" onClick={() => setCurrentPage("capture")} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
-              Back to Capture Page
-            </button>
-          </div>
-          {supportFeedback ? <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${/^Support message (sent|saved)/i.test(supportFeedback.trim()) ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50" : "border-rose-300/20 bg-rose-500/10 text-rose-100"}`}>{supportFeedback}</div> : null}
+      <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.04]">
+        <div className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 bg-white/[0.05] text-sm font-semibold text-white">
+          <div className="px-4 py-3">Support Channel</div>
+          <div className="border-l border-white/10 px-4 py-3">Availability</div>
+          <div className="border-l border-white/10 px-4 py-3">Details</div>
         </div>
-
-        <div className="space-y-5">
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">What To Include</p>
-            <div className="mt-4 space-y-3 text-sm text-slate-300">
-              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Which page you were using when the problem happened.</div>
-              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Your device, browser, or whether you were on iPhone.</div>
-              <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">What you clicked and what appeared on screen.</div>
-            </div>
+        {[
+          ["Email Support", "All users", "mabasoasakhe10@gmail.com"],
+          ["In-App Messaging", "Signed-in users", "0717020081"],
+          ["Phone Call", "Direct contact", "0717020081"],
+        ].map(([channel, availability, detail]) => (
+          <div key={channel} className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 text-sm text-slate-200 last:border-b-0">
+            <div className="px-4 py-4 font-semibold text-white">{channel}</div>
+            <div className="border-l border-white/10 px-4 py-4">{availability}</div>
+            <div className="border-l border-white/10 px-4 py-4">{detail}</div>
           </div>
+        ))}
+      </div>
+
+      <div className="mt-6 grid gap-5 xl:grid-cols-3">
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Email Support</p>
+          <p className="mt-3 text-sm leading-7 text-slate-300">For all enquiries, send an email directly to Mabaso AI support.</p>
+          <a href="mailto:mabasoasakhe10@gmail.com" className="mt-4 inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-300/15">
+            mabasoasakhe10@gmail.com
+          </a>
+        </article>
+
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">In-App Messaging</p>
+          <div className="mt-3 space-y-3 text-sm leading-7 text-slate-300">
+            <p>Signed-in users can ask for help while using Mabaso AI.</p>
+            <p>Use <span className="font-semibold text-white">0717020081</span> for in-app messaging support guidance.</p>
+          </div>
+        </article>
+
+        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Phone Support</p>
+          <p className="mt-3 text-sm leading-7 text-slate-300">For direct phone calls, use the Mabaso AI contact number below.</p>
+          <a href="tel:0717020081" className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
+            0717020081
+          </a>
+        </article>
+      </div>
+
+      <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Best Way To Reach Us</p>
+        <div className="mt-4 space-y-3 text-sm text-slate-300">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use email for formal enquiries and longer explanations.</div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use 0717020081 for in-app messaging support guidance and direct phone calls.</div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">For faster help, mention the page you were using and what you expected Mabaso AI to do.</div>
         </div>
       </div>
     </section>
@@ -6381,100 +6402,6 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "support") {
-        return (
-          <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-            <article className={sectionCardClass}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Contact Support</p>
-                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Saved support feedback and issue reports</h2>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredSupportMessages.length)} visible</span>
-                  <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">{formatAdminInteger(unreadSupportCount)} new</span>
-                </div>
-              </div>
-              <div className="mt-5 space-y-4">
-                {filteredSupportMessages.length ? filteredSupportMessages.map((item) => (
-                  <div key={item.id} className={`rounded-[24px] border px-4 py-4 ${item.admin_seen_at ? "border-slate-200 bg-slate-50" : "border-rose-100 bg-rose-50/80"}`}>
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="phone-safe-copy text-sm font-semibold text-slate-950">{item.email}</p>
-                          <span className="rounded-full bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white">{item.category || "General"}</span>
-                          {!item.admin_seen_at ? <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">New</span> : null}
-                        </div>
-                        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">{item.page || "unknown-page"} / {formatAdminDateTime(item.created_at)}</p>
-                      </div>
-                      {!item.admin_seen_at ? (
-                        <button type="button" onClick={() => reviewSupportMessage(item.id)} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
-                          Mark Reviewed
-                        </button>
-                      ) : (
-                        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                          Reviewed {item.admin_seen_by ? `by ${item.admin_seen_by}` : ""}
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">{item.message}</p>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Device</p>
-                        <p className="mt-2 text-sm text-slate-900">{item.device || "Not provided"}</p>
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Browser</p>
-                        <p className="mt-2 text-sm text-slate-900">{item.browser || "Not provided"}</p>
-                      </div>
-                      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Delivery</p>
-                        <p className="mt-2 text-sm text-slate-900">{titleCaseWords(item.email_delivery_status || "queued")}</p>
-                      </div>
-                    </div>
-                  </div>
-                )) : emptyPanel("Support feedback will appear here after users send messages from the public Contact Support page or the in-app support page.")}
-              </div>
-            </article>
-
-            <div className="space-y-5">
-              <article className={sectionCardClass}>
-                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Inbox Health</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">What needs attention right now</h2>
-                <div className="mt-5 grid gap-3">
-                  {[
-                    { label: "Unread messages", value: formatAdminInteger(unreadSupportCount) },
-                    { label: `Unread in ${selectedAdminRange.shortLabel}`, value: formatAdminInteger(support.unread_count_in_range ?? 0) },
-                    { label: "Latest message", value: support.latest_message_at ? formatAdminDateTime(support.latest_message_at) : "No messages yet" },
-                  ].map((item) => (
-                    <div key={item.label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{item.label}</p>
-                      <p className="mt-3 text-lg font-semibold text-slate-950">{item.value}</p>
-                    </div>
-                  ))}
-                </div>
-              </article>
-
-              <article className={sectionCardClass}>
-                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Admin Notes</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">How support messages are stored</h2>
-                <div className="mt-5 space-y-3">
-                  {[
-                    "Messages are saved in the backend database so they remain visible inside the dashboard.",
-                    "Public Contact Support and signed-in in-app support both feed into this same admin inbox.",
-                    "New feedback stays highlighted until an admin marks it as reviewed.",
-                  ].map((item) => (
-                    <div key={item} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4 text-sm leading-7 text-slate-700">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </article>
-            </div>
-          </div>
-        );
-      }
-
       if (adminSidebarTab === "billing") {
         return (
           <article className={sectionCardClass}>
@@ -6550,14 +6477,7 @@ export default function App() {
                           onClick={() => setAdminSidebarTab(item.id)}
                           className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${adminSidebarTab === item.id ? "bg-[linear-gradient(135deg,#5b6bff,#7c8bff)] text-white shadow-[0_12px_30px_rgba(91,107,255,0.35)]" : "text-slate-200 hover:bg-white/10"}`}
                         >
-                          <span className="flex items-center justify-between gap-3">
-                            <span>{item.label}</span>
-                            {item.id === "support" && unreadSupportCount > 0 ? (
-                              <span className="rounded-full bg-rose-400/20 px-2.5 py-1 text-[11px] font-semibold text-rose-100">
-                                {unreadSupportCount}
-                              </span>
-                            ) : null}
-                          </span>
+                          <span>{item.label}</span>
                         </button>
                       ))}
                     </div>
@@ -6654,7 +6574,6 @@ export default function App() {
       { id: "analytics", label: "Usage Analytics", group: "Analytics" },
       { id: "health", label: "System Health", group: "System" },
       { id: "security", label: "Security", group: "System" },
-      { id: "support", label: "Contact Support", group: "System" },
       { id: "billing", label: "Billing", group: "System" },
       { id: "settings", label: "Settings", group: "System" },
     ];
@@ -6674,22 +6593,18 @@ export default function App() {
     const systemHealth = dashboard.system_health || {};
     const transcriptionQueue = systemHealth.transcription_queue || {};
     const security = dashboard.security || {};
-    const support = dashboard.support || {};
     const users = dashboard.users || [];
     const activityLogs = dashboard.activity_logs || [];
-    const supportMessages = support.messages || [];
     const failedJobs = aiGeneration.failed_jobs || [];
     const topUsersByUsage = storageInsights.top_users || [];
     const storageBreakdown = storageInsights.breakdown || {};
     const failedLoginCount = (security.failed_logins || []).length;
-    const unreadSupportCount = support.unread_count ?? 0;
     const normalizedSearchQuery = adminSearchQuery.toLowerCase().trim();
     const matchesSearch = (value) => !normalizedSearchQuery || String(value || "").toLowerCase().includes(normalizedSearchQuery);
     const filteredUsers = users.filter((user) => matchesSearch(`${user.email} ${user.role} ${user.status} ${user.next_timeout_at}`));
     const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address}`));
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
-    const filteredSupportMessages = supportMessages.filter((item) => matchesSearch(`${item.email} ${item.page} ${item.category} ${item.device} ${item.browser} ${item.message}`));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -9201,6 +9116,12 @@ export default function App() {
       window.clearInterval(intervalId);
     };
   }, [adminDashboardRange, authSessionMode, authToken, currentPage]);
+
+  useEffect(() => {
+    if (adminSidebarTab === "support") {
+      setAdminSidebarTab("overview");
+    }
+  }, [adminSidebarTab]);
 
   useEffect(() => {
     if (!followRoomView || !activeRoom?.active_tab) return;
