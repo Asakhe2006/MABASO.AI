@@ -71,6 +71,8 @@ const SUPPORT_CONTACT_CATEGORIES = [
   "General feedback",
 ];
 const ROOM_REFRESH_INTERVAL_MS = 5000;
+const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
+const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
@@ -84,6 +86,8 @@ const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
+const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
+const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
@@ -140,6 +144,9 @@ const outputLanguageOptions = [
   { value: "French", label: "French" },
   { value: "Portuguese", label: "Portuguese" },
 ];
+const DEFAULT_SUPPORT_CONTACT_CATEGORY = SUPPORT_CONTACT_CATEGORIES.includes("General feedback")
+  ? "General feedback"
+  : SUPPORT_CONTACT_CATEGORIES[0];
 
 function resolveSpeechLocale(language = "English") {
   const normalized = String(language || "").trim().toLowerCase();
@@ -168,6 +175,57 @@ function resolveTeacherVoice(voices = [], selectedVoiceName = "", language = "En
 function getSpeechRecognitionConstructor() {
   if (typeof window === "undefined") return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function normalizeCollaborationRoomId(value = "") {
+  const cleaned = String(value || "").trim();
+  return /^[A-Za-z0-9_-]{8,80}$/.test(cleaned) ? cleaned : "";
+}
+
+function loadStoredRoomInviteId() {
+  if (typeof window === "undefined") return "";
+  return normalizeCollaborationRoomId(window.localStorage.getItem(ROOM_INVITE_STORAGE_KEY) || "");
+}
+
+function loadDismissedRoomInviteIds() {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return Array.from(new Set(parsed.map((item) => normalizeCollaborationRoomId(item)).filter(Boolean)));
+  } catch {
+    return [];
+  }
+}
+
+function parseRoomInviteIdFromLocation() {
+  if (typeof window === "undefined") return "";
+  try {
+    const searchParams = new URLSearchParams(window.location.search || "");
+    const searchInviteId = normalizeCollaborationRoomId(searchParams.get("invite") || searchParams.get("room") || "");
+    if (searchInviteId) return searchInviteId;
+  } catch {
+    // Ignore malformed search params and continue to hash parsing.
+  }
+  const rawHash = (window.location.hash || "").replace(/^#/, "");
+  if (!rawHash) return "";
+  const hashParams = new URLSearchParams(rawHash);
+  return normalizeCollaborationRoomId(hashParams.get("room") || hashParams.get("invite") || rawHash);
+}
+
+function clearRoomInviteHashFromLocation() {
+  if (typeof window === "undefined") return;
+  const inviteId = parseRoomInviteIdFromLocation();
+  if (!inviteId || !window.location.hash) return;
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}` || "/");
+}
+
+function buildPublicSupportPlaceholderEmail(seed = "") {
+  const cleanedSeed = String(seed || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 24);
+  return `guest+${cleanedSeed || Date.now()}@mabaso.ai`;
 }
 
 const tabs = [
@@ -3225,6 +3283,8 @@ export default function App() {
   const [roomInviteInput, setRoomInviteInput] = useState("");
   const [newRoomVisibility, setNewRoomVisibility] = useState("private");
   const [roomSharedNotesDraft, setRoomSharedNotesDraft] = useState("");
+  const [highlightedInviteRoomId, setHighlightedInviteRoomId] = useState(() => loadStoredRoomInviteId());
+  const [dismissedRoomInviteIds, setDismissedRoomInviteIds] = useState(loadDismissedRoomInviteIds);
   const [roomMessageDraft, setRoomMessageDraft] = useState("");
   const [followRoomView, setFollowRoomView] = useState(true);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
@@ -3235,7 +3295,7 @@ export default function App() {
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
   const [supportContactEmail, setSupportContactEmail] = useState("");
-  const [supportContactCategory, setSupportContactCategory] = useState(SUPPORT_CONTACT_CATEGORIES[0]);
+  const [supportContactCategory, setSupportContactCategory] = useState(DEFAULT_SUPPORT_CONTACT_CATEGORY);
   const [supportContactDevice, setSupportContactDevice] = useState(() => detectSupportDevice());
   const [supportContactBrowser, setSupportContactBrowser] = useState(() => detectSupportBrowser());
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
@@ -3273,6 +3333,7 @@ export default function App() {
   const googleButtonRef = useRef(null);
   const enterpriseGoogleButtonRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
+  const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const answerSyncTimersRef = useRef({});
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
@@ -3288,11 +3349,16 @@ export default function App() {
   const teacherAutoTabRef = useRef("");
   const teacherSpeechTimerRef = useRef(null);
   const teacherSpeechRecognitionRef = useRef(null);
+  const roomSharedNotesDraftRef = useRef("");
+  const roomNotesLastSyncedValueRef = useRef("");
+  const roomNotesLastEditedAtRef = useRef(0);
   const teacherPlaybackCursorRef = useRef({ segmentIndex: 0, chunkIndex: 0 });
   const teacherResumeStateRef = useRef({ shouldResume: false, segmentIndex: 0, chunkIndex: 0 });
   const teacherAnswerRunRef = useRef(0);
   const teacherQuestionRequestRunRef = useRef(0);
   const teacherRecognitionRunRef = useRef(0);
+  const teacherRecognitionShouldContinueRef = useRef(false);
+  const teacherRecognitionManualStopRef = useRef(false);
   const [podcastAudioSegments, setPodcastAudioSegments] = useState([]);
   const [podcastAudioUrl, setPodcastAudioUrl] = useState("");
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
@@ -3333,6 +3399,39 @@ export default function App() {
     return targetPath;
   };
 
+  const persistPendingRoomInviteId = (roomId = "") => {
+    const normalized = normalizeCollaborationRoomId(roomId);
+    pendingRoomInviteIdRef.current = normalized;
+    if (typeof window !== "undefined") {
+      if (normalized) {
+        window.localStorage.setItem(ROOM_INVITE_STORAGE_KEY, normalized);
+      } else {
+        window.localStorage.removeItem(ROOM_INVITE_STORAGE_KEY);
+      }
+    }
+    return normalized;
+  };
+
+  const readPendingRoomInviteId = () => normalizeCollaborationRoomId(
+    pendingRoomInviteIdRef.current
+      || (typeof window !== "undefined" ? window.localStorage.getItem(ROOM_INVITE_STORAGE_KEY) || "" : ""),
+  );
+
+  const consumePendingRoomInviteId = () => {
+    const roomId = readPendingRoomInviteId();
+    persistPendingRoomInviteId("");
+    return roomId;
+  };
+
+  const persistDismissedRoomInviteList = (roomIds = []) => {
+    const normalized = Array.from(new Set((roomIds || []).map((item) => normalizeCollaborationRoomId(item)).filter(Boolean)));
+    setDismissedRoomInviteIds(normalized);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY, JSON.stringify(normalized));
+    }
+    return normalized;
+  };
+
   const completePendingPostAuthRedirect = (sessionMode = "user") => {
     const targetPath = readPendingPostAuthRedirectPath();
     if (!targetPath) return false;
@@ -3364,6 +3463,13 @@ export default function App() {
     setPublicPage(normalized === PUBLIC_TERMS_PATH ? "terms" : "auth");
   };
 
+  const buildCollaborationInviteUrl = (roomId = "") => {
+    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+    if (!normalizedRoomId) return "";
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://mabaso.ai";
+    return `${origin}/app/collaboration#room=${encodeURIComponent(normalizedRoomId)}`;
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
 
@@ -3376,6 +3482,13 @@ export default function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  useEffect(() => {
+    const nextInviteRoomId = parseRoomInviteIdFromLocation();
+    if (!nextInviteRoomId) return;
+    persistPendingRoomInviteId(nextInviteRoomId);
+    setHighlightedInviteRoomId((current) => current || nextInviteRoomId);
+  }, [browserPath]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -3396,6 +3509,10 @@ export default function App() {
       setSupportContactBrowser(detectSupportBrowser());
     }
   }, [supportContactBrowser, supportContactDevice]);
+
+  useEffect(() => {
+    roomSharedNotesDraftRef.current = roomSharedNotesDraft;
+  }, [roomSharedNotesDraft]);
 
   const openPublicTermsPage = () => navigateToPath("/company/terms");
 
@@ -3485,6 +3602,23 @@ export default function App() {
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
+  const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
+  const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
+    const leftIsHighlighted = left.id === highlightedInviteRoomId ? 1 : 0;
+    const rightIsHighlighted = right.id === highlightedInviteRoomId ? 1 : 0;
+    if (leftIsHighlighted !== rightIsHighlighted) return rightIsHighlighted - leftIsHighlighted;
+
+    const leftIsInvited = left.owner_email !== normalizedAuthEmail ? 1 : 0;
+    const rightIsInvited = right.owner_email !== normalizedAuthEmail ? 1 : 0;
+    if (leftIsInvited !== rightIsInvited) return rightIsInvited - leftIsInvited;
+
+    return new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime();
+  });
+  const invitedCollaborationRooms = sortedCollaborationRooms.filter((room) => room.owner_email !== normalizedAuthEmail);
+  const collaborationInviteSpotlight = sortedCollaborationRooms.find(
+    (room) => room.id === highlightedInviteRoomId && room.owner_email !== normalizedAuthEmail,
+  ) || invitedCollaborationRooms[0] || null;
+  const collaborationInvitePromptRoom = invitedCollaborationRooms.find((room) => !dismissedRoomInviteIds.includes(room.id)) || null;
   const workspaceFileLabel = getPrimarySourceLabel({
     fileName: file?.name || "",
     historyFileName: activeHistoryItem?.fileName || "",
@@ -3496,6 +3630,8 @@ export default function App() {
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
+  const activeOwnerRoomInviteLink = activeRoom?.is_owner ? buildCollaborationInviteUrl(activeRoom.id) : "";
+  const showCollaborationInvitePrompt = ["capture", "workspace"].includes(currentPage) && Boolean(collaborationInvitePromptRoom);
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
     : hasResults || activeTab === "chat";
@@ -3790,6 +3926,8 @@ export default function App() {
     teacherAnswerRunRef.current += 1;
     teacherQuestionRequestRunRef.current += 1;
     teacherRecognitionRunRef.current += 1;
+    teacherRecognitionShouldContinueRef.current = false;
+    teacherRecognitionManualStopRef.current = false;
     setIsTeacherListening(false);
     setIsTeacherQuestionLoading(false);
     setIsTeacherAnswering(false);
@@ -3806,6 +3944,8 @@ export default function App() {
   const resumeTeacherLessonAfterQuestion = ({ statusMessage = "" } = {}) => {
     const resumeState = teacherResumeStateRef.current;
     teacherResumeStateRef.current = { shouldResume: false, segmentIndex: 0, chunkIndex: 0 };
+    teacherRecognitionShouldContinueRef.current = false;
+    teacherRecognitionManualStopRef.current = false;
     setIsTeacherQuestionLoading(false);
     setIsTeacherAnswering(false);
     if (resumeState.shouldResume && teacherLessonData.segments.length) {
@@ -3918,7 +4058,7 @@ export default function App() {
         </div>
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        {collaborationRooms.length ? collaborationRooms.map((room) => (
+        {sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => (
           <article key={room.id} className={`rounded-[24px] border p-5 transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
@@ -3929,10 +4069,11 @@ export default function App() {
                   <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{room.member_count} member{room.member_count === 1 ? "" : "s"}</span>
                   <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-50">Test mode: {room.test_visibility}</span>
                   <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Shared tool: {tabs.find((tab) => tab.id === room.active_tab)?.label || "Study Guide"}</span>
+                  {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-50">Invited room</span> : null}
                 </div>
               </div>
               <div className="force-mobile-stack flex flex-wrap gap-2">
-                <button type="button" onClick={async () => { setCurrentPage("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open Room</button>
+                <button type="button" onClick={() => openCollaborationRoom(room.id)} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950">Open Room</button>
               </div>
             </div>
           </article>
@@ -3970,6 +4111,39 @@ export default function App() {
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
       {collaborationMaterialsSection}
+    </section>
+  ) : null;
+
+  const collaborationInvitePrompt = showCollaborationInvitePrompt ? (
+    <section className="mb-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_28%),linear-gradient(180deg,rgba(8,15,30,0.88),rgba(15,23,42,0.84))] p-5 shadow-[0_24px_70px_rgba(2,8,23,0.38)]">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="inline-flex rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-xs uppercase tracking-[0.26em] text-cyan-100">
+            Collaboration invite
+          </div>
+          <h2 className="phone-safe-copy mt-4 text-2xl font-semibold text-white">{collaborationInvitePromptRoom?.title}</h2>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+            {collaborationInvitePromptRoom?.owner_email} shared a study room with you. Open it any time to join the shared board, room chat, and synced study tools.
+          </p>
+        </div>
+        <div className="force-mobile-stack flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => openCollaborationRoomFromInvite(collaborationInvitePromptRoom?.id)}
+            className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white"
+          >
+            Open Shared Board
+          </button>
+          <button
+            type="button"
+            onClick={() => persistDismissedRoomInviteList([...dismissedRoomInviteIds, collaborationInvitePromptRoom?.id])}
+            className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+            aria-label="Hide this collaboration invite prompt"
+          >
+            &times;
+          </button>
+        </div>
+      </div>
     </section>
   ) : null;
 
@@ -4517,7 +4691,7 @@ export default function App() {
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 4 of 4</div>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">Create or open a shared study room.</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Students can move here after the study workspace to share notes, sync a revision tool, and chat inside one lecture room.</p>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Students can move here after the study workspace to share notes, sync a revision tool, chat inside one lecture room, and join by invite link.</p>
           </div>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
@@ -4525,12 +4699,42 @@ export default function App() {
         </div>
       </div>
 
+      {collaborationInviteSpotlight ? (
+        <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Available room invite</p>
+              <h3 className="phone-safe-copy mt-3 text-2xl font-semibold text-white">{collaborationInviteSpotlight.title}</h3>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+                {collaborationInviteSpotlight.owner_email} shared this room with you. Open the shared board to see the notes area, room chat, and synced study focus for the lecture.
+              </p>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => openCollaborationRoomFromInvite(collaborationInviteSpotlight.id)}
+                className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white"
+              >
+                Open Shared Board
+              </button>
+              <button
+                type="button"
+                onClick={() => persistDismissedRoomInviteList([...dismissedRoomInviteIds, collaborationInviteSpotlight.id])}
+                className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm text-white transition hover:bg-white/10"
+              >
+                Hide Prompt
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
         <div className="min-w-0 space-y-5">
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture, invite people by email, and share the generated room link with anyone who should join the board.</p>
             <div className="mt-5 space-y-4">
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
@@ -4555,6 +4759,42 @@ export default function App() {
                 </div>
               </div>
               <button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button>
+              {activeOwnerRoomInviteLink ? (
+                <div className="rounded-[22px] border border-cyan-300/20 bg-cyan-400/10 p-4">
+                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">Share collaboration link</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-100">Send this link to a friend so Mabaso AI opens the collaboration invite flow and guides them into this room.</p>
+                  <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-cyan-50">
+                    <span className="phone-safe-copy break-all">{activeOwnerRoomInviteLink}</span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(activeOwnerRoomInviteLink);
+                          setStatus("Collaboration invite link copied.");
+                        } catch {
+                          setError("Could not copy the collaboration invite link.");
+                        }
+                      }}
+                      className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-cyan-50"
+                    >
+                      Copy Link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== "undefined") {
+                          window.open(activeOwnerRoomInviteLink, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white"
+                    >
+                      Preview Invite
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -4567,17 +4807,23 @@ export default function App() {
               <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button>
             </div>
             <div className="mt-4 space-y-3">
-              {collaborationRooms.length ? collaborationRooms.map((room) => (
+              {sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => (
                 <button
                   key={room.id}
                   type="button"
-                  onClick={async () => {
-                    setCurrentPage("collaboration");
-                    await loadCollaborationRoom(room.id, { resetNotesDraft: true });
-                  }}
-                  className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}
+                  onClick={() => openCollaborationRoom(room.id)}
+                  className={`w-full rounded-2xl border p-4 text-left transition ${
+                    activeRoomId === room.id
+                      ? "border-emerald-300/35 bg-emerald-300/10"
+                      : room.id === highlightedInviteRoomId || room.owner_email !== normalizedAuthEmail
+                        ? "border-cyan-300/20 bg-cyan-400/10 hover:bg-cyan-400/15"
+                        : "border-white/10 bg-slate-950/75 hover:bg-white/10"
+                  }`}
                 >
-                  <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
+                    {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-cyan-50">Invite</span> : null}
+                  </div>
                   <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p>
                   <p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p>
                 </button>
@@ -4675,9 +4921,10 @@ export default function App() {
                       <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p>
                       <h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4>
                     </div>
-                    <button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button>
+                    <button type="button" onClick={() => saveRoomNotes()} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync shared notes"}</button>
                   </div>
-                  <textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." />
+                  <textarea value={roomSharedNotesDraft} onChange={(event) => { roomNotesLastEditedAtRef.current = Date.now(); setRoomSharedNotesDraft(event.target.value); }} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." />
+                  <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, and the button above forces an immediate sync.</p>
                 </div>
 
                 <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
@@ -8817,6 +9064,17 @@ export default function App() {
     }
   };
 
+  const syncRoomNotesDraftFromRoom = (room, { force = false } = {}) => {
+    const nextSharedNotes = room?.shared_notes || "";
+    const previousSyncedNotes = roomNotesLastSyncedValueRef.current;
+    const currentDraft = roomSharedNotesDraftRef.current;
+    const recentlyEdited = Date.now() - roomNotesLastEditedAtRef.current < ROOM_NOTES_REMOTE_SYNC_GRACE_MS;
+    roomNotesLastSyncedValueRef.current = nextSharedNotes;
+    if (force || !recentlyEdited || !currentDraft || currentDraft === previousSyncedNotes || currentDraft === nextSharedNotes) {
+      setRoomSharedNotesDraft(nextSharedNotes);
+    }
+  };
+
   const loadCollaborationRoom = async (roomId, options = {}) => {
     const { silent = false, resetNotesDraft = false } = options;
     if (!roomId) return;
@@ -8827,7 +9085,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
       setActiveRoomId(roomId);
       setActiveRoom(data.room || null);
-      if (resetNotesDraft) setRoomSharedNotesDraft(data.room?.shared_notes || "");
+      syncRoomNotesDraftFromRoom(data.room, { force: resetNotesDraft });
       if (!silent) setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
     } catch (err) {
       if (!silent) setError(err.message || "Could not open the collaboration room.");
@@ -8836,11 +9094,58 @@ export default function App() {
     }
   };
 
+  const acceptCollaborationInvite = async (roomId, options = {}) => {
+    const { silent = false, openBoard = false } = options;
+    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+    if (!normalizedRoomId) return null;
+    if (!silent) setIsRoomLoading(true);
+    try {
+      const response = await authFetch(`/collaboration/invitations/${normalizedRoomId}/accept`, {
+        method: "POST",
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not join this collaboration room.");
+      setHighlightedInviteRoomId(normalizedRoomId);
+      persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
+      await refreshCollaborationRooms(true);
+      if (openBoard) {
+        setCurrentPage("collaboration");
+        setActiveRoomId(normalizedRoomId);
+        setActiveRoom(data.room || null);
+        syncRoomNotesDraftFromRoom(data.room, { force: true });
+        setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
+      } else if (!silent) {
+        setStatus(`Added ${data.room?.title || "the collaboration room"} to your collaboration list.`);
+      }
+      return data.room || null;
+    } catch (err) {
+      if (!silent) setError(err.message || "Could not join this collaboration room.");
+      return null;
+    } finally {
+      if (!silent) setIsRoomLoading(false);
+    }
+  };
+
+  const openCollaborationRoomFromInvite = async (roomId) => {
+    await acceptCollaborationInvite(roomId, { openBoard: true });
+  };
+
+  const openCollaborationRoom = async (roomId, options = {}) => {
+    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+    if (!normalizedRoomId) return;
+    persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
+    setCurrentPage("collaboration");
+    await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true, ...options });
+  };
+
   useEffect(() => {
     if (!authToken) {
       setCollaborationRooms([]);
       setActiveRoomId("");
       setActiveRoom(null);
+      setRoomSharedNotesDraft("");
+      roomNotesLastSyncedValueRef.current = "";
+      roomNotesLastEditedAtRef.current = 0;
       return;
     }
     refreshCollaborationRooms(true);
@@ -8856,6 +9161,27 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [activeRoomId, authToken]);
+
+  useEffect(() => {
+    if (!authToken) return undefined;
+    const pendingRoomId = readPendingRoomInviteId();
+    if (!pendingRoomId || browserPath !== "/app/collaboration") return undefined;
+
+    let cancelled = false;
+    (async () => {
+      const room = await acceptCollaborationInvite(pendingRoomId, { silent: true, openBoard: false });
+      if (cancelled || !room) return;
+      consumePendingRoomInviteId();
+      clearRoomInviteHashFromLocation();
+      setCurrentPage("collaboration");
+      setHighlightedInviteRoomId(pendingRoomId);
+      setStatus(`Your collaboration invite for ${room.title || "this room"} is ready.`);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, browserPath]);
 
   useEffect(() => {
     if (!authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
@@ -8883,6 +9209,8 @@ export default function App() {
 
   useEffect(() => {
     if (!activeRoom?.id) {
+      roomNotesLastSyncedValueRef.current = "";
+      roomNotesLastEditedAtRef.current = 0;
       setRoomQuizAnswers({});
       setRoomQuizAnswerImages({});
       setRoomQuizResults({});
@@ -8904,6 +9232,17 @@ export default function App() {
     setRoomQuizResults({});
     setRoomQuizSubmitted(false);
   }, [activeRoom?.id, authEmail]);
+
+  useEffect(() => {
+    if (!authToken || !activeRoomId || !activeRoom) return undefined;
+    if (roomSharedNotesDraft === roomNotesLastSyncedValueRef.current) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      saveRoomNotes({ silent: true, preserveStatus: true, notesOverride: roomSharedNotesDraftRef.current });
+    }, ROOM_NOTES_AUTOSAVE_DELAY_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeRoom, activeRoomId, authToken, roomSharedNotesDraft]);
 
   useEffect(() => () => {
     Object.values(answerSyncTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
@@ -9077,22 +9416,25 @@ export default function App() {
       email: String(email || "").trim(),
       message: normalizedMessage,
       page: String(page || "").trim() || "unknown-page",
-      category: String(category || "").trim() || SUPPORT_CONTACT_CATEGORIES[0],
+      category: String(category || "").trim() || DEFAULT_SUPPORT_CONTACT_CATEGORY,
       device: String(device || "").trim() || detectSupportDevice(),
       browser: String(browser || "").trim() || detectSupportBrowser(),
       client_request_id: buildClientRequestId("support"),
     };
+    if (authToken) {
+      const requestOptions = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      };
+      return authJsonWithTransientRetries("/support/contact", requestOptions, { timeoutMs: 90000, retries: 2 });
+    }
+    if (!payload.email) payload.email = buildPublicSupportPlaceholderEmail(payload.client_request_id || payload.page);
     const requestOptions = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     };
-    if (authToken) {
-      return authJsonWithTransientRetries("/support/contact", requestOptions, { timeoutMs: 90000, retries: 2 });
-    }
-    if (!payload.email) {
-      throw new Error("Enter your email address so the support team can reply.");
-    }
     return publicJsonWithTransientRetries("/support/public-contact", requestOptions, { timeoutMs: 90000, retries: 2 });
   };
 
@@ -9134,7 +9476,7 @@ export default function App() {
       return;
     }
     if (field === "category") {
-      setSupportContactCategory(nextValue || SUPPORT_CONTACT_CATEGORIES[0]);
+      setSupportContactCategory(nextValue || DEFAULT_SUPPORT_CONTACT_CATEGORY);
       return;
     }
     if (field === "device") {
@@ -11175,7 +11517,7 @@ export default function App() {
     }
   };
 
-  const startTeacherQuestionCapture = () => {
+  const startTeacherQuestionCapture = ({ continueListening = false, preservedTranscript = "" } = {}) => {
     if (!teacherLessonData.segments.length) {
       setError("Build teacher mode first so the lesson can pause and answer questions.");
       return;
@@ -11186,13 +11528,26 @@ export default function App() {
       return;
     }
 
-    rememberTeacherResumeState();
-    resetTeacherQuestionFlow({ clearTranscript: false });
-    stopTeacherPlayback({ resetIndex: false });
-    setTeacherQuestionDraft("");
-    setTeacherQuestionAnswer("");
-    setTeacherQuestionStatus("Listening to your question...");
-    setStatus("Teacher is listening to your question.");
+    const baseTranscript = String(preservedTranscript || "").replace(/\s+/g, " ").trim();
+
+    if (!continueListening) {
+      rememberTeacherResumeState();
+      resetTeacherQuestionFlow({ clearTranscript: false });
+      stopTeacherPlayback({ resetIndex: false });
+      setIsTeacherPaused(true);
+      setTeacherQuestionDraft("");
+      setTeacherQuestionAnswer("");
+    }
+
+    if (baseTranscript) {
+      setTeacherQuestionDraft(baseTranscript);
+    }
+    setTeacherQuestionStatus(
+      baseTranscript
+        ? "Keep speaking, then press Stop Question when you are done."
+        : "Listening... Ask your question, then press Stop Question when you are done.",
+    );
+    setStatus("Teacher is listening. Press Stop Question when you are done.");
     setError("");
 
     const recognition = new SpeechRecognitionCtor();
@@ -11203,13 +11558,14 @@ export default function App() {
     );
     const recognitionRunId = teacherRecognitionRunRef.current + 1;
     teacherRecognitionRunRef.current = recognitionRunId;
-    let capturedTranscript = "";
+    let capturedTranscript = baseTranscript;
     let recognitionError = "";
-    let didSubmit = false;
 
     teacherSpeechRecognitionRef.current = recognition;
+    teacherRecognitionShouldContinueRef.current = true;
+    teacherRecognitionManualStopRef.current = false;
     recognition.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.onresult = (event) => {
@@ -11220,19 +11576,32 @@ export default function App() {
         .replace(/\s+/g, " ")
         .trim();
       if (!transcriptText) return;
-      capturedTranscript = transcriptText;
-      setTeacherQuestionDraft(transcriptText);
-      setTeacherQuestionStatus("Listening to your question...");
+      const mergedTranscript = [baseTranscript, transcriptText]
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      capturedTranscript = mergedTranscript;
+      setTeacherQuestionDraft(mergedTranscript);
+      setTeacherQuestionStatus("Listening... Press Stop Question when you are done.");
     };
     recognition.onerror = (event) => {
       if (teacherRecognitionRunRef.current !== recognitionRunId) return;
       recognitionError = event?.error || "unknown";
       if (recognitionError === "no-speech") {
-        setTeacherQuestionStatus("I did not hear a question. Returning to the lesson...");
+        setTeacherQuestionStatus(
+          capturedTranscript
+            ? "I am still listening. Keep speaking or press Stop Question when you are done."
+            : "I am still listening. Ask your question, then press Stop Question when you are done.",
+        );
         return;
       }
       if (recognitionError === "aborted") {
-        setTeacherQuestionStatus("Question listening stopped.");
+        setTeacherQuestionStatus(
+          teacherRecognitionManualStopRef.current
+            ? "Finishing your question..."
+            : "Question listening stopped.",
+        );
         return;
       }
       setTeacherQuestionStatus("Teacher could not hear that question clearly.");
@@ -11241,18 +11610,33 @@ export default function App() {
     recognition.onend = () => {
       if (teacherRecognitionRunRef.current !== recognitionRunId) return;
       teacherSpeechRecognitionRef.current = null;
-      setIsTeacherListening(false);
       const finalQuestion = capturedTranscript.trim();
-      if (finalQuestion && !didSubmit) {
-        didSubmit = true;
-        submitTeacherQuestion(finalQuestion);
+      if (teacherRecognitionManualStopRef.current || !teacherRecognitionShouldContinueRef.current) {
+        teacherRecognitionShouldContinueRef.current = false;
+        teacherRecognitionManualStopRef.current = false;
+        setIsTeacherListening(false);
+        if (finalQuestion) {
+          submitTeacherQuestion(finalQuestion);
+          return;
+        }
+        setTeacherQuestionStatus("I did not catch a clear question. Press Ask Question to try again, or Resume to continue the lesson.");
+        setStatus("Teacher question stopped without a clear question.");
+        setIsTeacherPaused(true);
+        setIsTeacherQuestionLoading(false);
+        setIsTeacherAnswering(false);
         return;
       }
       if (recognitionError && recognitionError !== "aborted" && recognitionError !== "no-speech") {
-        resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed after a voice capture problem." });
+        teacherRecognitionShouldContinueRef.current = false;
+        setIsTeacherListening(false);
+        setIsTeacherPaused(true);
+        setTeacherQuestionStatus("Teacher could not keep listening right now. You can try again or resume the lesson.");
         return;
       }
-      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed the lesson." });
+      window.setTimeout(() => {
+        if (!teacherRecognitionShouldContinueRef.current || teacherRecognitionManualStopRef.current) return;
+        startTeacherQuestionCapture({ continueListening: true, preservedTranscript: finalQuestion });
+      }, 180);
     };
 
     try {
@@ -11260,14 +11644,19 @@ export default function App() {
       setIsTeacherListening(true);
     } catch (err) {
       teacherSpeechRecognitionRef.current = null;
-      setTeacherQuestionStatus("Teacher could not start listening.");
+      teacherRecognitionShouldContinueRef.current = false;
+      teacherRecognitionManualStopRef.current = false;
+      setIsTeacherListening(false);
+      setIsTeacherPaused(true);
+      setTeacherQuestionStatus("Teacher could not start listening. You can try again or resume the lesson.");
       setError(err.message || "Voice question capture failed.");
-      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed the lesson." });
     }
   };
 
   const handleTeacherQuestionButtonClick = () => {
     if (isTeacherListening) {
+      teacherRecognitionManualStopRef.current = true;
+      teacherRecognitionShouldContinueRef.current = false;
       setTeacherQuestionStatus("Finishing your question...");
       setStatus("Teacher is finishing your question.");
       stopTeacherVoiceRecognition({ finishListening: true, preserveHandlers: true });
@@ -11305,7 +11694,8 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not create the collaboration room.");
       setActiveRoomId(data.room?.id || "");
       setActiveRoom(data.room || null);
-      setRoomSharedNotesDraft(data.room?.shared_notes || "");
+      roomNotesLastEditedAtRef.current = 0;
+      syncRoomNotesDraftFromRoom(data.room, { force: true });
       setRoomTitleInput(resolvedTitle);
       setRoomMessageDraft("");
       setCurrentPage("collaboration");
@@ -11319,22 +11709,26 @@ export default function App() {
     }
   };
 
-  const saveRoomNotes = async () => {
+  const saveRoomNotes = async (options = {}) => {
+    const { silent = false, preserveStatus = false, notesOverride = null } = options;
     if (!activeRoomId) return;
+    const nextSharedNotes = typeof notesOverride === "string" ? notesOverride : roomSharedNotesDraftRef.current;
     setIsSavingRoomNotes(true);
-    setError("");
+    if (!silent) setError("");
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shared_notes: roomSharedNotesDraft }),
+        body: JSON.stringify({ shared_notes: nextSharedNotes }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save shared notes.");
       setActiveRoom(data.room || null);
-      setStatus("Shared notes saved for the room.");
+      roomNotesLastSyncedValueRef.current = data.room?.shared_notes || nextSharedNotes;
+      await refreshCollaborationRooms(true);
+      if (!preserveStatus) setStatus("Shared notes saved for the room.");
     } catch (err) {
-      setError(err.message || "Could not save shared notes.");
+      if (!silent) setError(err.message || "Could not save shared notes.");
     } finally {
       setIsSavingRoomNotes(false);
     }
@@ -12138,6 +12532,7 @@ export default function App() {
           <button type="button" onClick={() => { setCurrentPage("collaboration"); refreshCollaborationRooms(true); }} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
+        {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
@@ -12327,7 +12722,7 @@ export default function App() {
                           <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play</button>
                           <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause</button>
                           <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume</button>
-                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Finish Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Question"}</button>
+                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Stop Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Question"}</button>
                           <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused && !isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Stop</button>
                         </div>
                       </div>
@@ -12347,7 +12742,7 @@ export default function App() {
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="min-w-0">
                             <p className="text-xs uppercase tracking-[0.22em] text-emerald-700">Student Question</p>
-                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Question while the teacher is speaking, say your question, and the lesson will pause, answer, then continue."}</p>
+                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Question while the teacher is speaking, say your question, then press Stop Question when you are done so the teacher can answer."}</p>
                           </div>
                           <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-slate-600">
                             {isTeacherListening ? "Listening" : isTeacherQuestionLoading ? "Thinking" : isTeacherAnswering ? "Answering" : "Ready"}

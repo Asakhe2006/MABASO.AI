@@ -217,57 +217,14 @@ function ContactSupportForm({
           <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Live Support Form</p>
           <h2 className="mt-3 text-2xl font-semibold text-white">Send feedback directly to the Mabaso AI admin inbox</h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-            Describe what went wrong, what you expected to happen, and the browser or device you used. The admin dashboard stores these messages so they can be reviewed later.
+            Describe what went wrong, what you expected to happen, and where it happened in the platform. Mabaso AI attaches account and browser context automatically when it is available.
           </p>
         </div>
         <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200">
           {isAuthenticated ? "Signed-in support flow" : "Public support flow"}
         </span>
       </div>
-      <div className="mt-6 grid gap-4 xl:grid-cols-2">
-        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Reply Email</span>
-          <input
-            value={supportForm.email || ""}
-            onChange={(event) => onSupportFieldChange?.("email", event.target.value)}
-            placeholder="you@example.com"
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
-          />
-        </label>
-        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Issue Category</span>
-          <select
-            value={supportForm.category || ""}
-            onChange={(event) => onSupportFieldChange?.("category", event.target.value)}
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
-          >
-            {(supportForm.categories || []).map((item) => (
-              <option key={item} value={item} className="bg-slate-950 text-white">
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Device</span>
-          <input
-            value={supportForm.device || ""}
-            onChange={(event) => onSupportFieldChange?.("device", event.target.value)}
-            placeholder="Windows PC, iPhone, MacBook..."
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
-          />
-        </label>
-        <label className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-          <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Browser</span>
-          <input
-            value={supportForm.browser || ""}
-            onChange={(event) => onSupportFieldChange?.("browser", event.target.value)}
-            placeholder="Chrome, Safari, Edge..."
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none"
-          />
-        </label>
-      </div>
-      <label className="mt-4 block rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+      <label className="mt-6 block rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
         <span className="text-xs uppercase tracking-[0.24em] text-slate-500">Message</span>
         <textarea
           value={supportForm.message || ""}
@@ -286,7 +243,6 @@ function ContactSupportForm({
         >
           {supportForm.isSubmitting ? "Sending..." : "Send Support Message"}
         </button>
-        <p className="text-sm text-slate-300">New messages appear in the admin dashboard Contact Support tab.</p>
       </div>
       {supportForm.feedback ? (
         <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${feedbackTone}`}>

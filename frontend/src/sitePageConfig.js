@@ -1819,12 +1819,12 @@ export const sitePages = [
     access: "public",
     metadata: {
       title: "Contact Support | Mabaso AI",
-      description: "Contact the Mabaso AI team using a premium support form with issue categories, device details, and screenshot upload guidance.",
+      description: "Contact the Mabaso AI team using a premium support form built around a clear message, workflow context, and secure delivery.",
     },
     hero: {
       eyebrow: "Support / Contact Support",
-      headline: "Open a support case with the right issue details from the start.",
-      description: "Contact Support is the structured intake page for support conversations. It collects issue type, browser and device details, workflow stage, and optional screenshots so problems reach the right context fast.",
+      headline: "Send a support message without losing the important context.",
+      description: "Contact Support is the public intake page for support conversations. It keeps the form simple, centers the problem description, and lets Mabaso AI attach account and browser context automatically when it is available.",
       ctas: [
         primaryCta("Sign In to Submit Securely", "open-signin"),
         secondaryCta("Browse Help Center", "route", "/support/help-center"),
@@ -1836,24 +1836,24 @@ export const sitePages = [
       ],
       preview: {
         kicker: "Support form preview",
-        title: "Issue category, browser details, message, and screenshot guidance",
-        subtitle: "Use a professional ticket-intake layout that feels like enterprise product support, not a generic contact box.",
-        tabs: ["Category", "Device", "Details", "Attachment"],
+        title: "Focused message form with secure context capture",
+        subtitle: "Use a premium, low-friction support form that feels direct and polished instead of overloaded.",
+        tabs: ["Message", "Context", "Secure Send", "Follow-up"],
         rows: [
-          { label: "Best results", value: "Include workflow stage and browser details" },
-          { label: "Attachments", value: "Screenshot guidance ready" },
+          { label: "Best results", value: "Describe the page, action, and expected result" },
+          { label: "Context", value: "Account and browser details attached when available" },
           { label: "Submission", value: "Secure sign-in unlocks ticket sending" },
         ],
       },
     },
     contains: [
-      { icon: "message-square-warning", title: "Support ticket form", description: "A structured contact form collects the details support needs first." },
-      { icon: "monitor-smartphone", title: "Device and browser selectors", description: "Users can describe where the issue happened more accurately." },
-      { icon: "image-up", title: "Screenshot guidance", description: "The page explains how screenshots help diagnose workflow and UI issues." },
+      { icon: "message-square-warning", title: "Support ticket form", description: "A clear message-first form collects the problem in the user's own words." },
+      { icon: "monitor-smartphone", title: "Automatic context capture", description: "Browser and account context can be attached automatically when available." },
+      { icon: "image-up", title: "Workflow guidance", description: "The page encourages users to mention the page, action, and expected result." },
     ],
     layout: [
       { title: "Form-led hero", description: "Bring the contact form into the first fold rather than hiding it below long copy." },
-      { title: "Issue taxonomy section", description: "Show categories such as upload, transcription, exports, collaboration, billing, and security." },
+      { title: "Message-first structure", description: "Keep the core form focused on the user's actual issue rather than too many setup fields." },
       { title: "Secure-submission explanation", description: "Clarify why secure sign-in improves ticket routing and account-safe assistance." },
     ],
     modules: [
@@ -1861,10 +1861,10 @@ export const sitePages = [
         icon: "clipboard-list",
         title: "Suggested form modules",
         items: [
-          "Issue category picker",
-          "Workflow-stage selector",
-          "Browser and device selectors",
-          "Detailed message field and screenshot guidance",
+          "Detailed message field",
+          "Workflow context helper copy",
+          "Automatic account or browser context when available",
+          "Clear secure-send action",
         ],
       },
       {
@@ -1878,13 +1878,13 @@ export const sitePages = [
       },
     ],
     visuals: [
-      "Enterprise support form with grouped fields",
-      "Category cards for upload, generation, export, browser, and security issues",
-      "Screenshot guidance panel with annotation tips",
+      "Enterprise support form with one clear primary message area",
+      "Quiet context badges for public versus signed-in support flows",
+      "Low-friction secure-send panel with polished success and error states",
     ],
     emptyState: {
-      title: "No support category selected yet",
-      description: "Render an intake form skeleton with a secure-submission notice and a CTA to sign in for account-linked support.",
+      title: "No support message written yet",
+      description: "Render a message-first form skeleton with a secure-submission notice and a CTA to sign in for account-linked support.",
     },
     designNotes: [
       "This page should feel trustworthy and procedural, not casual.",

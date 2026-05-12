@@ -1969,6 +1969,13 @@ def normalize_support_category(value: str) -> str:
     return normalize_support_context_value(value or "General", 80) or "General"
 
 
+def build_public_support_placeholder_email(seed: str = "") -> str:
+    cleaned_seed = re.sub(r"[^a-z0-9]+", "", compact_text(seed).lower())[:32]
+    if not cleaned_seed:
+        cleaned_seed = uuid4().hex[:16]
+    return f"guest+{cleaned_seed}@mabaso.ai"
+
+
 def send_support_email(
     reply_email: str,
     message_text: str,
@@ -3404,6 +3411,22 @@ def get_accessible_collaboration_room(room_id: str, current_user: str) -> sqlite
               AND (r.owner_email = ? OR m.email = ?)
             """,
             (room_id, current_user, current_user),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Collaboration room not found.")
+    return row
+
+
+def get_collaboration_room_by_id(room_id: str) -> sqlite3.Row:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM collaboration_rooms
+            WHERE id = ?
+            """,
+            (room_id,),
         ).fetchone()
 
     if not row:
@@ -5523,10 +5546,8 @@ async def submit_public_support_request(
     payload: SupportMessageRequest,
     request: Request,
 ):
-    if not compact_text(payload.email):
-        raise HTTPException(status_code=400, detail="Your email address is required for support replies.")
     return await process_support_request_submission(
-        reply_email=payload.email,
+        reply_email=payload.email or build_public_support_placeholder_email(payload.client_request_id or payload.page),
         payload=payload,
         request=request,
         audit_action="support.public_contact",
@@ -13514,6 +13535,40 @@ async def create_collaboration_room(
 async def get_collaboration_room(room_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room(room_id, current_user)
     return {"room": serialize_collaboration_room(room, current_user)}
+
+
+@app.post("/collaboration/invitations/{room_id}/accept")
+async def accept_collaboration_invitation(
+    room_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_collaboration_room_by_id(room_id)
+    now_iso = utc_now().isoformat()
+    member_role = "owner" if room["owner_email"] == current_user else "member"
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO collaboration_room_members (room_id, email, role, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (room["id"], current_user, member_role, now_iso),
+        )
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    record_audit_log(
+        action="collaboration.invite.accept",
+        email=current_user,
+        request=request,
+        resource_type="collaboration",
+        resource_name=room_id,
+    )
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
 
 
 @app.post("/collaboration/rooms/{room_id}/messages")
