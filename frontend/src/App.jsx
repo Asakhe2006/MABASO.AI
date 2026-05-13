@@ -5066,248 +5066,250 @@ export default function App() {
           </div>
         </div>
 
-        <div className="min-w-0 space-y-5">
+        <div className="min-w-0">
           {activeRoom ? (
-            <>
-              <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
+            <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p>
+                  <h3 className="phone-safe-copy mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3>
+                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p>
+                  <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
+                </div>
+                <div className="force-mobile-stack flex flex-wrap gap-3">
+                  <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button>
+                  <button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button>
+                </div>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                {(activeRoom.members || []).map((member) => (
+                  <span key={member.email} className="phone-safe-copy rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>
+                ))}
+              </div>
+              <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
-                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p>
-                    <h3 className="phone-safe-copy mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3>
-                    <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p>
-                    <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
+                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p>
+                    <h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4>
+                    <p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room's shared revision focus.</p>
                   </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button>
-                    <button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button>
+                  <div className="force-mobile-stack flex flex-wrap gap-2">
+                    {[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => (
+                      <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>
+                    ))}
                   </div>
                 </div>
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {(activeRoom.members || []).map((member) => (
-                    <span key={member.email} className="phone-safe-copy rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>
-                  ))}
-                </div>
-                <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p>
-                      <h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4>
-                      <p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room's shared revision focus.</p>
-                    </div>
-                    <div className="force-mobile-stack flex flex-wrap gap-2">
-                      {[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => (
-                        <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="mt-4">
-                    {activeRoom.active_tab === "guide" ? renderStudyGuideContent({
-                      topic: activeRoomGuideTopic,
-                      titleSection: activeRoomGuideTitleSection,
-                      summarySection: activeRoomGuideSummarySection,
-                      visibleSections: activeRoomVisibleGuideSections,
-                      formattedContent: activeRoomFormattedGuide,
-                      studyImageList: activeRoom?.study_images || [],
-                      emptyMessage: "No shared study guide selected yet.",
-                    }) : null}
-                    {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
-                    {activeRoom.active_tab === "formulas" ? (
-                      <StudyToolFormulaPanel
-                        rows={activeRoomFormulaRows}
-                        content={activeRoomFormattedFormula}
-                        emptyMessage="No shared formulas selected yet."
-                      />
-                    ) : null}
-                    {activeRoom.active_tab === "examples" ? (
-                      <StudyToolMarkdownCard
-                        content={activeRoomFormattedExample}
-                        emptyMessage="No shared worked examples selected yet."
-                      />
-                    ) : null}
-                    {activeRoom.active_tab === "flashcards" ? (
-                      <StudyToolFlashcardsPanel
-                        cards={activeRoom.flashcards || []}
-                        emptyMessage="No shared flashcards selected yet."
-                      />
-                    ) : null}
-                    {activeRoom.active_tab === "quiz" ? renderQuizSection({
-                      questions: activeRoomQuizQuestions,
-                      answers: roomQuizAnswers,
-                      results: roomQuizResults,
-                      quizImages: roomQuizAnswerImages,
-                      submitted: roomQuizSubmitted,
-                      isMarking: isMarkingRoomQuiz,
-                      onMark: markRoomQuiz,
-                      onAnswerChange: handleRoomQuizAnswerChange,
-                      onOptionChange: handleRoomQuizOptionChange,
-                      onImageChange: handleRoomQuizImageChange,
-                      sharedAnswerGroups: roomAnswerGroups,
-                      visibilityMode: activeRoom.test_visibility,
-                      scoreValue: activeRoomQuizQuestions.reduce((total, item) => total + Number(roomQuizResults[item.number]?.score || 0), 0),
-                      scopeId: `room-${activeRoom.id}`,
-                      ownerControls: activeRoom.is_owner ? <div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null,
-                      ownerNotice: activeRoom.is_owner ? "" : "Only the room owner can switch between private answers and shared answers for the room test.",
-                      emptyMessage: "No room test has been added to this collaboration yet.",
-                    }) : null}
-                    {!["guide", "transcript", "formulas", "examples", "flashcards", "quiz"].includes(activeRoom.active_tab) ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div> : null}
-                  </div>
+                <div className="mt-4">
+                  {activeRoom.active_tab === "guide" ? renderStudyGuideContent({
+                    topic: activeRoomGuideTopic,
+                    titleSection: activeRoomGuideTitleSection,
+                    summarySection: activeRoomGuideSummarySection,
+                    visibleSections: activeRoomVisibleGuideSections,
+                    formattedContent: activeRoomFormattedGuide,
+                    studyImageList: activeRoom?.study_images || [],
+                    emptyMessage: "No shared study guide selected yet.",
+                  }) : null}
+                  {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
+                  {activeRoom.active_tab === "formulas" ? (
+                    <StudyToolFormulaPanel
+                      rows={activeRoomFormulaRows}
+                      content={activeRoomFormattedFormula}
+                      emptyMessage="No shared formulas selected yet."
+                    />
+                  ) : null}
+                  {activeRoom.active_tab === "examples" ? (
+                    <StudyToolMarkdownCard
+                      content={activeRoomFormattedExample}
+                      emptyMessage="No shared worked examples selected yet."
+                    />
+                  ) : null}
+                  {activeRoom.active_tab === "flashcards" ? (
+                    <StudyToolFlashcardsPanel
+                      cards={activeRoom.flashcards || []}
+                      emptyMessage="No shared flashcards selected yet."
+                    />
+                  ) : null}
+                  {activeRoom.active_tab === "quiz" ? renderQuizSection({
+                    questions: activeRoomQuizQuestions,
+                    answers: roomQuizAnswers,
+                    results: roomQuizResults,
+                    quizImages: roomQuizAnswerImages,
+                    submitted: roomQuizSubmitted,
+                    isMarking: isMarkingRoomQuiz,
+                    onMark: markRoomQuiz,
+                    onAnswerChange: handleRoomQuizAnswerChange,
+                    onOptionChange: handleRoomQuizOptionChange,
+                    onImageChange: handleRoomQuizImageChange,
+                    sharedAnswerGroups: roomAnswerGroups,
+                    visibilityMode: activeRoom.test_visibility,
+                    scoreValue: activeRoomQuizQuestions.reduce((total, item) => total + Number(roomQuizResults[item.number]?.score || 0), 0),
+                    scopeId: `room-${activeRoom.id}`,
+                    ownerControls: activeRoom.is_owner ? <div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null,
+                    ownerNotice: activeRoom.is_owner ? "" : "Only the room owner can switch between private answers and shared answers for the room test.",
+                    emptyMessage: "No room test has been added to this collaboration yet.",
+                  }) : null}
+                  {!["guide", "transcript", "formulas", "examples", "flashcards", "quiz"].includes(activeRoom.active_tab) ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div> : null}
                 </div>
               </div>
-
-              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-                <div className="min-w-0">
-                  <input
-                    ref={roomBoardImageInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                      uploadRoomBoardImages(event.target.files);
-                      event.target.value = "";
-                    }}
-                  />
-                  <div className="-mx-1 flex gap-4 overflow-x-auto px-1 pb-2 snap-x snap-mandatory md:mx-0 md:flex-col md:overflow-visible md:px-0 md:pb-0">
-                    <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(2,6,23,0.98))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.38)] md:min-w-0">
-                      <div className="force-mobile-stack flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 1</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-white">Large shared notes board</h4>
-                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">A clear square canvas for the whole group. Use it for section plans, reminders, definitions, or the lecturer's key steps.</p>
-                        </div>
-                        <div className="force-mobile-stack flex flex-wrap gap-3">
-                          <button type="button" onClick={() => saveRoomNotes()} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync board"}</button>
-                          <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
-                        </div>
-                      </div>
-                      <div className="mt-4 aspect-square min-h-[420px] overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] bg-[size:30px_30px,30px_30px,auto]">
-                        <textarea
-                          value={roomSharedNotesDraft}
-                          onChange={(event) => {
-                            roomNotesLastEditedAtRef.current = Date.now();
-                            setRoomSharedNotesDraft(event.target.value);
-                          }}
-                          rows={18}
-                          className="h-full w-full resize-none bg-transparent px-5 py-5 text-base leading-8 text-slate-50 outline-none placeholder:text-slate-500"
-                          placeholder="Write the next section the teacher must follow, add sentence-by-sentence key points, note formulas, or plan how the group will revise this lecture..."
-                        />
-                      </div>
-                      <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, the board stays square on larger screens, and on phones you can swipe to the next page for board photos.</p>
-                    </div>
-
-                    <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-white/[0.04] p-5 md:min-w-0">
-                      <div className="force-mobile-stack flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 2</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-white">Uploaded board photos</h4>
-                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Photos uploaded in the room appear large here so the group can inspect diagrams, handwritten work, or classroom board captures clearly.</p>
-                        </div>
-                        <div className="force-mobile-stack flex flex-wrap gap-3">
-                          <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{activeRoomBoardImages.length} photo{activeRoomBoardImages.length === 1 ? "" : "s"}</div>
-                          <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
-                        </div>
-                      </div>
-
-                      {selectedRoomBoardImage ? (
-                        <>
-                          <article className="mt-5 overflow-hidden rounded-[28px] border border-white/10 bg-slate-950/85 shadow-[0_22px_70px_rgba(2,8,23,0.34)]">
-                            <img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Collaboration board upload"} className="aspect-[4/3] w-full bg-black/30 object-contain md:aspect-[16/11]" loading="lazy" />
-                            <div className="space-y-3 p-4">
-                              <div className="force-mobile-stack flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <p className="phone-safe-copy text-lg font-semibold text-white">{selectedRoomBoardImage.name || "Board photo"}</p>
-                                  <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedRoomBoardImage.uploaded_by || "Room member"}{selectedRoomBoardImage.created_at ? ` - ${new Date(selectedRoomBoardImage.created_at).toLocaleString()}` : ""}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteRoomBoardImage(selectedRoomBoardImage.id)}
-                                  disabled={deletingRoomBoardImageId === selectedRoomBoardImage.id}
-                                  className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 disabled:opacity-50"
-                                >
-                                  {deletingRoomBoardImageId === selectedRoomBoardImage.id ? "Removing..." : "Remove"}
-                                </button>
-                              </div>
-                            </div>
-                          </article>
-
-                          {activeRoomBoardImages.length > 1 ? (
-                            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                              {activeRoomBoardImages.map((image) => (
-                                <article key={image.id} className={`relative overflow-hidden rounded-[22px] border transition ${selectedRoomBoardImage?.id === image.id ? "border-sky-300/35 bg-sky-400/10" : "border-white/10 bg-slate-950/75"}`}>
-                                  <button type="button" onClick={() => setSelectedRoomBoardImageId(image.id)} className="block w-full text-left">
-                                    <img src={image.image_url} alt={image.name || "Board photo"} className="h-36 w-full object-cover" loading="lazy" />
-                                    <div className="p-3">
-                                      <p className="phone-safe-copy text-sm font-semibold text-white">{image.name || "Board photo"}</p>
-                                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{image.uploaded_by || "Room member"}</p>
-                                    </div>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      deleteRoomBoardImage(image.id);
-                                    }}
-                                    disabled={deletingRoomBoardImageId === image.id}
-                                    className="absolute right-3 top-3 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[11px] text-white disabled:opacity-50"
-                                  >
-                                    {deletingRoomBoardImageId === image.id ? "..." : "Remove"}
-                                  </button>
-                                </article>
-                              ))}
-                            </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] p-8 text-sm leading-7 text-slate-300">
-                          No board photo uploaded yet. Add a photo of the board, notebook, or worked solution and it will appear large here for the whole room.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
-                  <div className="force-mobile-stack flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p>
-                      <h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4>
-                    </div>
-                    {isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}
-                  </div>
-                  <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">
-                    {(activeRoom.messages || []).length ? (
-                      <div className="space-y-3">
-                        {activeRoom.messages.map((message) => (
-                          <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                            <p className="phone-safe-copy text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p>
-                            <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>
-                    )}
-                  </div>
-                  <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
-                    <div className="force-mobile-stack flex items-end gap-3">
-                      <textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." />
-                      <button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message">
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                          <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                        </svg>
-                      </button>
-                    </div>
-                    <p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p>
-                  </div>
-                </div>
-              </div>
-            </>
+            </div>
           ) : (
             <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>
           )}
         </div>
       </div>
+
+      {activeRoom ? (
+        <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(320px,0.82fr)_minmax(0,1fr)_minmax(0,1fr)] xl:items-stretch">
+          <div className="order-2 rounded-[24px] border border-white/10 bg-slate-950/75 p-5 xl:order-1 xl:flex xl:min-h-[68vh] xl:flex-col">
+            <div className="force-mobile-stack flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p>
+                <h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4>
+              </div>
+              {isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}
+            </div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4 xl:flex-1 xl:min-h-0 xl:overflow-hidden">
+              {(activeRoom.messages || []).length ? (
+                <div className="space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1">
+                  {activeRoom.messages.map((message) => (
+                    <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                      <p className="phone-safe-copy text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p>
+                      <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="xl:flex xl:h-full xl:items-center">
+                  <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>
+                </div>
+              )}
+            </div>
+            <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
+              <div className="force-mobile-stack flex items-end gap-3">
+                <textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." />
+                <button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                    <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                  </svg>
+                </button>
+              </div>
+              <p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p>
+            </div>
+          </div>
+
+          <div className="order-1 min-w-0 xl:order-2 xl:col-span-2">
+            <input
+              ref={roomBoardImageInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(event) => {
+                uploadRoomBoardImages(event.target.files);
+                event.target.value = "";
+              }}
+            />
+            <div className="-mx-1 flex gap-4 overflow-x-auto px-1 pb-2 snap-x snap-mandatory xl:mx-0 xl:grid xl:grid-cols-2 xl:gap-5 xl:overflow-visible xl:px-0 xl:pb-0 xl:snap-none">
+              <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(2,6,23,0.98))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.38)] xl:min-h-[68vh] xl:min-w-0 xl:flex xl:flex-col">
+                <div className="force-mobile-stack flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 1</p>
+                    <h4 className="mt-2 text-2xl font-semibold text-white">Large shared notes board</h4>
+                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">A clear square canvas for the whole group. Use it for section plans, reminders, definitions, or the lecturer&apos;s key steps.</p>
+                  </div>
+                  <div className="force-mobile-stack flex flex-wrap gap-3">
+                    <button type="button" onClick={() => saveRoomNotes()} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync board"}</button>
+                    <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
+                  </div>
+                </div>
+                <div className="mt-4 aspect-square min-h-[420px] overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] bg-[size:30px_30px,30px_30px,auto] xl:min-h-0 xl:flex-1 xl:aspect-auto">
+                  <textarea
+                    value={roomSharedNotesDraft}
+                    onChange={(event) => {
+                      roomNotesLastEditedAtRef.current = Date.now();
+                      setRoomSharedNotesDraft(event.target.value);
+                    }}
+                    rows={18}
+                    className="h-full w-full resize-none bg-transparent px-5 py-5 text-base leading-8 text-slate-50 outline-none placeholder:text-slate-500"
+                    placeholder="Write the next section the teacher must follow, add sentence-by-sentence key points, note formulas, or plan how the group will revise this lecture..."
+                  />
+                </div>
+                <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, and on phones you can still swipe to the next page for board photos.</p>
+              </div>
+
+              <div className="min-w-full snap-center rounded-[24px] border border-white/10 bg-white/[0.04] p-5 xl:min-h-[68vh] xl:min-w-0 xl:flex xl:flex-col">
+                <div className="force-mobile-stack flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 2</p>
+                    <h4 className="mt-2 text-2xl font-semibold text-white">Uploaded board photos</h4>
+                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Photos uploaded in the room appear large here so the group can inspect diagrams, handwritten work, or classroom board captures clearly.</p>
+                  </div>
+                  <div className="force-mobile-stack flex flex-wrap gap-3">
+                    <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{activeRoomBoardImages.length} photo{activeRoomBoardImages.length === 1 ? "" : "s"}</div>
+                    <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
+                  </div>
+                </div>
+
+                {selectedRoomBoardImage ? (
+                  <>
+                    <article className="mt-5 overflow-hidden rounded-[28px] border border-white/10 bg-slate-950/85 shadow-[0_22px_70px_rgba(2,8,23,0.34)] xl:flex xl:flex-1 xl:flex-col">
+                      <img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Collaboration board upload"} className="aspect-[4/3] w-full bg-black/30 object-contain md:aspect-[16/11] xl:min-h-[42vh] xl:flex-1 xl:aspect-auto" loading="lazy" />
+                      <div className="space-y-3 p-4">
+                        <div className="force-mobile-stack flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="phone-safe-copy text-lg font-semibold text-white">{selectedRoomBoardImage.name || "Board photo"}</p>
+                            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedRoomBoardImage.uploaded_by || "Room member"}{selectedRoomBoardImage.created_at ? ` - ${new Date(selectedRoomBoardImage.created_at).toLocaleString()}` : ""}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteRoomBoardImage(selectedRoomBoardImage.id)}
+                            disabled={deletingRoomBoardImageId === selectedRoomBoardImage.id}
+                            className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 disabled:opacity-50"
+                          >
+                            {deletingRoomBoardImageId === selectedRoomBoardImage.id ? "Removing..." : "Remove"}
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+
+                    {activeRoomBoardImages.length > 1 ? (
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                        {activeRoomBoardImages.map((image) => (
+                          <article key={image.id} className={`relative overflow-hidden rounded-[22px] border transition ${selectedRoomBoardImage?.id === image.id ? "border-sky-300/35 bg-sky-400/10" : "border-white/10 bg-slate-950/75"}`}>
+                            <button type="button" onClick={() => setSelectedRoomBoardImageId(image.id)} className="block w-full text-left">
+                              <img src={image.image_url} alt={image.name || "Board photo"} className="h-36 w-full object-cover" loading="lazy" />
+                              <div className="p-3">
+                                <p className="phone-safe-copy text-sm font-semibold text-white">{image.name || "Board photo"}</p>
+                                <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{image.uploaded_by || "Room member"}</p>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                deleteRoomBoardImage(image.id);
+                              }}
+                              disabled={deletingRoomBoardImageId === image.id}
+                              className="absolute right-3 top-3 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[11px] text-white disabled:opacity-50"
+                            >
+                              {deletingRoomBoardImageId === image.id ? "..." : "Remove"}
+                            </button>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] p-8 text-sm leading-7 text-slate-300 xl:flex xl:flex-1 xl:items-center">
+                    No board photo uploaded yet. Add a photo of the board, notebook, or worked solution and it will appear large here for the whole room.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 
