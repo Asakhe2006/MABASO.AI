@@ -3390,6 +3390,30 @@ def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[
     ]
 
 
+def get_latest_collaboration_room_message(room_id: str) -> dict[str, str] | None:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, author_email, content, created_at
+            FROM collaboration_room_messages
+            WHERE room_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (room_id,),
+        ).fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "id": row["id"],
+        "author_email": row["author_email"],
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }
+
+
 def get_collaboration_room_answers(room_id: str, current_user: str, test_visibility: str) -> list[dict[str, str]]:
     query = """
         SELECT question_number, author_email, answer_text, updated_at
@@ -3533,6 +3557,7 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
 
 def serialize_collaboration_room_card(room_row: sqlite3.Row) -> dict:
     members = get_collaboration_room_members(room_row["id"])
+    latest_message = get_latest_collaboration_room_message(room_row["id"])
     return {
         "id": room_row["id"],
         "title": room_row["title"],
@@ -3544,6 +3569,7 @@ def serialize_collaboration_room_card(room_row: sqlite3.Row) -> dict:
         "board_image_count": len(normalize_collaboration_board_images(load_json_list(room_row["board_images_json"]))),
         "member_count": len(members),
         "members": members,
+        "latest_message": latest_message,
     }
 
 

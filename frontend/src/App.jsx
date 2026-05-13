@@ -88,6 +88,7 @@ const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
+const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
@@ -218,6 +219,28 @@ function clearRoomInviteHashFromLocation() {
   const inviteId = parseRoomInviteIdFromLocation();
   if (!inviteId || !window.location.hash) return;
   window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}` || "/");
+}
+
+function shouldFocusCollaborationReplyFromLocation() {
+  if (typeof window === "undefined") return false;
+  try {
+    const searchParams = new URLSearchParams(window.location.search || "");
+    const searchValue = (searchParams.get("reply") || "").trim().toLowerCase();
+    if (["1", "true", "reply", "yes"].includes(searchValue)) return true;
+  } catch {
+    // Ignore malformed search params and continue to hash parsing.
+  }
+  const rawHash = (window.location.hash || "").replace(/^#/, "");
+  if (!rawHash) return false;
+  const hashParams = new URLSearchParams(rawHash);
+  const hashValue = (hashParams.get("reply") || "").trim().toLowerCase();
+  return ["1", "true", "reply", "yes"].includes(hashValue);
+}
+
+function buildCollaborationReplyPath(roomId = "") {
+  const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+  if (!normalizedRoomId) return "/app/collaboration";
+  return `/app/collaboration?room=${encodeURIComponent(normalizedRoomId)}&reply=1`;
 }
 
 function buildPublicSupportPlaceholderEmail(seed = "") {
@@ -3205,6 +3228,28 @@ function buildCollaborationPreview(room) {
   return truncatePreviewText(room.shared_notes || "No shared content has been selected yet.");
 }
 
+function getLatestCollaborationRoomMessageRecord(room) {
+  if (!room || typeof room !== "object") return null;
+  const cardMessage = room.latest_message;
+  if (cardMessage && typeof cardMessage === "object" && cardMessage.id) {
+    return {
+      id: String(cardMessage.id),
+      author_email: String(cardMessage.author_email || ""),
+      content: String(cardMessage.content || ""),
+      created_at: String(cardMessage.created_at || ""),
+    };
+  }
+  const messages = Array.isArray(room.messages) ? room.messages : [];
+  const latestMessage = messages[messages.length - 1];
+  if (!latestMessage || !latestMessage.id) return null;
+  return {
+    id: String(latestMessage.id),
+    author_email: String(latestMessage.author_email || ""),
+    content: String(latestMessage.content || ""),
+    created_at: String(latestMessage.created_at || ""),
+  };
+}
+
 export default function App() {
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
@@ -3315,6 +3360,7 @@ export default function App() {
   const [highlightedInviteRoomId, setHighlightedInviteRoomId] = useState(() => loadStoredRoomInviteId());
   const [dismissedRoomInviteIds, setDismissedRoomInviteIds] = useState(loadDismissedRoomInviteIds);
   const [roomMessageDraft, setRoomMessageDraft] = useState("");
+  const [collaborationMessagePrompt, setCollaborationMessagePrompt] = useState(null);
   const [selectedRoomBoardImageId, setSelectedRoomBoardImageId] = useState("");
   const [followRoomView, setFollowRoomView] = useState(true);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
@@ -3344,6 +3390,7 @@ export default function App() {
   const bulkLectureFileInputRef = useRef(null);
   const chatImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
+  const roomMessageInputRef = useRef(null);
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -3387,6 +3434,8 @@ export default function App() {
   const roomSharedNotesDraftRef = useRef("");
   const roomNotesLastSyncedValueRef = useRef("");
   const roomNotesLastEditedAtRef = useRef(0);
+  const collaborationRoomMessageIdsRef = useRef({});
+  const pendingCollaborationReplyRoomIdRef = useRef("");
   const teacherPlaybackCursorRef = useRef({ segmentIndex: 0, chunkIndex: 0 });
   const teacherResumeStateRef = useRef({ shouldResume: false, segmentIndex: 0, chunkIndex: 0 });
   const teacherAnswerRunRef = useRef(0);
@@ -3520,7 +3569,152 @@ export default function App() {
     }
   };
 
-  const openCollaborationPage = ({ replace = false, refresh = true } = {}) => {
+  const focusRoomReplyComposer = () => {
+    if (typeof window === "undefined") return;
+    const focusInput = () => {
+      if (!roomMessageInputRef.current) return;
+      roomMessageInputRef.current.focus();
+      const valueLength = roomMessageInputRef.current.value?.length || 0;
+      if (typeof roomMessageInputRef.current.setSelectionRange === "function") {
+        roomMessageInputRef.current.setSelectionRange(valueLength, valueLength);
+      }
+    };
+    window.requestAnimationFrame(focusInput);
+    window.setTimeout(focusInput, 120);
+    window.setTimeout(focusInput, 260);
+  };
+
+  const ensureCollaborationNotificationPermission = async ({ promptIfNeeded = false } = {}) => {
+    if (typeof window === "undefined" || typeof Notification === "undefined") return "unsupported";
+    if (Notification.permission === "granted" || Notification.permission === "denied") return Notification.permission;
+    if (!promptIfNeeded) return Notification.permission;
+    try {
+      return await Notification.requestPermission();
+    } catch {
+      return Notification.permission || "default";
+    }
+  };
+
+  const showCollaborationSystemNotification = async (notificationPayload) => {
+    if (
+      typeof window === "undefined"
+      || typeof Notification === "undefined"
+      || Notification.permission !== "granted"
+      || !notificationPayload?.roomId
+    ) {
+      return;
+    }
+
+    const roomId = normalizeCollaborationRoomId(notificationPayload.roomId);
+    if (!roomId) return;
+
+    const title = truncatePreviewText(notificationPayload.roomTitle || "New study room message", 64);
+    const body = truncatePreviewText(
+      `${notificationPayload.authorEmail || "A collaborator"}: ${notificationPayload.content || ""}`.trim(),
+      140,
+    );
+    const url = `${window.location.origin}${buildCollaborationReplyPath(roomId)}`;
+    const notificationOptions = {
+      body,
+      tag: `collaboration-room-${roomId}`,
+      renotify: true,
+      icon: `${window.location.origin}/mabaso-og.png`,
+      badge: `${window.location.origin}/mabaso-og.png`,
+      data: { roomId, url },
+    };
+
+    try {
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(title, notificationOptions);
+        return;
+      }
+    } catch {
+      // Fall back to the page Notification API below.
+    }
+
+    try {
+      const notification = new Notification(title, notificationOptions);
+      notification.onclick = () => {
+        window.focus();
+        void openCollaborationReplyComposer(roomId);
+        notification.close();
+      };
+    } catch {
+      // Ignore browser notification failures and keep the in-app prompt path available.
+    }
+  };
+
+  const handleCollaborationRoomActivity = (rooms = []) => {
+    const nextRooms = Array.isArray(rooms) ? rooms.filter((room) => room && room.id) : [];
+    const trackedMessageIds = collaborationRoomMessageIdsRef.current;
+    const normalizedCurrentUserEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
+    const collaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+    let newestIncomingMessage = null;
+
+    nextRooms.forEach((room) => {
+      const latestMessage = getLatestCollaborationRoomMessageRecord(room);
+      const nextMessageId = latestMessage?.id || "";
+      const previousMessageId = Object.prototype.hasOwnProperty.call(trackedMessageIds, room.id)
+        ? trackedMessageIds[room.id]
+        : undefined;
+
+      trackedMessageIds[room.id] = nextMessageId;
+
+      if (!latestMessage || previousMessageId === undefined || previousMessageId === nextMessageId) return;
+      if (normalizeHistoryOwnerEmail(latestMessage.author_email || "") === normalizedCurrentUserEmail) return;
+
+      const candidate = {
+        roomId: room.id,
+        roomTitle: room.title || "Study room",
+        messageId: latestMessage.id,
+        authorEmail: latestMessage.author_email || "",
+        content: latestMessage.content || "",
+        createdAt: latestMessage.created_at || "",
+      };
+
+      if (
+        !newestIncomingMessage
+        || new Date(candidate.createdAt || 0).getTime() >= new Date(newestIncomingMessage.createdAt || 0).getTime()
+      ) {
+        newestIncomingMessage = candidate;
+      }
+    });
+
+    if (!newestIncomingMessage) return;
+
+    if (collaborationSurfaceActive) {
+      setCollaborationMessagePrompt(newestIncomingMessage);
+    }
+
+    if (!collaborationSurfaceActive || document.visibilityState === "hidden") {
+      void showCollaborationSystemNotification(newestIncomingMessage);
+    }
+  };
+
+  const openCollaborationReplyComposer = async (roomId) => {
+    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+    if (!normalizedRoomId) return;
+
+    pendingCollaborationReplyRoomIdRef.current = normalizedRoomId;
+    setCollaborationMessagePrompt(null);
+
+    if (!authToken) {
+      persistPendingRoomInviteId(normalizedRoomId);
+      persistPostAuthRedirectPath("/app/collaboration");
+      navigateToPath("/");
+      return;
+    }
+
+    openCollaborationPage({ refresh: false, promptNotifications: false });
+    await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true });
+    focusRoomReplyComposer();
+  };
+
+  const openCollaborationPage = ({ replace = false, refresh = true, promptNotifications = true } = {}) => {
+    if (promptNotifications) {
+      void ensureCollaborationNotificationPermission({ promptIfNeeded: true });
+    }
     openProtectedAppPage("collaboration", { replace });
     if (refresh) refreshCollaborationRooms(true);
   };
@@ -3698,6 +3892,7 @@ export default function App() {
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const activeOwnerRoomInviteLink = activeRoom?.is_owner ? buildCollaborationInviteUrl(activeRoom.id) : "";
   const showCollaborationInvitePrompt = ["capture", "workspace"].includes(currentPage) && Boolean(collaborationInvitePromptRoom);
+  const isCollaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
     : hasResults || activeTab === "chat";
@@ -4254,6 +4449,42 @@ export default function App() {
         </div>
       </div>
     </section>
+  ) : null;
+
+  const collaborationMessagePromptCard = isCollaborationSurfaceActive && collaborationMessagePrompt ? (
+    <div className="pointer-events-none fixed inset-x-3 top-4 z-[90] flex justify-end sm:inset-x-6">
+      <section className="pointer-events-auto w-full max-w-sm rounded-[26px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top_left,rgba(34,197,94,0.18),transparent_30%),linear-gradient(180deg,rgba(5,15,10,0.96),rgba(15,23,42,0.94))] p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-200/80">New room message</p>
+            <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{collaborationMessagePrompt.authorEmail}</p>
+            <p className="phone-safe-copy mt-1 text-xs text-emerald-100/80">{collaborationMessagePrompt.roomTitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCollaborationMessagePrompt(null)}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition hover:bg-white/10"
+            aria-label="Close message prompt"
+          >
+            &times;
+          </button>
+        </div>
+        <p className="phone-safe-copy mt-4 whitespace-pre-wrap break-words text-sm leading-6 text-slate-100">
+          {truncatePreviewText(collaborationMessagePrompt.content, 180)}
+        </p>
+        <div className="mt-4 flex justify-start">
+          <button
+            type="button"
+            onClick={() => {
+              void openCollaborationReplyComposer(collaborationMessagePrompt.roomId);
+            }}
+            className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50"
+          >
+            Reply
+          </button>
+        </div>
+      </section>
+    </div>
   ) : null;
 
   const renderBackButton = (onClick, label) => (
@@ -5094,7 +5325,7 @@ export default function App() {
                 </div>
                 <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
                   <div className="force-mobile-stack flex items-end gap-3">
-                    <textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." />
+                    <textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." />
                     <button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message">
                       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                         <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
@@ -9321,6 +9552,7 @@ export default function App() {
       const response = await authFetch("/collaboration/rooms");
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load collaboration rooms.");
+      handleCollaborationRoomActivity(data.rooms || []);
       setCollaborationRooms(data.rooms || []);
     } catch (err) {
       if (!silent) setError(err.message || "Could not load collaboration rooms.");
@@ -9346,6 +9578,7 @@ export default function App() {
       const response = await authFetch(`/collaboration/rooms/${roomId}`);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
+      handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId(roomId);
       setActiveRoom(data.room || null);
       syncRoomNotesDraftFromRoom(data.room, { force: resetNotesDraft });
@@ -9407,7 +9640,10 @@ export default function App() {
       setActiveRoomId("");
       setActiveRoom(null);
       setRoomSharedNotesDraft("");
+      setCollaborationMessagePrompt(null);
       setSelectedRoomBoardImageId("");
+      collaborationRoomMessageIdsRef.current = {};
+      pendingCollaborationReplyRoomIdRef.current = "";
       roomNotesLastSyncedValueRef.current = "";
       roomNotesLastEditedAtRef.current = 0;
       return;
@@ -9416,15 +9652,41 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    if (!authToken || !activeRoomId) return undefined;
+    if (!authToken) return undefined;
     const interval = window.setInterval(() => {
       refreshCollaborationRooms(true);
+    }, ROOM_REFRESH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeTab, authEmail, authEmailInput, authToken, currentPage]);
+
+  useEffect(() => {
+    if (!authToken || !activeRoomId) return undefined;
+    const interval = window.setInterval(() => {
       loadCollaborationRoom(activeRoomId, { silent: true });
     }, ROOM_REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
-  }, [activeRoomId, authToken]);
+  }, [activeRoomId, activeTab, authEmail, authEmailInput, authToken, currentPage]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return undefined;
+
+    const handleServiceWorkerMessage = (event) => {
+      const payload = event.data || {};
+      if (payload.type !== COLLABORATION_NOTIFICATION_EVENT_TYPE) return;
+      const normalizedRoomId = normalizeCollaborationRoomId(payload.roomId || "");
+      if (!normalizedRoomId) return;
+      void openCollaborationReplyComposer(normalizedRoomId);
+    };
+
+    navigator.serviceWorker.addEventListener("message", handleServiceWorkerMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleServiceWorkerMessage);
+    };
+  }, [authToken, authSessionMode, browserPath, currentPage]);
 
   useEffect(() => {
     if (!authToken) return undefined;
@@ -9442,6 +9704,21 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [authToken, browserPath]);
+
+  useEffect(() => {
+    const pendingReplyRoomId = pendingCollaborationReplyRoomIdRef.current;
+    if (!pendingReplyRoomId || activeRoomId !== pendingReplyRoomId) return;
+    if (currentPage !== "collaboration" && !(currentPage === "workspace" && activeTab === "collaboration")) return;
+    pendingCollaborationReplyRoomIdRef.current = "";
+    focusRoomReplyComposer();
+  }, [activeRoomId, activeTab, currentPage]);
+
+  useEffect(() => {
+    if (!authToken || browserPath !== "/app/collaboration") return;
+    const requestedRoomId = parseRoomInviteIdFromLocation();
+    if (!requestedRoomId || !shouldFocusCollaborationReplyFromLocation()) return;
+    void openCollaborationReplyComposer(requestedRoomId);
   }, [authToken, browserPath]);
 
   useEffect(() => {
@@ -11969,6 +12246,7 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not create the collaboration room.");
+      handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId(data.room?.id || "");
       setActiveRoom(data.room || null);
       roomNotesLastEditedAtRef.current = 0;
@@ -12078,6 +12356,7 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not send the room message.");
+      handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoom(data.room || null);
       setRoomMessageDraft("");
       refreshCollaborationRooms(true);
@@ -13267,7 +13546,7 @@ export default function App() {
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
 
@@ -13277,6 +13556,7 @@ export default function App() {
         {currentPage === "about" ? renderHelpAboutPage() : null}
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
+        {collaborationMessagePromptCard}
 
         <input
           ref={pastQuestionPaperFileInputRef}
