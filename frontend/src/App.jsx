@@ -10047,8 +10047,13 @@ export default function App() {
     response: { modalities: audio ? ["audio", "text"] : ["text"] },
   });
 
-  const refreshTeacherRealtimeContext = async ({ announce = false } = {}) => {
-    if (!isTeacherRealtimeConnected) return false;
+  const refreshTeacherRealtimeContext = ({ announce = false, allowDuringStartup = false } = {}) => {
+    const controlChannel = teacherRealtimeDataChannelRef.current;
+    const canRefreshDuringStartup = allowDuringStartup
+      && Boolean(teacherRealtimeSessionIdRef.current)
+      && controlChannel?.readyState === "open";
+    if (!isTeacherRealtimeConnected && !canRefreshDuringStartup) return Promise.resolve(false);
+    return (async () => {
     const payload = buildTeacherRealtimeRequestPayload();
     const contextSignature = JSON.stringify({
       summary: payload.summary.slice(0, 800),
@@ -10108,6 +10113,7 @@ export default function App() {
       setStatus("Live tutor context refreshed from the current workspace.");
     }
     return true;
+    })();
   };
 
   const handleTeacherRealtimeEvent = (event) => {
@@ -10581,7 +10587,7 @@ export default function App() {
           timeoutMessage: "Live tutor voice detection did not finish initializing.",
         },
       );
-      await refreshTeacherRealtimeContext();
+      await refreshTeacherRealtimeContext({ allowDuringStartup: true });
       await sessionUpdatedPromise;
       ensureTeacherRealtimeRunActive(runId);
 
