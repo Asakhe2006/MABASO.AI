@@ -9754,6 +9754,20 @@ export default function App() {
       );
     }
 
+    if (/openai_api_key is not configured|not configured on the backend/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "backend_config_missing",
+        "Live AI Tutor is not configured on the backend yet. Add OPENAI_API_KEY in Render and redeploy.",
+      );
+    }
+
+    if (/model access|does not have access|unknown model|model .* not found|unsupported model/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "realtime_model_unavailable",
+        "The backend OpenAI key does not have access to the selected Realtime model. Check model access or change the realtime model env setting.",
+      );
+    }
+
     if (
       /invalid session|realtime tutor session as invalid|invalid realtime tutor session|client secret request as invalid|invalid realtime tutor client secret|missing sdp offer|session created timed out|session answer/i.test(message)
     ) {
@@ -10245,8 +10259,10 @@ export default function App() {
         return "The live tutor control connection failed.";
       case "invalid_session":
         return "The live tutor session could not be initialized.";
+      case "backend_config_missing":
+      case "realtime_model_unavailable":
       case "openai_auth_failed":
-        return "The live tutor backend could not authenticate.";
+        return startupError.message || "The backend could not create a realtime tutor session.";
       case "audio_stream_unavailable":
         return "The tutor audio stream is unavailable.";
       case "context_sync_failed":
@@ -10691,6 +10707,13 @@ export default function App() {
     } catch (error) {
       if (typeof controlOpenTimeout !== "undefined") window.clearTimeout(controlOpenTimeout);
       if (typeof peerReadyTimeout !== "undefined") window.clearTimeout(peerReadyTimeout);
+      if (typeof console !== "undefined") {
+        console.error("[Mabaso Live Tutor] startup failure", {
+          message: error?.message || "",
+          status: error?.status || error?.response?.status || 0,
+          data: error?.data || null,
+        });
+      }
       const startupError = normalizeTeacherRealtimeStartupError(error, "realtime_failed");
       if (startupError.code === "startup_superseded" || startupError.code === "realtime_closed") {
         return;

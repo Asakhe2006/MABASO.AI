@@ -13983,8 +13983,8 @@ async def create_realtime_tutor_session(
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "OpenAI auth failed while creating the realtime tutor client secret. "
-                    "Check OPENAI_API_KEY and model access on the backend."
+                    f"OpenAI rejected the realtime tutor client secret request for model {selected_model}. "
+                    "Check OPENAI_API_KEY, project permissions, and Realtime model access on the backend."
                 ),
             )
         if response.status_code in {400, 404, 409, 422}:
