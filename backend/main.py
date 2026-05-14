@@ -14003,7 +14003,14 @@ async def create_realtime_tutor_session(
             ),
         )
 
-    client_secret = compact_text(((response_data.get("client_secret") or {}).get("value") if isinstance(response_data, dict) else ""), "")
+    client_secret = compact_text(
+        (
+            str(response_data.get("value") or "")
+            if isinstance(response_data, dict) and response_data.get("value")
+            else ((response_data.get("client_secret") or {}).get("value") if isinstance(response_data, dict) else "")
+        ),
+        "",
+    )
     if not client_secret:
         raise HTTPException(
             status_code=502,
@@ -14038,9 +14045,10 @@ async def create_realtime_tutor_session(
     )
     return {
         "session_id": session_id,
+        "value": client_secret,
         "client_secret": response_data.get("client_secret", {}),
         "openai_session_id": compact_text(str(response_data.get("id") or ""), ""),
-        "openai_session_expires_at": compact_text(str(response_data.get("expires_at") or ""), ""),
+        "openai_session_expires_at": compact_text(str(response_data.get("expires_at") or response_data.get("expires_at_ms") or ""), ""),
         "selected_model": selected_model,
         "selected_voice": selected_voice,
         "realtime_profile": realtime_profile,

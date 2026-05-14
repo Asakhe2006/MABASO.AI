@@ -9746,7 +9746,7 @@ export default function App() {
     if (
       responseStatus === 401
       || responseStatus === 403
-      || /openai auth failed|backend api key|client secret|ephemeral token/i.test(message)
+      || /openai auth failed|backend api key|invalid api key|incorrect api key|permission denied/i.test(message)
     ) {
       return createTeacherRealtimeStartupError(
         "openai_auth_failed",
@@ -9754,7 +9754,9 @@ export default function App() {
       );
     }
 
-    if (/invalid session|realtime tutor session as invalid|invalid realtime tutor session|missing sdp offer|session created timed out|session answer/i.test(message)) {
+    if (
+      /invalid session|realtime tutor session as invalid|invalid realtime tutor session|client secret request as invalid|invalid realtime tutor client secret|missing sdp offer|session created timed out|session answer/i.test(message)
+    ) {
       return createTeacherRealtimeStartupError(
         "invalid_session",
         "The Live AI Tutor session could not be created correctly. Please try Start Live again.",
@@ -10588,7 +10590,7 @@ export default function App() {
         { timeoutMs: 45000, retries: 2 },
       );
       ensureTeacherRealtimeRunActive(runId);
-      const clientSecret = String(data?.client_secret?.value || "").trim();
+      const clientSecret = String(data?.value || data?.client_secret?.value || "").trim();
       if (!data?.session_id || !clientSecret) {
         throw createTeacherRealtimeStartupError(
           "invalid_session",
