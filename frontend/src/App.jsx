@@ -790,6 +790,13 @@ function buildSpeechChunks(text = "", maxLength = 420) {
   return chunks;
 }
 
+function getTeacherSpeechRate(pace = "balanced", mode = "lesson") {
+  const normalizedPace = String(pace || "balanced").toLowerCase();
+  if (normalizedPace === "slow") return mode === "answer" ? 0.86 : 0.82;
+  if (normalizedPace === "fast") return mode === "answer" ? 0.98 : 0.94;
+  return mode === "answer" ? 0.92 : 0.88;
+}
+
 function getPresentationVisualTypeLabel(value) {
   const normalized = (value || "cluster").toLowerCase();
   if (normalized === "flow") return "Flow";
@@ -2610,12 +2617,12 @@ function teacherLessonToText(lesson) {
   const normalized = normalizeTeacherLessonData(lesson);
   const blocks = [];
   if (normalized.title) {
-    blocks.push("TEACHER MODE TITLE");
+    blocks.push("MABASO AI TUTOR TITLE");
     blocks.push(normalized.title);
     blocks.push("");
   }
   if (normalized.overview) {
-    blocks.push("TEACHER MODE OVERVIEW");
+    blocks.push("MABASO AI TUTOR OVERVIEW");
     blocks.push(normalized.overview);
     blocks.push("");
   }
@@ -3449,6 +3456,9 @@ export default function App() {
   const [isPodcastAutoPlaying, setIsPodcastAutoPlaying] = useState(false);
   const [teacherVoiceOptions, setTeacherVoiceOptions] = useState([]);
   const [selectedTeacherVoiceName, setSelectedTeacherVoiceName] = useState("");
+  const [teacherSpeechPace, setTeacherSpeechPace] = useState("balanced");
+  const [teacherTeachingStyle, setTeacherTeachingStyle] = useState("adaptive");
+  const [teacherResponseLength, setTeacherResponseLength] = useState("balanced");
   const [activeTeacherSegmentIndex, setActiveTeacherSegmentIndex] = useState(-1);
   const [isTeacherPlaying, setIsTeacherPlaying] = useState(false);
   const [isTeacherPaused, setIsTeacherPaused] = useState(false);
@@ -4531,7 +4541,7 @@ export default function App() {
             <div className="min-w-0">
               <p className="study-guide-kicker">Lecture Topic</p>
               <h4 className="study-guide-topic mt-2">{topic}</h4>
-              {isIntroActive ? <p className="study-guide-focus-badge mt-4">Teacher is explaining this section</p> : null}
+              {isIntroActive ? <p className="study-guide-focus-badge mt-4">Tutor is teaching this section</p> : null}
             </div>
           </div>
           {summarySection?.content ? (
@@ -4582,7 +4592,7 @@ export default function App() {
                   ref={sectionRef}
                   className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                 >
-                  {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this section</p> : null}
+                  {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this section</p> : null}
                   <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                   <div className="phone-safe-copy mt-3 max-w-none">
                     <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
@@ -8568,9 +8578,9 @@ export default function App() {
       } else if (isTeacherPlaying || isTeacherPaused) {
         const activeSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
         navigator.mediaSession.metadata = new window.MediaMetadata({
-          title: teacherLessonData.title || "Teacher Mode",
+          title: teacherLessonData.title || "Mabaso AI Tutor",
           artist: activeSegment?.sectionHeading || "Study Guide",
-          album: "MABASO Teacher Lesson",
+          album: "Mabaso AI Tutor Session",
         });
         navigator.mediaSession.setActionHandler("pause", () => pauseTeacherLesson());
         navigator.mediaSession.setActionHandler("play", () => resumeTeacherLesson());
@@ -9777,7 +9787,7 @@ export default function App() {
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
     { title: "Podcast Debate Script", content: podcastData.script || "" },
-    { title: "Teacher Mode Lesson", content: teacherLessonToText(teacherLessonData) },
+    { title: "Mabaso AI Tutor Session", content: teacherLessonToText(teacherLessonData) },
     { title: "Study Chat", content: chatToText(chatMessages) },
   ].filter((section) => (section.content || "").trim());
 
@@ -11300,11 +11310,11 @@ export default function App() {
   const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {
     const normalizedLesson = normalizeTeacherLessonData(lesson);
     if (!normalizedLesson.segments.length) {
-      setError("Generate teacher mode first so the lesson has something to explain.");
+      setError("Start a tutor session first so there is a lesson ready to teach.");
       return;
     }
     if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
-      setError("Teacher audio is not supported in this browser.");
+      setError("Tutor audio is not supported in this browser.");
       return;
     }
 
@@ -11323,7 +11333,7 @@ export default function App() {
         setIsTeacherPaused(false);
         setActiveTeacherSegmentIndex(-1);
         returnTeacherToGuide(lastSectionHeading);
-        setStatus("Teacher mode finished the lesson.");
+        setStatus("Mabaso AI Tutor finished the session.");
         return;
       }
 
@@ -11351,7 +11361,7 @@ export default function App() {
       const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
       utterance.voice = selectedVoice;
       utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
-      utterance.rate = 0.88;
+      utterance.rate = getTeacherSpeechRate(teacherSpeechPace, "lesson");
       utterance.pitch = 1;
       utterance.volume = 1;
       utterance.onstart = () => {
@@ -11382,7 +11392,7 @@ export default function App() {
 
     setCurrentPage("workspace");
     setActiveTab("guide");
-    setStatus("Teacher mode is explaining the study guide.");
+    setStatus("Mabaso AI Tutor is teaching from the study guide.");
     teacherSpeechTimerRef.current = window.setTimeout(() => {
       teacherSpeechTimerRef.current = null;
       speakSegment(Math.max(0, Number(startIndex || 0)), Math.max(0, Number(startChunkIndex || 0)));
@@ -11399,7 +11409,7 @@ export default function App() {
     window.speechSynthesis.pause();
     setIsTeacherPlaying(false);
     setIsTeacherPaused(true);
-    setStatus("Teacher mode paused.");
+    setStatus("Tutor session paused.");
   };
 
   const resumeTeacherLesson = () => {
@@ -11408,7 +11418,7 @@ export default function App() {
       window.speechSynthesis.resume();
       setIsTeacherPlaying(true);
       setIsTeacherPaused(false);
-      setStatus("Teacher mode resumed.");
+      setStatus("Tutor session resumed.");
       return;
     }
     playTeacherLesson(teacherLessonData, { startIndex: Math.max(0, activeTeacherSegmentIndex) });
@@ -11423,7 +11433,7 @@ export default function App() {
 
   const generateTeacherLesson = async ({ autoplay = true } = {}) => {
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
-      return setError("Generate a study guide or add lecture material before opening teacher mode.");
+      return setError("Generate a study guide or add lecture material before starting Mabaso AI Tutor.");
     }
 
     resetTeacherQuestionFlow({ clearResume: true, clearTranscript: true });
@@ -11432,7 +11442,7 @@ export default function App() {
     setError("");
     openProtectedAppPage("workspace");
     setActiveTab("guide");
-    setStatus("Preparing teacher mode...");
+    setStatus("Preparing Mabaso AI Tutor...");
     setProgress(0);
     setCurrentJobType("teacher_lesson");
 
@@ -11447,10 +11457,12 @@ export default function App() {
           lecture_slides: lectureSlides,
           past_question_papers: pastQuestionPapers,
           language: outputLanguage,
+          teaching_style: teacherTeachingStyle,
+          response_length: teacherResponseLength,
         }),
       });
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Teacher mode generation failed.");
+      if (!response.ok) throw new Error(data.detail || "Mabaso AI Tutor generation failed.");
       persistPendingJob({
         jobId: data.job_id,
         jobType: "teacher_lesson",
@@ -11499,7 +11511,7 @@ export default function App() {
         teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
       });
       clearPendingJob();
-      setStatus("Teacher mode is ready.");
+      setStatus("Mabaso AI Tutor is ready.");
       setProgress(100);
       if (autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
         window.setTimeout(() => {
@@ -11508,8 +11520,8 @@ export default function App() {
       }
     } catch (err) {
       clearPendingJob();
-      setError(err.message || "Teacher mode generation failed.");
-      setStatus("Teacher mode generation failed.");
+      setError(err.message || "Mabaso AI Tutor generation failed.");
+      setStatus("Mabaso AI Tutor generation failed.");
     } finally {
       setIsGeneratingTeacherLesson(false);
       setCurrentJobType("");
@@ -11819,7 +11831,7 @@ export default function App() {
             teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
           });
           clearPendingJob();
-          setStatus("Recovered teacher mode after refresh.");
+          setStatus("Recovered Mabaso AI Tutor after refresh.");
           if (pendingJob.autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
             window.setTimeout(() => {
               playTeacherLesson(nextTeacherLessonData);
@@ -11862,6 +11874,8 @@ export default function App() {
         language: outputLanguage,
         delivery_mode: deliveryMode,
         current_section: currentSection,
+        teaching_style: teacherTeachingStyle,
+        response_length: teacherResponseLength,
       }),
     });
     const data = await parseJsonSafe(response);
@@ -11928,14 +11942,14 @@ export default function App() {
       const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
       utterance.voice = selectedVoice;
       utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
-      utterance.rate = 0.9;
+      utterance.rate = getTeacherSpeechRate(teacherSpeechPace, "answer");
       utterance.pitch = 1;
       utterance.volume = 1;
       utterance.onstart = () => {
         if (teacherAnswerRunRef.current !== runId) return;
         setIsTeacherAnswering(true);
-        setTeacherQuestionStatus("Teacher is answering your question...");
-        setStatus("Teacher is answering your question.");
+        setTeacherQuestionStatus("Tutor is answering your question...");
+        setStatus("Tutor is answering your question.");
       };
       utterance.onend = () => {
         if (teacherAnswerRunRef.current !== runId) return;
@@ -11959,13 +11973,13 @@ export default function App() {
     const question = heardQuestion.trim();
     if (!question) {
       setTeacherQuestionStatus("I did not catch a clear question.");
-      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher resumed because no question was captured." });
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Tutor resumed because no clear question was captured." });
       return;
     }
 
     setTeacherQuestionDraft(question);
     setTeacherQuestionAnswer("");
-    setTeacherQuestionStatus("Teacher is thinking through your question...");
+    setTeacherQuestionStatus("Tutor is thinking through your question...");
     setIsTeacherQuestionLoading(true);
     setError("");
     const requestRunId = teacherQuestionRequestRunRef.current + 1;
@@ -11977,7 +11991,7 @@ export default function App() {
         question,
         history: [
           ...chatMessages.slice(-4),
-          ...(currentSection ? [{ role: "assistant", content: `Teacher was currently explaining: ${currentSection}` }] : []),
+          ...(currentSection ? [{ role: "assistant", content: `Tutor was currently teaching: ${currentSection}` }] : []),
         ],
         deliveryMode: "teacher_interrupt",
         currentSection,
@@ -11986,28 +12000,28 @@ export default function App() {
       setTeacherQuestionAnswer(answer);
       setChatMessages((current) => [
         ...current,
-        { role: "user", content: `[Teacher question] ${question}` },
+        { role: "user", content: `[Tutor question] ${question}` },
         { role: "assistant", content: answer },
       ]);
       setIsTeacherQuestionLoading(false);
       speakTeacherQuestionAnswer(answer, {
         onComplete: () => {
-          setTeacherQuestionStatus("Question answered. Returning to the lesson...");
-          resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher answered your question and continued the lesson." });
+          setTeacherQuestionStatus("Question answered. Returning to the tutor session...");
+          resumeTeacherLessonAfterQuestion({ statusMessage: "Tutor answered your question and continued the session." });
         },
       });
     } catch (err) {
       if (teacherQuestionRequestRunRef.current !== requestRunId) return;
       setIsTeacherQuestionLoading(false);
-      setTeacherQuestionStatus("Teacher could not answer that question right now.");
-      setError(err.message || "Teacher question failed.");
-      resumeTeacherLessonAfterQuestion({ statusMessage: "Teacher returned to the lesson after a question error." });
+      setTeacherQuestionStatus("Tutor could not answer that question right now.");
+      setError(err.message || "Tutor question failed.");
+      resumeTeacherLessonAfterQuestion({ statusMessage: "Tutor returned to the session after a question error." });
     }
   };
 
   const startTeacherQuestionCapture = ({ continueListening = false, preservedTranscript = "" } = {}) => {
     if (!teacherLessonData.segments.length) {
-      setError("Build teacher mode first so the lesson can pause and answer questions.");
+      setError("Start a tutor session first so the tutor can pause and answer questions.");
       return;
     }
     const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
@@ -12035,7 +12049,7 @@ export default function App() {
         ? "Keep speaking, then press Stop Question when you are done."
         : "Listening... Ask your question, then press Stop Question when you are done.",
     );
-    setStatus("Teacher is listening. Press Stop Question when you are done.");
+    setStatus("Tutor is listening. Press Stop Question when you are done.");
     setError("");
 
     const recognition = new SpeechRecognitionCtor();
@@ -12092,7 +12106,7 @@ export default function App() {
         );
         return;
       }
-      setTeacherQuestionStatus("Teacher could not hear that question clearly.");
+      setTeacherQuestionStatus("Tutor could not hear that question clearly.");
       setError("Voice question capture failed.");
     };
     recognition.onend = () => {
@@ -12107,8 +12121,8 @@ export default function App() {
           submitTeacherQuestion(finalQuestion);
           return;
         }
-        setTeacherQuestionStatus("I did not catch a clear question. Press Ask Question to try again, or Resume to continue the lesson.");
-        setStatus("Teacher question stopped without a clear question.");
+        setTeacherQuestionStatus("I did not catch a clear question. Press Ask Question to try again, or Resume Voice to continue the session.");
+        setStatus("Tutor question stopped without a clear question.");
         setIsTeacherPaused(true);
         setIsTeacherQuestionLoading(false);
         setIsTeacherAnswering(false);
@@ -12118,7 +12132,7 @@ export default function App() {
         teacherRecognitionShouldContinueRef.current = false;
         setIsTeacherListening(false);
         setIsTeacherPaused(true);
-        setTeacherQuestionStatus("Teacher could not keep listening right now. You can try again or resume the lesson.");
+        setTeacherQuestionStatus("Tutor could not keep listening right now. You can try again or resume the session.");
         return;
       }
       window.setTimeout(() => {
@@ -12136,7 +12150,7 @@ export default function App() {
       teacherRecognitionManualStopRef.current = false;
       setIsTeacherListening(false);
       setIsTeacherPaused(true);
-      setTeacherQuestionStatus("Teacher could not start listening. You can try again or resume the lesson.");
+      setTeacherQuestionStatus("Tutor could not start listening. You can try again or resume the session.");
       setError(err.message || "Voice question capture failed.");
     }
   };
@@ -12146,7 +12160,7 @@ export default function App() {
       teacherRecognitionManualStopRef.current = true;
       teacherRecognitionShouldContinueRef.current = false;
       setTeacherQuestionStatus("Finishing your question...");
-      setStatus("Teacher is finishing your question.");
+      setStatus("Tutor is finishing your question.");
       stopTeacherVoiceRecognition({ finishListening: true, preserveHandlers: true });
       return;
     }
@@ -12568,7 +12582,7 @@ export default function App() {
         { title: "Test", content: quizToText(item.quizQuestions || []) },
         { title: "PowerPoint Presentation", content: presentationToText(item.presentationData) },
         { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
-        { title: "Teacher Mode Lesson", content: teacherLessonToText(item.teacherLessonData) },
+        { title: "Mabaso AI Tutor Session", content: teacherLessonToText(item.teacherLessonData) },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
     } catch (err) {
@@ -13229,7 +13243,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing teacher" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing tutor session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
             </aside>
         </section> : null}
 
@@ -13274,7 +13288,7 @@ export default function App() {
                         <div className="min-w-0">
                           <p className="study-guide-kicker">Lecture Topic</p>
                           <h4 className="study-guide-topic mt-2">{guideTopic}</h4>
-                          {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Teacher is explaining this section</p> : null}
+                          {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Tutor is teaching this section</p> : null}
                         </div>
                       </div>
                       {guideSummarySection?.content ? (
@@ -13287,39 +13301,59 @@ export default function App() {
                     <div className="rounded-[24px] border border-emerald-300/25 bg-[linear-gradient(180deg,rgba(236,253,245,0.98),rgba(220,252,231,0.92))] p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-700">Teacher Mode</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-slate-900">Friendly lesson walkthrough that stays with the guide.</h4>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">This gives a longer 15+ minute explanation, spends extra time on worked examples, listens for student questions mid-lesson, and follows the guide while it speaks.</p>
+                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-700">Mabaso AI Tutor</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-slate-900">A live tutor session that teaches with voice, context, and natural interruptions.</h4>
+                          <p className="mt-3 text-sm leading-7 text-slate-700">This tutor session explains the guide step by step, spends extra time on worked examples, answers spoken questions in context, and feels closer to a premium AI teaching copilot than a plain reader.</p>
                         </div>
                         <div className="force-mobile-stack flex flex-wrap gap-3">
                           <div className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-700 shadow-sm">
-                            {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min lesson` : "15+ min target"}
+                            {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min tutor session` : "15+ min target"}
                           </div>
-                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Building Teacher..." : teacherLessonData.segments.length ? "Rebuild Teacher" : "Build Teacher Lesson"}</button>
-                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play</button>
-                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause</button>
-                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume</button>
-                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Stop Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Question"}</button>
-                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused && !isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Stop</button>
+                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Preparing Tutor..." : teacherLessonData.segments.length ? "Restart Teach Session" : "Start Teach Session"}</button>
+                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play Voice</button>
+                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause Voice</button>
+                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume Voice</button>
+                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Stop Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Live Question"}</button>
+                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused && !isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">End Session</button>
                         </div>
                       </div>
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
                         <div className="rounded-2xl border border-slate-200 bg-white/88 px-4 py-4 text-sm leading-7 text-slate-700 shadow-sm">
-                          {teacherLessonData.overview || "Generate teacher mode to hear a softer 15+ minute explanation that teaches the guide instead of reading it line by line."}
-                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">Now covering: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
+                          {teacherLessonData.overview || "Start Mabaso AI Tutor to hear a guided voice lesson that teaches the guide naturally, pauses for questions, and stays focused on understanding instead of reading line by line."}
+                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">Now teaching: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
                         </div>
-                        <div>
-                          <label className="block text-xs uppercase tracking-[0.22em] text-slate-500">Voice</label>
+                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Tutor Session Settings</p>
+                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Voice</label>
                           <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
                             {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Browser default voice</option>}
+                          </select>
+                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Speaking Pace</label>
+                          <select value={teacherSpeechPace} onChange={(event) => setTeacherSpeechPace(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
+                            <option value="slow">Slow and careful</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="fast">Fast and energetic</option>
+                          </select>
+                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Teaching Style</label>
+                          <select value={teacherTeachingStyle} onChange={(event) => setTeacherTeachingStyle(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
+                            <option value="adaptive">Adaptive tutor</option>
+                            <option value="step_by_step">Step by step</option>
+                            <option value="exam_focused">Exam focused</option>
+                            <option value="conversational">Conversational</option>
+                          </select>
+                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Response Depth</label>
+                          <select value={teacherResponseLength} onChange={(event) => setTeacherResponseLength(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
+                            <option value="concise">Concise</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="detailed">Detailed</option>
                           </select>
                         </div>
                       </div>
                       <div className="mt-4 rounded-[22px] border border-emerald-200 bg-white/92 p-4 shadow-sm">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                           <div className="min-w-0">
-                            <p className="text-xs uppercase tracking-[0.22em] text-emerald-700">Student Question</p>
-                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Question while the teacher is speaking, say your question, then press Stop Question when you are done so the teacher can answer."}</p>
+                            <p className="text-xs uppercase tracking-[0.22em] text-emerald-700">Live Student Question</p>
+                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Live Question while the tutor is speaking, say your question, then press Stop Question when you are done so the tutor can answer and continue naturally."}</p>
                           </div>
                           <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-slate-600">
                             {isTeacherListening ? "Listening" : isTeacherQuestionLoading ? "Thinking" : isTeacherAnswering ? "Answering" : "Ready"}
@@ -13333,7 +13367,7 @@ export default function App() {
                         ) : null}
                         {teacherQuestionAnswer ? (
                           <div className="mt-4">
-                            <p className="mb-3 text-xs uppercase tracking-[0.2em] text-slate-500">Teacher Answer</p>
+                            <p className="mb-3 text-xs uppercase tracking-[0.2em] text-slate-500">Tutor Answer</p>
                             <StudyToolMarkdownCard content={teacherQuestionAnswer} emptyMessage="" />
                           </div>
                         ) : null}
@@ -13378,7 +13412,7 @@ export default function App() {
                               }}
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
-                              {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this section</p> : null}
+                              {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this section</p> : null}
                               <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                               <div className="phone-safe-copy mt-3 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
@@ -13456,7 +13490,7 @@ export default function App() {
                           }}
                           className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                         >
-                          {isActiveSection ? <p className="study-guide-focus-badge mb-3">Teacher is explaining this example</p> : null}
+                          {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this example</p> : null}
                           <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                           <div className="phone-safe-copy mt-3 max-w-none">
                             <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />

@@ -474,7 +474,7 @@ MOBILE-FIRST READABILITY RULES
 - Prioritize readability, mobile responsiveness, visual clarity, professional academic structure, and simple scanning over compactness.
 
 MANDATORY COMPATIBILITY RULES
-- Because the app builds formulas, worked-example, flashcard, quiz, teacher-mode, and presentation assets from the guide, keep these exact headings whenever the content supports them:
+- Because the app builds formulas, worked-example, flashcard, quiz, tutor-session, and presentation assets from the guide, keep these exact headings whenever the content supports them:
   - ## IMPORTANT FORMULAS
   - ## WORKED EXAMPLES
   - ## STEP-BY-STEP EXPLANATIONS
@@ -673,6 +673,8 @@ class TeacherLessonRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     language: str = "English"
+    teaching_style: str = "adaptive"
+    response_length: str = "balanced"
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -751,6 +753,8 @@ class StudyChatRequest(BaseModel):
     language: str = "English"
     delivery_mode: str = "chat"
     current_section: str = ""
+    teaching_style: str = "adaptive"
+    response_length: str = "balanced"
 
 
 class SessionModeRequest(BaseModel):
@@ -3134,6 +3138,19 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     output_language = normalize_output_language(payload.language)
     delivery_mode = compact_text(getattr(payload, "delivery_mode", ""), "chat").lower()
     current_section = compact_text(getattr(payload, "current_section", ""))
+    teaching_style = compact_text(getattr(payload, "teaching_style", ""), "adaptive").lower()
+    response_length = compact_text(getattr(payload, "response_length", ""), "balanced").lower()
+    teaching_style_instruction = {
+        "adaptive": "Adapt the explanation to the student's likely level and confusion.",
+        "step_by_step": "Go step by step and make each transition explicit.",
+        "exam_focused": "Emphasize exam-relevant clues, common mistakes, and scoring logic.",
+        "conversational": "Sound warm, natural, and human while staying precise.",
+    }.get(teaching_style, "Adapt the explanation to the student's likely level and confusion.")
+    response_length_instruction = {
+        "concise": "Keep the spoken answer compact and high-signal.",
+        "balanced": "Keep the spoken answer concise but informative.",
+        "detailed": "Give a fuller explanation with a little more teaching depth.",
+    }.get(response_length, "Keep the spoken answer concise but informative.")
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
         cleaned = (value or "").strip()
@@ -3157,12 +3174,14 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
 
     if delivery_mode == "teacher_interrupt":
         system_prompt = (
-            "You are MABASO.AI in live teacher mode. "
+            "You are Mabaso AI Tutor in a live teaching session. "
             "A student has interrupted a spoken lesson with a question. "
             "Answer only from the provided lecture context. "
             "If the material does not support an answer, say that it was not clearly covered. "
-            "Sound like a strong tutor speaking aloud: direct, clear, and easy to follow. "
-            "Keep the answer compact but still explain the key reasoning, formula choice, or misconception when needed. "
+            "Sound like a premium human-like tutor speaking aloud: direct, clear, warm, and easy to follow. "
+            f"{teaching_style_instruction} "
+            f"{response_length_instruction} "
+            "Explain the key reasoning, formula choice, misconception, or next step when needed. "
             "Do not ask a follow-up question. "
             "Avoid heavy markdown and avoid sounding like a chatbot. "
             f"Reply in {output_language}."
@@ -9646,7 +9665,7 @@ def build_teacher_lesson_fallback(
                 break
 
     return {
-        "title": f"{topic} Teacher Lesson",
+        "title": f"{topic} Tutor Session",
         "overview": (
             f"A tutor-style walkthrough of {topic} designed for understanding, retention, and exam performance, "
             f"running for about {TEACHER_TARGET_MINUTES} minutes or more while following the guide section by section."
@@ -10158,6 +10177,8 @@ async def generate_teacher_lesson_package(
     past_question_papers: str,
     job_id: str,
     output_language: str,
+    teaching_style: str = "adaptive",
+    response_length: str = "balanced",
 ) -> dict[str, Any]:
     outline = build_teacher_section_outline(
         summary,
@@ -10188,6 +10209,19 @@ async def generate_teacher_lesson_package(
         f"AVAILABLE GUIDE HEADINGS\n{outline_block}",
     ]
     combined_source = "\n\n".join(block for block in context_blocks if block)
+    normalized_teaching_style = compact_text(teaching_style, "adaptive").lower()
+    normalized_response_length = compact_text(response_length, "balanced").lower()
+    teaching_style_instruction = {
+        "adaptive": "Adapt difficulty naturally and keep encouraging the student forward.",
+        "step_by_step": "Slow down and explain each concept in explicit, clearly connected steps.",
+        "exam_focused": "Prioritize high-yield concepts, exam traps, and revision cues.",
+        "conversational": "Sound especially natural, warm, and human while staying precise.",
+    }.get(normalized_teaching_style, "Adapt difficulty naturally and keep encouraging the student forward.")
+    response_length_instruction = {
+        "concise": "Keep each segment tighter while still teaching the key idea properly.",
+        "balanced": "Keep each segment concise but informative.",
+        "detailed": "Allow a little more depth and explanation inside each segment.",
+    }.get(normalized_response_length, "Keep each segment concise but informative.")
 
     def _generate_teacher_script(revision_note: str = "") -> dict[str, Any]:
         response = client.with_options(timeout=TEACHER_REQUEST_TIMEOUT).chat.completions.create(
@@ -10197,11 +10231,14 @@ async def generate_teacher_lesson_package(
                 {
                     "role": "system",
                     "content": (
-                        "You are an elite AI teaching engine built for university-level learning. "
+                        "You are Mabaso AI Teach Copilot, an elite AI tutor built for university-level learning. "
                         "Return strict JSON only with the keys title, overview, and segments.\n\n"
                         "Final goal:\n"
                         "- Teach for understanding, retention, engagement, exam performance, and long-term memory.\n"
-                        "- Feel like a top private tutor: highly intelligent but easy to understand, conversational, motivating, adaptive to learner difficulty, and visually synchronized with the study guide.\n\n"
+                        "- Feel like a top private tutor: highly intelligent but easy to understand, conversational, motivating, adaptive to learner difficulty, and visually synchronized with the study guide.\n"
+                        f"- Teaching style preference: {normalized_teaching_style}.\n"
+                        f"- Response depth preference: {normalized_response_length}.\n"
+                        f"- Follow this preference guidance: {teaching_style_instruction} {response_length_instruction}\n\n"
                         "JSON rules:\n"
                         "- `segments` must be an array of objects with `section_heading`, `prompt`, and `text` only.\n"
                         "- `section_heading` must be one of the provided guide headings.\n"
@@ -10247,7 +10284,7 @@ async def generate_teacher_lesson_package(
                 {
                     "role": "user",
                     "content": (
-                        "Build a teacher-mode lesson that follows the guide section by section.\n"
+                        "Build a Mabaso AI Tutor session that follows the guide section by section.\n"
                         "The student should feel personally guided by a premium AI tutor who teaches for true understanding, not just information delivery.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
@@ -12735,9 +12772,11 @@ async def run_teacher_lesson_job(
     lecture_slides: str,
     past_question_papers: str,
     output_language: str,
+    teaching_style: str = "adaptive",
+    response_length: str = "balanced",
 ):
     try:
-        update_job(job_id, status="processing", stage="Starting teacher lesson", progress=8)
+        update_job(job_id, status="processing", stage="Starting tutor session", progress=8)
         teacher_package = await generate_teacher_lesson_package(
             summary,
             transcript,
@@ -12746,11 +12785,13 @@ async def run_teacher_lesson_job(
             past_question_papers,
             job_id,
             output_language,
+            teaching_style,
+            response_length,
         )
         update_job(
             job_id,
             status="completed",
-            stage="Teacher lesson ready",
+            stage="Tutor session ready",
             progress=100,
             **teacher_package,
         )
@@ -12765,11 +12806,11 @@ async def run_teacher_lesson_job(
             metadata={"job_id": job_id},
         )
     except Exception as exc:
-        logger.exception("Teacher lesson job failed")
+        logger.exception("Tutor session job failed")
         update_job(
             job_id,
             status="failed",
-            stage="Teacher lesson failed",
+            stage="Tutor session failed",
             progress=100,
             error=format_job_error(exc),
         )
@@ -13251,11 +13292,13 @@ async def create_teacher_lesson(
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
+    teaching_style = compact_text(payload.teaching_style, "adaptive").lower()
+    response_length = compact_text(payload.response_length, "balanced").lower()
 
     if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
-            detail="Generate a study guide or add lecture material before opening teacher mode.",
+            detail="Generate a study guide or add lecture material before starting Mabaso AI Tutor.",
         )
 
     ensure_openai_key()
@@ -13270,6 +13313,8 @@ async def create_teacher_lesson(
             lecture_slides,
             past_question_papers,
             output_language,
+            teaching_style,
+            response_length,
         )
     )
     record_audit_log(
