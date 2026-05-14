@@ -188,12 +188,17 @@ function loadStoredRoomInviteId() {
   return normalizeCollaborationRoomId(window.localStorage.getItem(ROOM_INVITE_STORAGE_KEY) || "");
 }
 
-function loadDismissedRoomInviteIds() {
+function loadDismissedRoomInviteIds(email = "") {
   if (typeof window === "undefined") return [];
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY) || "[]");
-    if (!Array.isArray(parsed)) return [];
-    return Array.from(new Set(parsed.map((item) => normalizeCollaborationRoomId(item)).filter(Boolean)));
+    const normalizedEmail = normalizeHistoryOwnerEmail(email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "") || "__guest__";
+    const parsed = JSON.parse(window.localStorage.getItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY) || "{}");
+    const values = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object" && Array.isArray(parsed[normalizedEmail])
+        ? parsed[normalizedEmail]
+        : [];
+    return Array.from(new Set(values.map((item) => normalizeCollaborationRoomId(item)).filter(Boolean)));
   } catch {
     return [];
   }
@@ -212,13 +217,6 @@ function parseRoomInviteIdFromLocation() {
   if (!rawHash) return "";
   const hashParams = new URLSearchParams(rawHash);
   return normalizeCollaborationRoomId(hashParams.get("room") || hashParams.get("invite") || rawHash);
-}
-
-function clearRoomInviteHashFromLocation() {
-  if (typeof window === "undefined") return;
-  const inviteId = parseRoomInviteIdFromLocation();
-  if (!inviteId || !window.location.hash) return;
-  window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}` || "/");
 }
 
 function shouldFocusCollaborationReplyFromLocation() {
@@ -3358,13 +3356,15 @@ export default function App() {
   const [newRoomVisibility, setNewRoomVisibility] = useState("private");
   const [roomSharedNotesDraft, setRoomSharedNotesDraft] = useState("");
   const [highlightedInviteRoomId, setHighlightedInviteRoomId] = useState(() => loadStoredRoomInviteId());
-  const [dismissedRoomInviteIds, setDismissedRoomInviteIds] = useState(loadDismissedRoomInviteIds);
+  const [dismissedRoomInviteIds, setDismissedRoomInviteIds] = useState(() => loadDismissedRoomInviteIds(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [roomMessageDraft, setRoomMessageDraft] = useState("");
+  const [roomMembersInput, setRoomMembersInput] = useState("");
   const [collaborationMessagePrompt, setCollaborationMessagePrompt] = useState(null);
   const [selectedRoomBoardImageId, setSelectedRoomBoardImageId] = useState("");
   const [followRoomView, setFollowRoomView] = useState(true);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isRoomLoading, setIsRoomLoading] = useState(false);
+  const [isAddingRoomMembers, setIsAddingRoomMembers] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
   const [isUploadingRoomBoardImage, setIsUploadingRoomBoardImage] = useState(false);
@@ -3496,22 +3496,24 @@ export default function App() {
     return normalized;
   };
 
-  const readPendingRoomInviteId = () => normalizeCollaborationRoomId(
-    pendingRoomInviteIdRef.current
-      || (typeof window !== "undefined" ? window.localStorage.getItem(ROOM_INVITE_STORAGE_KEY) || "" : ""),
-  );
-
-  const consumePendingRoomInviteId = () => {
-    const roomId = readPendingRoomInviteId();
-    persistPendingRoomInviteId("");
-    return roomId;
-  };
-
-  const persistDismissedRoomInviteList = (roomIds = []) => {
+  const persistDismissedRoomInviteList = (roomIds = [], emailOverride = "") => {
     const normalized = Array.from(new Set((roomIds || []).map((item) => normalizeCollaborationRoomId(item)).filter(Boolean)));
+    const normalizedEmail = normalizeHistoryOwnerEmail(emailOverride || authEmail || authEmailInput || "") || "__guest__";
     setDismissedRoomInviteIds(normalized);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY, JSON.stringify(normalized));
+      let storedMap = {};
+      try {
+        const parsed = JSON.parse(window.localStorage.getItem(ROOM_INVITE_DISMISSALS_STORAGE_KEY) || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          storedMap = parsed;
+        }
+      } catch {
+        storedMap = {};
+      }
+      window.localStorage.setItem(
+        ROOM_INVITE_DISMISSALS_STORAGE_KEY,
+        JSON.stringify({ ...storedMap, [normalizedEmail]: normalized }),
+      );
     }
     return normalized;
   };
@@ -3719,13 +3721,6 @@ export default function App() {
     if (refresh) refreshCollaborationRooms(true);
   };
 
-  const buildCollaborationInviteUrl = (roomId = "") => {
-    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
-    if (!normalizedRoomId) return "";
-    const origin = typeof window !== "undefined" ? window.location.origin : "https://mabaso.ai";
-    return `${origin}/app/collaboration#room=${encodeURIComponent(normalizedRoomId)}`;
-  };
-
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
 
@@ -3754,6 +3749,10 @@ export default function App() {
     if (!authToken) return;
     setPublicPage("auth");
   }, [authToken]);
+
+  useEffect(() => {
+    setDismissedRoomInviteIds(loadDismissedRoomInviteIds(authEmail || authEmailInput || ""));
+  }, [authEmail, authEmailInput]);
 
   useEffect(() => {
     if (supportContactEmail.trim()) return;
@@ -3890,7 +3889,6 @@ export default function App() {
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
-  const activeOwnerRoomInviteLink = activeRoom?.is_owner ? buildCollaborationInviteUrl(activeRoom.id) : "";
   const showCollaborationInvitePrompt = ["capture", "workspace"].includes(currentPage) && Boolean(collaborationInvitePromptRoom);
   const isCollaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
   const canExportCurrent = activeTab === "quiz"
@@ -4373,7 +4371,7 @@ export default function App() {
                   <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{room.member_count} member{room.member_count === 1 ? "" : "s"}</span>
                   <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-50">Test mode: {room.test_visibility}</span>
                   <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">Shared tool: {tabs.find((tab) => tab.id === room.active_tab)?.label || "Study Guide"}</span>
-                  {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-50">Invited room</span> : null}
+                  {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-xs text-cyan-50">Shared room</span> : null}
                 </div>
               </div>
               <div className="force-mobile-stack flex flex-wrap gap-2">
@@ -4427,16 +4425,16 @@ export default function App() {
           </div>
           <h2 className="phone-safe-copy mt-4 text-2xl font-semibold text-white">{collaborationInvitePromptRoom?.title}</h2>
           <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-            {collaborationInvitePromptRoom?.owner_email} shared a study room with you. Open it any time to join the shared board, room chat, and synced study tools.
+            {collaborationInvitePromptRoom?.owner_email} added you to a study room. Open it any time to join the shared board, room chat, and synced study tools.
           </p>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => openCollaborationRoomFromInvite(collaborationInvitePromptRoom?.id)}
+            onClick={() => openCollaborationRoom(collaborationInvitePromptRoom?.id)}
             className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white"
           >
-            Open Shared Board
+            Open Room
           </button>
           <button
             type="button"
@@ -5154,7 +5152,7 @@ export default function App() {
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 4 of 4</div>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">Create or open a shared study room.</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Students can move here after the study workspace to share notes, sync a revision tool, chat inside one lecture room, and join by invite link.</p>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Students can move here after the study workspace to share notes, sync a revision tool, chat inside one lecture room, and add members by email.</p>
           </div>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
@@ -5166,19 +5164,19 @@ export default function App() {
         <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Available room invite</p>
+              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Shared study room</p>
               <h3 className="phone-safe-copy mt-3 text-2xl font-semibold text-white">{collaborationInviteSpotlight.title}</h3>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-                {collaborationInviteSpotlight.owner_email} shared this room with you. Open the shared board to see the notes area, room chat, and synced study focus for the lecture.
+                {collaborationInviteSpotlight.owner_email} added you to this room. Open it to see the notes area, room chat, and synced study focus for the lecture.
               </p>
             </div>
             <div className="force-mobile-stack flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={() => openCollaborationRoomFromInvite(collaborationInviteSpotlight.id)}
+                onClick={() => openCollaborationRoom(collaborationInviteSpotlight.id)}
                 className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white"
               >
-                Open Shared Board
+                Open Room
               </button>
               <button
                 type="button"
@@ -5197,7 +5195,7 @@ export default function App() {
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture, invite people by email, and share the generated room link with anyone who should join the board.</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture and add the member emails that should see it after they sign in.</p>
             <div className="mt-5 space-y-4">
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
@@ -5222,42 +5220,6 @@ export default function App() {
                 </div>
               </div>
               <button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button>
-              {activeOwnerRoomInviteLink ? (
-                <div className="rounded-[22px] border border-cyan-300/20 bg-cyan-400/10 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">Share collaboration link</p>
-                  <p className="mt-2 text-sm leading-7 text-slate-100">Send this link to a friend so Mabaso AI opens the collaboration invite flow and guides them into this room.</p>
-                  <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-cyan-50">
-                    <span className="phone-safe-copy break-all">{activeOwnerRoomInviteLink}</span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(activeOwnerRoomInviteLink);
-                          setStatus("Collaboration invite link copied.");
-                        } catch {
-                          setError("Could not copy the collaboration invite link.");
-                        }
-                      }}
-                      className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-cyan-50"
-                    >
-                      Copy Link
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (typeof window !== "undefined") {
-                          window.open(activeOwnerRoomInviteLink, "_blank", "noopener,noreferrer");
-                        }
-                      }}
-                      className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white"
-                    >
-                      Preview Invite
-                    </button>
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
 
@@ -5285,7 +5247,7 @@ export default function App() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
-                    {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-cyan-50">Invite</span> : null}
+                    {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-cyan-50">Shared with you</span> : null}
                   </div>
                   <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p>
                   <p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p>
@@ -5363,6 +5325,30 @@ export default function App() {
                   <span key={member.email} className="phone-safe-copy rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>
                 ))}
               </div>
+              {activeRoom.is_owner ? (
+                <div className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-5">
+                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">Add members</p>
+                  <h4 className="mt-2 text-2xl font-semibold text-white">Add more people to this room</h4>
+                  <p className="mt-3 text-sm leading-7 text-slate-100">Use email addresses here and those people will see this room prompt when they sign in.</p>
+                  <textarea
+                    value={roomMembersInput}
+                    onChange={(event) => setRoomMembersInput(event.target.value)}
+                    rows={3}
+                    className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none"
+                    placeholder="student1@email.com, student2@email.com"
+                  />
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={addMembersToActiveRoom}
+                      disabled={isAddingRoomMembers}
+                      className="rounded-full border border-cyan-300/20 bg-slate-950/80 px-4 py-2 text-sm font-semibold text-cyan-50 disabled:opacity-50"
+                    >
+                      {isAddingRoomMembers ? "Adding members..." : "Add members"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
@@ -9590,42 +9576,6 @@ export default function App() {
     }
   };
 
-  const acceptCollaborationInvite = async (roomId, options = {}) => {
-    const { silent = false, openBoard = false } = options;
-    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
-    if (!normalizedRoomId) return null;
-    if (!silent) setIsRoomLoading(true);
-    try {
-      const response = await authFetch(`/collaboration/invitations/${normalizedRoomId}/accept`, {
-        method: "POST",
-      });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not join this collaboration room.");
-      setHighlightedInviteRoomId(normalizedRoomId);
-      persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
-      if (openBoard) {
-        openCollaborationPage({ refresh: false });
-        setActiveRoomId(normalizedRoomId);
-        setActiveRoom(data.room || null);
-        syncRoomNotesDraftFromRoom(data.room, { force: true });
-        setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
-      } else if (!silent) {
-        setStatus(`Added ${data.room?.title || "the collaboration room"} to your collaboration list.`);
-      }
-      void refreshCollaborationRooms(true);
-      return data.room || null;
-    } catch (err) {
-      if (!silent) setError(err.message || "Could not join this collaboration room.");
-      return null;
-    } finally {
-      if (!silent) setIsRoomLoading(false);
-    }
-  };
-
-  const openCollaborationRoomFromInvite = async (roomId) => {
-    await acceptCollaborationInvite(roomId, { openBoard: true });
-  };
-
   const openCollaborationRoom = async (roomId, options = {}) => {
     const normalizedRoomId = normalizeCollaborationRoomId(roomId);
     if (!normalizedRoomId) return;
@@ -9640,6 +9590,7 @@ export default function App() {
       setActiveRoomId("");
       setActiveRoom(null);
       setRoomSharedNotesDraft("");
+      setRoomMembersInput("");
       setCollaborationMessagePrompt(null);
       setSelectedRoomBoardImageId("");
       collaborationRoomMessageIdsRef.current = {};
@@ -9687,24 +9638,6 @@ export default function App() {
       navigator.serviceWorker.removeEventListener("message", handleServiceWorkerMessage);
     };
   }, [authToken, authSessionMode, browserPath, currentPage]);
-
-  useEffect(() => {
-    if (!authToken) return undefined;
-    const pendingRoomId = readPendingRoomInviteId();
-    if (!pendingRoomId || browserPath !== "/app/collaboration") return undefined;
-
-    let cancelled = false;
-    (async () => {
-      const room = await acceptCollaborationInvite(pendingRoomId, { silent: true, openBoard: true });
-      if (cancelled || !room) return;
-      consumePendingRoomInviteId();
-      clearRoomInviteHashFromLocation();
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authToken, browserPath]);
 
   useEffect(() => {
     const pendingReplyRoomId = pendingCollaborationReplyRoomIdRef.current;
@@ -9755,6 +9688,7 @@ export default function App() {
 
   useEffect(() => {
     if (!activeRoom?.id) {
+      setRoomMembersInput("");
       setSelectedRoomBoardImageId("");
       roomNotesLastSyncedValueRef.current = "";
       roomNotesLastEditedAtRef.current = 0;
@@ -9775,6 +9709,7 @@ export default function App() {
     });
 
     setRoomQuizAnswers(nextAnswers);
+    setRoomMembersInput("");
     setRoomQuizAnswerImages({});
     setRoomQuizResults({});
     setRoomQuizSubmitted(false);
@@ -12252,6 +12187,8 @@ export default function App() {
       roomNotesLastEditedAtRef.current = 0;
       syncRoomNotesDraftFromRoom(data.room, { force: true });
       setRoomTitleInput(resolvedTitle);
+      setRoomInviteInput("");
+      setRoomMembersInput("");
       setRoomMessageDraft("");
       openCollaborationPage({ refresh: false });
       if (data.room?.active_tab) setActiveTab(data.room.active_tab);
@@ -12261,6 +12198,36 @@ export default function App() {
       setError(err.message || "Could not create the collaboration room.");
     } finally {
       setIsCreatingRoom(false);
+    }
+  };
+
+  const addMembersToActiveRoom = async () => {
+    if (!activeRoomId) return;
+    const emails = parseInviteEmails(roomMembersInput);
+    if (!emails.length) return setError("Add at least one member email first.");
+    setIsAddingRoomMembers(true);
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emails }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not add members to this room.");
+      handleCollaborationRoomActivity(data.room ? [data.room] : []);
+      setActiveRoom(data.room || null);
+      setRoomMembersInput("");
+      await refreshCollaborationRooms(true);
+      setStatus(
+        emails.length === 1
+          ? "1 member added to the room."
+          : `${emails.length} members added to the room.`,
+      );
+    } catch (err) {
+      setError(err.message || "Could not add members to this room.");
+    } finally {
+      setIsAddingRoomMembers(false);
     }
   };
 

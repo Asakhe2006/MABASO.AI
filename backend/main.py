@@ -792,6 +792,10 @@ class CollaborationSharedNotesRequest(BaseModel):
     shared_notes: str = ""
 
 
+class CollaborationRoomMembersRequest(BaseModel):
+    emails: list[str] = []
+
+
 class CollaborationActiveTabRequest(BaseModel):
     active_tab: str
 
@@ -13692,6 +13696,39 @@ async def send_collaboration_message(
             """,
             (uuid4().hex, room["id"], current_user, content, now_iso),
         )
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (now_iso, room["id"]),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.post("/collaboration/rooms/{room_id}/members")
+async def add_collaboration_room_members(
+    room_id: str,
+    payload: CollaborationRoomMembersRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if room["owner_email"] != current_user:
+        raise HTTPException(status_code=403, detail="Only the room owner can add members.")
+
+    invited_emails = normalize_invited_emails(payload.emails, current_user)
+    if not invited_emails:
+        raise HTTPException(status_code=400, detail="Add at least one member email first.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        for email in invited_emails:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO collaboration_room_members (room_id, email, role, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (room["id"], email, "member", now_iso),
+            )
         connection.execute(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
