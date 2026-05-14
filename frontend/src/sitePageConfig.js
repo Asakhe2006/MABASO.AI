@@ -149,7 +149,7 @@ export const sitePages = [
         kicker: "Animated workspace preview",
         title: "Guide, transcript, formulas, examples, test, chat",
         subtitle: "A premium floating-tab shell shows students exactly where each learning mode lives.",
-        tabs: ["Guide", "Transcript", "Examples", "Quiz", "Chat"],
+        tabs: ["Guide", "Transcript", "Examples", "Exam", "Chat"],
         rows: [
           { label: "Generated pack", value: "Ready for revision" },
           { label: "Navigation", value: "Smart tab memory and exports" },
@@ -362,7 +362,7 @@ export const sitePages = [
         rows: [
           { label: "Guide style", value: "Mobile-first and skimmable" },
           { label: "Subject handling", value: "Topic-aware structure" },
-          { label: "Linked outputs", value: "Quiz, flashcards, formulas" },
+          { label: "Linked outputs", value: "Exam, flashcards, formulas" },
         ],
       },
     },
@@ -706,7 +706,7 @@ export const sitePages = [
       benefits: [
         "Generate examples from your own lecture content",
         "Save solution sets to history and collaboration rooms",
-        "Move directly from examples into quizzes and Mabaso AI Tutor",
+        "Move directly from examples into exams and Mabaso AI Tutor",
       ],
     },
   }),
@@ -722,7 +722,7 @@ export const sitePages = [
     hero: {
       eyebrow: "Product / Flashcards",
       headline: "Revision cards built from the same lecture context as the rest of the study pack.",
-      description: "Flashcards in Mabaso AI are not isolated quiz toys. They are generated from the same guide, examples, transcript, and lecture support files so recall practice stays aligned with the actual class material.",
+      description: "Flashcards in Mabaso AI are not isolated exam-prep toys. They are generated from the same guide, examples, transcript, and lecture support files so recall practice stays aligned with the actual class material.",
       ctas: [
         primaryCta("Generate Flashcards", "open-app", "capture"),
         secondaryCta("Open AI Test Generator", "route", "/product/ai-test-generator"),
@@ -736,7 +736,7 @@ export const sitePages = [
         kicker: "Flip-card preview",
         title: "Question, answer, cue, and revision follow-through",
         subtitle: "Flashcards should feel like a premium memory mode with clean motion and study-ready language.",
-        tabs: ["Recall", "Review", "Quiz bridge"],
+        tabs: ["Recall", "Review", "Exam bridge"],
         rows: [
           { label: "Card style", value: "Short and focused" },
           { label: "Recall mode", value: "Fast repetition" },
@@ -835,7 +835,7 @@ export const sitePages = [
       },
     },
     contains: [
-      { icon: "clipboard-check", title: "Quiz generation", description: "The page explains how questions are generated from the study context." },
+      { icon: "clipboard-check", title: "Exam generation", description: "The page explains how questions are generated from the study context." },
       { icon: "timer-reset", title: "Timed testing", description: "Timed sessions and countdown states create a real exam-feel workflow." },
       { icon: "badge-percent", title: "Marking and feedback", description: "AI feedback highlights mistakes, scores, and what to improve next." },
     ],
@@ -912,7 +912,7 @@ export const sitePages = [
     hero: {
       eyebrow: "AI Tools / Mabaso AI Tutor",
       headline: "A premium AI tutor session built on smart realtime voice, not expensive always-on streaming.",
-      description: "Mabaso AI Tutor uses a hybrid architecture: live teaching runs on a cheaper realtime voice engine with VAD, smart mic sleep, and interruption handling, while study guides, transcripts, quizzes, and exports stay on background text workflows. The result still feels premium, fast, and deeply grounded in your workspace.",
+      description: "Mabaso AI Tutor uses a hybrid architecture: live teaching runs on a cheaper realtime voice engine with VAD, smart mic sleep, and interruption handling, while study guides, transcripts, exams, and exports stay on background text workflows. The result still feels premium, fast, and deeply grounded in your workspace.",
       ctas: [
         primaryCta("Start Teach Session", "open-app", "workspace"),
         secondaryCta("View Study Guide", "route", "/product/ai-study-guide"),
@@ -1326,7 +1326,7 @@ export const sitePages = [
         tabs: ["Room", "Notes", "Tool Sync", "Chat"],
         rows: [
           { label: "Room creation", value: "Invite by email" },
-          { label: "Shared focus", value: "Guide, quiz, flashcards, notes" },
+          { label: "Shared focus", value: "Guide, exam, flashcards, notes" },
           { label: "Protection", value: "Authenticated and room scoped" },
         ],
       },

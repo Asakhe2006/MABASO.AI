@@ -256,7 +256,7 @@ const tabs = [
   { id: "formulas", label: "Formulas" },
   { id: "examples", label: "Worked Examples" },
   { id: "flashcards", label: "Flashcards" },
-  { id: "quiz", label: "Quizzes" },
+  { id: "quiz", label: "Exam" },
   { id: "presentation", label: "PowerPoint Presentation" },
   { id: "podcast", label: "Podcast Generator" },
   { id: "chat", label: "AI Notes" },
@@ -1267,12 +1267,45 @@ function savePendingJobSnapshot(email = "", snapshot = null) {
   }
 }
 
-function loadAdminDashboardCache() {
+function loadAdminDashboardCacheBundle() {
   try {
     const value = window.localStorage.getItem(ADMIN_DASHBOARD_CACHE_KEY) || "";
-    if (!value) return null;
+    if (!value) {
+      return { latestRangeKey: "7d", snapshotsByRange: {} };
+    }
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed : null;
+    if (!parsed || typeof parsed !== "object") {
+      return { latestRangeKey: "7d", snapshotsByRange: {} };
+    }
+    if (parsed.snapshotsByRange && typeof parsed.snapshotsByRange === "object") {
+      const snapshotsByRange = Object.fromEntries(
+        Object.entries(parsed.snapshotsByRange)
+          .map(([key, snapshot]) => [normalizeAdminDashboardRangeKey(key), snapshot])
+          .filter(([, snapshot]) => snapshot && typeof snapshot === "object"),
+      );
+      return {
+        latestRangeKey: normalizeAdminDashboardRangeKey(parsed.latestRangeKey || "7d"),
+        snapshotsByRange,
+      };
+    }
+    const legacyRangeKey = normalizeAdminDashboardRangeKey(parsed?.time_window?.key || "7d");
+    return {
+      latestRangeKey: legacyRangeKey,
+      snapshotsByRange: parsed && typeof parsed === "object" ? { [legacyRangeKey]: parsed } : {},
+    };
+  } catch {
+    return { latestRangeKey: "7d", snapshotsByRange: {} };
+  }
+}
+
+function loadAdminDashboardCache(rangeKey = "") {
+  try {
+    const bundle = loadAdminDashboardCacheBundle();
+    const selectedRange = normalizeAdminDashboardRangeKey(rangeKey || bundle.latestRangeKey || "7d");
+    return bundle.snapshotsByRange[selectedRange]
+      || bundle.snapshotsByRange[bundle.latestRangeKey]
+      || Object.values(bundle.snapshotsByRange)[0]
+      || null;
   } catch {
     return null;
   }
@@ -1284,7 +1317,16 @@ function saveAdminDashboardCache(snapshot = null) {
       window.localStorage.removeItem(ADMIN_DASHBOARD_CACHE_KEY);
       return;
     }
-    window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(snapshot));
+    const bundle = loadAdminDashboardCacheBundle();
+    const rangeKey = normalizeAdminDashboardRangeKey(snapshot?.time_window?.key || bundle.latestRangeKey || "7d");
+    const nextBundle = {
+      latestRangeKey: rangeKey,
+      snapshotsByRange: {
+        ...bundle.snapshotsByRange,
+        [rangeKey]: snapshot,
+      },
+    };
+    window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(nextBundle));
   } catch {
     // Ignore cache write failures.
   }
@@ -1302,8 +1344,8 @@ function loadAdminDashboardRangePreference() {
   } catch {
     // Ignore local preference read failures.
   }
-  const cachedDashboard = loadAdminDashboardCache();
-  return normalizeAdminDashboardRangeKey(cachedDashboard?.time_window?.key || "7d");
+  const cachedDashboardBundle = loadAdminDashboardCacheBundle();
+  return normalizeAdminDashboardRangeKey(cachedDashboardBundle.latestRangeKey || "7d");
 }
 
 function saveAdminDashboardRangePreference(rangeKey = "7d") {
@@ -3467,8 +3509,8 @@ export default function App() {
   const [supportContactBrowser, setSupportContactBrowser] = useState(() => detectSupportBrowser());
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [presentationView, setPresentationView] = useState("setup");
-  const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache());
   const [adminDashboardRange, setAdminDashboardRange] = useState(loadAdminDashboardRangePreference);
+  const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache(loadAdminDashboardRangePreference()));
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
@@ -8606,12 +8648,6 @@ export default function App() {
   }, [adminDashboardRange]);
 
   useEffect(() => {
-    const snapshotRange = normalizeAdminDashboardRangeKey(adminDashboard?.time_window?.key || "");
-    if (!adminDashboard?.time_window?.key || snapshotRange === adminDashboardRange) return;
-    setAdminDashboardRange(snapshotRange);
-  }, [adminDashboard, adminDashboardRange]);
-
-  useEffect(() => {
     if (!authChecked || !authEmail) return;
     const cachedHistory = loadHistoryItems(authEmail);
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
@@ -9906,8 +9942,7 @@ export default function App() {
   const startTeacherRealtimeSession = async () => {
     if (isTeacherRealtimeConnecting) return;
     if (isTeacherRealtimeConnected) {
-      setTeacherRealtimeMicrophoneEnabled(!isTeacherRealtimeMicActive);
-      setTeacherQuestionStatus(!isTeacherRealtimeMicActive ? "Listening..." : "Microphone paused.");
+      setTeacherQuestionStatus("Live tutor is already ready.");
       return;
     }
     if (typeof window === "undefined" || typeof window.RTCPeerConnection === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -9964,9 +9999,13 @@ export default function App() {
       };
       peerConnection.onconnectionstatechange = () => {
         const connectionState = peerConnection.connectionState;
-        if (["failed", "disconnected", "closed"].includes(connectionState)) {
+        if (connectionState === "disconnected") {
+          setTeacherQuestionStatus("Live tutor connection is unstable. Reconnecting...");
+          return;
+        }
+        if (connectionState === "failed") {
           closeTeacherRealtimeRuntime();
-          setTeacherQuestionStatus("Live tutor disconnected.");
+          setTeacherQuestionStatus("Live tutor connection failed.");
         }
       };
       dataChannel.onmessage = (messageEvent) => {
@@ -10007,7 +10046,7 @@ export default function App() {
           sendTeacherRealtimePrompt("Greet the student briefly and ask what they would like to study today.", { audio: true });
         }, 250);
         setStatus("Live tutor connected.");
-        setTeacherQuestionStatus("Live tutor ready. Tap Speak when you want to talk.");
+        setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
       };
       dataChannel.onclose = () => {
         setIsTeacherRealtimeConnected(false);
@@ -10147,6 +10186,10 @@ export default function App() {
       setAdminDashboardRange(normalizeAdminDashboardRangeKey(data?.time_window?.key || selectedRange));
       setAdminDashboard(data);
     } catch (err) {
+      const cachedDashboard = loadAdminDashboardCache(selectedRange);
+      if (cachedDashboard) {
+        setAdminDashboard(cachedDashboard);
+      }
       if (!silent) setError(err.message || "Could not load the admin dashboard.");
       if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
         setCurrentPage("capture");
@@ -10160,6 +10203,10 @@ export default function App() {
     const normalizedRange = normalizeAdminDashboardRangeKey(nextRangeKey);
     if (normalizedRange === adminDashboardRange) return;
     hasLoadedAdminDashboardRef.current = false;
+    const cachedSnapshot = loadAdminDashboardCache(normalizedRange);
+    if (cachedSnapshot) {
+      setAdminDashboard(cachedSnapshot);
+    }
     setAdminDashboardRange(normalizedRange);
   };
 
@@ -12939,6 +12986,24 @@ export default function App() {
     startTeacherQuestionCapture();
   };
 
+  const startTeacherRealtimeQuestionHold = async () => {
+    if (isTeacherRealtimeConnecting || isTeacherQuestionLoading) return;
+    if (!isTeacherRealtimeConnected) {
+      setTeacherQuestionStatus("Start Live first, then hold Ask Question.");
+      return;
+    }
+    setTeacherRealtimeMicrophoneEnabled(true);
+    setTeacherQuestionStatus("Listening... Release when you're done.");
+  };
+
+  const stopTeacherRealtimeQuestionHold = () => {
+    if (!isTeacherRealtimeConnected || !isTeacherRealtimeMicActive) return;
+    setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
+    setIsTeacherListening(false);
+    setIsTeacherQuestionLoading(true);
+    setTeacherQuestionStatus("Thinking...");
+  };
+
   const openTutorWorkspaceTool = (tabId = "guide") => {
     teacherViewportSyncRef.current = "";
     teacherAutoTabRef.current = tabId;
@@ -13609,7 +13674,7 @@ export default function App() {
       { id: "transform-live", title: "Transform Live Lecture", description: "Convert live lecture to notes" },
       { id: "generate-guide", title: "Generate Study Guide", description: "Create comprehensive notes" },
       { id: "explain-notes", title: "Explain My Notes", description: "Teach the guide conversationally" },
-      { id: "generate-quiz", title: "Generate Quiz", description: "Generate practice questions" },
+      { id: "generate-quiz", title: "Generate Exam", description: "Generate practice questions" },
       { id: "summarize", title: "Summarize Lecture", description: "Create smart summaries" },
       { id: "extract-key-points", title: "Extract Key Points", description: "Highlight important concepts" },
       { id: "save-export", title: "Save & Export", description: "Export notes as PDF or text" },
@@ -13621,7 +13686,7 @@ export default function App() {
       { id: "guide", label: "Study Guide Generator", onClick: () => openTutorWorkspaceTool("guide") },
       { id: "transcript", label: "Transcript Analyzer", onClick: () => openTutorWorkspaceTool("transcript") },
       { id: "flashcards", label: "Flashcards", onClick: () => openTutorWorkspaceTool("flashcards") },
-      { id: "quiz", label: "Quizzes", onClick: () => openTutorWorkspaceTool("quiz") },
+      { id: "quiz", label: "Exam", onClick: () => openTutorWorkspaceTool("quiz") },
       { id: "formulas", label: "Revision Planner", onClick: () => openTutorWorkspaceTool("formulas") },
       { id: "materials", label: "Saved Sessions", onClick: () => setCurrentPage("materials") },
       { id: "chat", label: "AI Notes", onClick: () => openTutorWorkspaceTool("chat") },
@@ -13781,12 +13846,9 @@ export default function App() {
 
                 <div className="mt-7 grid grid-cols-3 gap-3 sm:grid-cols-6">
                   <button type="button" onClick={() => {
-                    if (isTeacherRealtimeConnected || isTeacherRealtimeConnecting) {
-                      startTeacherRealtimeSession();
-                      return;
-                    }
-                    startTeacherRealtimeSession();
-                  }} disabled={loading || isTeacherRealtimeConnecting} className="rounded-[22px] border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white transition hover:border-cyan-300/30 hover:bg-cyan-400/10 disabled:opacity-50">{isTeacherRealtimeConnected ? "Live On" : isTeacherRealtimeConnecting ? "Connecting" : "Start Live"}</button>
+                    if (teacherLessonData.segments.length) playTeacherLesson();
+                    else generateTeacherLesson({ autoplay: true });
+                  }} disabled={loading} className="rounded-[22px] border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white transition hover:border-cyan-300/30 hover:bg-cyan-400/10 disabled:opacity-50">Teach Guide</button>
                   <button type="button" onClick={() => {
                     if (isTeacherRealtimeConnected) {
                       setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
@@ -13805,10 +13867,22 @@ export default function App() {
                 </div>
 
                 <div className="mt-6 flex flex-col items-center gap-3">
-                  <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={isTeacherRealtimeConnecting || isTeacherQuestionLoading} className="flex h-24 w-24 items-center justify-center rounded-full border border-cyan-300/30 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.95),rgba(14,116,144,0.85))] text-lg font-semibold text-white shadow-[0_0_45px_rgba(56,189,248,0.45)] transition hover:scale-[1.02] disabled:opacity-60">
-                    {isTeacherRealtimeConnected ? (isTeacherRealtimeMicActive ? "Stop" : "Speak") : isTeacherRealtimeConnecting ? "Wait" : "Start"}
+                  <button type="button" onClick={() => startTeacherRealtimeSession()} disabled={isTeacherRealtimeConnecting} className="flex h-24 w-24 items-center justify-center rounded-full border border-cyan-300/30 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.95),rgba(14,116,144,0.85))] text-lg font-semibold text-white shadow-[0_0_45px_rgba(56,189,248,0.45)] transition hover:scale-[1.02] disabled:opacity-60">
+                    {isTeacherRealtimeConnected ? "Live" : isTeacherRealtimeConnecting ? "Wait" : "Start Live"}
                   </button>
-                  <p className="text-sm text-cyan-100">{teacherQuestionStatus || "Tap Start Live Session, then Speak only when you need the tutor."}</p>
+                  <button
+                    type="button"
+                    onPointerDown={startTeacherRealtimeQuestionHold}
+                    onPointerUp={stopTeacherRealtimeQuestionHold}
+                    onPointerLeave={stopTeacherRealtimeQuestionHold}
+                    onPointerCancel={stopTeacherRealtimeQuestionHold}
+                    disabled={!isTeacherRealtimeConnected || isTeacherRealtimeConnecting || isTeacherQuestionLoading}
+                    className="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:border-cyan-300/30 hover:bg-white/[0.08] disabled:opacity-50"
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-300/25 bg-cyan-400/15 text-xs uppercase tracking-[0.18em]">Mic</span>
+                    <span>Ask Question</span>
+                  </button>
+                  <p className="text-sm text-cyan-100">{teacherQuestionStatus || "Press Start Live, then hold Ask Question and release when you finish speaking."}</p>
                 </div>
 
                 <div className="mt-6 rounded-full border border-cyan-300/12 bg-[linear-gradient(90deg,rgba(2,6,23,0.12),rgba(14,165,233,0.14),rgba(34,197,94,0.12),rgba(2,6,23,0.12))] px-6 py-4 text-sm text-slate-200">
