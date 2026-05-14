@@ -117,10 +117,23 @@ PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
-REALTIME_TUTOR_DEFAULT_MODEL = (os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", "gpt-realtime-mini") or "gpt-realtime-mini").strip()
-REALTIME_TUTOR_PREMIUM_MODEL = (os.getenv("REALTIME_TUTOR_PREMIUM_MODEL", "gpt-realtime") or "gpt-realtime").strip()
+REALTIME_TUTOR_DEFAULT_MODEL = (
+    os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
+    or "gpt-realtime-mini"
+).strip()
+REALTIME_TUTOR_PREMIUM_MODEL = (
+    os.getenv(
+        "REALTIME_TUTOR_PREMIUM_MODEL",
+        os.getenv("OPENAI_REALTIME_PREMIUM_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")),
+    )
+    or "gpt-realtime"
+).strip()
 REALTIME_TUTOR_TRANSCRIPTION_MODEL = (
-    os.getenv("REALTIME_TUTOR_TRANSCRIPTION_MODEL", "gpt-realtime-whisper") or "gpt-realtime-whisper"
+    os.getenv(
+        "REALTIME_TUTOR_TRANSCRIPTION_MODEL",
+        os.getenv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-realtime-whisper"),
+    )
+    or "gpt-realtime-whisper"
 ).strip()
 REALTIME_TUTOR_DAILY_SECONDS = max(60, int(os.getenv("REALTIME_TUTOR_DAILY_SECONDS", "300")))
 REALTIME_TUTOR_ACTIVITY_GRACE_SECONDS = max(
@@ -13928,15 +13941,7 @@ async def create_realtime_tutor_session(
                     "model": REALTIME_TUTOR_TRANSCRIPTION_MODEL,
                     "language": normalize_realtime_tutor_language_hint(output_language),
                 },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "create_response": False,
-                    "interrupt_response": True,
-                    "idle_timeout_ms": REALTIME_TUTOR_IDLE_TIMEOUT_MS,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 600,
-                    "threshold": 0.45,
-                },
+                "turn_detection": None,
             },
             "output": {
                 "format": {"type": "audio/pcm", "rate": 24000},

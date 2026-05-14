@@ -80,6 +80,15 @@ const TEACHER_REALTIME_CONNECT_TIMEOUT_MS = 18000;
 const TEACHER_REALTIME_SESSION_EVENT_TIMEOUT_MS = 12000;
 const TEACHER_REALTIME_MAX_RECONNECT_ATTEMPTS = 4;
 const TEACHER_REALTIME_RECONNECT_BASE_DELAY_MS = 1200;
+const TEACHER_REALTIME_CONNECTION_STATES = {
+  IDLE: "idle",
+  REQUESTING_MICROPHONE: "requesting_microphone",
+  INITIALIZING: "initializing",
+  CONNECTING: "connecting",
+  CONNECTED: "connected",
+  RECONNECTING: "reconnecting",
+  FAILED: "failed",
+};
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
@@ -3620,6 +3629,7 @@ export default function App() {
   const [teacherSessionElapsedSeconds, setTeacherSessionElapsedSeconds] = useState(0);
   const [teacherNetworkQuality, setTeacherNetworkQuality] = useState(() => (typeof navigator !== "undefined" && navigator.onLine ? "Strong" : "Offline"));
   const [isTeacherMuted, setIsTeacherMuted] = useState(false);
+  const [teacherRealtimeConnectionState, setTeacherRealtimeConnectionState] = useState(TEACHER_REALTIME_CONNECTION_STATES.IDLE);
   const [isTeacherRealtimeConnecting, setIsTeacherRealtimeConnecting] = useState(false);
   const [isTeacherRealtimeConnected, setIsTeacherRealtimeConnected] = useState(false);
   const [teacherRealtimeModel, setTeacherRealtimeModel] = useState("");
@@ -9748,10 +9758,10 @@ export default function App() {
       );
     }
 
-    if (/vad|turn_detection|session update|session updated timed out/i.test(message)) {
+    if (/context sync|session update|session updated timed out/i.test(message)) {
       return createTeacherRealtimeStartupError(
-        "vad_initialization_failed",
-        "Voice detection could not finish initializing. Please try Start Live again.",
+        "context_sync_failed",
+        "Live tutor connected but could not sync the workspace context. Please try again.",
         { retryable: true },
       );
     }
@@ -9827,6 +9837,14 @@ export default function App() {
     TEACHER_REALTIME_RECONNECT_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
   );
 
+  const setTeacherRealtimeStage = (stage, detail = "") => {
+    setTeacherRealtimeConnectionState(stage);
+    if (typeof console !== "undefined") {
+      const suffix = detail ? `: ${detail}` : "";
+      console.info(`[Mabaso Live Tutor] ${stage}${suffix}`);
+    }
+  };
+
   const clearTeacherRealtimeTimers = ({ preserveReconnect = false } = {}) => {
     if (teacherRealtimeHeartbeatTimerRef.current) {
       window.clearInterval(teacherRealtimeHeartbeatTimerRef.current);
@@ -9867,6 +9885,7 @@ export default function App() {
   };
 
   const closeTeacherRealtimeRuntime = ({ preserveReconnect = false } = {}) => {
+    setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.IDLE, "runtime cleaned up");
     clearTeacherRealtimeTimers({ preserveReconnect });
     clearTeacherRealtimeEventWaiters(createTeacherRealtimeStartupError("realtime_closed", "Live tutor connection closed."));
     teacherRealtimeDataChannelRef.current?.close?.();
@@ -10047,13 +10066,8 @@ export default function App() {
     response: { modalities: audio ? ["audio", "text"] : ["text"] },
   });
 
-  const refreshTeacherRealtimeContext = ({ announce = false, allowDuringStartup = false } = {}) => {
-    const controlChannel = teacherRealtimeDataChannelRef.current;
-    const canRefreshDuringStartup = allowDuringStartup
-      && Boolean(teacherRealtimeSessionIdRef.current)
-      && controlChannel?.readyState === "open";
-    if (!isTeacherRealtimeConnected && !canRefreshDuringStartup) return Promise.resolve(false);
-    return (async () => {
+  const refreshTeacherRealtimeContext = async ({ announce = false } = {}) => {
+    if (!isTeacherRealtimeConnected) return false;
     const payload = buildTeacherRealtimeRequestPayload();
     const contextSignature = JSON.stringify({
       summary: payload.summary.slice(0, 800),
@@ -10079,6 +10093,7 @@ export default function App() {
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Could not refresh the live tutor context.");
     teacherRealtimeContextHashRef.current = contextSignature;
+    setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTED, "syncing workspace context");
     setTeacherRealtimeModel(data.selected_model || "");
     setTeacherRealtimeRemainingSeconds(Number(data.remaining_seconds_today || teacherRealtimeRemainingSeconds || 300));
     const updated = sendTeacherRealtimeEvent({
@@ -10089,12 +10104,7 @@ export default function App() {
         output_modalities: ["audio", "text"],
         audio: {
           input: {
-            turn_detection: {
-              type: "server_vad",
-              create_response: false,
-              interrupt_response: true,
-              idle_timeout_ms: Number(data.idle_timeout_ms || 8000),
-            },
+            turn_detection: null,
           },
           output: {
             speed: Number(data.speech_speed || 1),
@@ -10104,8 +10114,8 @@ export default function App() {
     });
     if (!updated) {
       throw createTeacherRealtimeStartupError(
-        "vad_initialization_failed",
-        "The live tutor control channel was not ready for voice detection setup.",
+        "context_sync_failed",
+        "The live tutor control channel was not ready to sync workspace context.",
         { retryable: true },
       );
     }
@@ -10113,7 +10123,6 @@ export default function App() {
       setStatus("Live tutor context refreshed from the current workspace.");
     }
     return true;
-    })();
   };
 
   const handleTeacherRealtimeEvent = (event) => {
@@ -10213,6 +10222,7 @@ export default function App() {
         { message: String(event?.error?.message || event?.message || "Realtime tutor error.").trim() },
         "realtime_failed",
       );
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, startupError.message);
       setError(startupError.message);
       setTeacherQuestionStatus(describeTeacherRealtimeFailure(startupError));
       if (teacherRealtimeShouldReconnectRef.current && startupError.retryable) {
@@ -10233,8 +10243,8 @@ export default function App() {
         return "The live tutor backend could not authenticate.";
       case "audio_stream_unavailable":
         return "The tutor audio stream is unavailable.";
-      case "vad_initialization_failed":
-        return "Voice detection could not finish starting.";
+      case "context_sync_failed":
+        return "The live tutor could not sync the current workspace context.";
       default:
         return "Live tutor connection failed.";
     }
@@ -10245,6 +10255,7 @@ export default function App() {
     const nextAttempt = teacherRealtimeReconnectAttemptRef.current + 1;
     if (nextAttempt > TEACHER_REALTIME_MAX_RECONNECT_ATTEMPTS) {
       teacherRealtimeShouldReconnectRef.current = false;
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, "automatic reconnect attempts exhausted");
       setIsTeacherRealtimeConnecting(false);
       setTeacherQuestionStatus("Live tutor could not reconnect automatically.");
       setStatus("Live tutor stopped after repeated reconnect failures.");
@@ -10255,6 +10266,7 @@ export default function App() {
     const delayMs = getTeacherRealtimeReconnectDelayMs(nextAttempt);
     teacherRealtimeStartupRunRef.current += 1;
     closeTeacherRealtimeRuntime({ preserveReconnect: true });
+    setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.RECONNECTING, `retry ${nextAttempt} after ${reason}`);
     setIsTeacherRealtimeConnecting(true);
     setStatus("Live tutor is reconnecting in the background.");
     setTeacherQuestionStatus(`Reconnecting live tutor in ${Math.ceil(delayMs / 1000)}s...`);
@@ -10305,6 +10317,10 @@ export default function App() {
 
     setIsTeacherRealtimeConnecting(true);
     setError("");
+    setTeacherRealtimeStage(
+      reconnect ? TEACHER_REALTIME_CONNECTION_STATES.RECONNECTING : TEACHER_REALTIME_CONNECTION_STATES.REQUESTING_MICROPHONE,
+      reconnect ? reconnectReason : "manual start",
+    );
     setStatus(reconnect ? "Reconnecting Live AI Tutor..." : "Preparing Live AI Tutor...");
     setTeacherQuestionStatus(reconnect ? "Retrying live tutor connection..." : "Requesting microphone...");
     openProtectedAppPage("workspace");
@@ -10319,6 +10335,7 @@ export default function App() {
     let peerReadyTimeout = null;
 
     try {
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.REQUESTING_MICROPHONE, "requesting microphone access");
       const localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -10339,6 +10356,7 @@ export default function App() {
         track.enabled = false;
       });
 
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.INITIALIZING, "microphone ready");
       setTeacherQuestionStatus("Preparing tutor audio...");
       const remoteAudio = document.createElement("audio");
       remoteAudio.autoplay = true;
@@ -10353,6 +10371,7 @@ export default function App() {
       await resumeTeacherRealtimeAudioOutput(remoteAudio);
       ensureTeacherRealtimeRunActive(runId);
 
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "creating realtime peer connection");
       setTeacherQuestionStatus("Opening live tutor control channel...");
       const peerConnection = new window.RTCPeerConnection();
       teacherRealtimePeerConnectionRef.current = peerConnection;
@@ -10539,6 +10558,7 @@ export default function App() {
       ensureTeacherRealtimeRunActive(runId);
 
       setTeacherQuestionStatus("Creating secure tutor session...");
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "creating realtime session");
       const { data } = await authJsonWithTransientRetries(
         "/realtime/tutor/session",
         {
@@ -10568,6 +10588,7 @@ export default function App() {
       setTeacherSessionElapsedSeconds(0);
 
       setTeacherQuestionStatus("Finishing live connection...");
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "waiting for realtime confirmation");
       await peerConnection.setRemoteDescription({
         type: "answer",
         sdp: String(data.answer_sdp || ""),
@@ -10579,23 +10600,12 @@ export default function App() {
       window.clearTimeout(peerReadyTimeout);
       ensureTeacherRealtimeRunActive(runId);
 
-      setTeacherQuestionStatus("Initializing voice detection...");
-      const sessionUpdatedPromise = waitForTeacherRealtimeEvent(
-        (event) => event?.type === "session.updated",
-        {
-          errorCode: "vad_initialization_failed",
-          timeoutMessage: "Live tutor voice detection did not finish initializing.",
-        },
-      );
-      await refreshTeacherRealtimeContext({ allowDuringStartup: true });
-      await sessionUpdatedPromise;
-      ensureTeacherRealtimeRunActive(runId);
-
       setTeacherQuestionStatus("Starting transcript stream...");
       await resumeTeacherRealtimeAudioOutput(remoteAudio);
       ensureTeacherRealtimeRunActive(runId);
 
       teacherRealtimeReconnectAttemptRef.current = 0;
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTED, "realtime session confirmed");
       setIsTeacherRealtimeConnecting(false);
       setIsTeacherRealtimeConnected(true);
       touchTeacherRealtimeActivity({ quiet: true });
@@ -10634,6 +10644,7 @@ export default function App() {
       teacherRealtimeSessionIdRef.current = "";
       setTeacherRealtimeModel("");
       setIsTeacherRealtimeConnecting(false);
+      setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, startupError.message);
       setError(startupError.message);
       setStatus("Live tutor could not start.");
       setTeacherQuestionStatus(describeTeacherRealtimeFailure(startupError));
@@ -13546,7 +13557,7 @@ export default function App() {
       sendTeacherRealtimeEvent({ type: "response.cancel" });
       sendTeacherRealtimeEvent({ type: "output_audio_buffer.clear" });
     }
-    setTeacherRealtimeMicrophoneEnabled(true);
+    setTeacherRealtimeMicrophoneEnabled(true, { scheduleSleep: false });
     setTeacherQuestionStatus("Listening... Release when you're done.");
   };
 
@@ -13556,7 +13567,8 @@ export default function App() {
     setIsTeacherListening(false);
     setIsTeacherQuestionLoading(true);
     setTeacherQuestionStatus("Thinking...");
-    if (!sendTeacherRealtimeResponseRequest({ audio: true })) {
+    const committed = sendTeacherRealtimeEvent({ type: "input_audio_buffer.commit" });
+    if (!committed || !sendTeacherRealtimeResponseRequest({ audio: true })) {
       setIsTeacherQuestionLoading(false);
       setTeacherQuestionStatus("Live tutor control channel is unavailable.");
       setError("The live tutor could not send your question for an answer.");
@@ -14281,11 +14293,19 @@ export default function App() {
       ),
     );
     const teacherRealtimeProfileLabel = teacherRealtimeProfile === "deep_explain" ? "Deep Explain" : "Smart Saver";
-    const realtimeStatusLabel = isTeacherRealtimeConnecting
-      ? "Connecting"
-      : isTeacherRealtimeConnected
-        ? "Live"
-        : "Offline";
+    const realtimeStatusLabel = teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.CONNECTED
+      ? "Live"
+      : teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.RECONNECTING
+        ? "Reconnecting"
+        : teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.REQUESTING_MICROPHONE
+          ? "Mic"
+          : teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.INITIALIZING
+            ? "Initializing"
+            : teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.CONNECTING
+              ? "Connecting"
+              : teacherRealtimeConnectionState === TEACHER_REALTIME_CONNECTION_STATES.FAILED
+                ? "Failed"
+                : "Offline";
 
     return (
       <div className="tutor-copilot-shell relative overflow-hidden rounded-[30px] border border-cyan-400/20 bg-[radial-gradient(circle_at_top,rgba(10,132,255,0.12),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(34,197,94,0.16),transparent_24%),linear-gradient(145deg,#020617,#030712_42%,#071427_100%)] p-3 sm:p-5">
@@ -14445,7 +14465,7 @@ export default function App() {
                 </div>
 
                 <div className="mt-6 rounded-full border border-cyan-300/12 bg-[linear-gradient(90deg,rgba(2,6,23,0.12),rgba(14,165,233,0.14),rgba(34,197,94,0.12),rgba(2,6,23,0.12))] px-6 py-4 text-sm text-slate-200">
-                  Live voice uses smart saver mode by default: the mic sleeps after silence, VAD handles interruptions, and you can move to the guide, transcript, or worked examples without stopping the session.
+                  Live voice uses smart saver mode by default: Start Live opens the tutor session, hold Ask Question to speak, release to send, and you can move to the guide, transcript, or worked examples without stopping the session.
                 </div>
               </div>
 
