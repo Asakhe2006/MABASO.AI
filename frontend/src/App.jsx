@@ -250,15 +250,16 @@ function buildPublicSupportPlaceholderEmail(seed = "") {
 }
 
 const tabs = [
-  { id: "guide", label: "Study Guide" },
-  { id: "transcript", label: "Transcript" },
+  { id: "guide", label: "Study Guide Generator" },
+  { id: "tutor", label: "Live AI Tutor" },
+  { id: "transcript", label: "Transcript Analyzer" },
   { id: "formulas", label: "Formulas" },
   { id: "examples", label: "Worked Examples" },
   { id: "flashcards", label: "Flashcards" },
-  { id: "quiz", label: "Test" },
+  { id: "quiz", label: "Quizzes" },
   { id: "presentation", label: "PowerPoint Presentation" },
   { id: "podcast", label: "Podcast Generator" },
-  { id: "chat", label: "Study Chat" },
+  { id: "chat", label: "AI Notes" },
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
@@ -795,6 +796,87 @@ function getTeacherSpeechRate(pace = "balanced", mode = "lesson") {
   if (normalizedPace === "slow") return mode === "answer" ? 0.86 : 0.82;
   if (normalizedPace === "fast") return mode === "answer" ? 0.98 : 0.94;
   return mode === "answer" ? 0.92 : 0.88;
+}
+
+function formatTutorTimestampLabel(value = "") {
+  if (!value) return "--:--";
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "--:--";
+  }
+}
+
+function getNetworkQualityDescriptor(connection) {
+  if (!connection) return "Stable";
+  const effectiveType = String(connection.effectiveType || "").toLowerCase();
+  const downlink = Number(connection.downlink || 0);
+  if (effectiveType.includes("slow-2g") || effectiveType.includes("2g")) return "Weak";
+  if (effectiveType.includes("3g") || downlink < 2) return "Fair";
+  if (effectiveType.includes("4g") || downlink >= 5) return "Strong";
+  return "Stable";
+}
+
+const realtimeTutorVoiceOptions = [
+  { value: "marin", label: "Marin" },
+  { value: "cedar", label: "Cedar" },
+  { value: "alloy", label: "Alloy" },
+  { value: "ash", label: "Ash" },
+  { value: "ballad", label: "Ballad" },
+  { value: "coral", label: "Coral" },
+  { value: "echo", label: "Echo" },
+  { value: "sage", label: "Sage" },
+  { value: "shimmer", label: "Shimmer" },
+  { value: "verse", label: "Verse" },
+];
+
+function normalizeRealtimeTutorVoiceId(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  const directMatch = realtimeTutorVoiceOptions.find((option) => option.value === normalized);
+  if (directMatch) return directMatch.value;
+  const partialMatch = realtimeTutorVoiceOptions.find((option) => normalized.includes(option.value));
+  if (partialMatch) return partialMatch.value;
+  return "marin";
+}
+
+function resolveRealtimeTutorLanguageHint(language = "English") {
+  const normalized = String(language || "").trim().toLowerCase();
+  if (normalized === "isizulu") return "zu";
+  if (normalized === "afrikaans") return "af";
+  if (normalized === "isixhosa") return "xh";
+  if (normalized === "sesotho") return "st";
+  if (normalized === "setswana") return "tn";
+  if (normalized === "french") return "fr";
+  if (normalized === "portuguese") return "pt";
+  return "en";
+}
+
+function resolveRealtimeTutorPreviewTarget(text = "") {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized) return "";
+  if (/(worked example|example\s+\d|step-by-step explanation|step by step explanation)/.test(normalized)) return "examples";
+  if (/transcript|what you said|lecture transcript/.test(normalized)) return "transcript";
+  if (/study guide|summary|formula|key concept|definition/.test(normalized)) return "guide";
+  return "";
+}
+
+function extractRealtimeTutorTextFromResponseEvent(event) {
+  if (!event || typeof event !== "object") return "";
+  const response = event.response && typeof event.response === "object" ? event.response : null;
+  if (!response || !Array.isArray(response.output)) return "";
+  const parts = [];
+  response.output.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    if (typeof item.text === "string" && item.text.trim()) parts.push(item.text.trim());
+    const contentParts = Array.isArray(item.content) ? item.content : [];
+    contentParts.forEach((part) => {
+      if (!part || typeof part !== "object") return;
+      if (typeof part.text === "string" && part.text.trim()) parts.push(part.text.trim());
+      if (typeof part.transcript === "string" && part.transcript.trim()) parts.push(part.transcript.trim());
+      if (typeof part.audio_transcript === "string" && part.audio_transcript.trim()) parts.push(part.audio_transcript.trim());
+    });
+  });
+  return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 function getPresentationVisualTypeLabel(value) {
@@ -3433,11 +3515,24 @@ export default function App() {
   const currentPageRef = useRef("capture");
   const teacherSectionRefs = useRef({});
   const teacherExamplesPanelRef = useRef(null);
+  const teacherTranscriptScrollRef = useRef(null);
   const teacherPlaybackRunRef = useRef(0);
   const teacherAutoTabRef = useRef("");
   const teacherViewportSyncRef = useRef("");
   const teacherSpeechTimerRef = useRef(null);
   const teacherSpeechRecognitionRef = useRef(null);
+  const teacherRealtimePeerConnectionRef = useRef(null);
+  const teacherRealtimeDataChannelRef = useRef(null);
+  const teacherRealtimeRemoteAudioRef = useRef(null);
+  const teacherRealtimeLocalStreamRef = useRef(null);
+  const teacherRealtimeSessionIdRef = useRef("");
+  const teacherRealtimeHeartbeatTimerRef = useRef(null);
+  const teacherRealtimeInactivityTimerRef = useRef(null);
+  const teacherRealtimeMicSleepTimerRef = useRef(null);
+  const teacherRealtimeAssistantDraftRef = useRef("");
+  const teacherRealtimeContextHashRef = useRef("");
+  const tutorCameraStreamRef = useRef(null);
+  const tutorScreenStreamRef = useRef(null);
   const roomSharedNotesDraftRef = useRef("");
   const roomNotesLastSyncedValueRef = useRef("");
   const roomNotesLastEditedAtRef = useRef(0);
@@ -3455,10 +3550,29 @@ export default function App() {
   const [activePodcastSegmentIndex, setActivePodcastSegmentIndex] = useState(0);
   const [isPodcastAutoPlaying, setIsPodcastAutoPlaying] = useState(false);
   const [teacherVoiceOptions, setTeacherVoiceOptions] = useState([]);
-  const [selectedTeacherVoiceName, setSelectedTeacherVoiceName] = useState("");
+  const [selectedTeacherVoiceName, setSelectedTeacherVoiceName] = useState("marin");
   const [teacherSpeechPace, setTeacherSpeechPace] = useState("balanced");
   const [teacherTeachingStyle, setTeacherTeachingStyle] = useState("adaptive");
   const [teacherResponseLength, setTeacherResponseLength] = useState("balanced");
+  const [teacherVoiceEmotion, setTeacherVoiceEmotion] = useState("warm");
+  const [teacherAutoSimplify, setTeacherAutoSimplify] = useState(true);
+  const [teacherExamMode, setTeacherExamMode] = useState(false);
+  const [teacherInteractiveMode, setTeacherInteractiveMode] = useState(true);
+  const [teacherRealtimeProfile, setTeacherRealtimeProfile] = useState("smart_saver");
+  const [teacherPreviewTab, setTeacherPreviewTab] = useState("guide");
+  const [teacherTranscriptEntries, setTeacherTranscriptEntries] = useState([]);
+  const [teacherSessionStartedAt, setTeacherSessionStartedAt] = useState("");
+  const [teacherSessionElapsedSeconds, setTeacherSessionElapsedSeconds] = useState(0);
+  const [teacherNetworkQuality, setTeacherNetworkQuality] = useState(() => (typeof navigator !== "undefined" && navigator.onLine ? "Strong" : "Offline"));
+  const [isTeacherMuted, setIsTeacherMuted] = useState(false);
+  const [isTeacherRealtimeConnecting, setIsTeacherRealtimeConnecting] = useState(false);
+  const [isTeacherRealtimeConnected, setIsTeacherRealtimeConnected] = useState(false);
+  const [teacherRealtimeModel, setTeacherRealtimeModel] = useState("");
+  const [teacherRealtimeRemainingSeconds, setTeacherRealtimeRemainingSeconds] = useState(300);
+  const [teacherRealtimeSessionCapSeconds, setTeacherRealtimeSessionCapSeconds] = useState(300);
+  const [isTeacherRealtimeMicActive, setIsTeacherRealtimeMicActive] = useState(false);
+  const [isTutorCameraOn, setIsTutorCameraOn] = useState(false);
+  const [isTutorScreenSharing, setIsTutorScreenSharing] = useState(false);
   const [activeTeacherSegmentIndex, setActiveTeacherSegmentIndex] = useState(-1);
   const [isTeacherPlaying, setIsTeacherPlaying] = useState(false);
   const [isTeacherPaused, setIsTeacherPaused] = useState(false);
@@ -3903,8 +4017,8 @@ export default function App() {
   const isCollaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
-    : hasResults || activeTab === "chat";
-  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
+    : hasResults || ["chat", "tutor"].includes(activeTab);
+  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation", "tutor"].includes(activeTab));
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "materials";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
@@ -3936,6 +4050,40 @@ export default function App() {
   const activeTeacherSegment = activeTeacherSegmentIndex >= 0
     ? teacherLessonData.segments[activeTeacherSegmentIndex] || null
     : null;
+  const teacherSessionIsActive = Boolean(
+    teacherLessonData.segments.length
+    || teacherTranscriptEntries.length
+    || isTeacherPlaying
+    || isTeacherPaused
+    || isTeacherRealtimeConnecting
+    || isTeacherRealtimeConnected
+    || isTeacherRealtimeMicActive
+    || isTeacherListening
+    || isTeacherQuestionLoading
+    || isTeacherAnswering,
+  );
+  const teacherLiveStatusLabel = isTeacherRealtimeConnecting
+    ? "Connecting..."
+    : isTeacherRealtimeMicActive || isTeacherListening
+    ? "Listening..."
+    : isTeacherQuestionLoading
+      ? "Thinking..."
+      : isTeacherAnswering
+        ? "Explaining..."
+        : isTeacherPlaying
+          ? "Explaining..."
+          : isTeacherRealtimeConnected
+            ? "Ready Live"
+          : isGeneratingTeacherLesson
+            ? "Generating Notes..."
+            : isTeacherPaused
+              ? "Paused"
+              : teacherLessonData.segments.length
+                ? "Ready"
+                : "Idle";
+  const teacherTranscriptText = teacherTranscriptEntries.length
+    ? teacherTranscriptEntries.map((entry) => `[${formatTutorTimestampLabel(entry.timestamp)}] ${entry.speaker}: ${entry.text}`).join("\n\n")
+    : teacherLessonToText(teacherLessonData);
   const isTeacherQuestionBusy = isTeacherListening || isTeacherQuestionLoading || isTeacherAnswering;
   const isWorkedExampleTeacherSegment = (sectionHeading = "") => {
     const normalizedHeading = normalizeGuideHeading(String(sectionHeading || "").replace(/\*\*/g, ""));
@@ -4136,19 +4284,44 @@ export default function App() {
     return true;
   };
 
+  const appendTeacherTranscriptEntry = ({ speaker = "AI Tutor", text = "", timestamp = new Date().toISOString(), sourceKey = "" } = {}) => {
+    const cleanedText = String(text || "").replace(/\s+/g, " ").trim();
+    if (!cleanedText) return;
+    setTeacherTranscriptEntries((current) => {
+      const lastEntry = current[current.length - 1];
+      if (lastEntry && (sourceKey && lastEntry.sourceKey === sourceKey) && lastEntry.text === cleanedText) return current;
+      return [
+        ...current,
+        {
+          id: `${sourceKey || speaker}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          speaker,
+          text: cleanedText,
+          timestamp,
+          sourceKey,
+        },
+      ].slice(-120);
+    });
+  };
+
   const returnTeacherToGuide = (sectionHeading = "") => {
     teacherViewportSyncRef.current = "";
     teacherAutoTabRef.current = "guide";
+    setTeacherPreviewTab("guide");
     setActiveTab("guide");
   };
 
   const openTeacherWorkedExamples = (sectionHeading = "") => {
     teacherViewportSyncRef.current = "";
     teacherAutoTabRef.current = "examples";
+    setTeacherPreviewTab("examples");
     setActiveTab("examples");
   };
 
   const syncTeacherSegmentToolView = (sectionHeading = "") => {
+    if (activeTab === "tutor") {
+      setTeacherPreviewTab(resolveTeacherExampleSectionKey(sectionHeading) ? "examples" : "guide");
+      return;
+    }
     if (resolveTeacherExampleSectionKey(sectionHeading)) {
       openTeacherWorkedExamples(sectionHeading);
       return;
@@ -4243,6 +4416,8 @@ export default function App() {
 
   useEffect(() => () => {
     stopTeacherVoiceRecognition();
+    teacherRealtimeSessionIdRef.current = "";
+    closeTeacherRealtimeRuntime();
     teacherPlaybackRunRef.current += 1;
     teacherAnswerRunRef.current += 1;
     teacherQuestionRequestRunRef.current += 1;
@@ -4254,7 +4429,99 @@ export default function App() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    tutorCameraStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    tutorScreenStreamRef.current?.getTracks?.().forEach((track) => track.stop());
   }, []);
+
+  useEffect(() => {
+    if (!teacherTranscriptEntries.length) return;
+    teacherTranscriptScrollRef.current?.scrollTo?.({
+      top: teacherTranscriptScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [teacherTranscriptEntries.length]);
+
+  useEffect(() => {
+    if (!teacherSessionStartedAt) {
+      setTeacherSessionElapsedSeconds(0);
+      return undefined;
+    }
+    const syncElapsed = () => {
+      const startedAtMs = new Date(teacherSessionStartedAt).getTime();
+      if (!Number.isFinite(startedAtMs)) return;
+      setTeacherSessionElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
+    };
+    syncElapsed();
+    const intervalId = window.setInterval(syncElapsed, 1000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [teacherSessionStartedAt]);
+
+  useEffect(() => {
+    if (!isTeacherRealtimeConnected || !teacherRealtimeSessionCapSeconds) return;
+    if (teacherSessionElapsedSeconds < teacherRealtimeSessionCapSeconds) return;
+    endTeacherRealtimeSession({ reason: "daily_limit", announce: true }).catch(() => {});
+  }, [isTeacherRealtimeConnected, teacherRealtimeSessionCapSeconds, teacherSessionElapsedSeconds]);
+
+  useEffect(() => {
+    if (!isTeacherRealtimeConnected) return undefined;
+    const refreshTimerId = window.setTimeout(() => {
+      refreshTeacherRealtimeContext().catch(() => {});
+    }, 900);
+    return () => {
+      window.clearTimeout(refreshTimerId);
+    };
+  }, [
+    isTeacherRealtimeConnected,
+    summary,
+    transcript,
+    formattedFormula,
+    formula,
+    formattedExample,
+    example,
+    lectureNotes,
+    lectureSlides,
+    pastQuestionPapers,
+    outputLanguage,
+    teacherTeachingStyle,
+    teacherResponseLength,
+    teacherSpeechPace,
+    teacherVoiceEmotion,
+    teacherAutoSimplify,
+    teacherExamMode,
+    teacherInteractiveMode,
+    teacherRealtimeProfile,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof navigator === "undefined") return undefined;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const syncNetwork = () => {
+      if (!navigator.onLine) {
+        setTeacherNetworkQuality("Offline");
+        return;
+      }
+      setTeacherNetworkQuality(getNetworkQualityDescriptor(connection));
+    };
+    syncNetwork();
+    window.addEventListener("online", syncNetwork);
+    window.addEventListener("offline", syncNetwork);
+    connection?.addEventListener?.("change", syncNetwork);
+    return () => {
+      window.removeEventListener("online", syncNetwork);
+      window.removeEventListener("offline", syncNetwork);
+      connection?.removeEventListener?.("change", syncNetwork);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (teacherLessonData.segments.length) return;
+    setTeacherTranscriptEntries((current) => (current.length ? [] : current));
+    setTeacherPreviewTab("guide");
+    setTeacherSessionStartedAt("");
+    setTeacherSessionElapsedSeconds(0);
+  }, [teacherLessonData.segments.length]);
 
   useEffect(() => {
     if (!(isTeacherPlaying || isTeacherPaused || activeTeacherSegmentIndex >= 0)) {
@@ -8250,7 +8517,7 @@ export default function App() {
     setActivePodcastSegmentIndex(0);
     setIsPodcastAutoPlaying(false);
     setTeacherLessonData(createEmptyTeacherLessonData());
-    setSelectedTeacherVoiceName("");
+    setSelectedTeacherVoiceName("marin");
     persistPostAuthRedirectPath("");
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
@@ -9332,6 +9599,464 @@ export default function App() {
     }
   };
 
+  const buildTeacherRealtimeRequestPayload = () => ({
+    summary,
+    transcript,
+    formulas: formattedFormula || formula,
+    worked_examples: formattedExample || example,
+    lecture_notes: lectureNotes,
+    lecture_slides: lectureSlides,
+    past_question_papers: pastQuestionPapers,
+    language: outputLanguage,
+    teaching_style: teacherTeachingStyle,
+    response_length: teacherResponseLength,
+    voice_emotion: teacherVoiceEmotion,
+    auto_simplify: teacherAutoSimplify,
+    exam_mode: teacherExamMode,
+    interactive_mode: teacherInteractiveMode,
+    preferred_voice: normalizeRealtimeTutorVoiceId(selectedTeacherVoiceName),
+    speaking_pace: teacherSpeechPace,
+    realtime_profile: teacherRealtimeProfile,
+  });
+
+  const clearTeacherRealtimeTimers = () => {
+    if (teacherRealtimeHeartbeatTimerRef.current) {
+      window.clearInterval(teacherRealtimeHeartbeatTimerRef.current);
+      teacherRealtimeHeartbeatTimerRef.current = null;
+    }
+    if (teacherRealtimeInactivityTimerRef.current) {
+      window.clearTimeout(teacherRealtimeInactivityTimerRef.current);
+      teacherRealtimeInactivityTimerRef.current = null;
+    }
+    if (teacherRealtimeMicSleepTimerRef.current) {
+      window.clearTimeout(teacherRealtimeMicSleepTimerRef.current);
+      teacherRealtimeMicSleepTimerRef.current = null;
+    }
+  };
+
+  const closeTeacherRealtimeRuntime = () => {
+    clearTeacherRealtimeTimers();
+    teacherRealtimeDataChannelRef.current?.close?.();
+    teacherRealtimePeerConnectionRef.current?.close?.();
+    teacherRealtimeLocalStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+    teacherRealtimeRemoteAudioRef.current?.pause?.();
+    if (teacherRealtimeRemoteAudioRef.current) {
+      teacherRealtimeRemoteAudioRef.current.srcObject = null;
+    }
+    teacherRealtimeDataChannelRef.current = null;
+    teacherRealtimePeerConnectionRef.current = null;
+    teacherRealtimeLocalStreamRef.current = null;
+    teacherRealtimeRemoteAudioRef.current = null;
+    teacherRealtimeAssistantDraftRef.current = "";
+    setIsTeacherRealtimeConnecting(false);
+    setIsTeacherRealtimeConnected(false);
+    setIsTeacherRealtimeMicActive(false);
+    setIsTeacherListening(false);
+    setIsTeacherQuestionLoading(false);
+    setIsTeacherAnswering(false);
+  };
+
+  const syncTeacherRealtimePreviewFromText = (text = "") => {
+    const targetTab = resolveRealtimeTutorPreviewTarget(text);
+    if (!targetTab) return;
+    if (activeTab === "tutor") {
+      setTeacherPreviewTab(targetTab);
+      return;
+    }
+    if (["guide", "examples", "transcript"].includes(targetTab)) {
+      openTutorWorkspaceTool(targetTab);
+    }
+  };
+
+  const endTeacherRealtimeSession = async ({ reason = "", announce = true } = {}) => {
+    const sessionId = teacherRealtimeSessionIdRef.current;
+    teacherRealtimeSessionIdRef.current = "";
+    closeTeacherRealtimeRuntime();
+    setTeacherRealtimeModel("");
+    teacherRealtimeContextHashRef.current = "";
+    if (sessionId) {
+      try {
+        await authFetch(`/realtime/tutor/session/${encodeURIComponent(sessionId)}/close`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+          timeoutMs: 15000,
+        });
+      } catch {
+        // Let server-side session grace handle missed closes.
+      }
+    }
+    if (announce) {
+      if (reason === "inactive") {
+        setStatus("Live tutor slept after inactivity to save voice time.");
+        setTeacherQuestionStatus("Session sleeping. Start it again when you're ready.");
+      } else if (reason === "daily_limit") {
+        setStatus("Live tutor used today's free voice time.");
+        setTeacherQuestionStatus("Today's free voice time is finished.");
+      } else {
+        setStatus("Live tutor session ended.");
+        setTeacherQuestionStatus("Live tutor session ended.");
+      }
+    }
+  };
+
+  const touchTeacherRealtimeActivity = ({ quiet = false } = {}) => {
+    if (!(isTeacherRealtimeConnecting || isTeacherRealtimeConnected || teacherRealtimeSessionIdRef.current)) return;
+    if (teacherRealtimeInactivityTimerRef.current) {
+      window.clearTimeout(teacherRealtimeInactivityTimerRef.current);
+    }
+    teacherRealtimeInactivityTimerRef.current = window.setTimeout(() => {
+      endTeacherRealtimeSession({ reason: "inactive", announce: true }).catch(() => {});
+    }, 90_000);
+    if (!quiet && isTeacherRealtimeConnected) {
+      setTeacherRealtimeRemainingSeconds((current) => Math.max(0, current));
+    }
+  };
+
+  const setTeacherRealtimeMicrophoneEnabled = (nextEnabled, { scheduleSleep = true } = {}) => {
+    const nextState = Boolean(nextEnabled);
+    const audioTrack = teacherRealtimeLocalStreamRef.current?.getAudioTracks?.()[0];
+    if (audioTrack) {
+      audioTrack.enabled = nextState;
+    }
+    setIsTeacherRealtimeMicActive(nextState);
+    setIsTeacherListening(nextState);
+    if (teacherRealtimeMicSleepTimerRef.current) {
+      window.clearTimeout(teacherRealtimeMicSleepTimerRef.current);
+      teacherRealtimeMicSleepTimerRef.current = null;
+    }
+    if (nextState && scheduleSleep) {
+      teacherRealtimeMicSleepTimerRef.current = window.setTimeout(() => {
+        setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
+        if (!teacherQuestionStatus) {
+          setTeacherQuestionStatus("Listening window closed to save voice time.");
+        }
+      }, 8_000);
+    }
+    if (isTeacherRealtimeConnected) {
+      touchTeacherRealtimeActivity({ quiet: true });
+    }
+  };
+
+  const sendTeacherRealtimeEvent = (event) => {
+    const channel = teacherRealtimeDataChannelRef.current;
+    if (!channel || channel.readyState !== "open") return false;
+    try {
+      channel.send(JSON.stringify(event));
+      touchTeacherRealtimeActivity({ quiet: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const sendTeacherRealtimePrompt = (text, { audio = true } = {}) => {
+    const cleanedText = String(text || "").replace(/\s+/g, " ").trim();
+    if (!cleanedText) return false;
+    const baseId = `rt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const created = sendTeacherRealtimeEvent({
+      type: "conversation.item.create",
+      item: {
+        id: `${baseId}-item`,
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: cleanedText }],
+      },
+    });
+    if (!created) return false;
+    return sendTeacherRealtimeEvent({
+      type: "response.create",
+      response: { modalities: audio ? ["audio", "text"] : ["text"] },
+    });
+  };
+
+  const refreshTeacherRealtimeContext = async ({ announce = false } = {}) => {
+    if (!isTeacherRealtimeConnected) return false;
+    const payload = buildTeacherRealtimeRequestPayload();
+    const contextSignature = JSON.stringify({
+      summary: payload.summary.slice(0, 800),
+      transcript: payload.transcript.slice(0, 800),
+      formulas: payload.formulas.slice(0, 400),
+      worked_examples: payload.worked_examples.slice(0, 600),
+      lecture_notes: payload.lecture_notes.slice(0, 500),
+      lecture_slides: payload.lecture_slides.slice(0, 500),
+      past_question_papers: payload.past_question_papers.slice(0, 500),
+      language: payload.language,
+      teaching_style: payload.teaching_style,
+      response_length: payload.response_length,
+      speaking_pace: payload.speaking_pace,
+      realtime_profile: payload.realtime_profile,
+    });
+    if (teacherRealtimeContextHashRef.current === contextSignature) return true;
+    const response = await authFetch("/realtime/tutor/context", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      timeoutMs: 25000,
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Could not refresh the live tutor context.");
+    teacherRealtimeContextHashRef.current = contextSignature;
+    setTeacherRealtimeModel(data.selected_model || "");
+    setTeacherRealtimeRemainingSeconds(Number(data.remaining_seconds_today || teacherRealtimeRemainingSeconds || 300));
+    sendTeacherRealtimeEvent({
+      type: "session.update",
+      session: {
+        model: data.selected_model || teacherRealtimeModel || "gpt-realtime-mini",
+        instructions: data.instructions || "",
+        output_modalities: ["audio", "text"],
+        audio: {
+          input: {
+            turn_detection: {
+              type: "server_vad",
+              create_response: true,
+              interrupt_response: true,
+              idle_timeout_ms: Number(data.idle_timeout_ms || 8000),
+            },
+          },
+          output: {
+            speed: Number(data.speech_speed || 1),
+          },
+        },
+      },
+    });
+    if (announce) {
+      setStatus("Live tutor context refreshed from the current workspace.");
+    }
+    return true;
+  };
+
+  const handleTeacherRealtimeEvent = (event) => {
+    const eventType = String(event?.type || "").trim();
+    if (!eventType) return;
+    touchTeacherRealtimeActivity({ quiet: true });
+    if (eventType === "input_audio_buffer.speech_started") {
+      setIsTeacherListening(true);
+      setIsTeacherQuestionLoading(false);
+      setTeacherQuestionStatus("Listening...");
+      return;
+    }
+    if (eventType === "input_audio_buffer.speech_stopped") {
+      setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
+      setIsTeacherQuestionLoading(true);
+      setTeacherQuestionStatus("Thinking...");
+      return;
+    }
+    if (eventType === "input_audio_buffer.timeout_triggered") {
+      setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
+      setTeacherQuestionStatus("Listening window closed to save voice time.");
+      return;
+    }
+    if (eventType === "conversation.item.input_audio_transcription.completed") {
+      const transcriptText = String(
+        event?.transcript
+        || event?.item?.content?.[0]?.transcript
+        || event?.item?.content?.[0]?.text
+        || "",
+      ).replace(/\s+/g, " ").trim();
+      if (transcriptText) {
+        appendTeacherTranscriptEntry({
+          speaker: "You",
+          text: transcriptText,
+          sourceKey: event?.item_id || `rt-user-${Date.now()}`,
+        });
+      }
+      return;
+    }
+    if (eventType === "response.created") {
+      teacherRealtimeAssistantDraftRef.current = "";
+      setIsTeacherQuestionLoading(true);
+      setIsTeacherAnswering(false);
+      setTeacherQuestionStatus("Thinking...");
+      return;
+    }
+    if (eventType === "response.output_text.delta" || eventType === "response.audio_transcript.delta") {
+      const deltaText = String(event?.delta || event?.text || event?.transcript || "").replace(/\s+/g, " ").trim();
+      if (deltaText) {
+        teacherRealtimeAssistantDraftRef.current = `${teacherRealtimeAssistantDraftRef.current} ${deltaText}`.replace(/\s+/g, " ").trim();
+      }
+      setIsTeacherQuestionLoading(false);
+      setIsTeacherAnswering(true);
+      setTeacherQuestionStatus("Explaining...");
+      return;
+    }
+    if (eventType === "response.done") {
+      const responseText = extractRealtimeTutorTextFromResponseEvent(event) || teacherRealtimeAssistantDraftRef.current;
+      teacherRealtimeAssistantDraftRef.current = "";
+      if (responseText) {
+        appendTeacherTranscriptEntry({
+          speaker: "AI Tutor",
+          text: responseText,
+          sourceKey: `rt-ai-${Date.now()}`,
+        });
+        syncTeacherRealtimePreviewFromText(responseText);
+      }
+      setIsTeacherQuestionLoading(false);
+      setIsTeacherAnswering(false);
+      setTeacherQuestionStatus("Live tutor ready. Tap Speak when you want to talk.");
+      return;
+    }
+    if (eventType === "error") {
+      const message = String(event?.error?.message || event?.message || "Realtime tutor error.").trim();
+      setError(message);
+      setTeacherQuestionStatus("Realtime tutor hit an error.");
+    }
+  };
+
+  const startTeacherRealtimeSession = async () => {
+    if (isTeacherRealtimeConnecting) return;
+    if (isTeacherRealtimeConnected) {
+      setTeacherRealtimeMicrophoneEnabled(!isTeacherRealtimeMicActive);
+      setTeacherQuestionStatus(!isTeacherRealtimeMicActive ? "Listening..." : "Microphone paused.");
+      return;
+    }
+    if (typeof window === "undefined" || typeof window.RTCPeerConnection === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("Realtime tutor needs microphone + WebRTC support in this browser.");
+      return;
+    }
+    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      setError("Generate a study guide or add lecture material before starting Live AI Tutor.");
+      return;
+    }
+
+    setIsTeacherRealtimeConnecting(true);
+    setError("");
+    setTeacherQuestionStatus("Connecting live tutor...");
+    openProtectedAppPage("workspace");
+    setActiveTab("tutor");
+    setTeacherTranscriptEntries([]);
+    setTeacherPreviewTab("guide");
+    teacherRealtimeContextHashRef.current = "";
+
+    try {
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
+      teacherRealtimeLocalStreamRef.current = localStream;
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
+
+      const peerConnection = new window.RTCPeerConnection();
+      teacherRealtimePeerConnectionRef.current = peerConnection;
+
+      const remoteAudio = new Audio();
+      remoteAudio.autoplay = true;
+      remoteAudio.playsInline = true;
+      remoteAudio.muted = Boolean(isTeacherMuted);
+      remoteAudio.volume = isTeacherMuted ? 0 : 1;
+      teacherRealtimeRemoteAudioRef.current = remoteAudio;
+
+      const dataChannel = peerConnection.createDataChannel("oai-events");
+      teacherRealtimeDataChannelRef.current = dataChannel;
+
+      peerConnection.ontrack = (event) => {
+        const [remoteStream] = event.streams || [];
+        if (remoteStream) {
+          remoteAudio.srcObject = remoteStream;
+          remoteAudio.play?.().catch(() => {});
+        }
+      };
+      peerConnection.onconnectionstatechange = () => {
+        const connectionState = peerConnection.connectionState;
+        if (["failed", "disconnected", "closed"].includes(connectionState)) {
+          closeTeacherRealtimeRuntime();
+          setTeacherQuestionStatus("Live tutor disconnected.");
+        }
+      };
+      dataChannel.onmessage = (messageEvent) => {
+        try {
+          handleTeacherRealtimeEvent(JSON.parse(messageEvent.data));
+        } catch {
+          // Ignore malformed realtime events.
+        }
+      };
+      dataChannel.onopen = async () => {
+        setIsTeacherRealtimeConnecting(false);
+        setIsTeacherRealtimeConnected(true);
+        touchTeacherRealtimeActivity({ quiet: true });
+        teacherRealtimeHeartbeatTimerRef.current = window.setInterval(async () => {
+          if (!teacherRealtimeSessionIdRef.current) return;
+          try {
+            const heartbeatResponse = await authFetch(
+              `/realtime/tutor/session/${encodeURIComponent(teacherRealtimeSessionIdRef.current)}/activity`,
+              { method: "POST", timeoutMs: 12000 },
+            );
+            const heartbeatData = await parseJsonSafe(heartbeatResponse);
+            if (heartbeatResponse.ok && Number.isFinite(Number(heartbeatData.seconds_remaining_today))) {
+              setTeacherRealtimeRemainingSeconds(Number(heartbeatData.seconds_remaining_today));
+              if (Number(heartbeatData.seconds_remaining_today) <= 0) {
+                endTeacherRealtimeSession({ reason: "daily_limit", announce: true }).catch(() => {});
+              }
+            }
+          } catch {
+            // Connection grace handles short heartbeat misses.
+          }
+        }, 20_000);
+        try {
+          await refreshTeacherRealtimeContext();
+        } catch {
+          // The session can still continue with the server-provided startup context.
+        }
+        window.setTimeout(() => {
+          sendTeacherRealtimePrompt("Greet the student briefly and ask what they would like to study today.", { audio: true });
+        }, 250);
+        setStatus("Live tutor connected.");
+        setTeacherQuestionStatus("Live tutor ready. Tap Speak when you want to talk.");
+      };
+      dataChannel.onclose = () => {
+        setIsTeacherRealtimeConnected(false);
+        setIsTeacherRealtimeMicActive(false);
+      };
+      dataChannel.onerror = () => {
+        setError("Realtime tutor connection failed.");
+      };
+
+      localStream.getTracks().forEach((track) => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      const response = await authFetch("/realtime/tutor/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...buildTeacherRealtimeRequestPayload(),
+          offer_sdp: offer.sdp,
+        }),
+        timeoutMs: 45000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not start the live tutor session.");
+
+      teacherRealtimeSessionIdRef.current = data.session_id || "";
+      setTeacherRealtimeModel(data.selected_model || "");
+      setTeacherRealtimeRemainingSeconds(Number(data.seconds_remaining_today || data.max_session_seconds || 300));
+      setTeacherRealtimeSessionCapSeconds(Number(data.max_session_seconds || data.daily_limit_seconds || 300));
+      setTeacherSessionStartedAt(new Date().toISOString());
+      setTeacherSessionElapsedSeconds(0);
+      await peerConnection.setRemoteDescription({
+        type: "answer",
+        sdp: String(data.answer_sdp || ""),
+      });
+    } catch (err) {
+      closeTeacherRealtimeRuntime();
+      teacherRealtimeSessionIdRef.current = "";
+      setTeacherRealtimeModel("");
+      setError(err.message || "Could not start the live tutor session.");
+      setTeacherQuestionStatus("Live tutor connection failed.");
+    } finally {
+      setIsTeacherRealtimeConnecting(false);
+    }
+  };
+
   const publicJsonWithTransientRetries = async (path, options = {}, { timeoutMs = 30000, retries = 0 } = {}) => {
     let attempt = 0;
     while (true) {
@@ -9766,6 +10491,7 @@ export default function App() {
 
   const getActiveContent = () => {
     if (activeTab === "guide") return formattedGuide || "No study guide generated yet.";
+    if (activeTab === "tutor") return teacherTranscriptText || teacherLessonToText(teacherLessonData) || "No tutor session generated yet.";
     if (activeTab === "transcript") return transcript || "No transcript generated yet.";
     if (activeTab === "formulas") return formattedFormula || "No formulas generated yet.";
     if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
@@ -11320,6 +12046,7 @@ export default function App() {
 
     const runId = teacherPlaybackRunRef.current + 1;
     teacherPlaybackRunRef.current = runId;
+    if (!teacherSessionStartedAt) setTeacherSessionStartedAt(new Date().toISOString());
     window.speechSynthesis.cancel();
     const lastSectionHeading = normalizedLesson.segments[normalizedLesson.segments.length - 1]?.sectionHeading || "";
 
@@ -11355,6 +12082,11 @@ export default function App() {
         setIsTeacherPlaying(true);
         setIsTeacherPaused(false);
         syncTeacherSegmentToolView(segment.sectionHeading);
+        appendTeacherTranscriptEntry({
+          speaker: "AI Tutor",
+          text: [segment.prompt, segment.text].filter(Boolean).join(". "),
+          sourceKey: `lesson-segment-${segmentIndex}`,
+        });
       }
       teacherPlaybackCursorRef.current = { segmentIndex, chunkIndex };
 
@@ -11363,7 +12095,7 @@ export default function App() {
       utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
       utterance.rate = getTeacherSpeechRate(teacherSpeechPace, "lesson");
       utterance.pitch = 1;
-      utterance.volume = 1;
+      utterance.volume = isTeacherMuted ? 0 : 1;
       utterance.onstart = () => {
         if (teacherPlaybackRunRef.current !== runId) return;
         setIsTeacherPlaying(true);
@@ -11391,7 +12123,6 @@ export default function App() {
     };
 
     setCurrentPage("workspace");
-    setActiveTab("guide");
     setStatus("Mabaso AI Tutor is teaching from the study guide.");
     teacherSpeechTimerRef.current = window.setTimeout(() => {
       teacherSpeechTimerRef.current = null;
@@ -11438,10 +12169,14 @@ export default function App() {
 
     resetTeacherQuestionFlow({ clearResume: true, clearTranscript: true });
     stopTeacherPlayback({ resetIndex: true });
+    setTeacherTranscriptEntries([]);
+    setTeacherPreviewTab("guide");
+    setTeacherSessionStartedAt("");
+    setTeacherSessionElapsedSeconds(0);
     setIsGeneratingTeacherLesson(true);
     setError("");
     openProtectedAppPage("workspace");
-    setActiveTab("guide");
+    setActiveTab("tutor");
     setStatus("Preparing Mabaso AI Tutor...");
     setProgress(0);
     setCurrentJobType("teacher_lesson");
@@ -11453,12 +12188,18 @@ export default function App() {
         body: JSON.stringify({
           transcript,
           summary,
+          formulas: formattedFormula || formula,
+          worked_examples: formattedExample || example,
           lecture_notes: lectureNotes,
           lecture_slides: lectureSlides,
           past_question_papers: pastQuestionPapers,
           language: outputLanguage,
           teaching_style: teacherTeachingStyle,
           response_length: teacherResponseLength,
+          voice_emotion: teacherVoiceEmotion,
+          auto_simplify: teacherAutoSimplify,
+          exam_mode: teacherExamMode,
+          interactive_mode: teacherInteractiveMode,
         }),
       });
       const data = await parseJsonSafe(response);
@@ -11477,6 +12218,11 @@ export default function App() {
         segments: job.teacher_segments,
       });
       setTeacherLessonData(nextTeacherLessonData);
+      appendTeacherTranscriptEntry({
+        speaker: "System",
+        text: `Tutor session prepared for ${nextTeacherLessonData.title || guideTopic || "this lecture"}.`,
+        sourceKey: `lesson-ready-${data.job_id}`,
+      });
       const sourceLabel = getPrimarySourceLabel({
         fileName: file?.name || "",
         videoUrl,
@@ -11866,6 +12612,8 @@ export default function App() {
         question,
         transcript,
         summary,
+        formulas: formattedFormula || formula,
+        worked_examples: formattedExample || example,
         lecture_notes: lectureNotes,
         lecture_slides: lectureSlides,
         past_question_papers: pastQuestionPapers,
@@ -11876,6 +12624,10 @@ export default function App() {
         current_section: currentSection,
         teaching_style: teacherTeachingStyle,
         response_length: teacherResponseLength,
+        voice_emotion: teacherVoiceEmotion,
+        auto_simplify: teacherAutoSimplify,
+        exam_mode: teacherExamMode,
+        interactive_mode: teacherInteractiveMode,
       }),
     });
     const data = await parseJsonSafe(response);
@@ -11944,7 +12696,7 @@ export default function App() {
       utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
       utterance.rate = getTeacherSpeechRate(teacherSpeechPace, "answer");
       utterance.pitch = 1;
-      utterance.volume = 1;
+      utterance.volume = isTeacherMuted ? 0 : 1;
       utterance.onstart = () => {
         if (teacherAnswerRunRef.current !== runId) return;
         setIsTeacherAnswering(true);
@@ -11982,6 +12734,11 @@ export default function App() {
     setTeacherQuestionStatus("Tutor is thinking through your question...");
     setIsTeacherQuestionLoading(true);
     setError("");
+    appendTeacherTranscriptEntry({
+      speaker: "You",
+      text: question,
+      sourceKey: `student-question-${Date.now()}`,
+    });
     const requestRunId = teacherQuestionRequestRunRef.current + 1;
     teacherQuestionRequestRunRef.current = requestRunId;
 
@@ -11998,6 +12755,11 @@ export default function App() {
       });
       if (teacherQuestionRequestRunRef.current !== requestRunId) return;
       setTeacherQuestionAnswer(answer);
+      appendTeacherTranscriptEntry({
+        speaker: "AI Tutor",
+        text: answer,
+        sourceKey: `tutor-answer-${requestRunId}`,
+      });
       setChatMessages((current) => [
         ...current,
         { role: "user", content: `[Tutor question] ${question}` },
@@ -12156,6 +12918,16 @@ export default function App() {
   };
 
   const handleTeacherQuestionButtonClick = () => {
+    if (isTeacherRealtimeConnected) {
+      const nextMicState = !isTeacherRealtimeMicActive;
+      setTeacherRealtimeMicrophoneEnabled(nextMicState);
+      setTeacherQuestionStatus(nextMicState ? "Listening..." : "Microphone paused.");
+      return;
+    }
+    if (!teacherLessonData.segments.length && !isTeacherRealtimeConnecting) {
+      startTeacherRealtimeSession().catch(() => {});
+      return;
+    }
     if (isTeacherListening) {
       teacherRecognitionManualStopRef.current = true;
       teacherRecognitionShouldContinueRef.current = false;
@@ -12165,6 +12937,233 @@ export default function App() {
       return;
     }
     startTeacherQuestionCapture();
+  };
+
+  const openTutorWorkspaceTool = (tabId = "guide") => {
+    teacherViewportSyncRef.current = "";
+    teacherAutoTabRef.current = tabId;
+    setTeacherPreviewTab(tabId === "examples" ? "examples" : tabId === "transcript" ? "transcript" : "guide");
+    setActiveTab(tabId);
+  };
+
+  const copyTeacherTranscript = async () => {
+    const transcriptText = teacherTranscriptText.trim();
+    if (!transcriptText) {
+      setError("Tutor transcript is still empty.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(transcriptText);
+      setStatus("Tutor transcript copied.");
+    } catch {
+      setError("Tutor transcript could not be copied.");
+    }
+  };
+
+  const saveTeacherTranscriptText = async () => {
+    const transcriptText = teacherTranscriptText.trim();
+    if (!transcriptText) {
+      setError("Tutor transcript is still empty.");
+      return;
+    }
+    try {
+      const blob = new Blob([transcriptText], { type: "text/plain;charset=utf-8" });
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${extractHistoryTitle(summary, workspaceFileLabel || "Mabaso AI Tutor")} - tutor transcript.txt`;
+      link.click();
+      window.URL.revokeObjectURL(objectUrl);
+      setStatus("Tutor transcript saved.");
+    } catch {
+      setError("Tutor transcript could not be saved.");
+    }
+  };
+
+  const exportTeacherTranscriptPdf = async () => {
+    const transcriptText = teacherTranscriptText.trim();
+    if (!transcriptText) {
+      setError("Tutor transcript is still empty.");
+      return;
+    }
+    try {
+      const baseTitle = extractHistoryTitle(summary, workspaceFileLabel || "Mabaso AI Tutor");
+      await exportPdf(`${baseTitle} - Tutor Transcript`, [{ title: "Tutor Transcript", content: transcriptText }]);
+      setStatus("Tutor transcript exported.");
+    } catch (err) {
+      setError(err.message || "Tutor transcript export failed.");
+    }
+  };
+
+  const clearTeacherSession = async () => {
+    resetTeacherQuestionFlow({ clearResume: true, clearTranscript: true });
+    stopTeacherPlayback({ resetIndex: true });
+    if (isTeacherRealtimeConnected || isTeacherRealtimeConnecting || teacherRealtimeSessionIdRef.current) {
+      await endTeacherRealtimeSession({ reason: "clear_session", announce: false });
+    }
+    setTeacherLessonData(createEmptyTeacherLessonData());
+    setTeacherTranscriptEntries([]);
+    setTeacherPreviewTab("guide");
+    setTeacherSessionStartedAt("");
+    setTeacherSessionElapsedSeconds(0);
+    setTeacherRealtimeRemainingSeconds(300);
+    setTeacherRealtimeSessionCapSeconds(300);
+    setTeacherQuestionStatus("");
+    setTeacherQuestionDraft("");
+    setTeacherQuestionAnswer("");
+    setStatus("Tutor session cleared.");
+  };
+
+  const toggleTeacherMute = () => {
+    if (isTeacherRealtimeConnected && teacherRealtimeRemoteAudioRef.current) {
+      const nextMuted = !isTeacherMuted;
+      teacherRealtimeRemoteAudioRef.current.muted = nextMuted;
+      teacherRealtimeRemoteAudioRef.current.volume = nextMuted ? 0 : 1;
+      setIsTeacherMuted(nextMuted);
+      setStatus(nextMuted ? "Tutor muted." : "Tutor unmuted.");
+      return;
+    }
+    if (!isTeacherMuted) {
+      if (typeof window !== "undefined" && window.speechSynthesis?.speaking && !window.speechSynthesis.paused) {
+        window.speechSynthesis.pause();
+        setIsTeacherPlaying(false);
+        setIsTeacherPaused(true);
+      }
+      setIsTeacherMuted(true);
+      setStatus("Tutor muted.");
+      return;
+    }
+    setIsTeacherMuted(false);
+    setStatus("Tutor unmuted.");
+  };
+
+  const toggleTutorCamera = async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("Camera access is not supported in this browser.");
+      return;
+    }
+    if (isTutorCameraOn) {
+      tutorCameraStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      tutorCameraStreamRef.current = null;
+      setIsTutorCameraOn(false);
+      setStatus("Tutor camera turned off.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      tutorCameraStreamRef.current = stream;
+      setIsTutorCameraOn(true);
+      setStatus("Tutor camera is active.");
+    } catch (err) {
+      setError(err.message || "Camera access failed.");
+    }
+  };
+
+  const toggleTutorScreenShare = async () => {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getDisplayMedia) {
+      setError("Screen sharing is not supported in this browser.");
+      return;
+    }
+    if (isTutorScreenSharing) {
+      tutorScreenStreamRef.current?.getTracks?.().forEach((track) => track.stop());
+      tutorScreenStreamRef.current = null;
+      setIsTutorScreenSharing(false);
+      setStatus("Screen share ended.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      tutorScreenStreamRef.current = stream;
+      stream.getVideoTracks?.()[0]?.addEventListener?.("ended", () => {
+        tutorScreenStreamRef.current = null;
+        setIsTutorScreenSharing(false);
+      });
+      setIsTutorScreenSharing(true);
+      setStatus("Screen share started.");
+    } catch (err) {
+      setError(err.message || "Screen share failed.");
+    }
+  };
+
+  const handleTutorQuickAction = async (actionId = "") => {
+    if (actionId === "transform-live") {
+      if (file) {
+        await upload();
+        if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
+        return;
+      }
+      if (videoUrl.trim()) {
+        await transcribeVideoUrl();
+        if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
+        return;
+      }
+      if (lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim()) {
+        await generateStudyGuide();
+        if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
+        return;
+      }
+      setError("Add a lecture file, video link, notes, or slides before transforming the session.");
+      return;
+    }
+    if (actionId === "generate-guide") {
+      await generateStudyGuide();
+      if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
+      setTeacherPreviewTab("guide");
+      return;
+    }
+    if (actionId === "explain-notes") {
+      if (isTeacherRealtimeConnected) {
+        await refreshTeacherRealtimeContext().catch(() => {});
+        sendTeacherRealtimePrompt(
+          "Use the current study guide, formulas, and worked examples to teach the next important concept step by step.",
+          { audio: true },
+        );
+        return;
+      }
+      await startTeacherRealtimeSession();
+      setStatus("Live tutor session is starting for note explanation.");
+      return;
+    }
+    if (actionId === "generate-quiz") {
+      await generateQuizFromGuide();
+      if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
+      return;
+    }
+    if (actionId === "summarize") {
+      if (isTeacherRealtimeConnected) {
+        sendTeacherRealtimePrompt("Give a short exam-ready summary of the current lecture.", { audio: true });
+        setTeacherPreviewTab("guide");
+        return;
+      }
+      if (!summary.trim() && !transcript.trim()) {
+        await generateStudyGuide();
+        return;
+      }
+      setTeacherPreviewTab("guide");
+      setStatus("Tutor is focusing the study guide summary.");
+      return;
+    }
+    if (actionId === "extract-key-points") {
+      if (isTeacherRealtimeConnected) {
+        sendTeacherRealtimePrompt("Highlight the most important concepts, formulas, and likely exam points from this workspace.", { audio: true });
+        setTeacherPreviewTab("guide");
+        return;
+      }
+      if (!summary.trim()) {
+        await generateStudyGuide();
+        return;
+      }
+      setTeacherPreviewTab("guide");
+      setStatus("Key concepts are highlighted through the guide and formulas.");
+      return;
+    }
+    if (actionId === "save-export") {
+      await downloadFullStudyPackPdf();
+      return;
+    }
+    if (actionId === "clear-session") {
+      await clearTeacherSession();
+    }
   };
 
   const createCollaborationRoom = async () => {
@@ -12603,6 +13602,345 @@ export default function App() {
     } catch (err) {
       setError(err.message || "Could not create the test PDF.");
     }
+  };
+
+  const renderTutorInterface = () => {
+    const tutorQuickActions = [
+      { id: "transform-live", title: "Transform Live Lecture", description: "Convert live lecture to notes" },
+      { id: "generate-guide", title: "Generate Study Guide", description: "Create comprehensive notes" },
+      { id: "explain-notes", title: "Explain My Notes", description: "Teach the guide conversationally" },
+      { id: "generate-quiz", title: "Generate Quiz", description: "Generate practice questions" },
+      { id: "summarize", title: "Summarize Lecture", description: "Create smart summaries" },
+      { id: "extract-key-points", title: "Extract Key Points", description: "Highlight important concepts" },
+      { id: "save-export", title: "Save & Export", description: "Export notes as PDF or text" },
+      { id: "clear-session", title: "Clear Session", description: "Reset tutor memory and transcript" },
+    ];
+    const tutorSidebarItems = [
+      { id: "capture", label: "Dashboard", onClick: () => openProtectedAppPage("capture") },
+      { id: "tutor", label: "Live AI Tutor", onClick: () => setActiveTab("tutor") },
+      { id: "guide", label: "Study Guide Generator", onClick: () => openTutorWorkspaceTool("guide") },
+      { id: "transcript", label: "Transcript Analyzer", onClick: () => openTutorWorkspaceTool("transcript") },
+      { id: "flashcards", label: "Flashcards", onClick: () => openTutorWorkspaceTool("flashcards") },
+      { id: "quiz", label: "Quizzes", onClick: () => openTutorWorkspaceTool("quiz") },
+      { id: "formulas", label: "Revision Planner", onClick: () => openTutorWorkspaceTool("formulas") },
+      { id: "materials", label: "Saved Sessions", onClick: () => setCurrentPage("materials") },
+      { id: "chat", label: "AI Notes", onClick: () => openTutorWorkspaceTool("chat") },
+      { id: "settings", label: "Settings", onClick: () => setStatus("Tutor settings are open on the right.") },
+    ];
+    const previewTabs = [
+      { id: "guide", label: "Study Guide Tool" },
+      { id: "examples", label: "Worked Examples" },
+      { id: "transcript", label: "Transcript Tool" },
+    ];
+    const previewContent = teacherPreviewTab === "transcript"
+      ? deferredTranscript || "Transcript moments will appear here after transcription."
+      : teacherPreviewTab === "examples"
+        ? formattedExample || example || "Worked examples will appear here after study guide generation."
+        : formattedGuide || summary || "Study guide content will appear here after generation.";
+    const previewActionLabel = teacherPreviewTab === "transcript"
+      ? "Open Transcript"
+      : teacherPreviewTab === "examples"
+        ? "Open Examples"
+        : "Open Study Guide";
+    const previewActionTab = teacherPreviewTab === "transcript"
+      ? "transcript"
+      : teacherPreviewTab === "examples"
+        ? "examples"
+        : "guide";
+    const teacherRealtimeSecondsRemaining = Math.max(
+      0,
+      Math.min(
+        Number(teacherRealtimeRemainingSeconds || 0) || 0,
+        teacherRealtimeSessionCapSeconds
+          ? Math.max(0, teacherRealtimeSessionCapSeconds - teacherSessionElapsedSeconds)
+          : Number(teacherRealtimeRemainingSeconds || 0) || 0,
+      ),
+    );
+    const teacherRealtimeProfileLabel = teacherRealtimeProfile === "deep_explain" ? "Deep Explain" : "Smart Saver";
+    const realtimeStatusLabel = isTeacherRealtimeConnecting
+      ? "Connecting"
+      : isTeacherRealtimeConnected
+        ? "Live"
+        : "Offline";
+
+    return (
+      <div className="tutor-copilot-shell relative overflow-hidden rounded-[30px] border border-cyan-400/20 bg-[radial-gradient(circle_at_top,rgba(10,132,255,0.12),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(34,197,94,0.16),transparent_24%),linear-gradient(145deg,#020617,#030712_42%,#071427_100%)] p-3 sm:p-5">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),transparent_35%,rgba(34,197,94,0.03))]" />
+        <div className="relative z-10 space-y-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="force-mobile-stack flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => openProtectedAppPage("capture")} className="[&>span]:hidden after:content-['Menu'] after:text-[11px] after:font-semibold after:uppercase after:tracking-[0.24em] flex h-11 min-w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/75 px-3 text-[0px] text-white transition hover:border-cyan-300/40 hover:bg-white/10">
+                <span className="text-lg leading-none">≡</span>
+              </button>
+              <button type="button" onClick={() => {
+                if (isTeacherRealtimeConnected || isTeacherRealtimeConnecting || teacherRealtimeSessionIdRef.current) {
+                  endTeacherRealtimeSession({ reason: "manual_end", announce: true }).catch(() => {});
+                  return;
+                }
+                stopTeacherLessonAndReturnToGuide({ resetIndex: true });
+                setStatus("Tutor session ended. Progress is still available in the workspace.");
+              }} className="rounded-2xl border border-rose-400/35 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/15">
+                End Session
+              </button>
+            </div>
+            <div className="text-center">
+              <p className="text-xs uppercase tracking-[0.35em] text-cyan-300/80">Mabaso AI Tutor</p>
+              <h3 className="mt-2 text-2xl font-semibold tracking-[0.08em] text-white sm:text-3xl">MABASO AI TUTOR</h3>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap items-center gap-3 lg:justify-end">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-white">{formatDurationClock(teacherSessionElapsedSeconds)}</div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-amber-200">{teacherNetworkQuality}</div>
+              <button type="button" onClick={() => setStatus("Tutor settings are ready on the right panel.")} className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-slate-100 transition hover:border-cyan-300/40 hover:bg-white/10">
+                <span className="text-xs font-semibold uppercase tracking-[0.18em]">SET</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)_320px]">
+            <div className="space-y-4">
+              <div className="rounded-[26px] border border-cyan-400/15 bg-[linear-gradient(180deg,rgba(7,23,42,0.92),rgba(2,8,23,0.9))] p-4 shadow-[0_18px_40px_rgba(2,8,23,0.35)]">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-white">Live Transcript</p>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    <button type="button" onClick={copyTeacherTranscript} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-white transition hover:bg-white/10">Copy</button>
+                    <button type="button" onClick={saveTeacherTranscriptText} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-white transition hover:bg-white/10">Save</button>
+                    <button type="button" onClick={exportTeacherTranscriptPdf} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-cyan-100 transition hover:bg-cyan-400/15">Export</button>
+                  </div>
+                </div>
+                <div ref={teacherTranscriptScrollRef} className="mt-4 max-h-[340px] space-y-4 overflow-y-auto pr-2">
+                  {teacherTranscriptEntries.length ? teacherTranscriptEntries.map((entry) => (
+                    <div key={entry.id} className="rounded-[20px] border border-white/8 bg-white/[0.03] px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className={`text-xs uppercase tracking-[0.24em] ${entry.speaker === "You" ? "text-emerald-300/90" : entry.speaker === "System" ? "text-amber-200/90" : "text-cyan-300/90"}`}>{entry.speaker}</p>
+                        <p className="text-xs text-slate-500">{formatTutorTimestampLabel(entry.timestamp)}</p>
+                      </div>
+                      <p className="mt-2 text-sm leading-7 text-slate-200">{entry.text}</p>
+                    </div>
+                  )) : (
+                    <div className="rounded-[22px] border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-400">
+                      Start a teach session to stream tutor moments, live questions, and linked explanations here.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
+                <p className="text-sm font-semibold text-white">Session Info</p>
+                <div className="mt-4 grid gap-3 text-sm text-slate-300">
+                  <div className="flex items-center justify-between gap-3"><span>Subject</span><span className="font-semibold text-white">Lecture Workspace</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Topic</span><span className="font-semibold text-white">{guideTopic}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Duration</span><span className="font-semibold text-white">{formatDurationClock(teacherSessionElapsedSeconds)}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Status</span><span className="font-semibold text-cyan-200">{teacherLiveStatusLabel}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Engine</span><span className="font-semibold text-emerald-100">{teacherRealtimeProfileLabel}</span></div>
+                  <div className="flex items-center justify-between gap-3"><span>Free voice left</span><span className="font-semibold text-white">{formatDurationClock(teacherRealtimeSecondsRemaining)}</span></div>
+                </div>
+                <button type="button" onClick={() => setCurrentPage("materials")} className="mt-4 w-full rounded-2xl border border-cyan-300/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15">
+                  View Session Summary
+                </button>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
+                <p className="text-sm font-semibold text-white">Study Workspace Links</p>
+                <div className="mt-4 grid gap-2">
+                  {tutorSidebarItems.map((item) => (
+                    <button key={item.id} type="button" onClick={item.onClick} className={`rounded-2xl border px-4 py-3 text-left text-sm transition ${((activeTab === item.id) || (item.id === currentPage && ["capture", "materials"].includes(item.id))) ? "border-cyan-300/30 bg-cyan-400/10 text-cyan-50" : "border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.06]"}`}>
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-5">
+              <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.86),rgba(2,8,23,0.72))] px-4 py-6 text-center shadow-[0_24px_60px_rgba(2,8,23,0.45)] sm:px-6">
+                <p className="text-sm font-semibold tracking-[0.24em] text-cyan-300/90">Live AI Tutor Session</p>
+                <h2 className="mt-3 text-3xl font-semibold text-white sm:text-5xl">{guideTopic}</h2>
+                <p className="mx-auto mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{teacherLessonData.overview || "In this tutor session, Mabaso AI uses your study guide, transcript, formulas, and worked examples to teach with live voice and linked explanations."}</p>
+                <div className="mt-5 flex justify-center">
+                  <div className="rounded-full border border-cyan-300/15 bg-cyan-400/10 px-5 py-3 text-sm text-cyan-100">
+                    {isTeacherRealtimeConnected || isTeacherRealtimeConnecting
+                      ? `Live engine: ${teacherRealtimeModel || "gpt-realtime-mini"} • ${realtimeStatusLabel}`
+                      : `Now teaching: ${activeTeacherSegment ? `${activeTeacherSegment.sectionHeading}${activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}` : "Ready to begin"}`}
+                  </div>
+                </div>
+
+                <div className="relative mt-8 flex min-h-[290px] items-center justify-center overflow-hidden rounded-[28px] border border-cyan-400/10 bg-[radial-gradient(circle_at_center,rgba(14,165,233,0.14),transparent_36%),transparent]">
+                  <div className="tutor-wave-field" />
+                  <div className={`tutor-orb-shell ${isTeacherListening ? "is-listening" : ""} ${isTeacherPlaying || isTeacherAnswering ? "is-speaking" : ""} ${isTeacherQuestionLoading || isGeneratingTeacherLesson ? "is-thinking" : ""}`}>
+                    <div className="tutor-orb-core" />
+                    <div className="tutor-orb-ring tutor-orb-ring-primary" />
+                    <div className="tutor-orb-ring tutor-orb-ring-secondary" />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-center">
+                  <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-5 py-3 text-sm font-semibold text-emerald-200">
+                    {teacherLiveStatusLabel}
+                  </div>
+                </div>
+
+                <div className="mt-7 grid grid-cols-3 gap-3 sm:grid-cols-6">
+                  <button type="button" onClick={() => {
+                    if (isTeacherRealtimeConnected || isTeacherRealtimeConnecting) {
+                      startTeacherRealtimeSession();
+                      return;
+                    }
+                    startTeacherRealtimeSession();
+                  }} disabled={loading || isTeacherRealtimeConnecting} className="rounded-[22px] border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white transition hover:border-cyan-300/30 hover:bg-cyan-400/10 disabled:opacity-50">{isTeacherRealtimeConnected ? "Live On" : isTeacherRealtimeConnecting ? "Connecting" : "Start Live"}</button>
+                  <button type="button" onClick={() => {
+                    if (isTeacherRealtimeConnected) {
+                      setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
+                      setTeacherQuestionStatus("Microphone paused.");
+                      return;
+                    }
+                    if (teacherLessonData.segments.length) {
+                      if (isTeacherPaused) resumeTeacherLesson();
+                      else pauseTeacherLesson();
+                    }
+                  }} disabled={!isTeacherRealtimeConnected && !teacherLessonData.segments.length} className="rounded-[22px] border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white transition hover:border-cyan-300/30 hover:bg-white/[0.08] disabled:opacity-50">{isTeacherRealtimeConnected ? "Sleep Mic" : isTeacherPaused ? "Resume" : "Pause"}</button>
+                  <button type="button" onClick={toggleTeacherMute} className={`rounded-[22px] border px-3 py-4 text-sm transition ${isTeacherMuted ? "border-emerald-400/35 bg-emerald-400/12 text-emerald-100" : "border-white/10 bg-white/[0.04] text-white hover:border-cyan-300/30 hover:bg-white/[0.08]"}`}>{isTeacherMuted ? "Muted" : "Mute"}</button>
+                  <button type="button" onClick={toggleTutorCamera} className={`rounded-[22px] border px-3 py-4 text-sm transition ${isTutorCameraOn ? "border-emerald-400/35 bg-emerald-400/12 text-emerald-100" : "border-white/10 bg-white/[0.04] text-white hover:border-cyan-300/30 hover:bg-white/[0.08]"}`}>{isTutorCameraOn ? "Camera On" : "Camera"}</button>
+                  <button type="button" onClick={toggleTutorScreenShare} className={`rounded-[22px] border px-3 py-4 text-sm transition ${isTutorScreenSharing ? "border-emerald-400/35 bg-emerald-400/12 text-emerald-100" : "border-white/10 bg-white/[0.04] text-white hover:border-cyan-300/30 hover:bg-white/[0.08]"}`}>{isTutorScreenSharing ? "Sharing" : "Share"}</button>
+                  <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} className="rounded-[22px] border border-white/10 bg-white/[0.04] px-3 py-4 text-sm text-white transition hover:border-cyan-300/30 hover:bg-white/[0.08]">Upload</button>
+                </div>
+
+                <div className="mt-6 flex flex-col items-center gap-3">
+                  <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={isTeacherRealtimeConnecting || isTeacherQuestionLoading} className="flex h-24 w-24 items-center justify-center rounded-full border border-cyan-300/30 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.95),rgba(14,116,144,0.85))] text-lg font-semibold text-white shadow-[0_0_45px_rgba(56,189,248,0.45)] transition hover:scale-[1.02] disabled:opacity-60">
+                    {isTeacherRealtimeConnected ? (isTeacherRealtimeMicActive ? "Stop" : "Speak") : isTeacherRealtimeConnecting ? "Wait" : "Start"}
+                  </button>
+                  <p className="text-sm text-cyan-100">{teacherQuestionStatus || "Tap Start Live Session, then Speak only when you need the tutor."}</p>
+                </div>
+
+                <div className="mt-6 rounded-full border border-cyan-300/12 bg-[linear-gradient(90deg,rgba(2,6,23,0.12),rgba(14,165,233,0.14),rgba(34,197,94,0.12),rgba(2,6,23,0.12))] px-6 py-4 text-sm text-slate-200">
+                  Live voice uses smart saver mode by default: the mic sleeps after silence, VAD handles interruptions, and you can move to the guide, transcript, or worked examples without stopping the session.
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                <div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.26em] text-cyan-300/75">Workspace Preview</p>
+                      <h4 className="mt-2 text-xl font-semibold text-white">Follow linked study tools while the tutor speaks</h4>
+                    </div>
+                    <button type="button" onClick={() => openTutorWorkspaceTool(previewActionTab)} className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15">
+                      {previewActionLabel}
+                    </button>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {previewTabs.map((tab) => (
+                      <button key={tab.id} type="button" onClick={() => setTeacherPreviewTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${teacherPreviewTab === tab.id ? "bg-cyan-400 text-slate-950" : "border border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"}`}>
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-4 rounded-[22px] border border-white/10 bg-black/25 p-4">
+                    <div className="max-h-[240px] overflow-y-auto text-sm leading-7 text-slate-200">
+                      <div className="phone-safe-copy max-w-none">
+                        <MobileFirstMarkdown>{previewContent}</MobileFirstMarkdown>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.26em] text-emerald-300/80">Session Memory</p>
+                  <h4 className="mt-2 text-xl font-semibold text-white">What the tutor can reference right now</h4>
+                  <div className="mt-4 space-y-3 text-sm text-slate-300">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">Study guide sections: {guideSections.length || 0}</div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">Worked example sections: {exampleSections.length || 0}</div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">Formula rows detected: {formulaRows.length || 0}</div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">Transcript ready: {transcript.trim() ? "Yes" : "No"}</div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">Realtime model: {teacherRealtimeModel || "gpt-realtime-mini"}</div>
+                    <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/8 px-4 py-3 text-emerald-100">
+                      When the tutor reaches a worked example, it can switch the preview to that tool and keep speaking without ending the session.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-[26px] border border-white/10 bg-[linear-gradient(180deg,rgba(7,23,42,0.92),rgba(2,8,23,0.88))] p-4">
+                <p className="text-sm font-semibold text-white">Tutor Settings</p>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Voice Engine</label>
+                    <select value={teacherRealtimeProfile} onChange={(event) => setTeacherRealtimeProfile(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      <option value="smart_saver">Smart Saver (Realtime Mini)</option>
+                      <option value="deep_explain">Deep Explain (Auto Upgrade)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Voice</label>
+                    <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      {realtimeTutorVoiceOptions.map((voice) => <option key={voice.value} value={voice.value}>{voice.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Speaking Pace</label>
+                    <select value={teacherSpeechPace} onChange={(event) => setTeacherSpeechPace(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      <option value="slow">Slow</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="fast">Fast</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Teaching Style</label>
+                    <select value={teacherTeachingStyle} onChange={(event) => setTeacherTeachingStyle(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      <option value="adaptive">Adaptive Tutor</option>
+                      <option value="step_by_step">Step by Step</option>
+                      <option value="exam_focused">Exam Mode</option>
+                      <option value="conversational">Conversational</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Response Depth</label>
+                    <select value={teacherResponseLength} onChange={(event) => setTeacherResponseLength(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      <option value="concise">Concise</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="detailed">Detailed</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs uppercase tracking-[0.24em] text-slate-400">Voice Emotion</label>
+                    <select value={teacherVoiceEmotion} onChange={(event) => setTeacherVoiceEmotion(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                      <option value="warm">Warm</option>
+                      <option value="calm">Calm</option>
+                      <option value="energetic">Energetic</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-200">
+                    <span>Auto Simplify</span>
+                    <input type="checkbox" checked={teacherAutoSimplify} onChange={(event) => setTeacherAutoSimplify(event.target.checked)} />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-200">
+                    <span>Exam Mode</span>
+                    <input type="checkbox" checked={teacherExamMode} onChange={(event) => setTeacherExamMode(event.target.checked)} />
+                  </label>
+                  <label className="flex items-center justify-between gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-100">
+                    <span>Interactive Mode</span>
+                    <input type="checkbox" checked={teacherInteractiveMode} onChange={(event) => setTeacherInteractiveMode(event.target.checked)} />
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-[26px] border border-white/10 bg-[linear-gradient(180deg,rgba(7,23,42,0.92),rgba(2,8,23,0.88))] p-4">
+                <p className="text-sm font-semibold text-white">Quick Actions</p>
+                <div className="mt-4 space-y-2">
+                  {tutorQuickActions.map((action) => (
+                    <button key={action.id} type="button" onClick={() => handleTutorQuickAction(action.id)} className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-cyan-300/30 hover:bg-cyan-400/10">
+                      <p className="text-sm font-semibold text-white">{action.title}</p>
+                      <p className="mt-1 text-xs leading-6 text-slate-400">{action.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const handleQuizAnswerChange = (question, value) => {
@@ -13257,22 +14595,27 @@ export default function App() {
           </div>
 
           <div className="mt-6 space-y-5">
-            <div className="min-w-0 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
-              <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
-                <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
-                <div className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">{hasResults ? "Generated" : "Awaiting lecture"}</div>
-              </div>
-              <div className="force-mobile-stack mb-4 flex flex-wrap gap-3">
-                <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
-                <div className="relative">
-                  <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
-                  {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
-                </div>
-                {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
-                <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
-              </div>
+            <div className={`min-w-0 rounded-[28px] ${activeTab === "tutor" ? "" : "border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"}`}>
+              {activeTab !== "tutor" ? (
+                <>
+                  <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
+                    <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
+                    <div className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">{hasResults ? "Generated" : "Awaiting lecture"}</div>
+                  </div>
+                  <div className="force-mobile-stack mb-4 flex flex-wrap gap-3">
+                    <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
+                    <div className="relative">
+                      <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
+                      {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
+                    </div>
+                    {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
+                    <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
+                  </div>
+                </>
+              ) : null}
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
+              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] ${activeTab === "tutor" ? "border-0 bg-transparent p-0" : `border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}`}>
+                {activeTab === "tutor" ? renderTutorInterface() : null}
                 {activeTab === "guide" ? (
                   <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
                     <div
@@ -13296,82 +14639,6 @@ export default function App() {
                           <MobileFirstMarkdown>{guideSummarySection.content}</MobileFirstMarkdown>
                         </div>
                       ) : null}
-                    </div>
-
-                    <div className="rounded-[24px] border border-emerald-300/25 bg-[linear-gradient(180deg,rgba(236,253,245,0.98),rgba(220,252,231,0.92))] p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-700">Mabaso AI Tutor</p>
-                          <h4 className="mt-2 text-2xl font-semibold text-slate-900">A live tutor session that teaches with voice, context, and natural interruptions.</h4>
-                          <p className="mt-3 text-sm leading-7 text-slate-700">This tutor session explains the guide step by step, spends extra time on worked examples, answers spoken questions in context, and feels closer to a premium AI teaching copilot than a plain reader.</p>
-                        </div>
-                        <div className="force-mobile-stack flex flex-wrap gap-3">
-                          <div className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-700 shadow-sm">
-                            {teacherLessonData.segments.length ? `${teacherEstimatedMinutes} min tutor session` : "15+ min target"}
-                          </div>
-                          <button type="button" onClick={() => generateTeacherLesson({ autoplay: true })} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingTeacherLesson ? "Preparing Tutor..." : teacherLessonData.segments.length ? "Restart Teach Session" : "Start Teach Session"}</button>
-                          <button type="button" onClick={() => playTeacherLesson()} disabled={!teacherLessonData.segments.length || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Play Voice</button>
-                          <button type="button" onClick={pauseTeacherLesson} disabled={!isTeacherPlaying || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Pause Voice</button>
-                          <button type="button" onClick={resumeTeacherLesson} disabled={!teacherLessonData.segments.length || !isTeacherPaused || isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">Resume Voice</button>
-                          <button type="button" onClick={handleTeacherQuestionButtonClick} disabled={!teacherLessonData.segments.length || isTeacherQuestionLoading} className="rounded-full border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm disabled:opacity-50">{isTeacherListening ? "Stop Question" : isTeacherAnswering ? "Ask Again" : isTeacherQuestionLoading ? "Thinking..." : "Ask Live Question"}</button>
-                          <button type="button" onClick={() => stopTeacherLessonAndReturnToGuide({ resetIndex: true })} disabled={!isTeacherPlaying && !isTeacherPaused && !isTeacherQuestionBusy} className="rounded-full border border-slate-200 bg-white/90 px-4 py-2 text-sm text-slate-700 shadow-sm disabled:opacity-50">End Session</button>
-                        </div>
-                      </div>
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-                        <div className="rounded-2xl border border-slate-200 bg-white/88 px-4 py-4 text-sm leading-7 text-slate-700 shadow-sm">
-                          {teacherLessonData.overview || "Start Mabaso AI Tutor to hear a guided voice lesson that teaches the guide naturally, pauses for questions, and stays focused on understanding instead of reading line by line."}
-                          {activeTeacherSegment ? <p className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">Now teaching: {activeTeacherSegment.sectionHeading}{activeTeacherSegment.prompt ? ` - ${activeTeacherSegment.prompt}` : ""}</p> : null}
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                          <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Tutor Session Settings</p>
-                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Voice</label>
-                          <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
-                            {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={`${voice.name}-${voice.lang}`} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Browser default voice</option>}
-                          </select>
-                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Speaking Pace</label>
-                          <select value={teacherSpeechPace} onChange={(event) => setTeacherSpeechPace(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
-                            <option value="slow">Slow and careful</option>
-                            <option value="balanced">Balanced</option>
-                            <option value="fast">Fast and energetic</option>
-                          </select>
-                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Teaching Style</label>
-                          <select value={teacherTeachingStyle} onChange={(event) => setTeacherTeachingStyle(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
-                            <option value="adaptive">Adaptive tutor</option>
-                            <option value="step_by_step">Step by step</option>
-                            <option value="exam_focused">Exam focused</option>
-                            <option value="conversational">Conversational</option>
-                          </select>
-                          <label className="mt-4 block text-xs uppercase tracking-[0.22em] text-slate-500">Response Depth</label>
-                          <select value={teacherResponseLength} onChange={(event) => setTeacherResponseLength(event.target.value)} className="mt-3 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none shadow-sm">
-                            <option value="concise">Concise</option>
-                            <option value="balanced">Balanced</option>
-                            <option value="detailed">Detailed</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div className="mt-4 rounded-[22px] border border-emerald-200 bg-white/92 p-4 shadow-sm">
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0">
-                            <p className="text-xs uppercase tracking-[0.22em] text-emerald-700">Live Student Question</p>
-                            <p className="mt-2 text-sm leading-7 text-slate-700">{teacherQuestionStatus || "Press Ask Live Question while the tutor is speaking, say your question, then press Stop Question when you are done so the tutor can answer and continue naturally."}</p>
-                          </div>
-                          <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-slate-600">
-                            {isTeacherListening ? "Listening" : isTeacherQuestionLoading ? "Thinking" : isTeacherAnswering ? "Answering" : "Ready"}
-                          </div>
-                        </div>
-                        {teacherQuestionDraft ? (
-                          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Heard Question</p>
-                            <p className="mt-2 text-sm leading-7 text-slate-800">{teacherQuestionDraft}</p>
-                          </div>
-                        ) : null}
-                        {teacherQuestionAnswer ? (
-                          <div className="mt-4">
-                            <p className="mb-3 text-xs uppercase tracking-[0.2em] text-slate-500">Tutor Answer</p>
-                            <StudyToolMarkdownCard content={teacherQuestionAnswer} emptyMessage="" />
-                          </div>
-                        ) : null}
-                      </div>
                     </div>
 
                     {studyImages.length ? (

@@ -907,36 +907,36 @@ export const sitePages = [
     access: "login",
     metadata: {
       title: "Mabaso AI Tutor | Mabaso AI",
-      description: "Realtime-style AI tutoring with voice sessions, natural interruptions, transcript memory, file-aware teaching, and premium tutor controls inside Mabaso AI.",
+      description: "Low-latency AI tutoring with a hybrid realtime voice stack, VAD-powered interruptions, workspace-aware teaching, and premium tutor controls inside Mabaso AI.",
     },
     hero: {
       eyebrow: "AI Tools / Mabaso AI Tutor",
-      headline: "A premium AI tutor session built for live voice teaching, interruptions, and guided understanding.",
-      description: "Mabaso AI Tutor reimagines the old teacher flow as a conversational tutor system. It teaches step by step, keeps context across the session, answers live student questions, follows the study guide, and turns notes, slides, formulas, and revision materials into a voice-first learning experience.",
+      headline: "A premium AI tutor session built on smart realtime voice, not expensive always-on streaming.",
+      description: "Mabaso AI Tutor uses a hybrid architecture: live teaching runs on a cheaper realtime voice engine with VAD, smart mic sleep, and interruption handling, while study guides, transcripts, quizzes, and exports stay on background text workflows. The result still feels premium, fast, and deeply grounded in your workspace.",
       ctas: [
         primaryCta("Start Teach Session", "open-app", "workspace"),
         secondaryCta("View Study Guide", "route", "/product/ai-study-guide"),
       ],
       metrics: [
-        { label: "Conversation", value: "Voice-first tutoring" },
-        { label: "Interruptions", value: "Natural question handoff" },
-        { label: "Guide sync", value: "Context aware" },
+        { label: "Realtime lane", value: "Smart saver by default" },
+        { label: "Interruptions", value: "VAD + natural handoff" },
+        { label: "Free voice", value: "5 min per day" },
       ],
       preview: {
         kicker: "Tutor session interface",
         title: "Voice orb, live transcript, tutor controls, and study-context memory",
-        subtitle: "Design the page like a premium AI copilot: animated speaking states, tutor settings, live question capture, and a guide-aware transcript rail.",
+        subtitle: "Design the page like a premium AI copilot: animated speaking states, tutor settings, smart-saver voice controls, live question capture, and a guide-aware transcript rail.",
         tabs: ["Session", "Voice", "Transcript", "Guide Sync"],
         rows: [
-          { label: "Experience", value: "Realtime-style teaching flow" },
-          { label: "Controls", value: "Start, interrupt, resume, end" },
+          { label: "Experience", value: "Hybrid realtime teaching flow" },
+          { label: "Controls", value: "Start, speak, interrupt, sleep, end" },
           { label: "Protection", value: "Tutor sessions require login" },
         ],
       },
     },
     contains: [
-      { icon: "audio-waveform", title: "Voice tutoring sessions", description: "A live tutor flow speaks naturally, pauses, resumes, and keeps the student in the same learning thread." },
-      { icon: "message-square-more", title: "Natural interruption handling", description: "Students can cut in with questions and receive in-context answers without losing their place." },
+      { icon: "audio-waveform", title: "Hybrid realtime tutoring", description: "A live tutor flow uses a cheaper realtime voice engine by default, then reserves heavier reasoning for the moments that need it." },
+      { icon: "message-square-more", title: "Natural interruption handling", description: "Students can cut in with questions, let VAD detect speech, and receive in-context answers without losing their place." },
       { icon: "files", title: "Multi-modal teaching context", description: "The tutor can explain notes, slides, transcripts, formulas, graphs, and uploaded revision materials together." },
     ],
     layout: [
@@ -950,7 +950,7 @@ export const sitePages = [
         title: "Main modules",
         items: [
           "Animated tutor orb, waveform, and session status states",
-          "Voice selector, speaking pace, teaching style, and response-depth controls",
+          "Voice selector, speaking pace, teaching style, response-depth, and smart-saver engine controls",
           "Live transcript, question capture, and guide-following context panel",
         ],
       },
@@ -984,6 +984,7 @@ export const sitePages = [
     },
     designNotes: [
       "The experience should feel premium, intelligent, smooth, and highly responsive rather than like a basic TTS player.",
+      "Treat the live voice lane as a cost-controlled premium layer: smart mic activation, silence timeout, VAD, and short spoken confirmations by default.",
       "Use dark backgrounds, electric-blue accents, glass surfaces, and subtle glow to push the interface toward a modern AI copilot feel.",
       "Keep the live teaching state, transcript, and guide-following behavior visibly connected so the tutor always feels grounded in study context.",
     ],

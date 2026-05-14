@@ -117,6 +117,21 @@ PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
+REALTIME_TUTOR_DEFAULT_MODEL = (os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", "gpt-realtime-mini") or "gpt-realtime-mini").strip()
+REALTIME_TUTOR_PREMIUM_MODEL = (os.getenv("REALTIME_TUTOR_PREMIUM_MODEL", "gpt-realtime") or "gpt-realtime").strip()
+REALTIME_TUTOR_TRANSCRIPTION_MODEL = (
+    os.getenv("REALTIME_TUTOR_TRANSCRIPTION_MODEL", "gpt-realtime-whisper") or "gpt-realtime-whisper"
+).strip()
+REALTIME_TUTOR_DAILY_SECONDS = max(60, int(os.getenv("REALTIME_TUTOR_DAILY_SECONDS", "300")))
+REALTIME_TUTOR_ACTIVITY_GRACE_SECONDS = max(
+    60,
+    int(os.getenv("REALTIME_TUTOR_ACTIVITY_GRACE_SECONDS", "120")),
+)
+REALTIME_TUTOR_IDLE_TIMEOUT_MS = min(
+    30000,
+    max(5000, int(os.getenv("REALTIME_TUTOR_IDLE_TIMEOUT_MS", "8000"))),
+)
+REALTIME_TUTOR_CONTEXT_CHARS = max(5000, int(os.getenv("REALTIME_TUTOR_CONTEXT_CHARS", "12000")))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
 APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "").strip()
@@ -669,12 +684,18 @@ class QuizGenerationRequest(BaseModel):
 class TeacherLessonRequest(BaseModel):
     transcript: str = ""
     summary: str = ""
+    formulas: str = ""
+    worked_examples: str = ""
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
     language: str = "English"
     teaching_style: str = "adaptive"
     response_length: str = "balanced"
+    voice_emotion: str = "warm"
+    auto_simplify: bool = True
+    exam_mode: bool = False
+    interactive_mode: bool = True
 
 
 class VideoUrlTranscriptionRequest(BaseModel):
@@ -745,6 +766,8 @@ class StudyChatRequest(BaseModel):
     question: str
     transcript: str = ""
     summary: str = ""
+    formulas: str = ""
+    worked_examples: str = ""
     lecture_notes: str = ""
     lecture_slides: str = ""
     past_question_papers: str = ""
@@ -755,6 +778,38 @@ class StudyChatRequest(BaseModel):
     current_section: str = ""
     teaching_style: str = "adaptive"
     response_length: str = "balanced"
+    voice_emotion: str = "warm"
+    auto_simplify: bool = True
+    exam_mode: bool = False
+    interactive_mode: bool = True
+
+
+class RealtimeTutorConfigRequest(BaseModel):
+    summary: str = ""
+    transcript: str = ""
+    formulas: str = ""
+    worked_examples: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
+    teaching_style: str = "adaptive"
+    response_length: str = "balanced"
+    voice_emotion: str = "warm"
+    auto_simplify: bool = True
+    exam_mode: bool = False
+    interactive_mode: bool = True
+    preferred_voice: str = "marin"
+    speaking_pace: str = "balanced"
+    realtime_profile: str = "smart_saver"
+
+
+class RealtimeTutorSessionRequest(RealtimeTutorConfigRequest):
+    offer_sdp: str
+
+
+class RealtimeTutorSessionCloseRequest(BaseModel):
+    reason: str = ""
 
 
 class SessionModeRequest(BaseModel):
@@ -1092,6 +1147,27 @@ def init_db():
                 connection.execute(
                     f"ALTER TABLE support_messages ADD COLUMN {column_name} {column_definition}"
                 )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS realtime_tutor_sessions (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                model TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                voice TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                ended_at TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_realtime_tutor_sessions_email_started_at
+            ON realtime_tutor_sessions (email, started_at DESC)
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS request_rate_limits (
@@ -2423,6 +2499,326 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
     return normalized_items
 
 
+REALTIME_TUTOR_VOICE_OPTIONS = (
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+)
+
+
+def normalize_realtime_tutor_voice(value: str = "") -> str:
+    normalized = compact_text(value, "marin").lower()
+    if normalized in REALTIME_TUTOR_VOICE_OPTIONS:
+        return normalized
+    for voice in REALTIME_TUTOR_VOICE_OPTIONS:
+        if voice in normalized:
+            return voice
+    return "cedar" if any(token in normalized for token in ("ava", "samantha", "serena")) else "marin"
+
+
+def normalize_realtime_tutor_profile(value: str = "") -> str:
+    normalized = compact_text(value, "smart_saver").lower()
+    if normalized in {"deep_explain", "deep-explain", "premium", "boost"}:
+        return "deep_explain"
+    return "smart_saver"
+
+
+def normalize_realtime_tutor_language_hint(language: str = "") -> str:
+    normalized = compact_text(language, "English").lower()
+    if normalized == "isizulu":
+        return "zu"
+    if normalized == "afrikaans":
+        return "af"
+    if normalized == "isixhosa":
+        return "xh"
+    if normalized == "sesotho":
+        return "st"
+    if normalized == "setswana":
+        return "tn"
+    if normalized == "french":
+        return "fr"
+    if normalized == "portuguese":
+        return "pt"
+    return "en"
+
+
+def get_realtime_tutor_speed_multiplier(value: str = "") -> float:
+    normalized = compact_text(value, "balanced").lower()
+    if normalized == "slow":
+        return 0.9
+    if normalized == "fast":
+        return 1.1
+    return 1.0
+
+
+def should_upgrade_realtime_tutor_model(
+    *,
+    summary: str,
+    transcript: str,
+    formulas: str,
+    worked_examples: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    response_length: str,
+    exam_mode: bool,
+) -> bool:
+    combined = " ".join(
+        part
+        for part in [
+            summary,
+            transcript,
+            formulas,
+            worked_examples,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+        ]
+        if part
+    ).lower()
+    signal_score = 0
+    if compact_text(response_length, "balanced").lower() == "detailed":
+        signal_score += 1
+    if exam_mode:
+        signal_score += 1
+    if len(formulas) > 700 or len(worked_examples) > 2400:
+        signal_score += 1
+    if sum(combined.count(token) for token in ("integral", "derivative", "matrix", "laplace", "fourier", "proof")) >= 3:
+        signal_score += 2
+    return signal_score >= 3
+
+
+def select_realtime_tutor_model(
+    *,
+    summary: str,
+    transcript: str,
+    formulas: str,
+    worked_examples: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    response_length: str,
+    exam_mode: bool,
+    realtime_profile: str,
+) -> str:
+    normalized_profile = normalize_realtime_tutor_profile(realtime_profile)
+    if normalized_profile == "deep_explain":
+        return REALTIME_TUTOR_PREMIUM_MODEL
+    if should_upgrade_realtime_tutor_model(
+        summary=summary,
+        transcript=transcript,
+        formulas=formulas,
+        worked_examples=worked_examples,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        past_question_papers=past_question_papers,
+        response_length=response_length,
+        exam_mode=exam_mode,
+    ):
+        return REALTIME_TUTOR_PREMIUM_MODEL
+    return REALTIME_TUTOR_DEFAULT_MODEL
+
+
+def build_realtime_tutor_instructions(
+    *,
+    summary: str,
+    transcript: str,
+    formulas: str,
+    worked_examples: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    output_language: str,
+    teaching_style: str,
+    response_length: str,
+    voice_emotion: str,
+    auto_simplify: bool,
+    exam_mode: bool,
+    interactive_mode: bool,
+) -> str:
+    normalized_teaching_style = compact_text(teaching_style, "adaptive").lower()
+    normalized_response_length = compact_text(response_length, "balanced").lower()
+    normalized_voice_emotion = compact_text(voice_emotion, "warm").lower()
+    teaching_style_instruction = {
+        "adaptive": "Adapt the explanation to the student's level and confusion in real time.",
+        "step_by_step": "Teach one step at a time and make each transition explicit.",
+        "exam_focused": "Emphasize exam clues, scoring logic, and high-yield revision points.",
+        "conversational": "Sound especially natural, human, and easy to follow.",
+    }.get(normalized_teaching_style, "Adapt the explanation to the student's level and confusion in real time.")
+    response_length_instruction = {
+        "concise": "Keep most spoken turns to one or two short sentences unless solving a problem.",
+        "balanced": "Keep spoken answers concise but still informative and useful.",
+        "detailed": "Go a little deeper when needed, but still teach in compact spoken chunks.",
+    }.get(normalized_response_length, "Keep spoken answers concise but still informative and useful.")
+    context_blocks = [
+        build_teacher_context_block("STUDY GUIDE SUMMARY", summary, REALTIME_TUTOR_CONTEXT_CHARS // 4),
+        build_teacher_context_block("IMPORTANT FORMULAS", formulas, REALTIME_TUTOR_CONTEXT_CHARS // 6),
+        build_teacher_context_block("WORKED EXAMPLES", worked_examples, REALTIME_TUTOR_CONTEXT_CHARS // 4),
+        build_teacher_context_block("LECTURE NOTES", lecture_notes, REALTIME_TUTOR_CONTEXT_CHARS // 5),
+        build_teacher_context_block("LECTURE SLIDES", lecture_slides, REALTIME_TUTOR_CONTEXT_CHARS // 5),
+        build_teacher_context_block("PAST QUESTION PAPERS", past_question_papers, REALTIME_TUTOR_CONTEXT_CHARS // 5),
+        build_teacher_context_block("LECTURE TRANSCRIPT", transcript, REALTIME_TUTOR_CONTEXT_CHARS // 4),
+    ]
+    workspace_context = "\n\n".join(block for block in context_blocks if block).strip()
+    if len(workspace_context) > REALTIME_TUTOR_CONTEXT_CHARS:
+        workspace_context = workspace_context[:REALTIME_TUTOR_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
+
+    instructions = (
+        "You are Mabaso AI Tutor, a live voice tutor inside a study workspace. "
+        "Teach naturally, warmly, and clearly through short realtime voice turns. "
+        "Do not sound like a chatbot and do not read textbook-sized paragraphs aloud. "
+        "For small confirmations like switching tools or refreshing notes, keep the spoken reply extremely short. "
+        "Use the study guide, transcript, formulas, worked examples, notes, and past papers as shared workspace memory. "
+        "If a worked example or formula is useful, refer to it naturally, for example: 'open the worked examples tool and look at example 2.' "
+        "The student can move between the Study Guide Generator, Transcript Analyzer, Worked Examples, Flashcards, Quizzes, AI Notes, and Revision Planner while you keep teaching. "
+        "When a concept is difficult, break it into smaller parts, slow down, and use concrete examples. "
+        "If the speech was unclear, say you did not fully catch it and ask for a repeat in one short sentence. "
+        f"{teaching_style_instruction} "
+        f"{response_length_instruction} "
+        f"The tone should feel {normalized_voice_emotion}. "
+        f"{'Simplify aggressively when the student sounds unsure. ' if auto_simplify else ''}"
+        f"{'Call out exam-relevant traps and likely test points when useful. ' if exam_mode else ''}"
+        f"{'Ask brief follow-up questions when they help the student think. ' if interactive_mode else ''}"
+        f"Reply in {output_language}.\n\n"
+        "WORKSPACE CONTEXT\n"
+        f"{workspace_context or 'No workspace context has been generated yet.'}"
+    )
+    return instructions.strip()
+
+
+def get_realtime_tutor_day_window(now: datetime | None = None) -> tuple[datetime, datetime]:
+    current = now or utc_now()
+    day_start = datetime(current.year, current.month, current.day, tzinfo=timezone.utc)
+    return day_start, day_start + timedelta(days=1)
+
+
+def get_realtime_tutor_sessions_for_day(email: str, now: datetime | None = None) -> list[sqlite3.Row]:
+    day_start, day_end = get_realtime_tutor_day_window(now)
+    with get_db_connection() as connection:
+        return connection.execute(
+            """
+            SELECT id, email, model, profile, voice, started_at, last_activity_at, ended_at, metadata_json
+            FROM realtime_tutor_sessions
+            WHERE email = ?
+              AND started_at >= ?
+              AND started_at < ?
+            ORDER BY started_at ASC
+            """,
+            (email, day_start.isoformat(), day_end.isoformat()),
+        ).fetchall()
+
+
+def resolve_realtime_tutor_session_end(row: sqlite3.Row, now: datetime | None = None) -> datetime:
+    current = now or utc_now()
+    started_at = parse_history_datetime(row["started_at"], current)
+    last_activity_at = parse_history_datetime(row["last_activity_at"], started_at)
+    ended_at = parse_history_datetime(row["ended_at"], current) if compact_text(row["ended_at"]) else None
+    grace_end = last_activity_at + timedelta(seconds=REALTIME_TUTOR_ACTIVITY_GRACE_SECONDS)
+    return min(
+        ended_at or current,
+        grace_end,
+        started_at + timedelta(seconds=REALTIME_TUTOR_DAILY_SECONDS),
+    )
+
+
+def calculate_realtime_tutor_usage_seconds(email: str, now: datetime | None = None) -> int:
+    current = now or utc_now()
+    total_seconds = 0
+    for row in get_realtime_tutor_sessions_for_day(email, current):
+        started_at = parse_history_datetime(row["started_at"], current)
+        ended_at = resolve_realtime_tutor_session_end(row, current)
+        if ended_at <= started_at:
+            continue
+        total_seconds += int((ended_at - started_at).total_seconds())
+    return min(REALTIME_TUTOR_DAILY_SECONDS, max(0, total_seconds))
+
+
+def get_realtime_tutor_remaining_seconds(email: str, now: datetime | None = None) -> int:
+    return max(0, REALTIME_TUTOR_DAILY_SECONDS - calculate_realtime_tutor_usage_seconds(email, now))
+
+
+def create_realtime_tutor_session_record(
+    *,
+    email: str,
+    model: str,
+    profile: str,
+    voice: str,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    session_id = f"rt_{uuid4().hex}"
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO realtime_tutor_sessions (
+                id,
+                email,
+                model,
+                profile,
+                voice,
+                started_at,
+                last_activity_at,
+                ended_at,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                email,
+                model,
+                profile,
+                voice,
+                now_iso,
+                now_iso,
+                None,
+                json.dumps(metadata or {}),
+            ),
+        )
+    return session_id
+
+
+def touch_realtime_tutor_session_record(session_id: str, email: str, *, end_session: bool = False) -> dict[str, Any] | None:
+    now = utc_now()
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, email, model, profile, voice, started_at, last_activity_at, ended_at, metadata_json
+            FROM realtime_tutor_sessions
+            WHERE id = ? AND email = ?
+            """,
+            (session_id, email),
+        ).fetchone()
+        if not row:
+            return None
+        next_ended_at = now.isoformat() if end_session else compact_text(row["ended_at"])
+        connection.execute(
+            """
+            UPDATE realtime_tutor_sessions
+            SET last_activity_at = ?, ended_at = ?
+            WHERE id = ? AND email = ?
+            """,
+            (
+                now.isoformat(),
+                next_ended_at or None,
+                session_id,
+                email,
+            ),
+        )
+    updated_row = dict(row)
+    updated_row["last_activity_at"] = now.isoformat()
+    if end_session:
+        updated_row["ended_at"] = now.isoformat()
+    return updated_row
+
+
 def is_session_revoked(token_hash: str) -> bool:
     with get_db_connection() as connection:
         connection.execute(
@@ -3138,8 +3534,14 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     output_language = normalize_output_language(payload.language)
     delivery_mode = compact_text(getattr(payload, "delivery_mode", ""), "chat").lower()
     current_section = compact_text(getattr(payload, "current_section", ""))
+    formulas = compact_text(getattr(payload, "formulas", ""))
+    worked_examples = compact_text(getattr(payload, "worked_examples", ""))
     teaching_style = compact_text(getattr(payload, "teaching_style", ""), "adaptive").lower()
     response_length = compact_text(getattr(payload, "response_length", ""), "balanced").lower()
+    voice_emotion = compact_text(getattr(payload, "voice_emotion", ""), "warm").lower()
+    auto_simplify = bool(getattr(payload, "auto_simplify", True))
+    exam_mode = bool(getattr(payload, "exam_mode", False))
+    interactive_mode = bool(getattr(payload, "interactive_mode", True))
     teaching_style_instruction = {
         "adaptive": "Adapt the explanation to the student's likely level and confusion.",
         "step_by_step": "Go step by step and make each transition explicit.",
@@ -3163,6 +3565,8 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
 
     context_parts = [
         trimmed_block("STUDY GUIDE", payload.summary, section_limit),
+        trimmed_block("IMPORTANT FORMULAS", formulas, section_limit),
+        trimmed_block("WORKED EXAMPLES", worked_examples, section_limit),
         trimmed_block("LECTURE NOTES", payload.lecture_notes, section_limit),
         trimmed_block("LECTURE SLIDES", payload.lecture_slides, section_limit),
         trimmed_block("PAST QUESTION PAPERS", payload.past_question_papers, section_limit),
@@ -3181,6 +3585,10 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "Sound like a premium human-like tutor speaking aloud: direct, clear, warm, and easy to follow. "
             f"{teaching_style_instruction} "
             f"{response_length_instruction} "
+            f"The emotional tone should feel {voice_emotion}. "
+            f"{'Simplify aggressively when the student sounds unsure. ' if auto_simplify else ''}"
+            f"{'Call out exam-relevant clues and high-yield traps when appropriate. ' if exam_mode else ''}"
+            f"{'Keep the answer interactive and conversational. ' if interactive_mode else ''}"
             "Explain the key reasoning, formula choice, misconception, or next step when needed. "
             "Do not ask a follow-up question. "
             "Avoid heavy markdown and avoid sounding like a chatbot. "
@@ -10172,6 +10580,8 @@ async def generate_podcast_package(
 async def generate_teacher_lesson_package(
     summary: str,
     transcript: str,
+    formulas: str,
+    worked_examples: str,
     lecture_notes: str,
     lecture_slides: str,
     past_question_papers: str,
@@ -10179,6 +10589,10 @@ async def generate_teacher_lesson_package(
     output_language: str,
     teaching_style: str = "adaptive",
     response_length: str = "balanced",
+    voice_emotion: str = "warm",
+    auto_simplify: bool = True,
+    exam_mode: bool = False,
+    interactive_mode: bool = True,
 ) -> dict[str, Any]:
     outline = build_teacher_section_outline(
         summary,
@@ -10202,6 +10616,8 @@ async def generate_teacher_lesson_package(
 
     context_blocks = [
         build_teacher_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        build_teacher_context_block("IMPORTANT FORMULAS", formulas, MAX_STUDY_GUIDE_INPUT_CHARS // 3),
+        build_teacher_context_block("WORKED EXAMPLES", worked_examples, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         build_teacher_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         build_teacher_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         build_teacher_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
@@ -10222,6 +10638,7 @@ async def generate_teacher_lesson_package(
         "balanced": "Keep each segment concise but informative.",
         "detailed": "Allow a little more depth and explanation inside each segment.",
     }.get(normalized_response_length, "Keep each segment concise but informative.")
+    normalized_voice_emotion = compact_text(voice_emotion, "warm").lower()
 
     def _generate_teacher_script(revision_note: str = "") -> dict[str, Any]:
         response = client.with_options(timeout=TEACHER_REQUEST_TIMEOUT).chat.completions.create(
@@ -10238,6 +10655,10 @@ async def generate_teacher_lesson_package(
                         "- Feel like a top private tutor: highly intelligent but easy to understand, conversational, motivating, adaptive to learner difficulty, and visually synchronized with the study guide.\n"
                         f"- Teaching style preference: {normalized_teaching_style}.\n"
                         f"- Response depth preference: {normalized_response_length}.\n"
+                        f"- Voice emotion preference: {normalized_voice_emotion}.\n"
+                        f"- Auto simplify: {'enabled' if auto_simplify else 'disabled'}.\n"
+                        f"- Exam mode: {'enabled' if exam_mode else 'disabled'}.\n"
+                        f"- Interactive mode: {'enabled' if interactive_mode else 'disabled'}.\n"
                         f"- Follow this preference guidance: {teaching_style_instruction} {response_length_instruction}\n\n"
                         "JSON rules:\n"
                         "- `segments` must be an array of objects with `section_heading`, `prompt`, and `text` only.\n"
@@ -10261,6 +10682,8 @@ async def generate_teacher_lesson_package(
                         "- If the concept is easier, be concise and focus on high-yield details.\n"
                         "- Spend the biggest share of time on WORKED EXAMPLES and STEP-BY-STEP EXPLANATIONS when those sections exist.\n"
                         "- Keep IMPORTANT FORMULAS conceptual by explaining what each term is doing, when the formula applies, and what assumption it depends on.\n"
+                        "- When the workspace includes worked examples, formulas, or transcript excerpts, treat them as first-class teaching context rather than ignoring them.\n"
+                        "- If a worked example is especially relevant, explicitly reference it in natural language such as 'look at example 2 in the worked examples tool' so the UI can move there without stopping the tutor.\n"
                         "- Never reuse the same reassurance sentence, transition sentence, or recap sentence across multiple segments.\n"
                         "- Occasionally point out common exam questions or common confusions when it fits.\n\n"
                         "Sync with the guide:\n"
@@ -10288,6 +10711,7 @@ async def generate_teacher_lesson_package(
                         "The student should feel personally guided by a premium AI tutor who teaches for true understanding, not just information delivery.\n"
                         "Do not explain flashcards. Do not explain practice questions and answers.\n"
                         "Spend extra time making worked examples, definitions, method steps, and exam-relevant misunderstandings very clear.\n"
+                        "Use the worked examples and formulas from the wider workspace when they help the teaching flow, not only the top-level guide summary.\n"
                         "When a section is difficult, slow down to sentence-by-sentence teaching rather than rushing through it.\n"
                         "Do not restate the same point in later segments unless the later segment adds a new angle, deeper reason, or new application.\n"
                         "Filter out slide footers, institution names, dates, slide numbers, page numbers, copyright text, and any unrelated template or metadata before writing the spoken lesson.\n"
@@ -12768,18 +13192,26 @@ async def run_teacher_lesson_job(
     job_id: str,
     summary: str,
     transcript: str,
+    formulas: str,
+    worked_examples: str,
     lecture_notes: str,
     lecture_slides: str,
     past_question_papers: str,
     output_language: str,
     teaching_style: str = "adaptive",
     response_length: str = "balanced",
+    voice_emotion: str = "warm",
+    auto_simplify: bool = True,
+    exam_mode: bool = False,
+    interactive_mode: bool = True,
 ):
     try:
         update_job(job_id, status="processing", stage="Starting tutor session", progress=8)
         teacher_package = await generate_teacher_lesson_package(
             summary,
             transcript,
+            formulas,
+            worked_examples,
             lecture_notes,
             lecture_slides,
             past_question_papers,
@@ -12787,6 +13219,10 @@ async def run_teacher_lesson_job(
             output_language,
             teaching_style,
             response_length,
+            voice_emotion,
+            auto_simplify,
+            exam_mode,
+            interactive_mode,
         )
         update_job(
             job_id,
@@ -13288,14 +13724,20 @@ async def create_teacher_lesson(
     enforce_rate_limit(scope="generate_teacher_lesson", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
+    formulas = payload.formulas.strip()
+    worked_examples = payload.worked_examples.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
     teaching_style = compact_text(payload.teaching_style, "adaptive").lower()
     response_length = compact_text(payload.response_length, "balanced").lower()
+    voice_emotion = compact_text(payload.voice_emotion, "warm").lower()
+    auto_simplify = bool(payload.auto_simplify)
+    exam_mode = bool(payload.exam_mode)
+    interactive_mode = bool(payload.interactive_mode)
 
-    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+    if not any([summary, transcript, formulas, worked_examples, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
             detail="Generate a study guide or add lecture material before starting Mabaso AI Tutor.",
@@ -13309,12 +13751,18 @@ async def create_teacher_lesson(
             job_id,
             summary,
             transcript,
+            formulas,
+            worked_examples,
             lecture_notes,
             lecture_slides,
             past_question_papers,
             output_language,
             teaching_style,
             response_length,
+            voice_emotion,
+            auto_simplify,
+            exam_mode,
+            interactive_mode,
         )
     )
     record_audit_log(
@@ -13327,6 +13775,294 @@ async def create_teacher_lesson(
         metadata={"job_id": job_id, "language": output_language},
     )
     return {"job_id": job_id}
+
+
+@app.post("/realtime/tutor/context")
+async def get_realtime_tutor_context(
+    payload: RealtimeTutorConfigRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(
+        scope="realtime_tutor_context",
+        request=request,
+        limit=90,
+        window_seconds=15 * 60,
+        identity=current_user,
+    )
+    output_language = normalize_output_language(payload.language)
+    response_length = compact_text(payload.response_length, "balanced").lower()
+    teaching_style = compact_text(payload.teaching_style, "adaptive").lower()
+    voice_emotion = compact_text(payload.voice_emotion, "warm").lower()
+    realtime_profile = normalize_realtime_tutor_profile(payload.realtime_profile)
+    selected_model = select_realtime_tutor_model(
+        summary=payload.summary.strip(),
+        transcript=payload.transcript.strip(),
+        formulas=payload.formulas.strip(),
+        worked_examples=payload.worked_examples.strip(),
+        lecture_notes=payload.lecture_notes.strip(),
+        lecture_slides=payload.lecture_slides.strip(),
+        past_question_papers=payload.past_question_papers.strip(),
+        response_length=response_length,
+        exam_mode=bool(payload.exam_mode),
+        realtime_profile=realtime_profile,
+    )
+    selected_voice = normalize_realtime_tutor_voice(payload.preferred_voice)
+    instructions = build_realtime_tutor_instructions(
+        summary=payload.summary.strip(),
+        transcript=payload.transcript.strip(),
+        formulas=payload.formulas.strip(),
+        worked_examples=payload.worked_examples.strip(),
+        lecture_notes=payload.lecture_notes.strip(),
+        lecture_slides=payload.lecture_slides.strip(),
+        past_question_papers=payload.past_question_papers.strip(),
+        output_language=output_language,
+        teaching_style=teaching_style,
+        response_length=response_length,
+        voice_emotion=voice_emotion,
+        auto_simplify=bool(payload.auto_simplify),
+        exam_mode=bool(payload.exam_mode),
+        interactive_mode=bool(payload.interactive_mode),
+    )
+    remaining_seconds = get_realtime_tutor_remaining_seconds(current_user)
+    record_audit_log(
+        action="realtime_tutor.context",
+        email=current_user,
+        request=request,
+        resource_type="realtime_tutor",
+        resource_name=selected_model,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "voice": selected_voice,
+            "profile": realtime_profile,
+            "remaining_seconds": remaining_seconds,
+        },
+    )
+    return {
+        "instructions": instructions,
+        "selected_model": selected_model,
+        "selected_voice": selected_voice,
+        "realtime_profile": realtime_profile,
+        "remaining_seconds_today": remaining_seconds,
+        "daily_limit_seconds": REALTIME_TUTOR_DAILY_SECONDS,
+        "idle_timeout_ms": REALTIME_TUTOR_IDLE_TIMEOUT_MS,
+        "language_hint": normalize_realtime_tutor_language_hint(output_language),
+        "speech_speed": get_realtime_tutor_speed_multiplier(payload.speaking_pace),
+    }
+
+
+@app.post("/realtime/tutor/session")
+async def create_realtime_tutor_session(
+    payload: RealtimeTutorSessionRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(
+        scope="realtime_tutor_session",
+        request=request,
+        limit=24,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    ensure_openai_key()
+    offer_sdp = payload.offer_sdp.strip()
+    if not offer_sdp:
+        raise HTTPException(status_code=400, detail="Missing SDP offer for realtime tutor session.")
+
+    remaining_seconds = get_realtime_tutor_remaining_seconds(current_user)
+    if remaining_seconds <= 0:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "You have reached today's free Live AI Tutor voice limit. "
+                f"Try again after the next UTC day starts."
+            ),
+        )
+
+    output_language = normalize_output_language(payload.language)
+    response_length = compact_text(payload.response_length, "balanced").lower()
+    teaching_style = compact_text(payload.teaching_style, "adaptive").lower()
+    voice_emotion = compact_text(payload.voice_emotion, "warm").lower()
+    realtime_profile = normalize_realtime_tutor_profile(payload.realtime_profile)
+    selected_model = select_realtime_tutor_model(
+        summary=payload.summary.strip(),
+        transcript=payload.transcript.strip(),
+        formulas=payload.formulas.strip(),
+        worked_examples=payload.worked_examples.strip(),
+        lecture_notes=payload.lecture_notes.strip(),
+        lecture_slides=payload.lecture_slides.strip(),
+        past_question_papers=payload.past_question_papers.strip(),
+        response_length=response_length,
+        exam_mode=bool(payload.exam_mode),
+        realtime_profile=realtime_profile,
+    )
+    selected_voice = normalize_realtime_tutor_voice(payload.preferred_voice)
+    instructions = build_realtime_tutor_instructions(
+        summary=payload.summary.strip(),
+        transcript=payload.transcript.strip(),
+        formulas=payload.formulas.strip(),
+        worked_examples=payload.worked_examples.strip(),
+        lecture_notes=payload.lecture_notes.strip(),
+        lecture_slides=payload.lecture_slides.strip(),
+        past_question_papers=payload.past_question_papers.strip(),
+        output_language=output_language,
+        teaching_style=teaching_style,
+        response_length=response_length,
+        voice_emotion=voice_emotion,
+        auto_simplify=bool(payload.auto_simplify),
+        exam_mode=bool(payload.exam_mode),
+        interactive_mode=bool(payload.interactive_mode),
+    )
+    session_config = {
+        "type": "realtime",
+        "model": selected_model,
+        "output_modalities": ["audio", "text"],
+        "instructions": instructions,
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "noise_reduction": {"type": "near_field"},
+                "transcription": {
+                    "model": REALTIME_TUTOR_TRANSCRIPTION_MODEL,
+                    "language": normalize_realtime_tutor_language_hint(output_language),
+                },
+                "turn_detection": {
+                    "type": "server_vad",
+                    "create_response": True,
+                    "interrupt_response": True,
+                    "idle_timeout_ms": REALTIME_TUTOR_IDLE_TIMEOUT_MS,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 600,
+                    "threshold": 0.45,
+                },
+            },
+            "output": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "voice": selected_voice,
+                "speed": get_realtime_tutor_speed_multiplier(payload.speaking_pace),
+            },
+        },
+    }
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/realtime/calls",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '').strip()}",
+                "OpenAI-Safety-Identifier": hash_value(current_user),
+            },
+            files=[
+                ("sdp", ("offer.sdp", offer_sdp, "application/sdp")),
+                ("session", (None, json.dumps(session_config), "application/json")),
+            ],
+            timeout=45,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="Could not start the realtime tutor session.") from exc
+
+    if not response.ok:
+        response_detail = compact_text(response.text, "OpenAI rejected the realtime tutor session request.")
+        raise HTTPException(status_code=502, detail=response_detail[:500])
+
+    session_id = create_realtime_tutor_session_record(
+        email=current_user,
+        model=selected_model,
+        profile=realtime_profile,
+        voice=selected_voice,
+        metadata={
+            "language": output_language,
+            "teaching_style": teaching_style,
+            "response_length": response_length,
+            "exam_mode": bool(payload.exam_mode),
+        },
+    )
+    record_audit_log(
+        action="realtime_tutor.session_start",
+        email=current_user,
+        request=request,
+        resource_type="realtime_tutor",
+        resource_name=selected_model,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "session_id": session_id,
+            "voice": selected_voice,
+            "profile": realtime_profile,
+            "remaining_seconds": remaining_seconds,
+        },
+    )
+    return {
+        "session_id": session_id,
+        "answer_sdp": response.text,
+        "selected_model": selected_model,
+        "selected_voice": selected_voice,
+        "realtime_profile": realtime_profile,
+        "max_session_seconds": remaining_seconds,
+        "seconds_remaining_today": remaining_seconds,
+        "daily_limit_seconds": REALTIME_TUTOR_DAILY_SECONDS,
+        "idle_timeout_ms": REALTIME_TUTOR_IDLE_TIMEOUT_MS,
+    }
+
+
+@app.post("/realtime/tutor/session/{session_id}/activity")
+async def mark_realtime_tutor_session_activity(
+    session_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    enforce_rate_limit(
+        scope="realtime_tutor_activity",
+        request=request,
+        limit=240,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    updated_row = touch_realtime_tutor_session_record(session_id, current_user, end_session=False)
+    if not updated_row:
+        raise HTTPException(status_code=404, detail="Realtime tutor session not found.")
+    return {
+        "session_id": session_id,
+        "seconds_remaining_today": get_realtime_tutor_remaining_seconds(current_user),
+        "daily_limit_seconds": REALTIME_TUTOR_DAILY_SECONDS,
+    }
+
+
+@app.post("/realtime/tutor/session/{session_id}/close")
+async def close_realtime_tutor_session(
+    session_id: str,
+    payload: RealtimeTutorSessionCloseRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    updated_row = touch_realtime_tutor_session_record(session_id, current_user, end_session=True)
+    if not updated_row:
+        raise HTTPException(status_code=404, detail="Realtime tutor session not found.")
+    session_started_at = parse_history_datetime(updated_row["started_at"], started_at)
+    session_ended_at = resolve_realtime_tutor_session_end(updated_row, started_at)
+    used_seconds = max(0, int((session_ended_at - session_started_at).total_seconds()))
+    remaining_seconds = get_realtime_tutor_remaining_seconds(current_user)
+    record_audit_log(
+        action="realtime_tutor.session_end",
+        email=current_user,
+        request=request,
+        resource_type="realtime_tutor",
+        resource_name=compact_text(updated_row.get("model"), "realtime_tutor"),
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "session_id": session_id,
+            "used_seconds": used_seconds,
+            "remaining_seconds": remaining_seconds,
+            "reason": compact_text(payload.reason),
+        },
+    )
+    return {
+        "session_id": session_id,
+        "used_seconds": used_seconds,
+        "seconds_remaining_today": remaining_seconds,
+        "daily_limit_seconds": REALTIME_TUTOR_DAILY_SECONDS,
+    }
 
 
 @app.post("/generate-podcast/")
