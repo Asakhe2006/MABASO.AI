@@ -76,6 +76,10 @@ const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
+const TEACHER_REALTIME_CONNECT_TIMEOUT_MS = 18000;
+const TEACHER_REALTIME_SESSION_EVENT_TIMEOUT_MS = 12000;
+const TEACHER_REALTIME_MAX_RECONNECT_ATTEMPTS = 4;
+const TEACHER_REALTIME_RECONNECT_BASE_DELAY_MS = 1200;
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
@@ -3571,6 +3575,15 @@ export default function App() {
   const teacherRealtimeHeartbeatTimerRef = useRef(null);
   const teacherRealtimeInactivityTimerRef = useRef(null);
   const teacherRealtimeMicSleepTimerRef = useRef(null);
+  const teacherRealtimeReconnectTimerRef = useRef(null);
+  const teacherRealtimeDisconnectTimerRef = useRef(null);
+  const teacherRealtimeGreetingTimerRef = useRef(null);
+  const teacherRealtimeAudioContextRef = useRef(null);
+  const teacherRealtimeStartupRunRef = useRef(0);
+  const teacherRealtimeReconnectAttemptRef = useRef(0);
+  const teacherRealtimeShouldReconnectRef = useRef(false);
+  const teacherRealtimeStartReasonRef = useRef("manual_start");
+  const teacherRealtimeEventWaitersRef = useRef([]);
   const teacherRealtimeAssistantDraftRef = useRef("");
   const teacherRealtimeContextHashRef = useRef("");
   const tutorCameraStreamRef = useRef(null);
@@ -4556,6 +4569,31 @@ export default function App() {
       connection?.removeEventListener?.("change", syncNetwork);
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return undefined;
+    const handleVisibilityResume = () => {
+      if (document.hidden || !teacherRealtimeRemoteAudioRef.current || !teacherRealtimeShouldReconnectRef.current) return;
+      resumeTeacherRealtimeAudioOutput().catch(() => {});
+    };
+    const handleOnlineRecovery = () => {
+      if (!teacherRealtimeShouldReconnectRef.current || isTeacherRealtimeConnected || isTeacherRealtimeConnecting) return;
+      scheduleTeacherRealtimeReconnect("network_restored");
+    };
+    const handlePageHide = () => {
+      teacherRealtimeShouldReconnectRef.current = false;
+      teacherRealtimeStartupRunRef.current += 1;
+      closeTeacherRealtimeRuntime();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityResume);
+    window.addEventListener("online", handleOnlineRecovery);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityResume);
+      window.removeEventListener("online", handleOnlineRecovery);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [isTeacherRealtimeConnected, isTeacherRealtimeConnecting]);
 
   useEffect(() => {
     if (teacherLessonData.segments.length) return;
@@ -9655,7 +9693,141 @@ export default function App() {
     realtime_profile: teacherRealtimeProfile,
   });
 
-  const clearTeacherRealtimeTimers = () => {
+  const createTeacherRealtimeStartupError = (code, message, { retryable = false, cause = null } = {}) => {
+    const error = new Error(String(message || "Live tutor startup failed.").trim());
+    error.code = code;
+    error.retryable = Boolean(retryable);
+    if (cause) error.cause = cause;
+    return error;
+  };
+
+  const normalizeTeacherRealtimeStartupError = (error, fallbackCode = "realtime_failed") => {
+    if (error?.code && error?.message) {
+      return error;
+    }
+
+    const message = String(error?.message || "").trim();
+    const responseStatus = Number(error?.response?.status || error?.status || 0);
+
+    if (error?.name === "NotAllowedError" || /permission|microphone denied|not allowed/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "microphone_denied",
+        "Microphone access was denied. Allow microphone access in your browser and try Start Live again.",
+      );
+    }
+
+    if (error?.name === "NotFoundError" || /device not found|no audio track|audio stream unavailable/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "audio_stream_unavailable",
+        "No working microphone stream was found. Check your microphone and try again.",
+      );
+    }
+
+    if (
+      error?.name === "NotReadableError"
+      || /could not start audio source|device in use|track start|hardware error|notreadable/i.test(message)
+    ) {
+      return createTeacherRealtimeStartupError(
+        "audio_stream_unavailable",
+        "The browser could not open your microphone stream. Close other apps using the mic and try again.",
+      );
+    }
+
+    if (responseStatus === 401 || responseStatus === 403 || /openai auth failed|backend api key/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "openai_auth_failed",
+        "OpenAI authentication failed for Live AI Tutor. Check backend API access and try again later.",
+      );
+    }
+
+    if (/invalid session|realtime tutor session as invalid|invalid realtime tutor session|missing sdp offer|session created timed out|session answer/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "invalid_session",
+        "The Live AI Tutor session could not be created correctly. Please try Start Live again.",
+        { retryable: true },
+      );
+    }
+
+    if (/vad|turn_detection|session update|session updated timed out/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "vad_initialization_failed",
+        "Voice detection could not finish initializing. Please try Start Live again.",
+        { retryable: true },
+      );
+    }
+
+    if (/autoplay|audio playback|audio output|audio context/i.test(message)) {
+      return createTeacherRealtimeStartupError(
+        "audio_stream_unavailable",
+        "The tutor audio output could not start. Bring the tab to the front and tap Start Live again.",
+        { retryable: true },
+      );
+    }
+
+    if (
+      /data channel|peer connection|webrtc|control channel|connection timeout|failed to fetch|server wakes up|could not reach the mabaso server/i.test(message)
+      || [408, 409, 425, 429, 500, 502, 503, 504].includes(responseStatus)
+    ) {
+      return createTeacherRealtimeStartupError(
+        "websocket_failed",
+        message || "The Live AI Tutor control connection failed to start.",
+        { retryable: isTransientHttpStatus(responseStatus) || isTransientServerConnectionMessage(message) || !responseStatus },
+      );
+    }
+
+    return createTeacherRealtimeStartupError(
+      fallbackCode,
+      message || "Live tutor connection failed.",
+      { retryable: Boolean(error?.retryable) },
+    );
+  };
+
+  const clearTeacherRealtimeEventWaiters = (error = null) => {
+    const waiters = teacherRealtimeEventWaitersRef.current.splice(0, teacherRealtimeEventWaitersRef.current.length);
+    waiters.forEach((waiter) => {
+      if (waiter.timer) window.clearTimeout(waiter.timer);
+      if (error) waiter.reject(error);
+    });
+  };
+
+  const waitForTeacherRealtimeEvent = (
+    matcher,
+    {
+      timeoutMs = TEACHER_REALTIME_SESSION_EVENT_TIMEOUT_MS,
+      errorCode = "realtime_failed",
+      timeoutMessage = "Timed out waiting for the live tutor session.",
+    } = {},
+  ) => new Promise((resolve, reject) => {
+    const waiter = {
+      matcher,
+      resolve: (event) => {
+        if (waiter.timer) window.clearTimeout(waiter.timer);
+        resolve(event);
+      },
+      reject: (reason) => {
+        if (waiter.timer) window.clearTimeout(waiter.timer);
+        reject(reason);
+      },
+      timer: window.setTimeout(() => {
+        teacherRealtimeEventWaitersRef.current = teacherRealtimeEventWaitersRef.current.filter((item) => item !== waiter);
+        reject(createTeacherRealtimeStartupError(errorCode, timeoutMessage, { retryable: true }));
+      }, timeoutMs),
+    };
+    teacherRealtimeEventWaitersRef.current.push(waiter);
+  });
+
+  const ensureTeacherRealtimeRunActive = (runId) => {
+    if (runId !== teacherRealtimeStartupRunRef.current) {
+      throw createTeacherRealtimeStartupError("startup_superseded", "A newer Live AI Tutor startup replaced this one.");
+    }
+  };
+
+  const getTeacherRealtimeReconnectDelayMs = (attempt) => Math.min(
+    12_000,
+    TEACHER_REALTIME_RECONNECT_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
+  );
+
+  const clearTeacherRealtimeTimers = ({ preserveReconnect = false } = {}) => {
     if (teacherRealtimeHeartbeatTimerRef.current) {
       window.clearInterval(teacherRealtimeHeartbeatTimerRef.current);
       teacherRealtimeHeartbeatTimerRef.current = null;
@@ -9668,17 +9840,44 @@ export default function App() {
       window.clearTimeout(teacherRealtimeMicSleepTimerRef.current);
       teacherRealtimeMicSleepTimerRef.current = null;
     }
+    if (teacherRealtimeDisconnectTimerRef.current) {
+      window.clearTimeout(teacherRealtimeDisconnectTimerRef.current);
+      teacherRealtimeDisconnectTimerRef.current = null;
+    }
+    if (teacherRealtimeGreetingTimerRef.current) {
+      window.clearTimeout(teacherRealtimeGreetingTimerRef.current);
+      teacherRealtimeGreetingTimerRef.current = null;
+    }
+    if (!preserveReconnect && teacherRealtimeReconnectTimerRef.current) {
+      window.clearTimeout(teacherRealtimeReconnectTimerRef.current);
+      teacherRealtimeReconnectTimerRef.current = null;
+    }
   };
 
-  const closeTeacherRealtimeRuntime = () => {
-    clearTeacherRealtimeTimers();
+  const closeTeacherRealtimeAudioOutput = async () => {
+    const audioContext = teacherRealtimeAudioContextRef.current;
+    teacherRealtimeAudioContextRef.current = null;
+    if (audioContext) {
+      try {
+        await audioContext.close();
+      } catch {
+        // Ignore close failures from browsers that already released the context.
+      }
+    }
+  };
+
+  const closeTeacherRealtimeRuntime = ({ preserveReconnect = false } = {}) => {
+    clearTeacherRealtimeTimers({ preserveReconnect });
+    clearTeacherRealtimeEventWaiters(createTeacherRealtimeStartupError("realtime_closed", "Live tutor connection closed."));
     teacherRealtimeDataChannelRef.current?.close?.();
     teacherRealtimePeerConnectionRef.current?.close?.();
     teacherRealtimeLocalStreamRef.current?.getTracks?.().forEach((track) => track.stop());
     teacherRealtimeRemoteAudioRef.current?.pause?.();
     if (teacherRealtimeRemoteAudioRef.current) {
       teacherRealtimeRemoteAudioRef.current.srcObject = null;
+      teacherRealtimeRemoteAudioRef.current.remove?.();
     }
+    closeTeacherRealtimeAudioOutput().catch(() => {});
     teacherRealtimeDataChannelRef.current = null;
     teacherRealtimePeerConnectionRef.current = null;
     teacherRealtimeLocalStreamRef.current = null;
@@ -9705,6 +9904,9 @@ export default function App() {
   };
 
   const endTeacherRealtimeSession = async ({ reason = "", announce = true } = {}) => {
+    teacherRealtimeShouldReconnectRef.current = false;
+    teacherRealtimeReconnectAttemptRef.current = 0;
+    teacherRealtimeStartupRunRef.current += 1;
     const sessionId = teacherRealtimeSessionIdRef.current;
     teacherRealtimeSessionIdRef.current = "";
     closeTeacherRealtimeRuntime();
@@ -9774,6 +9976,40 @@ export default function App() {
     }
   };
 
+  const resumeTeacherRealtimeAudioOutput = async (remoteAudio = teacherRealtimeRemoteAudioRef.current) => {
+    if (typeof window === "undefined") return;
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextCtor && !teacherRealtimeAudioContextRef.current) {
+      try {
+        teacherRealtimeAudioContextRef.current = new AudioContextCtor();
+      } catch {
+        teacherRealtimeAudioContextRef.current = null;
+      }
+    }
+    if (teacherRealtimeAudioContextRef.current?.state === "suspended") {
+      try {
+        await teacherRealtimeAudioContextRef.current.resume();
+      } catch {
+        throw createTeacherRealtimeStartupError(
+          "audio_stream_unavailable",
+          "The tutor audio context is suspended in this browser tab.",
+          { retryable: true },
+        );
+      }
+    }
+    if (remoteAudio?.srcObject) {
+      try {
+        await remoteAudio.play?.();
+      } catch {
+        throw createTeacherRealtimeStartupError(
+          "audio_stream_unavailable",
+          "The tutor audio playback could not start in this browser.",
+          { retryable: true },
+        );
+      }
+    }
+  };
+
   const sendTeacherRealtimeEvent = (event) => {
     const channel = teacherRealtimeDataChannelRef.current;
     if (!channel || channel.readyState !== "open") return false;
@@ -9806,6 +10042,11 @@ export default function App() {
     });
   };
 
+  const sendTeacherRealtimeResponseRequest = ({ audio = true } = {}) => sendTeacherRealtimeEvent({
+    type: "response.create",
+    response: { modalities: audio ? ["audio", "text"] : ["text"] },
+  });
+
   const refreshTeacherRealtimeContext = async ({ announce = false } = {}) => {
     if (!isTeacherRealtimeConnected) return false;
     const payload = buildTeacherRealtimeRequestPayload();
@@ -9835,7 +10076,7 @@ export default function App() {
     teacherRealtimeContextHashRef.current = contextSignature;
     setTeacherRealtimeModel(data.selected_model || "");
     setTeacherRealtimeRemainingSeconds(Number(data.remaining_seconds_today || teacherRealtimeRemainingSeconds || 300));
-    sendTeacherRealtimeEvent({
+    const updated = sendTeacherRealtimeEvent({
       type: "session.update",
       session: {
         model: data.selected_model || teacherRealtimeModel || "gpt-realtime-mini",
@@ -9845,7 +10086,7 @@ export default function App() {
           input: {
             turn_detection: {
               type: "server_vad",
-              create_response: true,
+              create_response: false,
               interrupt_response: true,
               idle_timeout_ms: Number(data.idle_timeout_ms || 8000),
             },
@@ -9856,6 +10097,13 @@ export default function App() {
         },
       },
     });
+    if (!updated) {
+      throw createTeacherRealtimeStartupError(
+        "vad_initialization_failed",
+        "The live tutor control channel was not ready for voice detection setup.",
+        { retryable: true },
+      );
+    }
     if (announce) {
       setStatus("Live tutor context refreshed from the current workspace.");
     }
@@ -9865,6 +10113,16 @@ export default function App() {
   const handleTeacherRealtimeEvent = (event) => {
     const eventType = String(event?.type || "").trim();
     if (!eventType) return;
+    teacherRealtimeEventWaitersRef.current = teacherRealtimeEventWaitersRef.current.filter((waiter) => {
+      try {
+        if (!waiter.matcher(event)) return true;
+        if (waiter.timer) window.clearTimeout(waiter.timer);
+        waiter.resolve(event);
+        return false;
+      } catch {
+        return true;
+      }
+    });
     touchTeacherRealtimeActivity({ quiet: true });
     if (eventType === "input_audio_buffer.speech_started") {
       setIsTeacherListening(true);
@@ -9873,9 +10131,8 @@ export default function App() {
       return;
     }
     if (eventType === "input_audio_buffer.speech_stopped") {
-      setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
-      setIsTeacherQuestionLoading(true);
-      setTeacherQuestionStatus("Thinking...");
+      setIsTeacherListening(false);
+      setTeacherQuestionStatus(isTeacherRealtimeMicActive ? "Release to ask the tutor." : "Question captured.");
       return;
     }
     if (eventType === "input_audio_buffer.timeout_triggered") {
@@ -9906,7 +10163,11 @@ export default function App() {
       setTeacherQuestionStatus("Thinking...");
       return;
     }
-    if (eventType === "response.output_text.delta" || eventType === "response.audio_transcript.delta") {
+    if (
+      eventType === "response.output_text.delta"
+      || eventType === "response.audio_transcript.delta"
+      || eventType === "response.output_audio_transcript.delta"
+    ) {
       const deltaText = String(event?.delta || event?.text || event?.transcript || "").replace(/\s+/g, " ").trim();
       if (deltaText) {
         teacherRealtimeAssistantDraftRef.current = `${teacherRealtimeAssistantDraftRef.current} ${deltaText}`.replace(/\s+/g, " ").trim();
@@ -9914,6 +10175,15 @@ export default function App() {
       setIsTeacherQuestionLoading(false);
       setIsTeacherAnswering(true);
       setTeacherQuestionStatus("Explaining...");
+      return;
+    }
+    if (eventType === "response.output_audio.delta") {
+      setIsTeacherQuestionLoading(false);
+      setIsTeacherAnswering(true);
+      setTeacherQuestionStatus("Explaining...");
+      resumeTeacherRealtimeAudioOutput().catch((audioError) => {
+        setError(normalizeTeacherRealtimeStartupError(audioError, "audio_stream_unavailable").message);
+      });
       return;
     }
     if (eventType === "response.done") {
@@ -9929,24 +10199,73 @@ export default function App() {
       }
       setIsTeacherQuestionLoading(false);
       setIsTeacherAnswering(false);
-      setTeacherQuestionStatus("Live tutor ready. Tap Speak when you want to talk.");
+      setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
       return;
     }
     if (eventType === "error") {
-      const message = String(event?.error?.message || event?.message || "Realtime tutor error.").trim();
-      setError(message);
-      setTeacherQuestionStatus("Realtime tutor hit an error.");
+      const startupError = normalizeTeacherRealtimeStartupError(
+        { message: String(event?.error?.message || event?.message || "Realtime tutor error.").trim() },
+        "realtime_failed",
+      );
+      setError(startupError.message);
+      setTeacherQuestionStatus(describeTeacherRealtimeFailure(startupError));
+      if (teacherRealtimeShouldReconnectRef.current && startupError.retryable) {
+        scheduleTeacherRealtimeReconnect("realtime_event_error", startupError);
+      }
     }
   };
 
-  const startTeacherRealtimeSession = async () => {
-    if (isTeacherRealtimeConnecting) return;
-    if (isTeacherRealtimeConnected) {
+  const describeTeacherRealtimeFailure = (startupError) => {
+    switch (startupError?.code) {
+      case "microphone_denied":
+        return "Microphone permission is required for Live AI Tutor.";
+      case "websocket_failed":
+        return "The live tutor control connection failed.";
+      case "invalid_session":
+        return "The live tutor session could not be initialized.";
+      case "openai_auth_failed":
+        return "The live tutor backend could not authenticate.";
+      case "audio_stream_unavailable":
+        return "The tutor audio stream is unavailable.";
+      case "vad_initialization_failed":
+        return "Voice detection could not finish starting.";
+      default:
+        return "Live tutor connection failed.";
+    }
+  };
+
+  const scheduleTeacherRealtimeReconnect = (reason = "transport_failed", startupError = null) => {
+    if (!teacherRealtimeShouldReconnectRef.current || teacherRealtimeReconnectTimerRef.current) return;
+    const nextAttempt = teacherRealtimeReconnectAttemptRef.current + 1;
+    if (nextAttempt > TEACHER_REALTIME_MAX_RECONNECT_ATTEMPTS) {
+      teacherRealtimeShouldReconnectRef.current = false;
+      setIsTeacherRealtimeConnecting(false);
+      setTeacherQuestionStatus("Live tutor could not reconnect automatically.");
+      setStatus("Live tutor stopped after repeated reconnect failures.");
+      if (startupError?.message) setError(startupError.message);
+      return;
+    }
+    teacherRealtimeReconnectAttemptRef.current = nextAttempt;
+    const delayMs = getTeacherRealtimeReconnectDelayMs(nextAttempt);
+    teacherRealtimeStartupRunRef.current += 1;
+    closeTeacherRealtimeRuntime({ preserveReconnect: true });
+    setIsTeacherRealtimeConnecting(true);
+    setStatus("Live tutor is reconnecting in the background.");
+    setTeacherQuestionStatus(`Reconnecting live tutor in ${Math.ceil(delayMs / 1000)}s...`);
+    teacherRealtimeReconnectTimerRef.current = window.setTimeout(() => {
+      teacherRealtimeReconnectTimerRef.current = null;
+      startTeacherRealtimeSession({ reconnect: true, preserveTranscript: true, reconnectReason: reason }).catch(() => {});
+    }, delayMs);
+  };
+
+  const startTeacherRealtimeSession = async ({ reconnect = false, preserveTranscript = false, reconnectReason = "manual_start" } = {}) => {
+    if (isTeacherRealtimeConnecting && !reconnect) return;
+    if (isTeacherRealtimeConnected && !reconnect) {
       setTeacherQuestionStatus("Live tutor is already ready.");
       return;
     }
     if (typeof window === "undefined" || typeof window.RTCPeerConnection === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setError("Realtime tutor needs microphone + WebRTC support in this browser.");
+      setError(`Realtime tutor needs microphone + WebRTC support in ${detectSupportBrowser() || "this browser"}.`);
       return;
     }
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
@@ -9954,14 +10273,44 @@ export default function App() {
       return;
     }
 
+    const runId = teacherRealtimeStartupRunRef.current + 1;
+    teacherRealtimeStartupRunRef.current = runId;
+    teacherRealtimeShouldReconnectRef.current = true;
+    teacherRealtimeStartReasonRef.current = reconnectReason;
+    if (!reconnect) {
+      teacherRealtimeReconnectAttemptRef.current = 0;
+    }
+    if (teacherRealtimeReconnectTimerRef.current) {
+      window.clearTimeout(teacherRealtimeReconnectTimerRef.current);
+      teacherRealtimeReconnectTimerRef.current = null;
+    }
+
+    const previousSessionId = teacherRealtimeSessionIdRef.current;
+    teacherRealtimeSessionIdRef.current = "";
+    closeTeacherRealtimeRuntime({ preserveReconnect: true });
+    if (previousSessionId) {
+      authFetch(`/realtime/tutor/session/${encodeURIComponent(previousSessionId)}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reconnect ? reconnectReason : "session_restart" }),
+        timeoutMs: 12000,
+      }).catch(() => {});
+    }
+
     setIsTeacherRealtimeConnecting(true);
     setError("");
-    setTeacherQuestionStatus("Connecting live tutor...");
+    setStatus(reconnect ? "Reconnecting Live AI Tutor..." : "Preparing Live AI Tutor...");
+    setTeacherQuestionStatus(reconnect ? "Retrying live tutor connection..." : "Requesting microphone...");
     openProtectedAppPage("workspace");
     setActiveTab("tutor");
-    setTeacherTranscriptEntries([]);
+    if (!preserveTranscript) {
+      setTeacherTranscriptEntries([]);
+    }
     setTeacherPreviewTab("guide");
+    setTeacherQuestionAnswer("");
     teacherRealtimeContextHashRef.current = "";
+    let controlOpenTimeout = null;
+    let peerReadyTimeout = null;
 
     try {
       const localStream = await navigator.mediaDevices.getUserMedia({
@@ -9972,88 +10321,207 @@ export default function App() {
           channelCount: 1,
         },
       });
+      ensureTeacherRealtimeRunActive(runId);
+      if (!localStream?.active || !localStream.getAudioTracks?.().length) {
+        throw createTeacherRealtimeStartupError(
+          "audio_stream_unavailable",
+          "The browser returned no working microphone track for Live AI Tutor.",
+        );
+      }
       teacherRealtimeLocalStreamRef.current = localStream;
       localStream.getAudioTracks().forEach((track) => {
         track.enabled = false;
       });
 
-      const peerConnection = new window.RTCPeerConnection();
-      teacherRealtimePeerConnectionRef.current = peerConnection;
-
-      const remoteAudio = new Audio();
+      setTeacherQuestionStatus("Preparing tutor audio...");
+      const remoteAudio = document.createElement("audio");
       remoteAudio.autoplay = true;
       remoteAudio.playsInline = true;
+      remoteAudio.preload = "auto";
       remoteAudio.muted = Boolean(isTeacherMuted);
       remoteAudio.volume = isTeacherMuted ? 0 : 1;
+      remoteAudio.setAttribute("playsinline", "true");
+      remoteAudio.style.display = "none";
+      document.body.appendChild(remoteAudio);
       teacherRealtimeRemoteAudioRef.current = remoteAudio;
+      await resumeTeacherRealtimeAudioOutput(remoteAudio);
+      ensureTeacherRealtimeRunActive(runId);
 
+      setTeacherQuestionStatus("Opening live tutor control channel...");
+      const peerConnection = new window.RTCPeerConnection();
+      teacherRealtimePeerConnectionRef.current = peerConnection;
       const dataChannel = peerConnection.createDataChannel("oai-events");
       teacherRealtimeDataChannelRef.current = dataChannel;
 
-      peerConnection.ontrack = (event) => {
-        const [remoteStream] = event.streams || [];
-        if (remoteStream) {
-          remoteAudio.srcObject = remoteStream;
-          remoteAudio.play?.().catch(() => {});
-        }
+      let resolveControlOpen = null;
+      let rejectControlOpen = null;
+      const controlOpenPromise = new Promise((resolve, reject) => {
+        resolveControlOpen = resolve;
+        rejectControlOpen = reject;
+      });
+      let resolvePeerReady = null;
+      let rejectPeerReady = null;
+      const peerReadyPromise = new Promise((resolve, reject) => {
+        resolvePeerReady = resolve;
+        rejectPeerReady = reject;
+      });
+      let peerReadySettled = false;
+      const markPeerReady = () => {
+        if (peerReadySettled) return;
+        peerReadySettled = true;
+        resolvePeerReady?.();
       };
-      peerConnection.onconnectionstatechange = () => {
-        const connectionState = peerConnection.connectionState;
-        if (connectionState === "disconnected") {
-          setTeacherQuestionStatus("Live tutor connection is unstable. Reconnecting...");
+      const failPeerReady = (error) => {
+        if (peerReadySettled) return;
+        peerReadySettled = true;
+        rejectPeerReady?.(error);
+      };
+      controlOpenTimeout = window.setTimeout(() => {
+        rejectControlOpen?.(createTeacherRealtimeStartupError(
+          "websocket_failed",
+          "The live tutor control channel did not open in time.",
+          { retryable: true },
+        ));
+      }, TEACHER_REALTIME_CONNECT_TIMEOUT_MS);
+      peerReadyTimeout = window.setTimeout(() => {
+        failPeerReady(createTeacherRealtimeStartupError(
+          "websocket_failed",
+          "The live tutor peer connection did not finish connecting in time.",
+          { retryable: true },
+        ));
+      }, TEACHER_REALTIME_CONNECT_TIMEOUT_MS);
+      const sessionCreatedPromise = waitForTeacherRealtimeEvent(
+        (event) => event?.type === "session.created",
+        {
+          errorCode: "invalid_session",
+          timeoutMessage: "The live tutor session did not finish initializing.",
+        },
+      );
+
+      const handleTransportDisconnect = (message, { delayed = false } = {}) => {
+        const startupError = createTeacherRealtimeStartupError("websocket_failed", message, { retryable: true });
+        if (delayed) {
+          if (teacherRealtimeDisconnectTimerRef.current) return;
+          teacherRealtimeDisconnectTimerRef.current = window.setTimeout(() => {
+            teacherRealtimeDisconnectTimerRef.current = null;
+            if (!teacherRealtimeShouldReconnectRef.current) return;
+            scheduleTeacherRealtimeReconnect("transport_disconnected", startupError);
+          }, 2500);
           return;
         }
-        if (connectionState === "failed") {
-          closeTeacherRealtimeRuntime();
-          setTeacherQuestionStatus("Live tutor connection failed.");
+        scheduleTeacherRealtimeReconnect("transport_failed", startupError);
+      };
+
+      peerConnection.ontrack = (event) => {
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        const [remoteStream] = event.streams || [];
+        if (!remoteStream || !remoteStream.getAudioTracks?.().length) {
+          setError("Live tutor audio stream unavailable.");
+          return;
+        }
+        remoteAudio.srcObject = remoteStream;
+        resumeTeacherRealtimeAudioOutput(remoteAudio).catch((audioError) => {
+          const startupError = normalizeTeacherRealtimeStartupError(audioError, "audio_stream_unavailable");
+          setError(startupError.message);
+          setTeacherQuestionStatus("Tutor audio output is unavailable.");
+          if (teacherRealtimeShouldReconnectRef.current && startupError.retryable) {
+            scheduleTeacherRealtimeReconnect("audio_output_failed", startupError);
+          }
+        });
+      };
+      peerConnection.onconnectionstatechange = () => {
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        const connectionState = peerConnection.connectionState;
+        if (connectionState === "connected") {
+          if (teacherRealtimeDisconnectTimerRef.current) {
+            window.clearTimeout(teacherRealtimeDisconnectTimerRef.current);
+            teacherRealtimeDisconnectTimerRef.current = null;
+          }
+          markPeerReady();
+          return;
+        }
+        if (connectionState === "disconnected") {
+          setTeacherQuestionStatus("Live tutor connection dropped. Reconnecting...");
+          handleTransportDisconnect("The live tutor peer connection was interrupted.", { delayed: true });
+          return;
+        }
+        if (connectionState === "failed" || connectionState === "closed") {
+          const startupError = createTeacherRealtimeStartupError(
+            "websocket_failed",
+            "The live tutor peer connection failed.",
+            { retryable: true },
+          );
+          failPeerReady(startupError);
+          rejectControlOpen?.(startupError);
+          if (teacherRealtimeShouldReconnectRef.current) {
+            scheduleTeacherRealtimeReconnect("peer_connection_failed", startupError);
+          }
+        }
+      };
+      peerConnection.oniceconnectionstatechange = () => {
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        const iceState = peerConnection.iceConnectionState;
+        if (iceState === "connected" || iceState === "completed") {
+          if (teacherRealtimeDisconnectTimerRef.current) {
+            window.clearTimeout(teacherRealtimeDisconnectTimerRef.current);
+            teacherRealtimeDisconnectTimerRef.current = null;
+          }
+          markPeerReady();
+          return;
+        }
+        if (iceState === "disconnected") {
+          handleTransportDisconnect("The live tutor ICE connection was interrupted.", { delayed: true });
+          return;
+        }
+        if (iceState === "failed" || iceState === "closed") {
+          const startupError = createTeacherRealtimeStartupError(
+            "websocket_failed",
+            "The live tutor ICE connection failed.",
+            { retryable: true },
+          );
+          failPeerReady(startupError);
+          rejectControlOpen?.(startupError);
+          if (teacherRealtimeShouldReconnectRef.current) {
+            scheduleTeacherRealtimeReconnect("ice_failed", startupError);
+          }
         }
       };
       dataChannel.onmessage = (messageEvent) => {
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
         try {
           handleTeacherRealtimeEvent(JSON.parse(messageEvent.data));
         } catch {
           // Ignore malformed realtime events.
         }
       };
-      dataChannel.onopen = async () => {
-        setIsTeacherRealtimeConnecting(false);
-        setIsTeacherRealtimeConnected(true);
-        touchTeacherRealtimeActivity({ quiet: true });
-        teacherRealtimeHeartbeatTimerRef.current = window.setInterval(async () => {
-          if (!teacherRealtimeSessionIdRef.current) return;
-          try {
-            const heartbeatResponse = await authFetch(
-              `/realtime/tutor/session/${encodeURIComponent(teacherRealtimeSessionIdRef.current)}/activity`,
-              { method: "POST", timeoutMs: 12000 },
-            );
-            const heartbeatData = await parseJsonSafe(heartbeatResponse);
-            if (heartbeatResponse.ok && Number.isFinite(Number(heartbeatData.seconds_remaining_today))) {
-              setTeacherRealtimeRemainingSeconds(Number(heartbeatData.seconds_remaining_today));
-              if (Number(heartbeatData.seconds_remaining_today) <= 0) {
-                endTeacherRealtimeSession({ reason: "daily_limit", announce: true }).catch(() => {});
-              }
-            }
-          } catch {
-            // Connection grace handles short heartbeat misses.
-          }
-        }, 20_000);
-        try {
-          await refreshTeacherRealtimeContext();
-        } catch {
-          // The session can still continue with the server-provided startup context.
-        }
-        window.setTimeout(() => {
-          sendTeacherRealtimePrompt("Greet the student briefly and ask what they would like to study today.", { audio: true });
-        }, 250);
-        setStatus("Live tutor connected.");
-        setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
+      dataChannel.onopen = () => {
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        window.clearTimeout(controlOpenTimeout);
+        resolveControlOpen?.();
       };
       dataChannel.onclose = () => {
-        setIsTeacherRealtimeConnected(false);
-        setIsTeacherRealtimeMicActive(false);
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        const startupError = createTeacherRealtimeStartupError(
+          "websocket_failed",
+          "The live tutor control channel closed unexpectedly.",
+          { retryable: true },
+        );
+        rejectControlOpen?.(startupError);
+        if (teacherRealtimeShouldReconnectRef.current) {
+          scheduleTeacherRealtimeReconnect("data_channel_closed", startupError);
+        }
       };
       dataChannel.onerror = () => {
-        setError("Realtime tutor connection failed.");
+        if (runId !== teacherRealtimeStartupRunRef.current) return;
+        const startupError = createTeacherRealtimeStartupError(
+          "websocket_failed",
+          "The live tutor control channel hit an error.",
+          { retryable: true },
+        );
+        rejectControlOpen?.(startupError);
+        if (teacherRealtimeShouldReconnectRef.current) {
+          scheduleTeacherRealtimeReconnect("data_channel_error", startupError);
+        }
       };
 
       localStream.getTracks().forEach((track) => {
@@ -10062,18 +10530,29 @@ export default function App() {
 
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
+      ensureTeacherRealtimeRunActive(runId);
 
-      const response = await authFetch("/realtime/tutor/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...buildTeacherRealtimeRequestPayload(),
-          offer_sdp: offer.sdp,
-        }),
-        timeoutMs: 45000,
-      });
-      const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not start the live tutor session.");
+      setTeacherQuestionStatus("Creating secure tutor session...");
+      const { data } = await authJsonWithTransientRetries(
+        "/realtime/tutor/session",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...buildTeacherRealtimeRequestPayload(),
+            offer_sdp: offer.sdp,
+          }),
+        },
+        { timeoutMs: 45000, retries: 2 },
+      );
+      ensureTeacherRealtimeRunActive(runId);
+      if (!data?.session_id || !String(data?.answer_sdp || "").trim()) {
+        throw createTeacherRealtimeStartupError(
+          "invalid_session",
+          "The live tutor session response was incomplete.",
+          { retryable: true },
+        );
+      }
 
       teacherRealtimeSessionIdRef.current = data.session_id || "";
       setTeacherRealtimeModel(data.selected_model || "");
@@ -10081,18 +10560,82 @@ export default function App() {
       setTeacherRealtimeSessionCapSeconds(Number(data.max_session_seconds || data.daily_limit_seconds || 300));
       setTeacherSessionStartedAt(new Date().toISOString());
       setTeacherSessionElapsedSeconds(0);
+
+      setTeacherQuestionStatus("Finishing live connection...");
       await peerConnection.setRemoteDescription({
         type: "answer",
         sdp: String(data.answer_sdp || ""),
       });
-    } catch (err) {
-      closeTeacherRealtimeRuntime();
+      ensureTeacherRealtimeRunActive(runId);
+
+      await Promise.all([controlOpenPromise, peerReadyPromise, sessionCreatedPromise]);
+      window.clearTimeout(controlOpenTimeout);
+      window.clearTimeout(peerReadyTimeout);
+      ensureTeacherRealtimeRunActive(runId);
+
+      setTeacherQuestionStatus("Initializing voice detection...");
+      const sessionUpdatedPromise = waitForTeacherRealtimeEvent(
+        (event) => event?.type === "session.updated",
+        {
+          errorCode: "vad_initialization_failed",
+          timeoutMessage: "Live tutor voice detection did not finish initializing.",
+        },
+      );
+      await refreshTeacherRealtimeContext();
+      await sessionUpdatedPromise;
+      ensureTeacherRealtimeRunActive(runId);
+
+      setTeacherQuestionStatus("Starting transcript stream...");
+      await resumeTeacherRealtimeAudioOutput(remoteAudio);
+      ensureTeacherRealtimeRunActive(runId);
+
+      teacherRealtimeReconnectAttemptRef.current = 0;
+      setIsTeacherRealtimeConnecting(false);
+      setIsTeacherRealtimeConnected(true);
+      touchTeacherRealtimeActivity({ quiet: true });
+      teacherRealtimeHeartbeatTimerRef.current = window.setInterval(async () => {
+        if (!teacherRealtimeSessionIdRef.current) return;
+        try {
+          const heartbeatResponse = await authFetch(
+            `/realtime/tutor/session/${encodeURIComponent(teacherRealtimeSessionIdRef.current)}/activity`,
+            { method: "POST", timeoutMs: 12000 },
+          );
+          const heartbeatData = await parseJsonSafe(heartbeatResponse);
+          if (heartbeatResponse.ok && Number.isFinite(Number(heartbeatData.seconds_remaining_today))) {
+            setTeacherRealtimeRemainingSeconds(Number(heartbeatData.seconds_remaining_today));
+            if (Number(heartbeatData.seconds_remaining_today) <= 0) {
+              endTeacherRealtimeSession({ reason: "daily_limit", announce: true }).catch(() => {});
+            }
+          }
+        } catch {
+          // Short heartbeat misses can recover on the next interval.
+        }
+      }, 20_000);
+      teacherRealtimeGreetingTimerRef.current = window.setTimeout(() => {
+        sendTeacherRealtimePrompt("Greet the student briefly and ask what they would like to study today.", { audio: true });
+      }, 300);
+      setStatus("Live tutor connected.");
+      setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
+    } catch (error) {
+      if (typeof controlOpenTimeout !== "undefined") window.clearTimeout(controlOpenTimeout);
+      if (typeof peerReadyTimeout !== "undefined") window.clearTimeout(peerReadyTimeout);
+      const startupError = normalizeTeacherRealtimeStartupError(error, "realtime_failed");
+      if (startupError.code === "startup_superseded" || startupError.code === "realtime_closed") {
+        return;
+      }
+      teacherRealtimeStartupRunRef.current += 1;
+      closeTeacherRealtimeRuntime({ preserveReconnect: startupError.retryable });
       teacherRealtimeSessionIdRef.current = "";
       setTeacherRealtimeModel("");
-      setError(err.message || "Could not start the live tutor session.");
-      setTeacherQuestionStatus("Live tutor connection failed.");
-    } finally {
       setIsTeacherRealtimeConnecting(false);
+      setError(startupError.message);
+      setStatus("Live tutor could not start.");
+      setTeacherQuestionStatus(describeTeacherRealtimeFailure(startupError));
+      if (teacherRealtimeShouldReconnectRef.current && startupError.retryable) {
+        scheduleTeacherRealtimeReconnect(reconnectReason, startupError);
+      } else {
+        teacherRealtimeShouldReconnectRef.current = false;
+      }
     }
   };
 
@@ -12992,6 +13535,11 @@ export default function App() {
       setTeacherQuestionStatus("Start Live first, then hold Ask Question.");
       return;
     }
+    sendTeacherRealtimeEvent({ type: "input_audio_buffer.clear" });
+    if (isTeacherAnswering) {
+      sendTeacherRealtimeEvent({ type: "response.cancel" });
+      sendTeacherRealtimeEvent({ type: "output_audio_buffer.clear" });
+    }
     setTeacherRealtimeMicrophoneEnabled(true);
     setTeacherQuestionStatus("Listening... Release when you're done.");
   };
@@ -13002,6 +13550,11 @@ export default function App() {
     setIsTeacherListening(false);
     setIsTeacherQuestionLoading(true);
     setTeacherQuestionStatus("Thinking...");
+    if (!sendTeacherRealtimeResponseRequest({ audio: true })) {
+      setIsTeacherQuestionLoading(false);
+      setTeacherQuestionStatus("Live tutor control channel is unavailable.");
+      setError("The live tutor could not send your question for an answer.");
+    }
   };
 
   const openTutorWorkspaceTool = (tabId = "guide") => {

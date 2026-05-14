@@ -13930,7 +13930,7 @@ async def create_realtime_tutor_session(
                 },
                 "turn_detection": {
                     "type": "server_vad",
-                    "create_response": True,
+                    "create_response": False,
                     "interrupt_response": True,
                     "idle_timeout_ms": REALTIME_TUTOR_IDLE_TIMEOUT_MS,
                     "prefix_padding_ms": 300,
@@ -13960,11 +13960,45 @@ async def create_realtime_tutor_session(
             timeout=45,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail="Could not start the realtime tutor session.") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "The backend could not reach OpenAI while starting the realtime tutor session. "
+                "Please retry in a moment."
+            ),
+        ) from exc
 
     if not response.ok:
         response_detail = compact_text(response.text, "OpenAI rejected the realtime tutor session request.")
-        raise HTTPException(status_code=502, detail=response_detail[:500])
+        if response.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "OpenAI auth failed while creating the realtime tutor session. "
+                    "Check OPENAI_API_KEY and model access on the backend."
+                ),
+            )
+        if response.status_code in {400, 404, 409, 422}:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "OpenAI rejected the realtime tutor session as invalid. "
+                    f"{response_detail[:320]}"
+                ),
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"OpenAI failed to create the realtime tutor session with status {response.status_code}. "
+                f"{response_detail[:320]}"
+            ),
+        )
+
+    if not compact_text(response.text, "").strip():
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI returned an invalid realtime tutor session answer.",
+        )
 
     session_id = create_realtime_tutor_session_record(
         email=current_user,
