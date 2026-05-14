@@ -818,7 +818,7 @@ class RealtimeTutorConfigRequest(BaseModel):
 
 
 class RealtimeTutorSessionRequest(RealtimeTutorConfigRequest):
-    offer_sdp: str
+    offer_sdp: str = ""
 
 
 class RealtimeTutorSessionCloseRequest(BaseModel):
@@ -13866,6 +13866,7 @@ async def get_realtime_tutor_context(
 
 
 @app.post("/realtime/tutor/session")
+@app.post("/api/realtime/session")
 async def create_realtime_tutor_session(
     payload: RealtimeTutorSessionRequest,
     request: Request,
@@ -13880,9 +13881,6 @@ async def create_realtime_tutor_session(
         identity=current_user,
     )
     ensure_openai_key()
-    offer_sdp = payload.offer_sdp.strip()
-    if not offer_sdp:
-        raise HTTPException(status_code=400, detail="Missing SDP offer for realtime tutor session.")
 
     remaining_seconds = get_realtime_tutor_remaining_seconds(current_user)
     if remaining_seconds <= 0:
@@ -13953,33 +13951,39 @@ async def create_realtime_tutor_session(
 
     try:
         response = requests.post(
-            "https://api.openai.com/v1/realtime/calls",
+            "https://api.openai.com/v1/realtime/client_secrets",
             headers={
                 "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '').strip()}",
+                "Content-Type": "application/json",
                 "OpenAI-Safety-Identifier": hash_value(current_user),
             },
-            files=[
-                ("sdp", ("offer.sdp", offer_sdp, "application/sdp")),
-                ("session", (None, json.dumps(session_config), "application/json")),
-            ],
+            json={"session": session_config},
             timeout=45,
         )
     except requests.RequestException as exc:
         raise HTTPException(
             status_code=502,
             detail=(
-                "The backend could not reach OpenAI while starting the realtime tutor session. "
+                "The backend could not reach OpenAI while preparing the realtime tutor session. "
                 "Please retry in a moment."
             ),
         ) from exc
 
+    try:
+        response_data = response.json()
+    except ValueError:
+        response_data = {}
+
     if not response.ok:
-        response_detail = compact_text(response.text, "OpenAI rejected the realtime tutor session request.")
+        response_detail = compact_text(
+            json.dumps(response_data) if response_data else response.text,
+            "OpenAI rejected the realtime tutor session request.",
+        )
         if response.status_code in {401, 403}:
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "OpenAI auth failed while creating the realtime tutor session. "
+                    "OpenAI auth failed while creating the realtime tutor client secret. "
                     "Check OPENAI_API_KEY and model access on the backend."
                 ),
             )
@@ -13987,22 +13991,23 @@ async def create_realtime_tutor_session(
             raise HTTPException(
                 status_code=502,
                 detail=(
-                    "OpenAI rejected the realtime tutor session as invalid. "
+                    "OpenAI rejected the realtime tutor client secret request as invalid. "
                     f"{response_detail[:320]}"
                 ),
             )
         raise HTTPException(
             status_code=502,
             detail=(
-                f"OpenAI failed to create the realtime tutor session with status {response.status_code}. "
+                f"OpenAI failed to create the realtime tutor client secret with status {response.status_code}. "
                 f"{response_detail[:320]}"
             ),
         )
 
-    if not compact_text(response.text, "").strip():
+    client_secret = compact_text(((response_data.get("client_secret") or {}).get("value") if isinstance(response_data, dict) else ""), "")
+    if not client_secret:
         raise HTTPException(
             status_code=502,
-            detail="OpenAI returned an invalid realtime tutor session answer.",
+            detail="OpenAI returned an invalid realtime tutor client secret response.",
         )
 
     session_id = create_realtime_tutor_session_record(
@@ -14033,7 +14038,9 @@ async def create_realtime_tutor_session(
     )
     return {
         "session_id": session_id,
-        "answer_sdp": response.text,
+        "client_secret": response_data.get("client_secret", {}),
+        "openai_session_id": compact_text(str(response_data.get("id") or ""), ""),
+        "openai_session_expires_at": compact_text(str(response_data.get("expires_at") or ""), ""),
         "selected_model": selected_model,
         "selected_voice": selected_voice,
         "realtime_profile": realtime_profile,

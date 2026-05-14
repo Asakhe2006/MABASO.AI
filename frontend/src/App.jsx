@@ -9743,7 +9743,11 @@ export default function App() {
       );
     }
 
-    if (responseStatus === 401 || responseStatus === 403 || /openai auth failed|backend api key/i.test(message)) {
+    if (
+      responseStatus === 401
+      || responseStatus === 403
+      || /openai auth failed|backend api key|client secret|ephemeral token/i.test(message)
+    ) {
       return createTeacherRealtimeStartupError(
         "openai_auth_failed",
         "OpenAI authentication failed for Live AI Tutor. Check backend API access and try again later.",
@@ -10457,6 +10461,9 @@ export default function App() {
       peerConnection.onconnectionstatechange = () => {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
         const connectionState = peerConnection.connectionState;
+        if (typeof console !== "undefined") {
+          console.info("[Mabaso Live Tutor] peer connection state", connectionState);
+        }
         if (connectionState === "connected") {
           if (teacherRealtimeDisconnectTimerRef.current) {
             window.clearTimeout(teacherRealtimeDisconnectTimerRef.current);
@@ -10486,6 +10493,9 @@ export default function App() {
       peerConnection.oniceconnectionstatechange = () => {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
         const iceState = peerConnection.iceConnectionState;
+        if (typeof console !== "undefined") {
+          console.info("[Mabaso Live Tutor] ICE state", iceState);
+        }
         if (iceState === "connected" || iceState === "completed") {
           if (teacherRealtimeDisconnectTimerRef.current) {
             window.clearTimeout(teacherRealtimeDisconnectTimerRef.current);
@@ -10521,11 +10531,17 @@ export default function App() {
       };
       dataChannel.onopen = () => {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
+        if (typeof console !== "undefined") {
+          console.info("[Mabaso Live Tutor] data channel open", dataChannel.readyState);
+        }
         window.clearTimeout(controlOpenTimeout);
         resolveControlOpen?.();
       };
       dataChannel.onclose = () => {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
+        if (typeof console !== "undefined") {
+          console.warn("[Mabaso Live Tutor] data channel closed");
+        }
         const startupError = createTeacherRealtimeStartupError(
           "websocket_failed",
           "The live tutor control channel closed unexpectedly.",
@@ -10538,6 +10554,9 @@ export default function App() {
       };
       dataChannel.onerror = () => {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
+        if (typeof console !== "undefined") {
+          console.warn("[Mabaso Live Tutor] data channel error");
+        }
         const startupError = createTeacherRealtimeStartupError(
           "websocket_failed",
           "The live tutor control channel hit an error.",
@@ -10560,24 +10579,29 @@ export default function App() {
       setTeacherQuestionStatus("Creating secure tutor session...");
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "creating realtime session");
       const { data } = await authJsonWithTransientRetries(
-        "/realtime/tutor/session",
+        "/api/realtime/session",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...buildTeacherRealtimeRequestPayload(),
-            offer_sdp: offer.sdp,
-          }),
+          body: JSON.stringify(buildTeacherRealtimeRequestPayload()),
         },
         { timeoutMs: 45000, retries: 2 },
       );
       ensureTeacherRealtimeRunActive(runId);
-      if (!data?.session_id || !String(data?.answer_sdp || "").trim()) {
+      const clientSecret = String(data?.client_secret?.value || "").trim();
+      if (!data?.session_id || !clientSecret) {
         throw createTeacherRealtimeStartupError(
           "invalid_session",
-          "The live tutor session response was incomplete.",
+          "The live tutor session response did not include a valid client secret.",
           { retryable: true },
         );
+      }
+      if (typeof console !== "undefined") {
+        console.info("[Mabaso Live Tutor] backend session prepared", {
+          sessionId: data.session_id,
+          model: data.selected_model || "",
+          openaiSessionId: data.openai_session_id || "",
+        });
       }
 
       teacherRealtimeSessionIdRef.current = data.session_id || "";
@@ -10589,9 +10613,39 @@ export default function App() {
 
       setTeacherQuestionStatus("Finishing live connection...");
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "waiting for realtime confirmation");
+      const openAiRealtimeResponse = await fetchWithTimeout(
+        "https://api.openai.com/v1/realtime/calls",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${clientSecret}`,
+            "Content-Type": "application/sdp",
+          },
+          body: offer.sdp,
+        },
+        45_000,
+      );
+      const answerSdp = await openAiRealtimeResponse.text();
+      if (!openAiRealtimeResponse.ok) {
+        const openAiError = createTeacherRealtimeStartupError(
+          openAiRealtimeResponse.status === 401 || openAiRealtimeResponse.status === 403
+            ? "openai_auth_failed"
+            : "invalid_session",
+          answerSdp.replace(/\s+/g, " ").trim().slice(0, 500) || "OpenAI rejected the realtime call handshake.",
+          { retryable: openAiRealtimeResponse.status >= 500 },
+        );
+        openAiError.status = openAiRealtimeResponse.status;
+        throw openAiError;
+      }
+      if (typeof console !== "undefined") {
+        console.info("[Mabaso Live Tutor] OpenAI realtime call accepted", {
+          sessionId: data.session_id,
+          openaiStatus: openAiRealtimeResponse.status,
+        });
+      }
       await peerConnection.setRemoteDescription({
         type: "answer",
-        sdp: String(data.answer_sdp || ""),
+        sdp: answerSdp,
       });
       ensureTeacherRealtimeRunActive(runId);
 
