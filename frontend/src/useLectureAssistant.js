@@ -6,14 +6,16 @@ const ASSISTANT_TTS_STORAGE_KEY = "mabaso-lecture-assistant-tts";
 const MAX_SAVED_CONVERSATIONS = 24;
 const VOICE_CHAT_RESTART_DELAY_MS = 1100;
 const VOICE_CHAT_NETWORK_RETRY_DELAY_MS = 1800;
-const VOICE_CHAT_MAX_NETWORK_RETRIES = 2;
-const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 8000;
-const VOICE_CHAT_SILENCE_TIMEOUT_MS = 2600;
+const VOICE_CHAT_MAX_NETWORK_RETRIES = 3;
+const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 15000;
+const VOICE_CHAT_SILENCE_TIMEOUT_MS = 3800;
+const VOICE_CHAT_NO_SPEECH_RETRY_DELAY_MS = 650;
+const VOICE_CHAT_MAX_NO_SPEECH_RETRIES = 3;
 const VOICE_REPLY_CHUNK_PAUSE_MS = 120;
 const VOICE_STREAM_MIN_CHARS = 120;
 const VOICE_STREAM_MAX_CHARS = 240;
 const VOICE_CHAT_UNEXPECTED_END_RETRY_DELAY_MS = 900;
-const VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES = 2;
+const VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES = 3;
 
 function compactText(value = "", fallback = "") {
   const text = String(value || "").replace(/\u0000/g, " ").trim();
@@ -44,16 +46,67 @@ function deriveConversationTitle(question = "", lectureLabel = "") {
   return cleaned.length > 56 ? `${cleaned.slice(0, 53).trim()}...` : cleaned;
 }
 
-function resolveSpeechLocale(language = "English") {
+function resolveSpeechRecognitionLocales(language = "English") {
   const normalized = compactText(language, "English").toLowerCase();
-  if (normalized === "isizulu") return "zu-ZA";
-  if (normalized === "afrikaans") return "af-ZA";
-  if (normalized === "isixhosa") return "xh-ZA";
-  if (normalized === "sesotho") return "st-ZA";
-  if (normalized === "setswana") return "tn-ZA";
-  if (normalized === "french") return "fr-FR";
-  if (normalized === "portuguese") return "pt-PT";
-  return "en-US";
+  const locales = [];
+  const pushLocale = (locale) => {
+    const normalizedLocale = compactText(locale);
+    if (normalizedLocale && !locales.includes(normalizedLocale)) {
+      locales.push(normalizedLocale);
+    }
+  };
+
+  if (normalized === "isizulu") {
+    pushLocale("zu-ZA");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "afrikaans") {
+    pushLocale("af-ZA");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "isixhosa") {
+    pushLocale("xh-ZA");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "sesotho") {
+    pushLocale("st-ZA");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "setswana") {
+    pushLocale("tn-ZA");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "french") {
+    pushLocale("fr-FR");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+  if (normalized === "portuguese") {
+    pushLocale("pt-PT");
+    pushLocale("en-ZA");
+    pushLocale("en-US");
+    return locales;
+  }
+
+  pushLocale("en-ZA");
+  pushLocale("en-GB");
+  pushLocale("en-US");
+  return locales;
+}
+
+function resolveSpeechLocale(language = "English") {
+  return resolveSpeechRecognitionLocales(language)[0] || "en-ZA";
 }
 
 function formatProviderLabel(provider = "") {
@@ -351,7 +404,10 @@ export function useLectureAssistant({
   const manualRecognitionStopRef = useRef(false);
   const ignoreRecognitionEndRef = useRef(false);
   const voiceNetworkRetryCountRef = useRef(0);
+  const voiceNoSpeechRetryCountRef = useRef(0);
   const voiceUnexpectedEndRetryCountRef = useRef(0);
+  const voiceRecognitionLocalesRef = useRef(resolveSpeechRecognitionLocales(outputLanguage));
+  const voiceRecognitionLocaleIndexRef = useRef(0);
   const voiceReplyRunRef = useRef(0);
   const voiceReplyChunkTimerRef = useRef(0);
   const voiceSpeechQueueRef = useRef([]);
@@ -409,6 +465,32 @@ export function useLectureAssistant({
     const resolved = Boolean(nextValue);
     voiceModeEnabledRef.current = resolved;
     setVoiceModeEnabled(resolved);
+  };
+
+  const syncRecognitionLocales = ({ resetIndex = false } = {}) => {
+    const nextLocales = resolveSpeechRecognitionLocales(outputLanguage);
+    voiceRecognitionLocalesRef.current = nextLocales;
+    if (resetIndex || voiceRecognitionLocaleIndexRef.current >= nextLocales.length) {
+      voiceRecognitionLocaleIndexRef.current = 0;
+    }
+    return nextLocales;
+  };
+
+  const resetVoiceRecoveryState = ({ resetLocale = false } = {}) => {
+    voiceNetworkRetryCountRef.current = 0;
+    voiceNoSpeechRetryCountRef.current = 0;
+    voiceUnexpectedEndRetryCountRef.current = 0;
+    if (resetLocale) {
+      voiceRecognitionLocaleIndexRef.current = 0;
+    }
+  };
+
+  const moveToNextRecognitionLocale = () => {
+    const locales = voiceRecognitionLocalesRef.current;
+    if (!Array.isArray(locales) || locales.length <= 1) return false;
+    if (voiceRecognitionLocaleIndexRef.current >= locales.length - 1) return false;
+    voiceRecognitionLocaleIndexRef.current += 1;
+    return true;
   };
 
   const scheduleVoiceListeningRestart = ({
@@ -577,6 +659,8 @@ export function useLectureAssistant({
     recognitionStopReasonRef.current = "";
     ignoreRecognitionEndRef.current = false;
     manualRecognitionStopRef.current = false;
+    resetVoiceRecoveryState({ resetLocale: true });
+    syncRecognitionLocales({ resetIndex: true });
     setIsVoiceReconnecting(false);
     applyVoiceModeEnabled(false);
     stopListening();
@@ -674,16 +758,17 @@ export function useLectureAssistant({
       setStatusText("Browser voice chat needs Chrome or Edge with microphone access.");
       return;
     }
-    if (!hasLectureContext) {
-      setStatusText("Load a lecture transcript or study guide first.");
-      return;
-    }
 
     openPanel({ focusComposer: false });
     if (!ttsEnabledRef.current) {
       setVoiceRepliesEnabled(true);
     }
     applyVoiceModeEnabled(true);
+    if (!continueVoiceChat) {
+      resetVoiceRecoveryState({ resetLocale: true });
+    }
+    const recognitionLocales = syncRecognitionLocales({ resetIndex: !continueVoiceChat });
+    const recognitionLocale = recognitionLocales[voiceRecognitionLocaleIndexRef.current] || recognitionLocales[0] || "en-ZA";
     setIsVoiceReconnecting(false);
     speechRecognitionErrorRef.current = "";
     manualRecognitionStopRef.current = false;
@@ -695,7 +780,7 @@ export function useLectureAssistant({
     }
 
     const recognition = new SpeechRecognitionCtor();
-    recognition.lang = resolveSpeechLocale(outputLanguage);
+    recognition.lang = recognitionLocale;
     recognition.interimResults = true;
     recognition.continuous = true;
     recognition.maxAlternatives = 1;
@@ -723,16 +808,18 @@ export function useLectureAssistant({
     };
 
     recognition.onstart = () => {
-      voiceNetworkRetryCountRef.current = 0;
-      voiceUnexpectedEndRetryCountRef.current = 0;
       setIsListening(true);
       setIsVoiceReconnecting(false);
       setStatusText(continueVoiceChat
-        ? "Listening for your next question..."
-        : "Voice chat is on. Speak your question now.");
+        ? (hasLectureContext
+          ? "Listening for your next question..."
+          : "Listening again. No lecture is loaded yet, so answers will be general until you load one.")
+        : (hasLectureContext
+          ? "Voice chat is on. Speak your question now."
+          : "Voice chat is on. Speak now. No lecture is loaded yet, so answers will be general until you load one."));
       scheduleListeningTimeout(
         VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS,
-        "No speech detected yet. Finishing the voice turn...",
+        "No speech detected yet. Re-arming the microphone...",
       );
     };
     recognition.onresult = (event) => {
@@ -744,6 +831,7 @@ export function useLectureAssistant({
         else interimTranscript += transcriptText;
       }
       latestTranscript = `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim();
+      resetVoiceRecoveryState();
       setDraft(latestTranscript);
       scheduleListeningTimeout(
         VOICE_CHAT_SILENCE_TIMEOUT_MS,
@@ -754,15 +842,43 @@ export function useLectureAssistant({
       if (manualRecognitionStopRef.current && event?.error === "aborted") return;
       clearVoiceListeningTimer();
       const errorCode = compactText(event?.error).toLowerCase();
+      if (errorCode === "language-not-supported" && voiceModeEnabledRef.current) {
+        const switchedLocale = moveToNextRecognitionLocale();
+        if (switchedLocale) {
+          recognitionStopReasonRef.current = "language_retry";
+          ignoreRecognitionEndRef.current = true;
+          setIsListening(false);
+          scheduleVoiceListeningRestart({
+            delayMs: 500,
+            continueVoiceChat: true,
+            reconnecting: true,
+            statusMessage: "Switching to a fallback speech language for the microphone...",
+          });
+          return;
+        }
+        setIsVoiceReconnecting(false);
+        setStatusText("The selected speech language is not supported in this browser. Try Chrome or Edge, or switch the study language.");
+        return;
+      }
       if (errorCode === "no-speech" && voiceModeEnabledRef.current) {
-        recognitionStopReasonRef.current = "no_speech_retry";
-        ignoreRecognitionEndRef.current = true;
         setIsListening(false);
-        scheduleVoiceListeningRestart({
-          delayMs: 420,
-          continueVoiceChat: true,
-          statusMessage: "Still listening. Speak whenever you are ready...",
-        });
+        if (voiceNoSpeechRetryCountRef.current < VOICE_CHAT_MAX_NO_SPEECH_RETRIES) {
+          voiceNoSpeechRetryCountRef.current += 1;
+          recognitionStopReasonRef.current = "no_speech_retry";
+          ignoreRecognitionEndRef.current = true;
+          const switchedLocale = voiceNoSpeechRetryCountRef.current >= 2 ? moveToNextRecognitionLocale() : false;
+          scheduleVoiceListeningRestart({
+            delayMs: VOICE_CHAT_NO_SPEECH_RETRY_DELAY_MS + (voiceNoSpeechRetryCountRef.current - 1) * 250,
+            continueVoiceChat: true,
+            reconnecting: switchedLocale || voiceNoSpeechRetryCountRef.current > 1,
+            statusMessage: switchedLocale
+              ? "Trying the microphone again with a fallback speech language..."
+              : "Still listening. Speak whenever you are ready...",
+          });
+          return;
+        }
+        setIsVoiceReconnecting(false);
+        setStatusText("I couldn't hear a clear voice signal from the microphone. Check the selected mic, browser permission, and speech language, then tap the mic again.");
         return;
       }
       if (errorCode === "network" && voiceModeEnabledRef.current) {
@@ -809,7 +925,7 @@ export function useLectureAssistant({
       }
       if (spokenQuestion) {
         setIsVoiceReconnecting(false);
-        voiceUnexpectedEndRetryCountRef.current = 0;
+        resetVoiceRecoveryState();
         setDraft(spokenQuestion);
         setStatusText("Sending your voice question...");
         await sendMessage({ promptText: spokenQuestion });
@@ -818,6 +934,22 @@ export function useLectureAssistant({
       if (speechRecognitionErrorRef.current) return;
 
       if (stopReason === "silence_timeout") {
+        if (voiceModeEnabledRef.current && continueVoiceChat) {
+          if (voiceNoSpeechRetryCountRef.current < VOICE_CHAT_MAX_NO_SPEECH_RETRIES) {
+            voiceNoSpeechRetryCountRef.current += 1;
+            scheduleVoiceListeningRestart({
+              delayMs: 420,
+              continueVoiceChat: true,
+              statusMessage: voiceNoSpeechRetryCountRef.current === 1
+                ? "Pause detected. Listening again..."
+                : "I did not catch any clear speech yet. Listening again...",
+            });
+            return;
+          }
+          setIsVoiceReconnecting(false);
+          setStatusText("I didn't catch any clear words before the pause. Tap the mic and try again.");
+          return;
+        }
         setStatusText(continueVoiceChat
           ? "Voice mode is still on. Start speaking again or tap the mic."
           : "No speech was captured. Tap the mic and try again.");
@@ -889,16 +1021,14 @@ export function useLectureAssistant({
       setStatusText("Type or speak a question first.");
       return false;
     }
-    if (!hasLectureContext) {
-      setStatusText("Load a lecture transcript or study guide first.");
-      return false;
-    }
     if (isGenerating) return false;
 
     openPanel();
     setIsVoiceReconnecting(false);
     stopSpeaking();
-    stopListening();
+    if (recognitionRef.current || isListening) {
+      stopListening();
+    }
 
     const targetConversation = ensureActiveConversation();
     const targetConversationId = targetConversation.id;
@@ -927,7 +1057,9 @@ export function useLectureAssistant({
 
     setDraft("");
     setIsGenerating(true);
-    setStatusText(voiceModeEnabledRef.current ? "Processing your voice question..." : "Connecting to Gemini...");
+    setStatusText(voiceModeEnabledRef.current
+      ? (hasLectureContext ? "Processing your voice question..." : "Processing your voice question without lecture context...")
+      : (hasLectureContext ? "Connecting to Gemini..." : "Connecting to Gemini without lecture context..."));
     setActiveProvider("");
 
     const controller = new AbortController();
@@ -1164,6 +1296,11 @@ export function useLectureAssistant({
   }, [voiceModeEnabled]);
 
   useEffect(() => {
+    voiceRecognitionLocalesRef.current = resolveSpeechRecognitionLocales(outputLanguage);
+    voiceRecognitionLocaleIndexRef.current = 0;
+  }, [outputLanguage]);
+
+  useEffect(() => {
     onLegacyMessagesChange?.(
       messages
         .filter((message) => ["user", "assistant"].includes(message.role) && compactText(message.content))
@@ -1240,7 +1377,7 @@ export function useLectureAssistant({
     activeConversation,
     activeConversationId,
     activeProvider,
-    canSend: Boolean(compactText(draft)) && !isGenerating && hasLectureContext,
+    canSend: Boolean(compactText(draft)) && !isGenerating,
     closePanel,
     composerRef,
     conversations,

@@ -3748,15 +3748,18 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         "Use markdown formatting when it helps readability.",
         "Support code blocks when code is requested.",
         "When maths helps, format it with LaTeX using $...$ or $$...$$.",
-        "Use the lecture context below whenever it is relevant.",
-        "If the lecture context does not clearly support an answer, say that clearly instead of pretending.",
         "Keep simple answers short, but expand naturally when the student needs detail.",
         f"Reply in {output_language}.",
     ]
     if lecture_label:
         rules.append(f"Current lecture label: {lecture_label}.")
     if context_text:
+        rules.append("Use the lecture context below whenever it is relevant.")
+        rules.append("If the lecture context does not clearly support an answer, say that clearly instead of pretending.")
         rules.append(f"Lecture context:\n\n{context_text}")
+    else:
+        rules.append("No lecture transcript or study guide is loaded yet.")
+        rules.append("Answer as a general study assistant until lecture context is added.")
     return "\n\n".join(part for part in rules if compact_text(part))
 
 
@@ -14554,20 +14557,6 @@ def create_lecture_assistant_stream(
     )
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
-
-    if not any(
-        compact_text(value)
-        for value in (
-            payload.summary,
-            payload.transcript,
-            payload.formulas,
-            payload.worked_examples,
-            payload.lecture_notes,
-            payload.lecture_slides,
-            payload.past_question_papers,
-        )
-    ):
-        raise HTTPException(status_code=400, detail="Load a lecture transcript or study guide first.")
 
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)

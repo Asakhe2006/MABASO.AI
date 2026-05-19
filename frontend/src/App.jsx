@@ -174,7 +174,7 @@ function resolveSpeechLocale(language = "English") {
   if (normalized === "setswana") return "tn-ZA";
   if (normalized === "french") return "fr-FR";
   if (normalized === "portuguese") return "pt-PT";
-  return "en-US";
+  return "en-ZA";
 }
 
 function resolveTeacherVoice(voices = [], selectedVoiceName = "", language = "English") {

@@ -202,7 +202,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
               : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}
             >
-              {hasLectureContext ? "Lecture context loaded" : "Load a lecture first"}
+              {hasLectureContext ? "Lecture context loaded" : "General mode until a lecture is loaded"}
             </span>
             <span className={`rounded-full px-3 py-2 text-xs font-semibold ${isListening
               ? themed(theme, "bg-fuchsia-400/12 text-fuchsia-100", "bg-fuchsia-50 text-fuchsia-700")
@@ -231,7 +231,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
               : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}
             >
-              {hasLectureContext ? "Ready here" : "Lecture not loaded"}
+              {hasLectureContext ? "Ready here" : "General AI ready"}
             </span>
             <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/5 text-slate-300", "bg-slate-100 text-slate-600")}`}>
               {providerLabel || "Secure streaming chat"}
@@ -399,7 +399,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleComposerKeyDown}
             rows={isExpanded ? 2 : 1}
-            placeholder={hasLectureContext ? "Ask anything from this lecture..." : "Load a transcript or study guide first..."}
+            placeholder={hasLectureContext ? "Ask anything from this lecture..." : "Ask a question, or load a lecture for grounded answers..."}
             className={`min-h-[56px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
           />
           <div className="flex shrink-0 items-center gap-2">
