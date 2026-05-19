@@ -4,6 +4,12 @@ const ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v1";
 const ASSISTANT_THEME_STORAGE_KEY = "mabaso-lecture-assistant-theme";
 const ASSISTANT_TTS_STORAGE_KEY = "mabaso-lecture-assistant-tts";
 const MAX_SAVED_CONVERSATIONS = 24;
+const VOICE_CHAT_RESTART_DELAY_MS = 1100;
+const VOICE_CHAT_NETWORK_RETRY_DELAY_MS = 1800;
+const VOICE_CHAT_MAX_NETWORK_RETRIES = 2;
+const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 8000;
+const VOICE_CHAT_SILENCE_TIMEOUT_MS = 2600;
+const VOICE_REPLY_CHUNK_PAUSE_MS = 120;
 
 function compactText(value = "", fallback = "") {
   const text = String(value || "").replace(/\u0000/g, " ").trim();
@@ -80,6 +86,32 @@ function pickSpeechSynthesisVoice(locale = "", voices = []) {
     || voices[0]
     || null
   );
+}
+
+function buildSpeechChunks(text = "", maxChars = 320) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const sentences = normalized.match(/[^.!?]+[.!?]?/g) || [normalized];
+  const chunks = [];
+  let buffer = "";
+
+  for (const sentence of sentences) {
+    const nextSentence = sentence.trim();
+    if (!nextSentence) continue;
+    if (!buffer) {
+      buffer = nextSentence;
+      continue;
+    }
+    if (`${buffer} ${nextSentence}`.length <= maxChars) {
+      buffer = `${buffer} ${nextSentence}`;
+      continue;
+    }
+    chunks.push(buffer);
+    buffer = nextSentence;
+  }
+
+  if (buffer) chunks.push(buffer);
+  return chunks;
 }
 
 function createConversationRecord({ contextKey = "", lectureLabel = "", title = "New lecture chat" } = {}) {
@@ -270,8 +302,13 @@ export function useLectureAssistant({
   const composerRef = useRef(null);
   const copyResetTimerRef = useRef(0);
   const speechRestartTimerRef = useRef(0);
+  const voiceListeningTimerRef = useRef(0);
   const speechRecognitionErrorRef = useRef("");
   const manualRecognitionStopRef = useRef(false);
+  const ignoreRecognitionEndRef = useRef(false);
+  const voiceNetworkRetryCountRef = useRef(0);
+  const voiceReplyRunRef = useRef(0);
+  const voiceReplyChunkTimerRef = useRef(0);
   const ttsEnabledRef = useRef(false);
   const voiceModeEnabledRef = useRef(false);
 
@@ -284,11 +321,19 @@ export function useLectureAssistant({
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
+      window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
+    voiceReplyRunRef.current += 1;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
+  };
+
+  const clearVoiceListeningTimer = () => {
+    if (typeof window === "undefined") return;
+    window.clearTimeout(voiceListeningTimerRef.current);
+    voiceListeningTimerRef.current = 0;
   };
 
   const setVoiceRepliesEnabled = (nextValue) => {
@@ -315,37 +360,72 @@ export function useLectureAssistant({
     const spokenText = compactText(text);
     if (!ttsEnabledRef.current || !spokenText) return;
     if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      if (voiceModeEnabledRef.current) {
+        applyVoiceModeEnabled(false);
+      }
       setStatusText("This browser cannot read replies aloud, but the answer is ready.");
       return;
     }
     stopSpeaking();
-    const utterance = new window.SpeechSynthesisUtterance(spokenText);
     const preferredLocale = resolveSpeechLocale(outputLanguage);
-    utterance.lang = preferredLocale;
-    utterance.voice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
-    utterance.onstart = () => {
-      setIsSpeaking(true);
-      setStatusText("Speaking the answer aloud...");
+    const selectedVoice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
+    const speechChunks = buildSpeechChunks(spokenText, 320);
+    if (!speechChunks.length) {
+      if (voiceModeEnabledRef.current) {
+        applyVoiceModeEnabled(false);
+      }
+      setStatusText("The answer is ready.");
+      return;
+    }
+
+    const runId = voiceReplyRunRef.current + 1;
+    voiceReplyRunRef.current = runId;
+
+    const speakChunk = (chunkIndex = 0) => {
+      if (voiceReplyRunRef.current !== runId) return;
+      if (chunkIndex >= speechChunks.length) {
+        setIsSpeaking(false);
+        if (voiceModeEnabledRef.current) {
+          applyVoiceModeEnabled(false);
+          setStatusText("Voice reply finished. Tap the mic to speak again.");
+          return;
+        }
+        setStatusText("The answer is ready.");
+        return;
+      }
+
+      const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
+      utterance.lang = preferredLocale;
+      utterance.voice = selectedVoice;
+      utterance.onstart = () => {
+        if (voiceReplyRunRef.current !== runId) return;
+        setIsSpeaking(true);
+        setStatusText(chunkIndex === 0 ? "Speaking the answer aloud..." : "Continuing the voice reply...");
+      };
+      utterance.onend = () => {
+        if (voiceReplyRunRef.current !== runId) return;
+        voiceReplyChunkTimerRef.current = window.setTimeout(() => {
+          voiceReplyChunkTimerRef.current = 0;
+          speakChunk(chunkIndex + 1);
+        }, VOICE_REPLY_CHUNK_PAUSE_MS);
+      };
+      utterance.onerror = () => {
+        if (voiceReplyRunRef.current !== runId) return;
+        setIsSpeaking(false);
+        if (voiceModeEnabledRef.current) {
+          applyVoiceModeEnabled(false);
+        }
+        setStatusText("The reply is ready, but browser text-to-speech could not play it.");
+      };
+      window.speechSynthesis.speak(utterance);
     };
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      if (!voiceModeEnabledRef.current) return;
-      setStatusText("Reply spoken. Listening for your next question...");
-      speechRestartTimerRef.current = window.setTimeout(() => {
-        speechRestartTimerRef.current = 0;
-        if (!voiceModeEnabledRef.current) return;
-        startListening({ continueVoiceChat: true });
-      }, 450);
-    };
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      setStatusText("The reply is ready, but browser text-to-speech could not play it.");
-    };
-    window.speechSynthesis.speak(utterance);
+
+    speakChunk(0);
   };
 
   const stopListening = () => {
     manualRecognitionStopRef.current = true;
+    clearVoiceListeningTimer();
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -362,10 +442,26 @@ export function useLectureAssistant({
       window.clearTimeout(speechRestartTimerRef.current);
       speechRestartTimerRef.current = 0;
     }
+    clearVoiceListeningTimer();
     applyVoiceModeEnabled(false);
     stopListening();
     stopSpeaking();
     setStatusText(message);
+  };
+
+  const scheduleVoiceListeningRestart = ({
+    delayMs = VOICE_CHAT_RESTART_DELAY_MS,
+    continueVoiceChat = true,
+    statusMessage = "Listening for your next question...",
+  } = {}) => {
+    if (typeof window === "undefined") return;
+    window.clearTimeout(speechRestartTimerRef.current);
+    speechRestartTimerRef.current = window.setTimeout(() => {
+      speechRestartTimerRef.current = 0;
+      if (!voiceModeEnabledRef.current) return;
+      startListening({ continueVoiceChat });
+    }, delayMs);
+    setStatusText(statusMessage);
   };
 
   const updateConversation = (conversationId, updater) => {
@@ -473,6 +569,7 @@ export function useLectureAssistant({
     applyVoiceModeEnabled(true);
     speechRecognitionErrorRef.current = "";
     manualRecognitionStopRef.current = false;
+    ignoreRecognitionEndRef.current = false;
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
       speechRestartTimerRef.current = 0;
@@ -481,16 +578,37 @@ export function useLectureAssistant({
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = resolveSpeechLocale(outputLanguage);
     recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.maxAlternatives = 1;
     recognitionRef.current = recognition;
 
     let finalTranscript = "";
+    let latestTranscript = "";
+    const scheduleListeningTimeout = (delayMs, statusMessage = "") => {
+      clearVoiceListeningTimer();
+      if (typeof window === "undefined") return;
+      voiceListeningTimerRef.current = window.setTimeout(() => {
+        voiceListeningTimerRef.current = 0;
+        if (!recognitionRef.current) return;
+        if (statusMessage) setStatusText(statusMessage);
+        try {
+          recognitionRef.current.stop();
+        } catch {
+          // Ignore browser recognition stop failures.
+        }
+      }, delayMs);
+    };
+
     recognition.onstart = () => {
+      voiceNetworkRetryCountRef.current = 0;
       setIsListening(true);
       setStatusText(continueVoiceChat
         ? "Listening for your next question..."
         : "Voice chat is on. Speak your question now.");
+      scheduleListeningTimeout(
+        VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS,
+        "No speech detected yet. Finishing the voice turn...",
+      );
     };
     recognition.onresult = (event) => {
       let interimTranscript = "";
@@ -500,12 +618,35 @@ export function useLectureAssistant({
         if (result.isFinal) finalTranscript += `${transcriptText} `;
         else interimTranscript += transcriptText;
       }
-      setDraft(`${finalTranscript}${interimTranscript}`.trimStart());
+      latestTranscript = `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim();
+      setDraft(latestTranscript);
+      scheduleListeningTimeout(
+        VOICE_CHAT_SILENCE_TIMEOUT_MS,
+        "Pause detected. Finishing your voice turn...",
+      );
     };
     recognition.onerror = (event) => {
       if (manualRecognitionStopRef.current && event?.error === "aborted") return;
+      clearVoiceListeningTimer();
+      const errorCode = compactText(event?.error).toLowerCase();
+      if (errorCode === "network" && voiceModeEnabledRef.current) {
+        ignoreRecognitionEndRef.current = true;
+        setIsListening(false);
+        if (voiceNetworkRetryCountRef.current < VOICE_CHAT_MAX_NETWORK_RETRIES) {
+          voiceNetworkRetryCountRef.current += 1;
+          scheduleVoiceListeningRestart({
+            delayMs: VOICE_CHAT_NETWORK_RETRY_DELAY_MS + (voiceNetworkRetryCountRef.current - 1) * 900,
+            continueVoiceChat: true,
+            statusMessage: `Browser speech recognition disconnected. Retrying voice chat (${voiceNetworkRetryCountRef.current}/${VOICE_CHAT_MAX_NETWORK_RETRIES})...`,
+          });
+          return;
+        }
+        applyVoiceModeEnabled(false);
+        setStatusText("Browser speech recognition lost its connection repeatedly. Tap the mic again in Chrome or Edge.");
+        return;
+      }
       speechRecognitionErrorRef.current = getSpeechRecognitionErrorMessage(event?.error);
-      if (event?.error !== "aborted") {
+      if (errorCode !== "aborted") {
         applyVoiceModeEnabled(false);
       }
       setStatusText(speechRecognitionErrorRef.current);
@@ -514,7 +655,12 @@ export function useLectureAssistant({
     recognition.onend = async () => {
       recognitionRef.current = null;
       setIsListening(false);
-      const spokenQuestion = compactText(finalTranscript);
+      clearVoiceListeningTimer();
+      if (ignoreRecognitionEndRef.current) {
+        ignoreRecognitionEndRef.current = false;
+        return;
+      }
+      const spokenQuestion = compactText(finalTranscript, latestTranscript);
       if (manualRecognitionStopRef.current) {
         manualRecognitionStopRef.current = false;
         return;
@@ -595,7 +741,7 @@ export function useLectureAssistant({
 
     setDraft("");
     setIsGenerating(true);
-    setStatusText("Connecting to Gemini...");
+    setStatusText(voiceModeEnabledRef.current ? "Processing your voice question..." : "Connecting to Gemini...");
     setActiveProvider("");
 
     const controller = new AbortController();
@@ -685,11 +831,17 @@ export function useLectureAssistant({
       if (error?.name === "AbortError") {
         if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
         else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+        if (voiceModeEnabledRef.current) {
+          applyVoiceModeEnabled(false);
+        }
         setStatusText("Generation stopped.");
         return false;
       }
       if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
       else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+      if (voiceModeEnabledRef.current) {
+        applyVoiceModeEnabled(false);
+      }
       setStatusText(compactText(error?.message, "The lecture assistant could not answer right now."));
       return false;
     } finally {
@@ -868,7 +1020,9 @@ export function useLectureAssistant({
     abortControllerRef.current?.abort?.();
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
+      window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
+    clearVoiceListeningTimer();
     stopListening();
     stopSpeaking();
     window.clearTimeout(copyResetTimerRef.current);

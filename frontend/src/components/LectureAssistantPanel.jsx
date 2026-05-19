@@ -11,6 +11,13 @@ function formatMessageTime(timestamp = "") {
   return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function formatConversationDate(timestamp = "") {
+  if (!timestamp) return "";
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 function buildMessagePreview(content = "", fallback = "New lecture chat") {
   const text = String(content || "").replace(/\s+/g, " ").trim();
   if (!text) return fallback;
@@ -26,6 +33,26 @@ function TypingIndicator({ theme = "dark" }) {
           key={index}
           className={`h-2.5 w-2.5 animate-pulse rounded-full ${dotTone}`}
           style={{ animationDelay: `${index * 150}ms` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VoiceStateIndicator({ theme = "dark", mode = "idle" }) {
+  const activeBarTone = themed(theme, "bg-fuchsia-200", "bg-fuchsia-600");
+  const idleBarTone = themed(theme, "bg-slate-500/40", "bg-slate-300");
+  const isActive = mode !== "idle";
+  return (
+    <div className="inline-flex items-end gap-1.5">
+      {[0, 1, 2, 3].map((index) => (
+        <span
+          key={index}
+          className={`w-1.5 rounded-full ${isActive ? `animate-pulse ${activeBarTone}` : idleBarTone}`}
+          style={{
+            height: `${12 + ((index % 2) * 8)}px`,
+            animationDelay: isActive ? `${index * 120}ms` : "0ms",
+          }}
         />
       ))}
     </div>
@@ -72,7 +99,17 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
   const savedMessageCount = messages.length;
   const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
-  const recentConversations = conversations.slice(0, 5);
+  const savedConversations = conversations.slice(0, 8);
+  const voiceStateMode = isListening ? "listening" : isSpeaking ? "speaking" : isGenerating && voiceModeEnabled ? "processing" : voiceModeEnabled ? "ready" : "idle";
+  const voiceStateLabel = isListening
+    ? "Listening..."
+    : isSpeaking
+      ? "Speaking..."
+      : isGenerating && voiceModeEnabled
+        ? "Processing..."
+      : voiceModeEnabled
+        ? "Voice turn active"
+        : "Voice ready";
 
   const handleComposerKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -162,25 +199,9 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
             </span>
           </div>
 
-          {recentConversations.length > 1 ? (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {recentConversations.map((conversation) => {
-                const isActive = conversation.id === activeConversation?.id;
-                return (
-                  <button
-                    key={conversation.id}
-                    type="button"
-                    onClick={() => selectConversation(conversation.id)}
-                    className={`rounded-full px-3 py-2 text-xs font-semibold transition ${isActive
-                      ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
-                      : themed(theme, "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-                  >
-                    {buildMessagePreview(conversation.title)}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
+          <p className={`mt-4 text-xs uppercase tracking-[0.2em] ${themed(theme, "text-slate-400", "text-slate-500")}`}>
+            Saved chats restore automatically in this browser for the current signed-in account.
+          </p>
         </>
       ) : (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -207,97 +228,148 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
       )}
 
       {isExpanded ? (
-        <>
-          <div className={`mt-4 rounded-[24px] border px-4 py-3 text-sm ${themed(theme, "border-white/10 bg-white/[0.03] text-slate-300", "border-slate-200 bg-slate-50 text-slate-600")}`}>
-            {statusText}
-          </div>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <aside className={`rounded-[24px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.03]", "border-slate-200 bg-slate-50/80")}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className={`text-xs uppercase tracking-[0.24em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Saved Chats</p>
+                <p className={`mt-2 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Stored locally in this browser.</p>
+              </div>
+              <button
+                type="button"
+                onClick={createConversation}
+                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+              >
+                New Chat
+              </button>
+            </div>
 
-          <div className={`mt-4 rounded-[24px] border px-4 py-4 sm:px-5 ${themed(theme, "border-white/10 bg-slate-950/70", "border-slate-200 bg-slate-50/80")}`}>
-            {messages.length ? (
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                    {message.role === "assistant" ? (
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
-                    ) : null}
-                    <div className={`max-w-[88%] rounded-[24px] border px-4 py-3 ${message.role === "assistant"
-                      ? themed(theme, "border-emerald-300/18 bg-emerald-300/10 text-slate-100", "border-emerald-100 bg-white text-slate-800")
-                      : themed(theme, "border-white/10 bg-white/8 text-white", "border-slate-200 bg-slate-900 text-white")}`}
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${message.role === "assistant"
-                          ? themed(theme, "text-emerald-100/75", "text-emerald-700")
-                          : "text-white/70"}`}
-                        >
-                          {message.role === "assistant" ? "Mabaso AI" : "You"}
-                        </p>
-                        {message.provider ? (
-                          <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${message.role === "assistant"
-                            ? themed(theme, "bg-white/8 text-slate-200", "bg-slate-100 text-slate-600")
-                            : "bg-white/10 text-white/80"}`}
+            <div className="mt-4 space-y-3">
+              {savedConversations.map((conversation) => {
+                const isActive = conversation.id === activeConversation?.id;
+                return (
+                  <button
+                    key={conversation.id}
+                    type="button"
+                    onClick={() => selectConversation(conversation.id)}
+                    className={`w-full rounded-[20px] border px-4 py-3 text-left transition ${isActive
+                      ? themed(theme, "border-emerald-300/20 bg-emerald-300/10 text-white", "border-emerald-200 bg-white text-slate-900 shadow-[0_12px_30px_rgba(15,23,42,0.08)]")
+                      : themed(theme, "border-white/10 bg-slate-950/45 text-slate-200 hover:bg-white/[0.06]", "border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold">{buildMessagePreview(conversation.title)}</p>
+                      <span className={`text-[11px] uppercase tracking-[0.18em] ${themed(theme, isActive ? "text-emerald-50/85" : "text-slate-400", isActive ? "text-emerald-700" : "text-slate-500")}`}>
+                        {formatConversationDate(conversation.updatedAt || conversation.createdAt)}
+                      </span>
+                    </div>
+                    <p className={`mt-2 text-xs ${themed(theme, isActive ? "text-emerald-50/80" : "text-slate-400", isActive ? "text-emerald-700/90" : "text-slate-500")}`}>
+                      {(conversation.messages || []).length} message{(conversation.messages || []).length === 1 ? "" : "s"}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <div className="min-w-0 space-y-4">
+            <div className={`rounded-[24px] border px-4 py-4 ${themed(theme, "border-white/10 bg-white/[0.03]", "border-slate-200 bg-slate-50")}`}>
+              <div className="flex flex-wrap items-center gap-3">
+                <VoiceStateIndicator theme={theme} mode={voiceStateMode} />
+                <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{voiceStateLabel}</p>
+                <span className={`rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] ${themed(theme, "bg-white/5 text-slate-300", "bg-white text-slate-600")}`}>
+                  {isListening ? "Listening" : isSpeaking ? "Speaking" : isGenerating ? "Thinking" : "Ready"}
+                </span>
+              </div>
+              <p className={`mt-3 text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>{statusText}</p>
+            </div>
+
+            <div className={`rounded-[24px] border px-4 py-4 sm:px-5 ${themed(theme, "border-white/10 bg-slate-950/70", "border-slate-200 bg-slate-50/80")}`}>
+              {messages.length ? (
+                <div className="space-y-4">
+                  {messages.map((message) => (
+                    <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                      {message.role === "assistant" ? (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
+                      ) : null}
+                      <div className={`max-w-[88%] rounded-[24px] border px-4 py-3 ${message.role === "assistant"
+                        ? themed(theme, "border-emerald-300/18 bg-emerald-300/10 text-slate-100", "border-emerald-100 bg-white text-slate-800")
+                        : themed(theme, "border-white/10 bg-white/8 text-white", "border-slate-200 bg-slate-900 text-white")}`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${message.role === "assistant"
+                            ? themed(theme, "text-emerald-100/75", "text-emerald-700")
+                            : "text-white/70"}`}
                           >
-                            {message.provider}
-                          </span>
-                        ) : null}
-                        {formatMessageTime(message.timestamp) ? (
-                          <span className={`text-[11px] ${themed(theme, "text-slate-400", message.role === "assistant" ? "text-slate-500" : "text-white/65")}`}>
-                            {formatMessageTime(message.timestamp)}
-                          </span>
-                        ) : null}
-                      </div>
+                            {message.role === "assistant" ? "Mabaso AI" : "You"}
+                          </p>
+                          {message.provider ? (
+                            <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${message.role === "assistant"
+                              ? themed(theme, "bg-white/8 text-slate-200", "bg-slate-100 text-slate-600")
+                              : "bg-white/10 text-white/80"}`}
+                            >
+                              {message.provider}
+                            </span>
+                          ) : null}
+                          {formatMessageTime(message.timestamp) ? (
+                            <span className={`text-[11px] ${themed(theme, "text-slate-400", message.role === "assistant" ? "text-slate-500" : "text-white/65")}`}>
+                              {formatMessageTime(message.timestamp)}
+                            </span>
+                          ) : null}
+                        </div>
 
-                      <div className="mt-3">
-                        {message.role === "assistant" ? (
-                          <AssistantMarkdown content={message.content} theme={theme} />
-                        ) : (
-                          <p className="whitespace-pre-wrap break-words text-sm leading-7">{message.content}</p>
-                        )}
-                      </div>
+                        <div className="mt-3">
+                          {message.role === "assistant" ? (
+                            <AssistantMarkdown content={message.content} theme={theme} />
+                          ) : (
+                            <p className="whitespace-pre-wrap break-words text-sm leading-7">{message.content}</p>
+                          )}
+                        </div>
 
-                      <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => copyMessage(message.id, message.content)}
-                          className={`font-semibold transition ${themed(theme, "text-slate-200 hover:text-white", message.role === "assistant" ? "text-slate-600 hover:text-slate-900" : "text-white/85 hover:text-white")}`}
-                        >
-                          {copiedMessageId === message.id ? "Copied" : "Copy"}
-                        </button>
-                        {message.role === "assistant" && message.id === lastAssistantMessageId && !isGenerating ? (
+                        <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
                           <button
                             type="button"
-                            onClick={regenerateLastResponse}
-                            className={`font-semibold transition ${themed(theme, "text-emerald-100 hover:text-white", "text-emerald-700 hover:text-emerald-800")}`}
+                            onClick={() => copyMessage(message.id, message.content)}
+                            className={`font-semibold transition ${themed(theme, "text-slate-200 hover:text-white", message.role === "assistant" ? "text-slate-600 hover:text-slate-900" : "text-white/85 hover:text-white")}`}
                           >
-                            Regenerate
+                            {copiedMessageId === message.id ? "Copied" : "Copy"}
                           </button>
-                        ) : null}
+                          {message.role === "assistant" && message.id === lastAssistantMessageId && !isGenerating ? (
+                            <button
+                              type="button"
+                              onClick={regenerateLastResponse}
+                              className={`font-semibold transition ${themed(theme, "text-emerald-100 hover:text-white", "text-emerald-700 hover:text-emerald-800")}`}
+                            >
+                              Regenerate
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {message.role === "user" ? (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">You</div>
+                      ) : null}
+                    </div>
+                  ))}
+
+                  {isGenerating ? (
+                    <div className="flex gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
+                      <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-emerald-300/18 bg-emerald-300/10", "border-emerald-100 bg-white")}`}>
+                        <TypingIndicator theme={theme} />
                       </div>
                     </div>
-                    {message.role === "user" ? (
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">You</div>
-                    ) : null}
-                  </div>
-                ))}
+                  ) : null}
 
-                {isGenerating ? (
-                  <div className="flex gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
-                    <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-emerald-300/18 bg-emerald-300/10", "border-emerald-100 bg-white")}`}>
-                      <TypingIndicator theme={theme} />
-                    </div>
-                  </div>
-                ) : null}
-
-                <div ref={messagesEndRef} />
-              </div>
-            ) : (
-              <div className={`rounded-[20px] border border-dashed px-4 py-5 ${themed(theme, "border-white/10 bg-white/[0.02] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
-                <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask naturally, like you would in Copilot or ChatGPT.</p>
-                <p className="mt-3 text-sm leading-7">This chat stays inside your lecture workspace, remembers conversation history in this browser, and streams replies securely from the backend.</p>
-              </div>
-            )}
+                  <div ref={messagesEndRef} />
+                </div>
+              ) : (
+                <div className={`rounded-[20px] border border-dashed px-4 py-5 ${themed(theme, "border-white/10 bg-white/[0.02] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
+                  <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask naturally, like you would in Copilot or ChatGPT.</p>
+                  <p className="mt-3 text-sm leading-7">This chat keeps lecture memory in your browser, streams replies from the backend, and supports browser-native voice turns without paid voice APIs.</p>
+                </div>
+              )}
+            </div>
           </div>
-        </>
+        </div>
       ) : null}
 
       <div className={`mt-4 rounded-[24px] border p-3 ${themed(theme, "border-white/10 bg-slate-950/82", "border-slate-200 bg-white")}`}>
@@ -351,6 +423,10 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               </button>
             )}
           </div>
+        </div>
+        <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
+          <span>Enter sends. Shift+Enter adds a new line.</span>
+          <span>{voiceModeEnabled ? "Voice turn stays active until the spoken reply finishes." : "Tap the mic for browser voice input and spoken replies."}</span>
         </div>
       </div>
     </section>
