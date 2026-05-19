@@ -77,6 +77,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     isListening,
     isOpen,
     isSpeaking,
+    isVoiceReconnecting,
     lectureLabel,
     messages,
     messagesEndRef,
@@ -88,6 +89,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     setDraft,
     statusText,
     stopGenerating,
+    stopVoiceChat,
     theme,
     toggleTheme,
     toggleTts,
@@ -100,8 +102,10 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const savedMessageCount = messages.length;
   const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
   const savedConversations = conversations.slice(0, 8);
-  const voiceStateMode = isListening ? "listening" : isSpeaking ? "speaking" : isGenerating && voiceModeEnabled ? "processing" : voiceModeEnabled ? "ready" : "idle";
-  const voiceStateLabel = isListening
+  const voiceStateMode = isVoiceReconnecting ? "reconnecting" : isListening ? "listening" : isSpeaking ? "speaking" : isGenerating && voiceModeEnabled ? "processing" : voiceModeEnabled ? "ready" : "idle";
+  const voiceStateLabel = isVoiceReconnecting
+    ? "Reconnecting..."
+    : isListening
     ? "Listening..."
     : isSpeaking
       ? "Speaking..."
@@ -162,6 +166,15 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               >
                 {theme === "dark" ? "Light Mode" : "Dark Mode"}
               </button>
+              {voiceModeEnabled ? (
+                <button
+                  type="button"
+                  onClick={() => stopVoiceChat({ message: "Voice conversation ended." })}
+                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-fuchsia-300/20 bg-fuchsia-400/10 text-fuchsia-100 hover:bg-fuchsia-400/15", "border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100")}`}
+                >
+                  End Voice
+                </button>
+              ) : null}
               {activeConversation?.messages?.length ? (
                 <button
                   type="button"
@@ -277,10 +290,15 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                 <VoiceStateIndicator theme={theme} mode={voiceStateMode} />
                 <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{voiceStateLabel}</p>
                 <span className={`rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] ${themed(theme, "bg-white/5 text-slate-300", "bg-white text-slate-600")}`}>
-                  {isListening ? "Listening" : isSpeaking ? "Speaking" : isGenerating ? "Thinking" : "Ready"}
+                  {isVoiceReconnecting ? "Reconnecting" : isListening ? "Listening" : isSpeaking ? "Speaking" : isGenerating ? "Thinking" : "Ready"}
                 </span>
               </div>
               <p className={`mt-3 text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>{statusText}</p>
+              {voiceModeEnabled ? (
+                <p className={`mt-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
+                  {isSpeaking || isGenerating ? "Tap the mic to interrupt the assistant and start talking immediately." : "Voice mode stays active across turns until you end it."}
+                </p>
+              ) : null}
             </div>
 
             <div className={`rounded-[24px] border px-4 py-4 sm:px-5 ${themed(theme, "border-white/10 bg-slate-950/70", "border-slate-200 bg-slate-50/80")}`}>
@@ -391,10 +409,10 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                 handleComposerFocus();
                 toggleVoiceChat();
               }}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${(isListening || isSpeaking || voiceModeEnabled)
+              className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${(isListening || isSpeaking || isVoiceReconnecting || voiceModeEnabled)
                 ? themed(theme, "border-fuchsia-300/35 bg-fuchsia-400/15 text-fuchsia-100", "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700")
                 : themed(theme, "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10", "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100")}`}
-              aria-label={(isListening || isSpeaking || voiceModeEnabled) ? "Stop voice chat" : "Start voice chat"}
+              aria-label={isSpeaking || isGenerating ? "Interrupt assistant and listen" : isListening ? "Stop voice chat" : voiceModeEnabled ? "Resume voice listening" : "Start voice chat"}
             >
               <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                 <path d="M12 4a3 3 0 0 1 3 3v4a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Zm-6 7a1 1 0 0 1 2 0 4 4 0 1 0 8 0 1 1 0 1 1 2 0 6 6 0 0 1-5 5.91V20h2a1 1 0 1 1 0 2H9a1 1 0 0 1 0-2h2v-2.09A6 6 0 0 1 6 11Z" fill="currentColor" />
@@ -426,7 +444,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
         </div>
         <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
           <span>Enter sends. Shift+Enter adds a new line.</span>
-          <span>{voiceModeEnabled ? "Voice turn stays active until the spoken reply finishes." : "Tap the mic for browser voice input and spoken replies."}</span>
+          <span>{voiceModeEnabled ? "Voice mode stays active across turns and can be interrupted with the mic." : "Tap the mic for continuous browser voice conversation."}</span>
         </div>
       </div>
     </section>

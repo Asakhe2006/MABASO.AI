@@ -10,6 +10,10 @@ const VOICE_CHAT_MAX_NETWORK_RETRIES = 2;
 const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 8000;
 const VOICE_CHAT_SILENCE_TIMEOUT_MS = 2600;
 const VOICE_REPLY_CHUNK_PAUSE_MS = 120;
+const VOICE_STREAM_MIN_CHARS = 120;
+const VOICE_STREAM_MAX_CHARS = 240;
+const VOICE_CHAT_UNEXPECTED_END_RETRY_DELAY_MS = 900;
+const VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES = 2;
 
 function compactText(value = "", fallback = "") {
   const text = String(value || "").replace(/\u0000/g, " ").trim();
@@ -68,7 +72,7 @@ function getSpeechRecognitionErrorMessage(errorCode = "") {
   if (normalized === "not-allowed" || normalized === "service-not-allowed") {
     return "Microphone permission was blocked. Allow microphone access for this site and try again.";
   }
-  if (normalized === "network") return "Browser speech recognition lost its connection. Try again in Chrome or Edge.";
+  if (normalized === "network") return "Browser microphone transcription lost its connection. The AI models are still available, so tap the mic again in Chrome or Edge.";
   if (normalized === "aborted") return "Voice chat was stopped before speech was captured.";
   if (normalized === "language-not-supported") return "This browser does not support the selected speech language.";
   return "Voice input had a browser error. You can type your question instead.";
@@ -112,6 +116,45 @@ function buildSpeechChunks(text = "", maxChars = 320) {
 
   if (buffer) chunks.push(buffer);
   return chunks;
+}
+
+function extractReadySpeechChunks(buffer = "", { flush = false } = {}) {
+  let remaining = String(buffer || "").replace(/\s+/g, " ").trim();
+  const ready = [];
+
+  while (remaining) {
+    const punctuationMatch = remaining.match(/^([\s\S]*?[.!?](?=\s|$))/);
+    if (punctuationMatch?.[1]) {
+      ready.push(punctuationMatch[1].trim());
+      remaining = remaining.slice(punctuationMatch[1].length).trimStart();
+      continue;
+    }
+
+    if (remaining.length >= VOICE_STREAM_MAX_CHARS) {
+      const candidate = remaining.slice(0, VOICE_STREAM_MAX_CHARS);
+      const splitIndex = Math.max(
+        candidate.lastIndexOf(". "),
+        candidate.lastIndexOf("? "),
+        candidate.lastIndexOf("! "),
+        candidate.lastIndexOf(", "),
+        candidate.lastIndexOf("; "),
+        candidate.lastIndexOf(": "),
+        candidate.lastIndexOf(" "),
+      );
+      const boundary = splitIndex >= VOICE_STREAM_MIN_CHARS ? splitIndex + 1 : VOICE_STREAM_MAX_CHARS;
+      ready.push(candidate.slice(0, boundary).trim());
+      remaining = remaining.slice(boundary).trimStart();
+      continue;
+    }
+
+    if (flush && remaining) {
+      ready.push(remaining.trim());
+      remaining = "";
+    }
+    break;
+  }
+
+  return { ready, remaining };
 }
 
 function createConversationRecord({ contextKey = "", lectureLabel = "", title = "New lecture chat" } = {}) {
@@ -289,6 +332,7 @@ export function useLectureAssistant({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isVoiceReconnecting, setIsVoiceReconnecting] = useState(false);
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [statusText, setStatusText] = useState("Ask a follow-up question and the lecture assistant will answer here with a streaming reply.");
   const [activeProvider, setActiveProvider] = useState("");
@@ -307,8 +351,15 @@ export function useLectureAssistant({
   const manualRecognitionStopRef = useRef(false);
   const ignoreRecognitionEndRef = useRef(false);
   const voiceNetworkRetryCountRef = useRef(0);
+  const voiceUnexpectedEndRetryCountRef = useRef(0);
   const voiceReplyRunRef = useRef(0);
   const voiceReplyChunkTimerRef = useRef(0);
+  const voiceSpeechQueueRef = useRef([]);
+  const voiceSpeechBufferRef = useRef("");
+  const voiceSpeechPlaybackActiveRef = useRef(false);
+  const voiceSpeechStreamDoneRef = useRef(false);
+  const voiceInterruptionRequestedRef = useRef(false);
+  const recognitionStopReasonRef = useRef("");
   const ttsEnabledRef = useRef(false);
   const voiceModeEnabledRef = useRef(false);
 
@@ -324,6 +375,10 @@ export function useLectureAssistant({
       window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
     voiceReplyRunRef.current += 1;
+    voiceSpeechQueueRef.current = [];
+    voiceSpeechBufferRef.current = "";
+    voiceSpeechPlaybackActiveRef.current = false;
+    voiceSpeechStreamDoneRef.current = false;
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -356,6 +411,131 @@ export function useLectureAssistant({
     setVoiceModeEnabled(resolved);
   };
 
+  const scheduleVoiceListeningRestart = ({
+    delayMs = VOICE_CHAT_RESTART_DELAY_MS,
+    continueVoiceChat = true,
+    statusMessage = "Listening for your next question...",
+    reconnecting = false,
+  } = {}) => {
+    if (typeof window === "undefined") return;
+    window.clearTimeout(speechRestartTimerRef.current);
+    setIsVoiceReconnecting(reconnecting);
+    speechRestartTimerRef.current = window.setTimeout(() => {
+      speechRestartTimerRef.current = 0;
+      if (!voiceModeEnabledRef.current) {
+        setIsVoiceReconnecting(false);
+        return;
+      }
+      startListening({ continueVoiceChat });
+    }, delayMs);
+    setStatusText(statusMessage);
+  };
+
+  const finalizeVoiceReplyIfReady = (runId) => {
+    if (voiceReplyRunRef.current !== runId) return;
+    if (voiceSpeechPlaybackActiveRef.current) return;
+    if (voiceSpeechQueueRef.current.length) return;
+    if (!voiceSpeechStreamDoneRef.current) {
+      setIsSpeaking(false);
+      if (voiceModeEnabledRef.current) {
+        setStatusText("Thinking through the rest of the answer...");
+      }
+      return;
+    }
+    setIsSpeaking(false);
+    voiceSpeechBufferRef.current = "";
+    voiceSpeechQueueRef.current = [];
+    voiceSpeechPlaybackActiveRef.current = false;
+    voiceSpeechStreamDoneRef.current = false;
+    if (!voiceModeEnabledRef.current) {
+      setStatusText("The answer is ready.");
+      return;
+    }
+    scheduleVoiceListeningRestart({
+      delayMs: 380,
+      continueVoiceChat: true,
+      statusMessage: "Reply finished. Listening for your next question...",
+    });
+  };
+
+  const playNextVoiceSpeechChunk = (runId, preferredLocale, selectedVoice) => {
+    if (voiceReplyRunRef.current !== runId) return;
+    if (voiceSpeechPlaybackActiveRef.current) return;
+    const nextChunk = voiceSpeechQueueRef.current.shift();
+    if (!nextChunk) {
+      finalizeVoiceReplyIfReady(runId);
+      return;
+    }
+    voiceSpeechPlaybackActiveRef.current = true;
+    const utterance = new window.SpeechSynthesisUtterance(nextChunk);
+    utterance.lang = preferredLocale;
+    utterance.voice = selectedVoice;
+    utterance.onstart = () => {
+      if (voiceReplyRunRef.current !== runId) return;
+      setIsSpeaking(true);
+      setIsVoiceReconnecting(false);
+      setStatusText(isGenerating ? "Speaking while the answer keeps streaming..." : "Speaking the answer aloud...");
+    };
+    utterance.onend = () => {
+      if (voiceReplyRunRef.current !== runId) return;
+      voiceSpeechPlaybackActiveRef.current = false;
+      voiceReplyChunkTimerRef.current = window.setTimeout(() => {
+        voiceReplyChunkTimerRef.current = 0;
+        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+      }, VOICE_REPLY_CHUNK_PAUSE_MS);
+    };
+    utterance.onerror = () => {
+      if (voiceReplyRunRef.current !== runId) return;
+      voiceSpeechPlaybackActiveRef.current = false;
+      setIsSpeaking(false);
+      if (voiceModeEnabledRef.current) {
+        applyVoiceModeEnabled(false);
+      }
+      setStatusText("The reply is ready, but browser text-to-speech could not play it.");
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const queueVoiceSpeechFromText = (textFragment = "", { flush = false } = {}) => {
+    const fragment = String(textFragment || "");
+    if (!fragment && !flush) return;
+    voiceSpeechBufferRef.current = `${voiceSpeechBufferRef.current}${fragment}`;
+    const { ready, remaining } = extractReadySpeechChunks(voiceSpeechBufferRef.current, { flush });
+    voiceSpeechBufferRef.current = remaining;
+    if (ready.length) {
+      voiceSpeechQueueRef.current.push(...ready);
+    }
+  };
+
+  const startVoiceSpeechStream = () => {
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      return false;
+    }
+    stopSpeaking();
+    const preferredLocale = resolveSpeechLocale(outputLanguage);
+    const selectedVoice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
+    const runId = voiceReplyRunRef.current + 1;
+    voiceReplyRunRef.current = runId;
+    voiceSpeechQueueRef.current = [];
+    voiceSpeechBufferRef.current = "";
+    voiceSpeechPlaybackActiveRef.current = false;
+    voiceSpeechStreamDoneRef.current = false;
+    return {
+      runId,
+      preferredLocale,
+      selectedVoice,
+      enqueueText: (fragment = "", options = {}) => {
+        queueVoiceSpeechFromText(fragment, options);
+        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+      },
+      markDone: () => {
+        voiceSpeechStreamDoneRef.current = true;
+        queueVoiceSpeechFromText("", { flush: true });
+        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+      },
+    };
+  };
+
   const speakReply = (text = "") => {
     const spokenText = compactText(text);
     if (!ttsEnabledRef.current || !spokenText) return;
@@ -366,61 +546,10 @@ export function useLectureAssistant({
       setStatusText("This browser cannot read replies aloud, but the answer is ready.");
       return;
     }
-    stopSpeaking();
-    const preferredLocale = resolveSpeechLocale(outputLanguage);
-    const selectedVoice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
-    const speechChunks = buildSpeechChunks(spokenText, 320);
-    if (!speechChunks.length) {
-      if (voiceModeEnabledRef.current) {
-        applyVoiceModeEnabled(false);
-      }
-      setStatusText("The answer is ready.");
-      return;
-    }
-
-    const runId = voiceReplyRunRef.current + 1;
-    voiceReplyRunRef.current = runId;
-
-    const speakChunk = (chunkIndex = 0) => {
-      if (voiceReplyRunRef.current !== runId) return;
-      if (chunkIndex >= speechChunks.length) {
-        setIsSpeaking(false);
-        if (voiceModeEnabledRef.current) {
-          applyVoiceModeEnabled(false);
-          setStatusText("Voice reply finished. Tap the mic to speak again.");
-          return;
-        }
-        setStatusText("The answer is ready.");
-        return;
-      }
-
-      const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
-      utterance.lang = preferredLocale;
-      utterance.voice = selectedVoice;
-      utterance.onstart = () => {
-        if (voiceReplyRunRef.current !== runId) return;
-        setIsSpeaking(true);
-        setStatusText(chunkIndex === 0 ? "Speaking the answer aloud..." : "Continuing the voice reply...");
-      };
-      utterance.onend = () => {
-        if (voiceReplyRunRef.current !== runId) return;
-        voiceReplyChunkTimerRef.current = window.setTimeout(() => {
-          voiceReplyChunkTimerRef.current = 0;
-          speakChunk(chunkIndex + 1);
-        }, VOICE_REPLY_CHUNK_PAUSE_MS);
-      };
-      utterance.onerror = () => {
-        if (voiceReplyRunRef.current !== runId) return;
-        setIsSpeaking(false);
-        if (voiceModeEnabledRef.current) {
-          applyVoiceModeEnabled(false);
-        }
-        setStatusText("The reply is ready, but browser text-to-speech could not play it.");
-      };
-      window.speechSynthesis.speak(utterance);
-    };
-
-    speakChunk(0);
+    const stream = startVoiceSpeechStream();
+    if (!stream) return;
+    stream.enqueueText(spokenText, { flush: true });
+    stream.markDone();
   };
 
   const stopListening = () => {
@@ -443,25 +572,16 @@ export function useLectureAssistant({
       speechRestartTimerRef.current = 0;
     }
     clearVoiceListeningTimer();
+    voiceInterruptionRequestedRef.current = false;
+    speechRecognitionErrorRef.current = "";
+    recognitionStopReasonRef.current = "";
+    ignoreRecognitionEndRef.current = false;
+    manualRecognitionStopRef.current = false;
+    setIsVoiceReconnecting(false);
     applyVoiceModeEnabled(false);
     stopListening();
     stopSpeaking();
     setStatusText(message);
-  };
-
-  const scheduleVoiceListeningRestart = ({
-    delayMs = VOICE_CHAT_RESTART_DELAY_MS,
-    continueVoiceChat = true,
-    statusMessage = "Listening for your next question...",
-  } = {}) => {
-    if (typeof window === "undefined") return;
-    window.clearTimeout(speechRestartTimerRef.current);
-    speechRestartTimerRef.current = window.setTimeout(() => {
-      speechRestartTimerRef.current = 0;
-      if (!voiceModeEnabledRef.current) return;
-      startListening({ continueVoiceChat });
-    }, delayMs);
-    setStatusText(statusMessage);
   };
 
   const updateConversation = (conversationId, updater) => {
@@ -538,21 +658,18 @@ export function useLectureAssistant({
 
   const startListening = ({ continueVoiceChat = false } = {}) => {
     if (isListening) {
-      stopVoiceChat();
+      stopVoiceChat({ message: "Voice conversation ended." });
       return;
     }
-    if (isSpeaking) {
-      stopVoiceChat();
-      return;
-    }
-    if (isGenerating) {
-      setStatusText("Wait for the current reply to finish, or press Stop first.");
+    if (isSpeaking || isGenerating) {
+      setStatusText("Tap the mic again to interrupt the reply and continue talking.");
       return;
     }
     const SpeechRecognitionCtor = typeof window !== "undefined"
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
     if (!SpeechRecognitionCtor) {
+      setIsVoiceReconnecting(false);
       applyVoiceModeEnabled(false);
       setStatusText("Browser voice chat needs Chrome or Edge with microphone access.");
       return;
@@ -567,9 +684,11 @@ export function useLectureAssistant({
       setVoiceRepliesEnabled(true);
     }
     applyVoiceModeEnabled(true);
+    setIsVoiceReconnecting(false);
     speechRecognitionErrorRef.current = "";
     manualRecognitionStopRef.current = false;
     ignoreRecognitionEndRef.current = false;
+    recognitionStopReasonRef.current = "";
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
       speechRestartTimerRef.current = 0;
@@ -584,6 +703,14 @@ export function useLectureAssistant({
 
     let finalTranscript = "";
     let latestTranscript = "";
+    const finishListeningTurn = (stopReason) => {
+      recognitionStopReasonRef.current = stopReason;
+      try {
+        recognition.stop();
+      } catch {
+        // Ignore browser recognition stop failures.
+      }
+    };
     const scheduleListeningTimeout = (delayMs, statusMessage = "") => {
       clearVoiceListeningTimer();
       if (typeof window === "undefined") return;
@@ -591,17 +718,15 @@ export function useLectureAssistant({
         voiceListeningTimerRef.current = 0;
         if (!recognitionRef.current) return;
         if (statusMessage) setStatusText(statusMessage);
-        try {
-          recognitionRef.current.stop();
-        } catch {
-          // Ignore browser recognition stop failures.
-        }
+        finishListeningTurn("silence_timeout");
       }, delayMs);
     };
 
     recognition.onstart = () => {
       voiceNetworkRetryCountRef.current = 0;
+      voiceUnexpectedEndRetryCountRef.current = 0;
       setIsListening(true);
+      setIsVoiceReconnecting(false);
       setStatusText(continueVoiceChat
         ? "Listening for your next question..."
         : "Voice chat is on. Speak your question now.");
@@ -629,7 +754,19 @@ export function useLectureAssistant({
       if (manualRecognitionStopRef.current && event?.error === "aborted") return;
       clearVoiceListeningTimer();
       const errorCode = compactText(event?.error).toLowerCase();
+      if (errorCode === "no-speech" && voiceModeEnabledRef.current) {
+        recognitionStopReasonRef.current = "no_speech_retry";
+        ignoreRecognitionEndRef.current = true;
+        setIsListening(false);
+        scheduleVoiceListeningRestart({
+          delayMs: 420,
+          continueVoiceChat: true,
+          statusMessage: "Still listening. Speak whenever you are ready...",
+        });
+        return;
+      }
       if (errorCode === "network" && voiceModeEnabledRef.current) {
+        recognitionStopReasonRef.current = "network_retry";
         ignoreRecognitionEndRef.current = true;
         setIsListening(false);
         if (voiceNetworkRetryCountRef.current < VOICE_CHAT_MAX_NETWORK_RETRIES) {
@@ -637,16 +774,18 @@ export function useLectureAssistant({
           scheduleVoiceListeningRestart({
             delayMs: VOICE_CHAT_NETWORK_RETRY_DELAY_MS + (voiceNetworkRetryCountRef.current - 1) * 900,
             continueVoiceChat: true,
-            statusMessage: `Browser speech recognition disconnected. Retrying voice chat (${voiceNetworkRetryCountRef.current}/${VOICE_CHAT_MAX_NETWORK_RETRIES})...`,
+            reconnecting: true,
+            statusMessage: `Reconnecting microphone (${voiceNetworkRetryCountRef.current}/${VOICE_CHAT_MAX_NETWORK_RETRIES})...`,
           });
           return;
         }
-        applyVoiceModeEnabled(false);
-        setStatusText("Browser speech recognition lost its connection repeatedly. Tap the mic again in Chrome or Edge.");
+        setIsVoiceReconnecting(false);
+        setStatusText("Browser microphone transcription disconnected repeatedly. Voice mode is still open, so tap the mic to resume in Chrome or Edge.");
         return;
       }
       speechRecognitionErrorRef.current = getSpeechRecognitionErrorMessage(event?.error);
       if (errorCode !== "aborted") {
+        setIsVoiceReconnecting(false);
         applyVoiceModeEnabled(false);
       }
       setStatusText(speechRecognitionErrorRef.current);
@@ -660,22 +799,46 @@ export function useLectureAssistant({
         ignoreRecognitionEndRef.current = false;
         return;
       }
+      const stopReason = compactText(recognitionStopReasonRef.current).toLowerCase();
+      recognitionStopReasonRef.current = "";
       const spokenQuestion = compactText(finalTranscript, latestTranscript);
       if (manualRecognitionStopRef.current) {
         manualRecognitionStopRef.current = false;
+        setIsVoiceReconnecting(false);
         return;
       }
       if (spokenQuestion) {
+        setIsVoiceReconnecting(false);
+        voiceUnexpectedEndRetryCountRef.current = 0;
         setDraft(spokenQuestion);
         setStatusText("Sending your voice question...");
         await sendMessage({ promptText: spokenQuestion });
         return;
       }
       if (speechRecognitionErrorRef.current) return;
-      setStatusText("No speech was captured. Tap the mic and try again.");
-      if (voiceModeEnabledRef.current) {
-        applyVoiceModeEnabled(false);
+
+      if (stopReason === "silence_timeout") {
+        setStatusText(continueVoiceChat
+          ? "Voice mode is still on. Start speaking again or tap the mic."
+          : "No speech was captured. Tap the mic and try again.");
+        return;
       }
+
+      if (voiceModeEnabledRef.current && continueVoiceChat && voiceUnexpectedEndRetryCountRef.current < VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES) {
+        voiceUnexpectedEndRetryCountRef.current += 1;
+        scheduleVoiceListeningRestart({
+          delayMs: VOICE_CHAT_UNEXPECTED_END_RETRY_DELAY_MS + (voiceUnexpectedEndRetryCountRef.current - 1) * 700,
+          continueVoiceChat: true,
+          reconnecting: true,
+          statusMessage: `Microphone paused unexpectedly. Reconnecting (${voiceUnexpectedEndRetryCountRef.current}/${VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES})...`,
+        });
+        return;
+      }
+
+      setIsVoiceReconnecting(false);
+      setStatusText(continueVoiceChat
+        ? "Voice mode is still open, but the microphone paused. Tap the mic to continue."
+        : "No speech was captured. Tap the mic and try again.");
     };
 
     try {
@@ -687,11 +850,33 @@ export function useLectureAssistant({
     }
   };
 
-  const stopGenerating = () => {
+  const stopGenerating = ({ preserveVoiceMode = false, restartListening = false } = {}) => {
     abortControllerRef.current?.abort?.();
     abortControllerRef.current = null;
     setIsGenerating(false);
+    if (preserveVoiceMode && voiceModeEnabledRef.current) {
+      if (restartListening) {
+        scheduleVoiceListeningRestart({
+          delayMs: 180,
+          continueVoiceChat: true,
+          statusMessage: "AI interrupted. Listening...",
+        });
+      } else {
+        setStatusText("Generation stopped.");
+      }
+      return;
+    }
     setStatusText("Generation stopped.");
+  };
+
+  const interruptAssistantAndListen = () => {
+    if (!voiceModeEnabledRef.current) {
+      startListening();
+      return;
+    }
+    voiceInterruptionRequestedRef.current = true;
+    stopSpeaking();
+    stopGenerating({ preserveVoiceMode: true, restartListening: true });
   };
 
   const sendMessage = async ({
@@ -711,6 +896,7 @@ export function useLectureAssistant({
     if (isGenerating) return false;
 
     openPanel();
+    setIsVoiceReconnecting(false);
     stopSpeaking();
     stopListening();
 
@@ -747,6 +933,8 @@ export function useLectureAssistant({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let streamedText = "";
+    const shouldStreamVoiceReply = Boolean(voiceModeEnabledRef.current && ttsEnabledRef.current);
+    const voiceSpeechStream = shouldStreamVoiceReply ? startVoiceSpeechStream() : null;
 
     try {
       const response = await requestStream({
@@ -789,13 +977,18 @@ export function useLectureAssistant({
             provider: compactText(data.provider),
             model: compactText(data.model),
           });
-          setStatusText(`${data.label || formatProviderLabel(data.provider)} is replying...`);
+          setStatusText(voiceModeEnabledRef.current
+            ? `${data.label || formatProviderLabel(data.provider)} is replying in voice mode...`
+            : `${data.label || formatProviderLabel(data.provider)} is replying...`);
           return;
         }
         if (event === "delta") {
           const chunk = String(data.text || "");
           if (!chunk) return;
           streamedText += chunk;
+          if (voiceSpeechStream) {
+            voiceSpeechStream.enqueueText(chunk);
+          }
           patchMessage(targetConversationId, nextAssistantMessage.id, (message) => ({
             ...message,
             content: `${message.content || ""}${chunk}`,
@@ -807,13 +1000,18 @@ export function useLectureAssistant({
         }
         if (event === "done") {
           setActiveProvider(compactText(data.provider));
+          if (voiceSpeechStream) {
+            voiceSpeechStream.markDone();
+          }
           patchMessage(targetConversationId, nextAssistantMessage.id, (message) => ({
             ...message,
             provider: compactText(data.provider, message.provider),
             model: compactText(data.model, message.model),
             status: "complete",
           }));
-          setStatusText(`${data.label || formatProviderLabel(data.provider)} finished the reply.`);
+          setStatusText(voiceModeEnabledRef.current
+            ? `${data.label || formatProviderLabel(data.provider)} finished streaming. Voice reply may still be speaking...`
+            : `${data.label || formatProviderLabel(data.provider)} finished the reply.`);
           return;
         }
         if (event === "error") {
@@ -825,12 +1023,20 @@ export function useLectureAssistant({
         throw new Error("The lecture assistant did not return any text.");
       }
 
-      speakReply(streamedText);
+      if (!voiceSpeechStream) {
+        speakReply(streamedText);
+      } else {
+        voiceSpeechStream.markDone();
+      }
       return true;
     } catch (error) {
       if (error?.name === "AbortError") {
         if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
         else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+        if (voiceInterruptionRequestedRef.current) {
+          voiceInterruptionRequestedRef.current = false;
+          return false;
+        }
         if (voiceModeEnabledRef.current) {
           applyVoiceModeEnabled(false);
         }
@@ -839,12 +1045,14 @@ export function useLectureAssistant({
       }
       if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
       else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+      stopSpeaking();
       if (voiceModeEnabledRef.current) {
         applyVoiceModeEnabled(false);
       }
       setStatusText(compactText(error?.message, "The lecture assistant could not answer right now."));
       return false;
     } finally {
+      voiceInterruptionRequestedRef.current = false;
       abortControllerRef.current = null;
       setIsGenerating(false);
     }
@@ -1043,9 +1251,11 @@ export function useLectureAssistant({
     draft,
     hasLectureContext,
     isGenerating,
+    interruptAssistantAndListen,
     isListening,
     isOpen,
     isSpeaking,
+    isVoiceReconnecting,
     voiceModeEnabled,
     lectureLabel: compactText(lectureLabel),
     messages,
@@ -1069,8 +1279,16 @@ export function useLectureAssistant({
     toggleTheme: () => setTheme((current) => current === "dark" ? "light" : "dark"),
     toggleTts: toggleVoiceReplies,
     toggleVoiceChat: () => {
-      if (isListening || isSpeaking || voiceModeEnabledRef.current) {
-        stopVoiceChat();
+      if (isSpeaking || isGenerating) {
+        interruptAssistantAndListen();
+        return;
+      }
+      if (isListening) {
+        stopVoiceChat({ message: "Voice conversation ended." });
+        return;
+      }
+      if (voiceModeEnabledRef.current) {
+        startListening({ continueVoiceChat: true });
         return;
       }
       startListening();
