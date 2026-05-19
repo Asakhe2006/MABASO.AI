@@ -1,7 +1,8 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import LectureAssistantPanel from "./components/LectureAssistantPanel";
 import { EnterpriseFooter, EnterpriseSiteShell, ProtectedWorkspacePreview } from "./EnterpriseSiteShell";
-import { findSitePageByRoute } from "./sitePageConfig";
+import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
   resolveAppRouteForPage,
@@ -10,6 +11,7 @@ import {
   resolveEnterpriseRoute,
   resolveMetadataForRoute,
 } from "./siteRouting";
+import { useLectureAssistant } from "./useLectureAssistant";
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -99,6 +101,7 @@ const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
+const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
 const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
@@ -262,9 +265,215 @@ function buildPublicSupportPlaceholderEmail(seed = "") {
   return `guest+${cleanedSeed || Date.now()}@mabaso.ai`;
 }
 
+function rememberExplicitProtectedPreviewPath(path = "") {
+  if (typeof window === "undefined") return "";
+  const normalized = normalizeRoutePath(path);
+  if (normalized.startsWith("/app/")) {
+    window.sessionStorage.setItem(EXPLICIT_PROTECTED_PREVIEW_PATH_KEY, normalized);
+    return normalized;
+  }
+  window.sessionStorage.removeItem(EXPLICIT_PROTECTED_PREVIEW_PATH_KEY);
+  return "";
+}
+
+function readExplicitProtectedPreviewPath() {
+  if (typeof window === "undefined") return "";
+  return normalizeRoutePath(window.sessionStorage.getItem(EXPLICIT_PROTECTED_PREVIEW_PATH_KEY) || "");
+}
+
+function consumeExplicitProtectedPreviewPath() {
+  const normalized = readExplicitProtectedPreviewPath();
+  if (typeof window !== "undefined") {
+    window.sessionStorage.removeItem(EXPLICIT_PROTECTED_PREVIEW_PATH_KEY);
+  }
+  return normalized;
+}
+
+const browserVoiceStopWords = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "can",
+  "do",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "into",
+  "is",
+  "it",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "please",
+  "show",
+  "so",
+  "tell",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "what",
+  "when",
+  "where",
+  "which",
+  "why",
+  "with",
+  "you",
+  "your",
+]);
+
+function tokenizeBrowserVoiceText(text = "") {
+  return Array.from(new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]+/g, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3 && !browserVoiceStopWords.has(token)),
+  ));
+}
+
+function extractBrowserVoiceSnippet(text = "", maxSentences = 2, maxCharacters = 340) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const sentences = normalized.match(/[^.!?]+[.!?]*/g) || [normalized];
+  const snippet = sentences.slice(0, maxSentences).join(" ").trim();
+  return snippet.length > maxCharacters
+    ? `${snippet.slice(0, Math.max(0, maxCharacters - 3)).trim()}...`
+    : snippet;
+}
+
+function buildBrowserVoiceEntries({
+  guideSections = [],
+  exampleSections = [],
+  transcript = "",
+  formulaRows = [],
+}) {
+  const entries = [];
+
+  guideSections.forEach((section, index) => {
+    if (!section?.content) return;
+    entries.push({
+      id: `guide-${index}`,
+      type: "guide",
+      title: section.displayHeading || section.heading || `Guide section ${index + 1}`,
+      content: section.content,
+    });
+  });
+
+  exampleSections.forEach((section, index) => {
+    if (!section?.content) return;
+    entries.push({
+      id: `example-${index}`,
+      type: "example",
+      title: section.displayHeading || section.heading || `Worked example ${index + 1}`,
+      content: section.content,
+    });
+  });
+
+  formulaRows.forEach((row, index) => {
+    if (!row?.expression && !row?.result) return;
+    entries.push({
+      id: `formula-${index}`,
+      type: "formula",
+      title: `Formula ${index + 1}`,
+      content: [row.expression, row.result].filter(Boolean).join(" = "),
+    });
+  });
+
+  (String(transcript || "").split(/\n{2,}/) || [])
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .slice(0, 18)
+    .forEach((block, index) => {
+      entries.push({
+        id: `transcript-${index}`,
+        type: "transcript",
+        title: `Transcript note ${index + 1}`,
+        content: block,
+      });
+    });
+
+  return entries;
+}
+
+function scoreBrowserVoiceEntry(entry, tokens = []) {
+  if (!entry || !tokens.length) return 0;
+  const titleText = String(entry.title || "").toLowerCase();
+  const contentText = String(entry.content || "").toLowerCase();
+  return tokens.reduce((total, token) => {
+    const titleMatch = titleText.includes(token) ? 3 : 0;
+    const contentMatch = contentText.includes(token) ? 1 : 0;
+    return total + titleMatch + contentMatch;
+  }, 0);
+}
+
+function buildBrowserVoiceAnswer({
+  question = "",
+  guideTopic = "",
+  guideSections = [],
+  exampleSections = [],
+  transcript = "",
+  formulaRows = [],
+}) {
+  const tokens = tokenizeBrowserVoiceText(question);
+  const entries = buildBrowserVoiceEntries({ guideSections, exampleSections, transcript, formulaRows });
+  if (!entries.length) {
+    return {
+      answer: "Generate a study guide, transcript, formulas, or worked examples first. Then this browser voice page can answer from that lecture without paid AI calls.",
+      sources: [],
+    };
+  }
+
+  const formulaQuestion = /(formula|equation|calculate|solve|substitute|expression)/i.test(question);
+  if (formulaQuestion && formulaRows.length) {
+    const formulaEntry = buildBrowserVoiceEntries({ formulaRows })[0];
+    if (formulaEntry) {
+      return {
+        answer: `From your lecture formula sheet for ${guideTopic || "this topic"}: ${formulaEntry.content}.`,
+        sources: [formulaEntry.title],
+      };
+    }
+  }
+
+  const rankedEntries = entries
+    .map((entry) => ({ entry, score: scoreBrowserVoiceEntry(entry, tokens) }))
+    .sort((left, right) => right.score - left.score);
+
+  const strongestMatches = rankedEntries.filter((item) => item.score > 0).slice(0, 2);
+  const fallbackEntries = strongestMatches.length ? strongestMatches : rankedEntries.slice(0, 2);
+  const primaryMatch = fallbackEntries[0]?.entry || entries[0];
+  const secondaryMatch = fallbackEntries[1]?.entry || null;
+  const primarySnippet = extractBrowserVoiceSnippet(primaryMatch?.content || "", 2, 360);
+  const secondarySnippet = secondaryMatch ? extractBrowserVoiceSnippet(secondaryMatch.content || "", 1, 220) : "";
+  const answerParts = [
+    guideTopic ? `Here is the best match I found in ${guideTopic}.` : "Here is the best match I found in your lecture material.",
+    primaryMatch?.title ? `${primaryMatch.title}: ${primarySnippet}` : primarySnippet,
+  ];
+
+  if (secondaryMatch && secondarySnippet && secondaryMatch.id !== primaryMatch?.id) {
+    answerParts.push(`Also check ${secondaryMatch.title}: ${secondarySnippet}`);
+  }
+
+  return {
+    answer: answerParts.filter(Boolean).join(" "),
+    sources: fallbackEntries.map((item) => item.entry?.title).filter(Boolean),
+  };
+}
+
 const tabs = [
   { id: "guide", label: "Study Guide Generator" },
-  { id: "tutor", label: "Live AI Tutor" },
   { id: "transcript", label: "Transcript Analyzer" },
   { id: "formulas", label: "Formulas" },
   { id: "examples", label: "Worked Examples" },
@@ -276,7 +485,7 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
-const APP_PAGE_IDS = ["capture", "workspace", "materials", "collaboration"];
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "collaboration", "voice"];
 
 function normalizeWorkspaceTabId(tabId = "") {
   const normalized = String(tabId || "").trim().toLowerCase();
@@ -3427,6 +3636,7 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
+  const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -3556,6 +3766,7 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
   const enterpriseGoogleButtonRef = useRef(null);
+  const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const answerSyncTimersRef = useRef({});
@@ -3595,6 +3806,8 @@ export default function App() {
   const teacherRealtimeEventWaitersRef = useRef([]);
   const teacherRealtimeAssistantDraftRef = useRef("");
   const teacherRealtimeContextHashRef = useRef("");
+  const browserVoiceRecognitionRef = useRef(null);
+  const browserVoiceAnswerRunRef = useRef(0);
   const tutorCameraStreamRef = useRef(null);
   const tutorScreenStreamRef = useRef(null);
   const roomSharedNotesDraftRef = useRef("");
@@ -3647,6 +3860,11 @@ export default function App() {
   const [teacherQuestionDraft, setTeacherQuestionDraft] = useState("");
   const [teacherQuestionAnswer, setTeacherQuestionAnswer] = useState("");
   const [teacherQuestionStatus, setTeacherQuestionStatus] = useState("");
+  const [browserVoiceDraft, setBrowserVoiceDraft] = useState("");
+  const [browserVoiceMessages, setBrowserVoiceMessages] = useState([]);
+  const [browserVoiceStatus, setBrowserVoiceStatus] = useState("Use your microphone or type a question. This page answers from the lecture already loaded in your browser.");
+  const [isBrowserVoiceListening, setIsBrowserVoiceListening] = useState(false);
+  const [isBrowserVoiceSpeaking, setIsBrowserVoiceSpeaking] = useState(false);
 
   const persistPostAuthRedirectPath = (path = "") => {
     const normalized = normalizePostAuthRedirectPath(path);
@@ -3736,6 +3954,11 @@ export default function App() {
     }
     setBrowserPath(normalized);
     setPublicPage(normalized === PUBLIC_TERMS_PATH ? "terms" : "auth");
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      });
+    }
   };
 
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
@@ -3752,10 +3975,16 @@ export default function App() {
     if (targetRoute) navigateToPath(targetRoute, { replace });
   };
 
+  const openModeSelection = ({ replace = false } = {}) => {
+    currentPageRef.current = "mode-select";
+    setCurrentPage("mode-select");
+    navigateToPath("/", { replace });
+  };
+
   const revealWorkspacePage = (tabId = "guide", { forcePage = false } = {}) => {
     const normalizedTabId = normalizeWorkspaceTabId(tabId || "guide");
     setActiveTab(normalizedTabId);
-    if (forcePage || !["materials", "about", "support"].includes(currentPageRef.current)) {
+    if (forcePage || !["materials", "about", "support", "voice"].includes(currentPageRef.current)) {
       openProtectedAppPage("workspace");
     }
   };
@@ -3937,7 +4166,22 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     setPublicPage("auth");
+    setShowLandingAuthOptions(false);
   }, [authToken]);
+
+  useEffect(() => {
+    if (!showLandingAuthOptions || typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      landingAuthPanelRef.current?.scrollIntoView?.({ block: "start", inline: "nearest" });
+    });
+  }, [showLandingAuthOptions]);
+
+  useEffect(() => {
+    if (!authChecked || authToken || !findProtectedWorkspaceRoute(browserPath)) return;
+    const explicitPreviewPath = consumeExplicitProtectedPreviewPath();
+    if (explicitPreviewPath === browserPath) return;
+    navigateToPath("/", { replace: true });
+  }, [authChecked, authToken, browserPath]);
 
   useEffect(() => {
     setDismissedRoomInviteIds(loadDismissedRoomInviteIds(authEmail || authEmailInput || ""));
@@ -4008,6 +4252,10 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
+  useEffect(() => {
+    if (activeTab !== "tutor") return;
+    setActiveTab("guide");
+  }, [activeTab]);
   const activePresentationDesign = presentationDesigns.find((design) => design.id === (presentationData.designId || selectedPresentationDesign)) || presentationDesigns[0];
   const activePresentationDesignTokens = getPresentationDesignTokens(activePresentationDesign);
   const selectedPresentationTemplateName = presentationTemplateFile?.name || "";
@@ -4044,11 +4292,13 @@ export default function App() {
   const isRegistrationPasswordStep = isRegisterMode && registerStep === "password";
   const showResetVerificationCard = isResetMode && Boolean(pendingEmailAuthEmail);
   const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in|email verified)/i.test(authMessage.trim());
-  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode|enter your email and we will send a verification code|your study history stays linked to this email)/i.test(authMessage.trim());
+  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode|enter your email and we will send a verification code|your study history stays linked to this email|continue with google or apple to sign in securely|create your mabaso ai account by continuing with google or apple)/i.test(authMessage.trim());
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
+  const landingAuthMessageIsGuidance = /continue with google or apple|create your mabaso ai account by continuing with google or apple/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
-  const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
+  const showLandingAuthPanel = showLandingAuthOptions || isGoogleSigningIn || isAppleSigningIn || (Boolean(authMessage.trim()) && browserPath === "/" && !authToken);
+  const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
   const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
@@ -4082,10 +4332,15 @@ export default function App() {
   const isCollaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
-    : hasResults || ["chat", "tutor"].includes(activeTab);
-  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation", "tutor"].includes(activeTab));
+    : hasResults || ["chat"].includes(activeTab);
+  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
   const showHistoryPanel = currentPage === "materials";
+  const showLectureAssistantFloatingButton = Boolean(
+    authToken
+    && authChecked
+    && !["admin", "mode-select"].includes(currentPage),
+  );
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
@@ -4111,6 +4366,165 @@ export default function App() {
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
     || "Shared Study Guide";
+  const browserVoiceRecognitionSupported = Boolean(getSpeechRecognitionConstructor());
+  const browserVoiceEntries = buildBrowserVoiceEntries({
+    guideSections,
+    exampleSections,
+    transcript: deferredTranscript,
+    formulaRows,
+  });
+  const stopBrowserVoicePlayback = () => {
+    browserVoiceAnswerRunRef.current += 1;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsBrowserVoiceSpeaking(false);
+  };
+  const stopBrowserVoiceListening = () => {
+    const recognition = browserVoiceRecognitionRef.current;
+    browserVoiceRecognitionRef.current = null;
+    if (recognition) {
+      try {
+        recognition.stop();
+      } catch {
+        // Ignore browser recognition stop errors.
+      }
+    }
+    setIsBrowserVoiceListening(false);
+  };
+  const speakBrowserVoiceAnswer = (text = "") => {
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setBrowserVoiceStatus("Browser speech playback is not available here, but the written answer is ready below.");
+      return;
+    }
+    const spokenText = String(text || "").trim();
+    if (!spokenText) return;
+    const selectedVoice = resolveTeacherVoice(teacherVoiceOptions, selectedTeacherVoiceName, outputLanguage);
+    const runId = browserVoiceAnswerRunRef.current + 1;
+    browserVoiceAnswerRunRef.current = runId;
+    window.speechSynthesis.cancel();
+    const utterance = new window.SpeechSynthesisUtterance(spokenText);
+    utterance.lang = resolveSpeechLocale(outputLanguage);
+    utterance.rate = getTeacherSpeechRate("balanced", "answer");
+    if (selectedVoice) utterance.voice = selectedVoice;
+    utterance.onstart = () => {
+      if (browserVoiceAnswerRunRef.current !== runId) return;
+      setIsBrowserVoiceSpeaking(true);
+      setBrowserVoiceStatus("Speaking the answer from your browser voice.");
+    };
+    utterance.onend = () => {
+      if (browserVoiceAnswerRunRef.current !== runId) return;
+      setIsBrowserVoiceSpeaking(false);
+      setBrowserVoiceStatus("Answer ready. Ask another question when you are ready.");
+    };
+    utterance.onerror = () => {
+      if (browserVoiceAnswerRunRef.current !== runId) return;
+      setIsBrowserVoiceSpeaking(false);
+      setBrowserVoiceStatus("The browser could not read that answer aloud, but the written answer is still available.");
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+  const submitBrowserVoicePrompt = (rawQuestion = "") => {
+    const question = String(rawQuestion || "").trim();
+    if (!question) {
+      setBrowserVoiceStatus("Say or type a question first.");
+      return;
+    }
+    stopBrowserVoiceListening();
+    stopBrowserVoicePlayback();
+    const response = buildBrowserVoiceAnswer({
+      question,
+      guideTopic,
+      guideSections,
+      exampleSections,
+      transcript: deferredTranscript,
+      formulaRows,
+    });
+    setBrowserVoiceMessages((current) => [
+      ...current,
+      { id: `voice-user-${Date.now()}`, role: "user", content: question },
+      { id: `voice-assistant-${Date.now() + 1}`, role: "assistant", content: response.answer, sources: response.sources },
+    ]);
+    setBrowserVoiceDraft("");
+    setBrowserVoiceStatus(response.sources?.length ? `Answered from ${response.sources.join(", ")}.` : "Answered from the lecture currently loaded in your browser.");
+    speakBrowserVoiceAnswer(response.answer);
+  };
+  const startBrowserVoiceListening = () => {
+    const RecognitionCtor = getSpeechRecognitionConstructor();
+    if (!RecognitionCtor) {
+      setBrowserVoiceStatus(`Voice input is not supported in ${detectSupportBrowser() || "this browser"}. You can still type a question instead.`);
+      return;
+    }
+    stopBrowserVoiceListening();
+    stopBrowserVoicePlayback();
+    const recognition = new RecognitionCtor();
+    browserVoiceRecognitionRef.current = recognition;
+    recognition.lang = resolveSpeechLocale(outputLanguage);
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = "";
+    let latestTranscript = "";
+    recognition.onstart = () => {
+      setIsBrowserVoiceListening(true);
+      setBrowserVoiceStatus("Listening. Speak your question now.");
+    };
+    recognition.onresult = (event) => {
+      const transcriptText = Array.from(event.results || [])
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .trim();
+      if (transcriptText) {
+        latestTranscript = transcriptText;
+        setBrowserVoiceDraft(transcriptText);
+      }
+      const completedText = Array.from(event.results || [])
+        .filter((result) => result.isFinal)
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .trim();
+      if (completedText) {
+        finalTranscript = completedText;
+      }
+    };
+    recognition.onerror = (event) => {
+      const errorCode = String(event?.error || "").trim().toLowerCase();
+      setIsBrowserVoiceListening(false);
+      browserVoiceRecognitionRef.current = null;
+      if (errorCode === "no-speech") {
+        setBrowserVoiceStatus("I did not catch a clear question. Try again and speak a little closer to the microphone.");
+        return;
+      }
+      if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+        setBrowserVoiceStatus("Microphone access was denied. Allow microphone access, then try again.");
+        return;
+      }
+      setBrowserVoiceStatus("The browser could not keep listening right now. You can try again or type the question.");
+    };
+    recognition.onend = () => {
+      setIsBrowserVoiceListening(false);
+      browserVoiceRecognitionRef.current = null;
+      if (finalTranscript.trim()) {
+        submitBrowserVoicePrompt(finalTranscript.trim());
+        return;
+      }
+      if (latestTranscript.trim()) {
+        setBrowserVoiceDraft(latestTranscript.trim());
+        setBrowserVoiceStatus("Speech captured. Press Ask from browser to send it, or speak again.");
+        return;
+      }
+      setBrowserVoiceStatus("Listening stopped before a full question was captured.");
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      setIsBrowserVoiceListening(false);
+      browserVoiceRecognitionRef.current = null;
+      setBrowserVoiceStatus("The browser could not start voice input right now. Try again or type the question.");
+    }
+  };
   const teacherEstimatedMinutes = getTeacherEstimatedMinutes(teacherLessonData);
   const activeTeacherSegment = activeTeacherSegmentIndex >= 0
     ? teacherLessonData.segments[activeTeacherSegmentIndex] || null
@@ -4383,10 +4797,6 @@ export default function App() {
   };
 
   const syncTeacherSegmentToolView = (sectionHeading = "") => {
-    if (activeTab === "tutor") {
-      setTeacherPreviewTab(resolveTeacherExampleSectionKey(sectionHeading) ? "examples" : "guide");
-      return;
-    }
     if (resolveTeacherExampleSectionKey(sectionHeading)) {
       openTeacherWorkedExamples(sectionHeading);
       return;
@@ -4898,7 +5308,7 @@ export default function App() {
             <div className="min-w-0">
               <p className="study-guide-kicker">Lecture Topic</p>
               <h4 className="study-guide-topic mt-2">{topic}</h4>
-              {isIntroActive ? <p className="study-guide-focus-badge mt-4">Tutor is teaching this section</p> : null}
+              {isIntroActive ? <p className="study-guide-focus-badge mt-4">Audio focus on this section</p> : null}
             </div>
           </div>
           {summarySection?.content ? (
@@ -4949,7 +5359,7 @@ export default function App() {
                   ref={sectionRef}
                   className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                 >
-                  {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this section</p> : null}
+                  {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                   <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                   <div className="phone-safe-copy mt-3 max-w-none">
                     <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
@@ -5505,6 +5915,106 @@ export default function App() {
           <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use email for formal enquiries and longer explanations.</div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use 0717020081 for in-app messaging support guidance and direct phone calls.</div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">For faster help, mention the page you were using and what you expected Mabaso AI to do.</div>
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderBrowserVoicePage = () => (
+    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+      <div className="border-b border-white/10 pb-5">
+        <div className="flex items-start gap-4">
+          {renderBackButton(() => {
+            setActiveTab("chat");
+            openProtectedAppPage("workspace");
+          }, "Back to study chat")}
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Browser Voice Practice</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">Speak about this lecture without paid voice model costs.</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">This page uses your browser microphone, browser speech playback, and the lecture material already loaded in Mabaso AI. It does not call the live OpenAI tutor.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="space-y-5">
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Voice Setup</p>
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Language</label>
+                <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                  {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Browser voice</label>
+                <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none">
+                  {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Default browser voice</option>}
+                </select>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-slate-200">
+                {browserVoiceRecognitionSupported ? "Microphone capture is available in this browser." : `This browser cannot capture voice questions directly. You can still type a question in ${detectSupportBrowser() || "this browser"}.`}
+              </div>
+              <div className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">
+                {browserVoiceEntries.length ? `Ready with ${browserVoiceEntries.length} lecture sections from your guide, transcript, formulas, and worked examples.` : "Load lecture material first so the browser has something useful to answer from."}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Status</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">{browserVoiceStatus}</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button type="button" onClick={isBrowserVoiceListening ? stopBrowserVoiceListening : startBrowserVoiceListening} className={`rounded-full px-4 py-2 text-sm font-semibold ${isBrowserVoiceListening ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"}`}>
+                {isBrowserVoiceListening ? "Stop listening" : "Start speaking"}
+              </button>
+              <button type="button" onClick={stopBrowserVoicePlayback} disabled={!isBrowserVoiceSpeaking} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">
+                Stop voice
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Voice Conversation</p>
+                <h3 className="mt-2 text-2xl font-semibold text-white">Ask from your lecture context</h3>
+              </div>
+              <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
+                Browser only
+              </div>
+            </div>
+            <div className="mt-5 max-h-[420px] space-y-4 overflow-y-auto pr-1">
+              {browserVoiceMessages.length ? browserVoiceMessages.map((message) => (
+                <div key={message.id} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}>
+                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "Browser voice" : "You"}</p>
+                  <div className="whitespace-pre-wrap break-words">{message.content}</div>
+                  {message.role === "assistant" && message.sources?.length ? <p className="mt-3 text-xs text-emerald-100/70">Source: {message.sources.join(", ")}</p> : null}
+                </div>
+              )) : (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">
+                  Say a question like “Explain the main concept again” or “Which formula do I use here?” and this page will answer from the study material already on screen.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
+            <div className="force-mobile-stack flex items-end gap-3">
+              <textarea value={browserVoiceDraft} onChange={(event) => setBrowserVoiceDraft(event.target.value)} rows={2} className="min-h-[72px] flex-1 resize-none rounded-2xl border border-white/10 bg-black/35 px-4 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Speak or type a lecture question here..." />
+              <button type="button" onClick={isBrowserVoiceListening ? stopBrowserVoiceListening : startBrowserVoiceListening} className={`flex h-14 w-14 items-center justify-center self-end rounded-full border ${isBrowserVoiceListening ? "border-rose-300/30 bg-rose-500/15 text-rose-100" : "border-white/10 bg-white/5 text-white"} sm:self-auto`} aria-label="Toggle microphone">
+                <svg viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+                  <path d="M12 4a3 3 0 0 1 3 3v4a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Zm-5 7a5 5 0 0 0 10 0M12 16v4M9 20h6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                </svg>
+              </button>
+              <button type="button" onClick={() => submitBrowserVoicePrompt(browserVoiceDraft)} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white">
+                Ask from browser
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -6159,7 +6669,7 @@ export default function App() {
           </div>
           {!thumbnail ? (
             <div className="mt-5 flex items-end justify-between gap-4">
-              <p className="max-w-2xl text-sm leading-6" style={mutedStyle}>{slide?.flowNote || "This slide keeps the lesson moving in a clear teaching order."}</p>
+              <p className="max-w-2xl text-sm leading-6" style={mutedStyle}>{slide?.flowNote || "This slide keeps the lesson moving in a clear order."}</p>
               <span className="text-[11px] font-semibold uppercase tracking-[0.28em]" style={mutedStyle}>mabaso</span>
             </div>
           ) : (
@@ -6368,7 +6878,7 @@ export default function App() {
             <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.28em] text-sky-100/75">AI Presentation Maker</p>
-                <h4 className="mt-2 text-3xl font-semibold text-white">Build lecture slides with real structure, useful visuals, and stronger teaching flow.</h4>
+                <h4 className="mt-2 text-3xl font-semibold text-white">Build lecture slides with real structure, useful visuals, and stronger study flow.</h4>
                 <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Choose a template first. After you generate, the template page disappears and the presentation moves to its own progress page. Uploaded slide and note images are matched first when they truly fit the slide topic.</p>
               </div>
               {presentationData.slides.length ? <button type="button" onClick={focusPresentationViewer} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-4 py-2 text-sm font-semibold text-sky-50">Open current deck</button> : null}
@@ -7855,21 +8365,48 @@ export default function App() {
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredUsers.length)} visible</span>
             </div>
             {renderSimpleTable(
-              ["User", "Role", "Status", "Last Login", "Next Timeout", "Sessions", "Lectures", "Materials", "Tests", "Actions"],
+              [
+                "User",
+                "Role",
+                "Status",
+                "Last Login",
+                "Live Sessions",
+                `Sessions (${selectedAdminRange.shortLabel})`,
+                `Lectures (${selectedAdminRange.shortLabel})`,
+                `Materials (${selectedAdminRange.shortLabel})`,
+                `Tests (${selectedAdminRange.shortLabel})`,
+                `Activity (${selectedAdminRange.shortLabel})`,
+                "Controls",
+              ],
               filteredUsers.map((user) => (
                 <tr key={user.email} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
                   <td className="rounded-l-[24px] px-3 py-4">
                     <p className="phone-safe-copy text-sm font-semibold text-slate-900">{user.email}</p>
                     <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">Risk {titleCaseWords(user.risk_score || "low")}</p>
+                    <p className="mt-2 text-xs text-slate-500">Joined {user.created_at ? formatAdminDateTime(user.created_at) : "Unknown"}</p>
                   </td>
                   <td className="px-3 py-4 text-sm text-slate-700">{titleCaseWords(user.role)}</td>
                   <td className="px-3 py-4"><span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span></td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{user.last_login_at ? formatAdminDateTime(user.last_login_at) : "Never"}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{user.next_timeout_at ? formatAdminDateTime(user.next_timeout_at) : "No active session"}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.sessions_count || 0)}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.lectures_transcribed || 0)}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.study_materials || 0)}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.tests_generated || 0)}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">
+                    <p>{user.last_login_at ? formatAdminDateTime(user.last_login_at) : "Never"}</p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      {user.last_login_in_range_at
+                        ? `Seen in ${selectedAdminRange.shortLabel}: ${formatAdminDateTime(user.last_login_in_range_at)}`
+                        : `No login in ${selectedAdminRange.shortLabel}`}
+                    </p>
+                  </td>
+                  <td className="px-3 py-4 text-sm text-slate-700">
+                    <p>{formatAdminInteger(user.active_sessions_now ?? user.sessions_count ?? 0)}</p>
+                    <p className="mt-2 text-xs text-slate-500">{user.next_timeout_at ? `Next timeout ${formatAdminDateTime(user.next_timeout_at)}` : "No active timeout"}</p>
+                  </td>
+                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.tracked_sessions_in_range ?? 0)}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.lectures_transcribed_in_range ?? user.lectures_transcribed ?? 0)}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">
+                    <p>{formatAdminInteger(user.study_materials_in_range ?? user.study_materials ?? 0)}</p>
+                    <p className="mt-2 text-xs text-slate-500">{formatAdminBytes(user.storage_bytes_in_range ?? user.storage_bytes ?? 0)}</p>
+                  </td>
+                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.tests_generated_in_range ?? user.tests_generated ?? 0)}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(user.total_actions_in_range ?? user.total_actions_30d ?? 0)}</td>
                   <td className="rounded-r-[24px] px-3 py-4">
                     <div className="flex flex-wrap gap-2">
                       {user.status !== "suspended" ? (
@@ -8591,6 +9128,7 @@ export default function App() {
     setIsSigningInWithPassword(false);
     setIsRequestingEmailCode(false);
     setIsVerifyingEmailCode(false);
+    setShowLandingAuthOptions(false);
     setHistoryItems([]);
     setActiveHistoryId("");
     setCurrentPage("capture");
@@ -8891,6 +9429,11 @@ export default function App() {
     stopTeacherPlayback({ resetIndex: true });
   }, []);
 
+  useEffect(() => () => {
+    stopBrowserVoiceListening();
+    stopBrowserVoicePlayback();
+  }, []);
+
   useEffect(() => {
     if (!recording) return undefined;
     const handleBeforeUnload = (event) => {
@@ -8929,9 +9472,9 @@ export default function App() {
       } else if (isTeacherPlaying || isTeacherPaused) {
         const activeSegment = teacherLessonData.segments[activeTeacherSegmentIndex] || teacherLessonData.segments[0] || null;
         navigator.mediaSession.metadata = new window.MediaMetadata({
-          title: teacherLessonData.title || "Mabaso AI Tutor",
+          title: teacherLessonData.title || "Study Audio",
           artist: activeSegment?.sectionHeading || "Study Guide",
-          album: "Mabaso AI Tutor Session",
+          album: "Study Audio Session",
         });
         navigator.mediaSession.setActionHandler("pause", () => pauseTeacherLesson());
         navigator.mediaSession.setActionHandler("play", () => resumeTeacherLesson());
@@ -9445,11 +9988,11 @@ export default function App() {
     persistPostAuthRedirectPath(redirectPath);
     if (mode === "register") {
       openRegisterMode();
-      setAuthMessage("Create your Mabaso AI account by continuing with Google or Apple.");
     } else {
       openLoginMode();
-      setAuthMessage("Continue with Google or Apple to sign in securely.");
     }
+    setAuthMessage("");
+    setShowLandingAuthOptions(true);
     navigateToPath("/");
   };
 
@@ -9457,15 +10000,20 @@ export default function App() {
     const normalizedTarget = String(target || "capture").trim().toLowerCase();
     const nextPath = normalizedTarget === "admin"
       ? "/admin/dashboard"
-      : `/app/${normalizedTarget}`;
+      : normalizedTarget === "voice"
+        ? "/app/voice-study"
+        : `/app/${normalizedTarget}`;
     persistPostAuthRedirectPath(authToken ? "" : nextPath);
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
-      } else if (["capture", "workspace", "materials", "collaboration"].includes(normalizedTarget)) {
+      } else if (["capture", "workspace", "materials", "collaboration", "voice"].includes(normalizedTarget)) {
         openProtectedAppPage(normalizedTarget);
         return;
       }
+    }
+    if (!authToken) {
+      rememberExplicitProtectedPreviewPath(nextPath);
     }
     navigateToPath(nextPath);
   };
@@ -9549,6 +10097,10 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authToken) return;
     if (browserPath === "/admin/dashboard") {
+      if (authSessionMode !== "admin") {
+        openProtectedAppPage("capture", { replace: true });
+        return;
+      }
       if (authSessionMode === "admin" && currentPage !== "admin") {
         setCurrentPage("admin");
       }
@@ -9683,6 +10235,51 @@ export default function App() {
     }
   };
 
+  const requestLectureAssistantStream = (payload, signal) => authFetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    timeoutMs: 95000,
+    signal,
+  });
+
+  const lectureAssistantContextKey = [
+    activeHistoryId,
+    file?.name || "",
+    videoUrl.trim(),
+    lectureNotes.trim().slice(0, 80),
+    lectureSlides.trim().slice(0, 80),
+    pastQuestionPapers.trim().slice(0, 80),
+  ].filter(Boolean).join("|");
+
+  const lectureAssistantLabel = extractHistoryTitle(
+    summary,
+    file?.name || videoUrl.trim() || "Current lecture",
+  );
+
+  const lectureAssistant = useLectureAssistant({
+    requestStream: requestLectureAssistantStream,
+    authEmail,
+    contextKey: lectureAssistantContextKey,
+    lectureLabel: lectureAssistantLabel,
+    outputLanguage,
+    transcript,
+    summary,
+    formulas: formattedFormula || formula,
+    workedExamples: formattedExample || example,
+    lectureNotes,
+    lectureSlides,
+    pastQuestionPapers,
+    draft: chatQuestion,
+    setDraft: setChatQuestion,
+  });
+  const lectureAssistantMessages = lectureAssistant.messages;
+  const latestLectureAssistantReply = [...lectureAssistantMessages].reverse().find((message) => message.role === "assistant") || null;
+
+  useEffect(() => {
+    setIsAskingChat(lectureAssistant.isGenerating);
+  }, [lectureAssistant.isGenerating]);
+
   const buildTeacherRealtimeRequestPayload = () => ({
     summary,
     transcript,
@@ -9704,7 +10301,7 @@ export default function App() {
   });
 
   const createTeacherRealtimeStartupError = (code, message, { retryable = false, cause = null } = {}) => {
-    const error = new Error(String(message || "Live tutor startup failed.").trim());
+    const error = new Error(String(message || "Live audio startup failed.").trim());
     error.code = code;
     error.retryable = Boolean(retryable);
     if (cause) error.cause = cause;
@@ -9750,14 +10347,14 @@ export default function App() {
     ) {
       return createTeacherRealtimeStartupError(
         "openai_auth_failed",
-        "OpenAI authentication failed for Live AI Tutor. Check backend API access and try again later.",
+        "OpenAI authentication failed for live audio. Check backend API access and try again later.",
       );
     }
 
     if (/openai_api_key is not configured|not configured on the backend/i.test(message)) {
       return createTeacherRealtimeStartupError(
         "backend_config_missing",
-        "Live AI Tutor is not configured on the backend yet. Add OPENAI_API_KEY in Render and redeploy.",
+        "Live audio is not configured on the backend yet. Add OPENAI_API_KEY in Render and redeploy.",
       );
     }
 
@@ -9773,7 +10370,7 @@ export default function App() {
     ) {
       return createTeacherRealtimeStartupError(
         "invalid_session",
-        "The Live AI Tutor session could not be created correctly. Please try Start Live again.",
+        "The live audio session could not be created correctly. Please try again.",
         { retryable: true },
       );
     }
@@ -9781,7 +10378,7 @@ export default function App() {
     if (/context sync|session update|session updated timed out/i.test(message)) {
       return createTeacherRealtimeStartupError(
         "context_sync_failed",
-        "Live tutor connected but could not sync the workspace context. Please try again.",
+        "Live audio connected but could not sync the workspace context. Please try again.",
         { retryable: true },
       );
     }
@@ -9789,7 +10386,7 @@ export default function App() {
     if (/autoplay|audio playback|audio output|audio context/i.test(message)) {
       return createTeacherRealtimeStartupError(
         "audio_stream_unavailable",
-        "The tutor audio output could not start. Bring the tab to the front and tap Start Live again.",
+        "The audio output could not start. Bring the tab to the front and try again.",
         { retryable: true },
       );
     }
@@ -9800,14 +10397,14 @@ export default function App() {
     ) {
       return createTeacherRealtimeStartupError(
         "websocket_failed",
-        message || "The Live AI Tutor control connection failed to start.",
+        message || "The live audio control connection failed to start.",
         { retryable: isTransientHttpStatus(responseStatus) || isTransientServerConnectionMessage(message) || !responseStatus },
       );
     }
 
     return createTeacherRealtimeStartupError(
       fallbackCode,
-      message || "Live tutor connection failed.",
+      message || "Live audio connection failed.",
       { retryable: Boolean(error?.retryable) },
     );
   };
@@ -9825,7 +10422,7 @@ export default function App() {
     {
       timeoutMs = TEACHER_REALTIME_SESSION_EVENT_TIMEOUT_MS,
       errorCode = "realtime_failed",
-      timeoutMessage = "Timed out waiting for the live tutor session.",
+      timeoutMessage = "Timed out waiting for the live audio session.",
     } = {},
   ) => new Promise((resolve, reject) => {
     const waiter = {
@@ -9848,7 +10445,7 @@ export default function App() {
 
   const ensureTeacherRealtimeRunActive = (runId) => {
     if (runId !== teacherRealtimeStartupRunRef.current) {
-      throw createTeacherRealtimeStartupError("startup_superseded", "A newer Live AI Tutor startup replaced this one.");
+      throw createTeacherRealtimeStartupError("startup_superseded", "A newer live audio startup replaced this one.");
     }
   };
 
@@ -9907,7 +10504,7 @@ export default function App() {
   const closeTeacherRealtimeRuntime = ({ preserveReconnect = false } = {}) => {
     setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.IDLE, "runtime cleaned up");
     clearTeacherRealtimeTimers({ preserveReconnect });
-    clearTeacherRealtimeEventWaiters(createTeacherRealtimeStartupError("realtime_closed", "Live tutor connection closed."));
+    clearTeacherRealtimeEventWaiters(createTeacherRealtimeStartupError("realtime_closed", "Live audio connection closed."));
     teacherRealtimeDataChannelRef.current?.close?.();
     teacherRealtimePeerConnectionRef.current?.close?.();
     teacherRealtimeLocalStreamRef.current?.getTracks?.().forEach((track) => track.stop());
@@ -9933,10 +10530,6 @@ export default function App() {
   const syncTeacherRealtimePreviewFromText = (text = "") => {
     const targetTab = resolveRealtimeTutorPreviewTarget(text);
     if (!targetTab) return;
-    if (activeTab === "tutor") {
-      setTeacherPreviewTab(targetTab);
-      return;
-    }
     if (["guide", "examples", "transcript"].includes(targetTab)) {
       openTutorWorkspaceTool(targetTab);
     }
@@ -9965,14 +10558,14 @@ export default function App() {
     }
     if (announce) {
       if (reason === "inactive") {
-        setStatus("Live tutor slept after inactivity to save voice time.");
+        setStatus("Live audio slept after inactivity to save voice time.");
         setTeacherQuestionStatus("Session sleeping. Start it again when you're ready.");
       } else if (reason === "daily_limit") {
-        setStatus("Live tutor used today's free voice time.");
+        setStatus("Live audio used today's free voice time.");
         setTeacherQuestionStatus("Today's free voice time is finished.");
       } else {
-        setStatus("Live tutor session ended.");
-        setTeacherQuestionStatus("Live tutor session ended.");
+        setStatus("Live audio session ended.");
+        setTeacherQuestionStatus("Live audio session ended.");
       }
     }
   };
@@ -10031,7 +10624,7 @@ export default function App() {
       } catch {
         throw createTeacherRealtimeStartupError(
           "audio_stream_unavailable",
-          "The tutor audio context is suspended in this browser tab.",
+          "The audio context is suspended in this browser tab.",
           { retryable: true },
         );
       }
@@ -10042,7 +10635,7 @@ export default function App() {
       } catch {
         throw createTeacherRealtimeStartupError(
           "audio_stream_unavailable",
-          "The tutor audio playback could not start in this browser.",
+          "The audio playback could not start in this browser.",
           { retryable: true },
         );
       }
@@ -10111,7 +10704,7 @@ export default function App() {
       timeoutMs: 25000,
     });
     const data = await parseJsonSafe(response);
-    if (!response.ok) throw new Error(data.detail || "Could not refresh the live tutor context.");
+    if (!response.ok) throw new Error(data.detail || "Could not refresh the live audio context.");
     teacherRealtimeContextHashRef.current = contextSignature;
     setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTED, "syncing workspace context");
     setTeacherRealtimeModel(data.selected_model || "");
@@ -10135,12 +10728,12 @@ export default function App() {
     if (!updated) {
       throw createTeacherRealtimeStartupError(
         "context_sync_failed",
-        "The live tutor control channel was not ready to sync workspace context.",
+        "The live audio control channel was not ready to sync workspace context.",
         { retryable: true },
       );
     }
     if (announce) {
-      setStatus("Live tutor context refreshed from the current workspace.");
+      setStatus("Live audio context refreshed from the current workspace.");
     }
     return true;
   };
@@ -10167,7 +10760,7 @@ export default function App() {
     }
     if (eventType === "input_audio_buffer.speech_stopped") {
       setIsTeacherListening(false);
-      setTeacherQuestionStatus(isTeacherRealtimeMicActive ? "Release to ask the tutor." : "Question captured.");
+      setTeacherQuestionStatus(isTeacherRealtimeMicActive ? "Release to send your question." : "Question captured.");
       return;
     }
     if (eventType === "input_audio_buffer.timeout_triggered") {
@@ -10234,12 +10827,12 @@ export default function App() {
       }
       setIsTeacherQuestionLoading(false);
       setIsTeacherAnswering(false);
-      setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
+      setTeacherQuestionStatus("Live audio ready. Hold Ask Question when you want to talk.");
       return;
     }
     if (eventType === "error") {
       const startupError = normalizeTeacherRealtimeStartupError(
-        { message: String(event?.error?.message || event?.message || "Realtime tutor error.").trim() },
+        { message: String(event?.error?.message || event?.message || "Realtime audio error.").trim() },
         "realtime_failed",
       );
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, startupError.message);
@@ -10254,21 +10847,21 @@ export default function App() {
   const describeTeacherRealtimeFailure = (startupError) => {
     switch (startupError?.code) {
       case "microphone_denied":
-        return "Microphone permission is required for Live AI Tutor.";
+        return "Microphone permission is required for live audio.";
       case "websocket_failed":
-        return "The live tutor control connection failed.";
+        return "The live audio control connection failed.";
       case "invalid_session":
-        return "The live tutor session could not be initialized.";
+        return "The live audio session could not be initialized.";
       case "backend_config_missing":
       case "realtime_model_unavailable":
       case "openai_auth_failed":
-        return startupError.message || "The backend could not create a realtime tutor session.";
+        return startupError.message || "The backend could not create a realtime audio session.";
       case "audio_stream_unavailable":
-        return "The tutor audio stream is unavailable.";
+        return "The audio stream is unavailable.";
       case "context_sync_failed":
-        return "The live tutor could not sync the current workspace context.";
+        return "The live audio session could not sync the current workspace context.";
       default:
-        return "Live tutor connection failed.";
+        return "Live audio connection failed.";
     }
   };
 
@@ -10279,8 +10872,8 @@ export default function App() {
       teacherRealtimeShouldReconnectRef.current = false;
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, "automatic reconnect attempts exhausted");
       setIsTeacherRealtimeConnecting(false);
-      setTeacherQuestionStatus("Live tutor could not reconnect automatically.");
-      setStatus("Live tutor stopped after repeated reconnect failures.");
+      setTeacherQuestionStatus("Live audio could not reconnect automatically.");
+      setStatus("Live audio stopped after repeated reconnect failures.");
       if (startupError?.message) setError(startupError.message);
       return;
     }
@@ -10290,8 +10883,8 @@ export default function App() {
     closeTeacherRealtimeRuntime({ preserveReconnect: true });
     setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.RECONNECTING, `retry ${nextAttempt} after ${reason}`);
     setIsTeacherRealtimeConnecting(true);
-    setStatus("Live tutor is reconnecting in the background.");
-    setTeacherQuestionStatus(`Reconnecting live tutor in ${Math.ceil(delayMs / 1000)}s...`);
+    setStatus("Live audio is reconnecting in the background.");
+      setTeacherQuestionStatus(`Reconnecting live audio in ${Math.ceil(delayMs / 1000)}s...`);
     teacherRealtimeReconnectTimerRef.current = window.setTimeout(() => {
       teacherRealtimeReconnectTimerRef.current = null;
       startTeacherRealtimeSession({ reconnect: true, preserveTranscript: true, reconnectReason: reason }).catch(() => {});
@@ -10301,15 +10894,15 @@ export default function App() {
   const startTeacherRealtimeSession = async ({ reconnect = false, preserveTranscript = false, reconnectReason = "manual_start" } = {}) => {
     if (isTeacherRealtimeConnecting && !reconnect) return;
     if (isTeacherRealtimeConnected && !reconnect) {
-      setTeacherQuestionStatus("Live tutor is already ready.");
+      setTeacherQuestionStatus("Live audio is already ready.");
       return;
     }
     if (typeof window === "undefined" || typeof window.RTCPeerConnection === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setError(`Realtime tutor needs microphone + WebRTC support in ${detectSupportBrowser() || "this browser"}.`);
+      setError(`Realtime audio needs microphone + WebRTC support in ${detectSupportBrowser() || "this browser"}.`);
       return;
     }
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
-      setError("Generate a study guide or add lecture material before starting Live AI Tutor.");
+      setError("Generate a study guide or add lecture material before starting live audio.");
       return;
     }
 
@@ -10343,10 +10936,10 @@ export default function App() {
       reconnect ? TEACHER_REALTIME_CONNECTION_STATES.RECONNECTING : TEACHER_REALTIME_CONNECTION_STATES.REQUESTING_MICROPHONE,
       reconnect ? reconnectReason : "manual start",
     );
-    setStatus(reconnect ? "Reconnecting Live AI Tutor..." : "Preparing Live AI Tutor...");
-    setTeacherQuestionStatus(reconnect ? "Retrying live tutor connection..." : "Requesting microphone...");
+    setStatus(reconnect ? "Reconnecting live audio..." : "Preparing live audio...");
+    setTeacherQuestionStatus(reconnect ? "Retrying live audio connection..." : "Requesting microphone...");
     openProtectedAppPage("workspace");
-    setActiveTab("tutor");
+    setActiveTab("guide");
     if (!preserveTranscript) {
       setTeacherTranscriptEntries([]);
     }
@@ -10370,7 +10963,7 @@ export default function App() {
       if (!localStream?.active || !localStream.getAudioTracks?.().length) {
         throw createTeacherRealtimeStartupError(
           "audio_stream_unavailable",
-          "The browser returned no working microphone track for Live AI Tutor.",
+          "The browser returned no working microphone track for live audio.",
         );
       }
       teacherRealtimeLocalStreamRef.current = localStream;
@@ -10379,7 +10972,7 @@ export default function App() {
       });
 
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.INITIALIZING, "microphone ready");
-      setTeacherQuestionStatus("Preparing tutor audio...");
+      setTeacherQuestionStatus("Preparing audio...");
       const remoteAudio = document.createElement("audio");
       remoteAudio.autoplay = true;
       remoteAudio.playsInline = true;
@@ -10394,7 +10987,7 @@ export default function App() {
       ensureTeacherRealtimeRunActive(runId);
 
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "creating realtime peer connection");
-      setTeacherQuestionStatus("Opening live tutor control channel...");
+      setTeacherQuestionStatus("Opening live audio control channel...");
       const peerConnection = new window.RTCPeerConnection();
       teacherRealtimePeerConnectionRef.current = peerConnection;
       const dataChannel = peerConnection.createDataChannel("oai-events");
@@ -10426,14 +11019,14 @@ export default function App() {
       controlOpenTimeout = window.setTimeout(() => {
         rejectControlOpen?.(createTeacherRealtimeStartupError(
           "websocket_failed",
-          "The live tutor control channel did not open in time.",
+          "The live audio control channel did not open in time.",
           { retryable: true },
         ));
       }, TEACHER_REALTIME_CONNECT_TIMEOUT_MS);
       peerReadyTimeout = window.setTimeout(() => {
         failPeerReady(createTeacherRealtimeStartupError(
           "websocket_failed",
-          "The live tutor peer connection did not finish connecting in time.",
+          "The live audio peer connection did not finish connecting in time.",
           { retryable: true },
         ));
       }, TEACHER_REALTIME_CONNECT_TIMEOUT_MS);
@@ -10441,7 +11034,7 @@ export default function App() {
         (event) => event?.type === "session.created",
         {
           errorCode: "invalid_session",
-          timeoutMessage: "The live tutor session did not finish initializing.",
+          timeoutMessage: "The live audio session did not finish initializing.",
         },
       );
 
@@ -10463,7 +11056,7 @@ export default function App() {
         if (runId !== teacherRealtimeStartupRunRef.current) return;
         const [remoteStream] = event.streams || [];
         if (!remoteStream || !remoteStream.getAudioTracks?.().length) {
-          setError("Live tutor audio stream unavailable.");
+          setError("Live audio stream unavailable.");
           return;
         }
         remoteAudio.srcObject = remoteStream;
@@ -10491,14 +11084,14 @@ export default function App() {
           return;
         }
         if (connectionState === "disconnected") {
-          setTeacherQuestionStatus("Live tutor connection dropped. Reconnecting...");
-          handleTransportDisconnect("The live tutor peer connection was interrupted.", { delayed: true });
+          setTeacherQuestionStatus("Live audio connection dropped. Reconnecting...");
+          handleTransportDisconnect("The live audio peer connection was interrupted.", { delayed: true });
           return;
         }
         if (connectionState === "failed" || connectionState === "closed") {
           const startupError = createTeacherRealtimeStartupError(
             "websocket_failed",
-            "The live tutor peer connection failed.",
+            "The live audio peer connection failed.",
             { retryable: true },
           );
           failPeerReady(startupError);
@@ -10523,13 +11116,13 @@ export default function App() {
           return;
         }
         if (iceState === "disconnected") {
-          handleTransportDisconnect("The live tutor ICE connection was interrupted.", { delayed: true });
+          handleTransportDisconnect("The live audio ICE connection was interrupted.", { delayed: true });
           return;
         }
         if (iceState === "failed" || iceState === "closed") {
           const startupError = createTeacherRealtimeStartupError(
             "websocket_failed",
-            "The live tutor ICE connection failed.",
+            "The live audio ICE connection failed.",
             { retryable: true },
           );
           failPeerReady(startupError);
@@ -10562,7 +11155,7 @@ export default function App() {
         }
         const startupError = createTeacherRealtimeStartupError(
           "websocket_failed",
-          "The live tutor control channel closed unexpectedly.",
+          "The live audio control channel closed unexpectedly.",
           { retryable: true },
         );
         rejectControlOpen?.(startupError);
@@ -10577,7 +11170,7 @@ export default function App() {
         }
         const startupError = createTeacherRealtimeStartupError(
           "websocket_failed",
-          "The live tutor control channel hit an error.",
+          "The live audio control channel hit an error.",
           { retryable: true },
         );
         rejectControlOpen?.(startupError);
@@ -10594,7 +11187,7 @@ export default function App() {
       await peerConnection.setLocalDescription(offer);
       ensureTeacherRealtimeRunActive(runId);
 
-      setTeacherQuestionStatus("Creating secure tutor session...");
+      setTeacherQuestionStatus("Creating secure audio session...");
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.CONNECTING, "creating realtime session");
       const { data } = await authJsonWithTransientRetries(
         "/api/realtime/session",
@@ -10610,7 +11203,7 @@ export default function App() {
       if (!data?.session_id || !clientSecret) {
         throw createTeacherRealtimeStartupError(
           "invalid_session",
-          "The live tutor session response did not include a valid client secret.",
+          "The live audio session response did not include a valid client secret.",
           { retryable: true },
         );
       }
@@ -10702,8 +11295,8 @@ export default function App() {
       teacherRealtimeGreetingTimerRef.current = window.setTimeout(() => {
         sendTeacherRealtimePrompt("Greet the student briefly and ask what they would like to study today.", { audio: true });
       }, 300);
-      setStatus("Live tutor connected.");
-      setTeacherQuestionStatus("Live tutor ready. Hold Ask Question when you want to talk.");
+      setStatus("Live audio connected.");
+      setTeacherQuestionStatus("Live audio ready. Hold Ask Question when you want to talk.");
     } catch (error) {
       if (typeof controlOpenTimeout !== "undefined") window.clearTimeout(controlOpenTimeout);
       if (typeof peerReadyTimeout !== "undefined") window.clearTimeout(peerReadyTimeout);
@@ -10725,7 +11318,7 @@ export default function App() {
       setIsTeacherRealtimeConnecting(false);
       setTeacherRealtimeStage(TEACHER_REALTIME_CONNECTION_STATES.FAILED, startupError.message);
       setError(startupError.message);
-      setStatus("Live tutor could not start.");
+      setStatus("Live audio could not start.");
       setTeacherQuestionStatus(describeTeacherRealtimeFailure(startupError));
       if (teacherRealtimeShouldReconnectRef.current && startupError.retryable) {
         scheduleTeacherRealtimeReconnect(reconnectReason, startupError);
@@ -10763,7 +11356,7 @@ export default function App() {
     const targetMode = mode === "admin" ? "admin" : "user";
     if (targetMode === "user" && authSessionMode === "user") {
       if (!completePendingPostAuthRedirect("user")) {
-        setCurrentPage("capture");
+        openProtectedAppPage("capture", { replace: browserPath === "/admin/dashboard" });
       }
       if (!silent) setStatus("User mode opened.");
       return;
@@ -10780,7 +11373,9 @@ export default function App() {
       const nextToken = data.token || authToken;
       applyAuthResponse({ ...data, token: nextToken }, authEmail, { promptForMode: false });
       if (targetMode === "user") {
-        completePendingPostAuthRedirect("user");
+        if (!completePendingPostAuthRedirect("user")) {
+          openProtectedAppPage("capture", { replace: browserPath === "/admin/dashboard" });
+        }
       }
       if (targetMode === "admin") {
         if (completePendingPostAuthRedirect("admin")) {
@@ -11177,7 +11772,6 @@ export default function App() {
 
   const getActiveContent = () => {
     if (activeTab === "guide") return formattedGuide || "No study guide generated yet.";
-    if (activeTab === "tutor") return teacherTranscriptText || teacherLessonToText(teacherLessonData) || "No tutor session generated yet.";
     if (activeTab === "transcript") return transcript || "No transcript generated yet.";
     if (activeTab === "formulas") return formattedFormula || "No formulas generated yet.";
     if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
@@ -11185,7 +11779,7 @@ export default function App() {
     if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
     if (activeTab === "presentation") return presentationToText(presentationData) || "No PowerPoint presentation generated yet.";
     if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
-    if (activeTab === "chat") return chatToText(chatMessages) || "No study chat yet.";
+    if (activeTab === "chat") return chatToText(lectureAssistantMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
   };
 
@@ -11199,8 +11793,8 @@ export default function App() {
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
     { title: "Podcast Debate Script", content: podcastData.script || "" },
-    { title: "Mabaso AI Tutor Session", content: teacherLessonToText(teacherLessonData) },
-    { title: "Study Chat", content: chatToText(chatMessages) },
+    { title: "Study Audio Session", content: teacherLessonToText(teacherLessonData) },
+    { title: "Study Chat", content: chatToText(lectureAssistantMessages) },
   ].filter((section) => (section.content || "").trim());
 
   const addHistoryItem = (item) => {
@@ -12722,7 +13316,7 @@ export default function App() {
   const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {
     const normalizedLesson = normalizeTeacherLessonData(lesson);
     if (!normalizedLesson.segments.length) {
-      setError("Start a tutor session first so there is a lesson ready to teach.");
+      setError("Start an audio session first so there is a lesson ready.");
       return;
     }
     if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
@@ -12746,7 +13340,7 @@ export default function App() {
         setIsTeacherPaused(false);
         setActiveTeacherSegmentIndex(-1);
         returnTeacherToGuide(lastSectionHeading);
-        setStatus("Mabaso AI Tutor finished the session.");
+        setStatus("Study audio finished.");
         return;
       }
 
@@ -12809,7 +13403,7 @@ export default function App() {
     };
 
     setCurrentPage("workspace");
-    setStatus("Mabaso AI Tutor is teaching from the study guide.");
+    setStatus("Study audio is reading from the guide.");
     teacherSpeechTimerRef.current = window.setTimeout(() => {
       teacherSpeechTimerRef.current = null;
       speakSegment(Math.max(0, Number(startIndex || 0)), Math.max(0, Number(startChunkIndex || 0)));
@@ -12850,7 +13444,7 @@ export default function App() {
 
   const generateTeacherLesson = async ({ autoplay = true } = {}) => {
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
-      return setError("Generate a study guide or add lecture material before starting Mabaso AI Tutor.");
+      return setError("Generate a study guide or add lecture material before starting study audio.");
     }
 
     resetTeacherQuestionFlow({ clearResume: true, clearTranscript: true });
@@ -12862,8 +13456,8 @@ export default function App() {
     setIsGeneratingTeacherLesson(true);
     setError("");
     openProtectedAppPage("workspace");
-    setActiveTab("tutor");
-    setStatus("Preparing Mabaso AI Tutor...");
+    setActiveTab("guide");
+    setStatus("Preparing study audio...");
     setProgress(0);
     setCurrentJobType("teacher_lesson");
 
@@ -12889,7 +13483,7 @@ export default function App() {
         }),
       });
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Mabaso AI Tutor generation failed.");
+      if (!response.ok) throw new Error(data.detail || "Study audio generation failed.");
       persistPendingJob({
         jobId: data.job_id,
         jobType: "teacher_lesson",
@@ -12943,17 +13537,17 @@ export default function App() {
         teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
       });
       clearPendingJob();
-      setStatus("Mabaso AI Tutor is ready.");
+      setStatus("Study audio is ready.");
       setProgress(100);
-      if (autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
+      if (autoplay && !["materials", "about", "support", "voice"].includes(currentPageRef.current)) {
         window.setTimeout(() => {
           playTeacherLesson(nextTeacherLessonData);
         }, 0);
       }
     } catch (err) {
       clearPendingJob();
-      setError(err.message || "Mabaso AI Tutor generation failed.");
-      setStatus("Mabaso AI Tutor generation failed.");
+      setError(err.message || "Study audio generation failed.");
+      setStatus("Study audio generation failed.");
     } finally {
       setIsGeneratingTeacherLesson(false);
       setCurrentJobType("");
@@ -13263,8 +13857,8 @@ export default function App() {
             teacherLessonData: sanitizeTeacherLessonForHistory(nextTeacherLessonData),
           });
           clearPendingJob();
-          setStatus("Recovered Mabaso AI Tutor after refresh.");
-          if (pendingJob.autoplay && !["materials", "about", "support"].includes(currentPageRef.current)) {
+          setStatus("Recovered study audio after refresh.");
+          if (pendingJob.autoplay && !["materials", "about", "support", "voice"].includes(currentPageRef.current)) {
             window.setTimeout(() => {
               playTeacherLesson(nextTeacherLessonData);
             }, 0);
@@ -13323,27 +13917,21 @@ export default function App() {
 
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
-    if (!question) return setError("Ask a question first.");
-    if (!summary && !transcript) return setError("Generate a transcript or study guide first.");
-    setIsAskingChat(true);
-    setError("");
-    try {
-      const answer = await requestStudyAssistantAnswer({
-        question,
-        history: chatMessages.slice(-6),
-        referenceImages: chatReferenceImages.map((item) => item.dataUrl),
-      });
-      const userMessage = chatReferenceImages.length ? `${question}\n\n[Reference images attached: ${chatReferenceImages.length}]` : question;
-      setChatMessages((current) => [...current, { role: "user", content: userMessage }, { role: "assistant", content: answer }]);
-      setChatQuestion("");
-      setChatReferenceImages([]);
-      setStatus("MABASO answered your question.");
-    } catch (err) {
-      setError(err.message || "Study chat failed.");
-      setStatus("Study chat failed.");
-    } finally {
-      setIsAskingChat(false);
+    lectureAssistant.openPanel();
+    if (!question) {
+      setError("Ask a question first.");
+      return;
     }
+    if (chatReferenceImages.length) {
+      setChatReferenceImages([]);
+      setStatus("The new lecture assistant sent your text question without image attachments.");
+    }
+    if (!lectureAssistant.hasLectureContext) {
+      setError("Generate a transcript or study guide first.");
+      return;
+    }
+    setError("");
+    await lectureAssistant.sendMessage({ promptText: question });
   };
 
   const speakTeacherQuestionAnswer = (answerText = "", { onComplete } = {}) => {
@@ -13454,7 +14042,7 @@ export default function App() {
       setIsTeacherQuestionLoading(false);
       speakTeacherQuestionAnswer(answer, {
         onComplete: () => {
-          setTeacherQuestionStatus("Question answered. Returning to the tutor session...");
+          setTeacherQuestionStatus("Question answered. Returning to the audio session...");
           resumeTeacherLessonAfterQuestion({ statusMessage: "Tutor answered your question and continued the session." });
         },
       });
@@ -13469,7 +14057,7 @@ export default function App() {
 
   const startTeacherQuestionCapture = ({ continueListening = false, preservedTranscript = "" } = {}) => {
     if (!teacherLessonData.segments.length) {
-      setError("Start a tutor session first so the tutor can pause and answer questions.");
+      setError("Start an audio session first so the app can pause and answer questions.");
       return;
     }
     const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
@@ -13649,8 +14237,8 @@ export default function App() {
     const committed = sendTeacherRealtimeEvent({ type: "input_audio_buffer.commit" });
     if (!committed || !sendTeacherRealtimeResponseRequest({ audio: true })) {
       setIsTeacherQuestionLoading(false);
-      setTeacherQuestionStatus("Live tutor control channel is unavailable.");
-      setError("The live tutor could not send your question for an answer.");
+      setTeacherQuestionStatus("Live audio control channel is unavailable.");
+      setError("The live audio session could not send your question for an answer.");
     }
   };
 
@@ -13686,7 +14274,7 @@ export default function App() {
       const objectUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = `${extractHistoryTitle(summary, workspaceFileLabel || "Mabaso AI Tutor")} - tutor transcript.txt`;
+      link.download = `${extractHistoryTitle(summary, workspaceFileLabel || "Study Audio Session")} - audio transcript.txt`;
       link.click();
       window.URL.revokeObjectURL(objectUrl);
       setStatus("Tutor transcript saved.");
@@ -13702,7 +14290,7 @@ export default function App() {
       return;
     }
     try {
-      const baseTitle = extractHistoryTitle(summary, workspaceFileLabel || "Mabaso AI Tutor");
+      const baseTitle = extractHistoryTitle(summary, workspaceFileLabel || "Study Audio Session");
       await exportPdf(`${baseTitle} - Tutor Transcript`, [{ title: "Tutor Transcript", content: transcriptText }]);
       setStatus("Tutor transcript exported.");
     } catch (err) {
@@ -13836,7 +14424,7 @@ export default function App() {
         return;
       }
       await startTeacherRealtimeSession();
-      setStatus("Live tutor session is starting for note explanation.");
+      setStatus("Live audio is starting for note explanation.");
       return;
     }
     if (actionId === "generate-quiz") {
@@ -14296,7 +14884,7 @@ export default function App() {
         { title: "Test", content: quizToText(item.quizQuestions || []) },
         { title: "PowerPoint Presentation", content: presentationToText(item.presentationData) },
         { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
-        { title: "Mabaso AI Tutor Session", content: teacherLessonToText(item.teacherLessonData) },
+        { title: "Study Audio Session", content: teacherLessonToText(item.teacherLessonData) },
       ]);
       setStatus(`${item.title} PDF downloaded.`);
     } catch (err) {
@@ -14332,7 +14920,7 @@ export default function App() {
     ];
     const tutorSidebarItems = [
       { id: "capture", label: "Dashboard", onClick: () => openProtectedAppPage("capture") },
-      { id: "tutor", label: "Live AI Tutor", onClick: () => setActiveTab("tutor") },
+      { id: "tutor", label: "Study Audio", onClick: () => setActiveTab("guide") },
       { id: "guide", label: "Study Guide Generator", onClick: () => openTutorWorkspaceTool("guide") },
       { id: "transcript", label: "Transcript Analyzer", onClick: () => openTutorWorkspaceTool("transcript") },
       { id: "flashcards", label: "Flashcards", onClick: () => openTutorWorkspaceTool("flashcards") },
@@ -14407,7 +14995,7 @@ export default function App() {
               </button>
             </div>
             <div className="text-center">
-              <p className="text-xs uppercase tracking-[0.35em] text-cyan-300/80">Mabaso AI Tutor</p>
+              <p className="text-xs uppercase tracking-[0.35em] text-cyan-300/80">Study Audio</p>
               <h3 className="mt-2 text-2xl font-semibold tracking-[0.08em] text-white sm:text-3xl">MABASO AI TUTOR</h3>
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3 lg:justify-end">
@@ -14476,7 +15064,7 @@ export default function App() {
 
             <div className="space-y-5">
               <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.86),rgba(2,8,23,0.72))] px-4 py-6 text-center shadow-[0_24px_60px_rgba(2,8,23,0.45)] sm:px-6">
-                <p className="text-sm font-semibold tracking-[0.24em] text-cyan-300/90">Live AI Tutor Session</p>
+                <p className="text-sm font-semibold tracking-[0.24em] text-cyan-300/90">Study Audio Session</p>
                 <h2 className="mt-3 text-3xl font-semibold text-white sm:text-5xl">{guideTopic}</h2>
                 <p className="mx-auto mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{teacherLessonData.overview || "In this tutor session, Mabaso AI uses your study guide, transcript, formulas, and worked examples to teach with live voice and linked explanations."}</p>
                 <div className="mt-5 flex justify-center">
@@ -15007,11 +15595,7 @@ export default function App() {
                     Last used on this device: {authEmailInput}
                   </div>
                 ) : null}
-                <div
-                  className="relative w-full max-w-[360px]"
-                  onPointerDownCapture={() => persistPostAuthRedirectPath("")}
-                  onClickCapture={() => persistPostAuthRedirectPath("")}
-                >
+                <div className="w-full max-w-[360px]">
                   <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5 shadow-[0_24px_70px_rgba(2,8,23,0.35)]">
                     <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">AI Tools for Students</p>
                     <h3 className="mt-3 text-3xl font-semibold leading-tight tracking-[-0.03em] text-white">Study smarter from your very first lecture.</h3>
@@ -15023,17 +15607,39 @@ export default function App() {
                       </button>
                       .
                     </p>
-                    <div className="mt-6 flex items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-white">
+                    <button
+                      type="button"
+                      onClick={() => openAuthLanding("login", "/app/capture")}
+                      className="mt-6 flex w-full items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-left text-white transition hover:brightness-105"
+                    >
                       <span className="text-lg font-semibold">Get Started</span>
                       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                         <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
                       </svg>
-                    </div>
+                    </button>
                   </div>
-                  <div ref={googleButtonRef} className="absolute inset-x-5 bottom-5 h-[58px] overflow-hidden opacity-0" aria-hidden="true" />
                 </div>
+                {showLandingAuthPanel ? (
+                  <div ref={landingAuthPanelRef} className="rounded-[24px] border border-emerald-300/15 bg-slate-950/80 p-4 shadow-[0_20px_60px_rgba(2,8,23,0.32)]">
+                    <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Secure sign-in</p>
+                    <p className="mt-2 text-sm leading-7 text-slate-300">Use your browser sign-in first. After login, Mabaso AI will open your capture workspace automatically.</p>
+                    <div className="mt-4 flex justify-center">
+                      <div ref={googleButtonRef} className="min-h-[44px] w-full max-w-[320px]" />
+                    </div>
+                    {appleSignInAvailable ? (
+                      <button
+                        type="button"
+                        onClick={startAppleLogin}
+                        disabled={isAppleSigningIn}
+                        className="mt-3 w-full rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
+                      >
+                        {isAppleSigningIn ? "Opening Apple sign-in..." : "Continue with Apple"}
+                      </button>
+                    ) : null}
+                    {showAuthMessageBanner ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
+                  </div>
+                ) : null}
                 {isGoogleSigningIn ? <div className="max-w-[360px] rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">Finishing Google sign-in and opening your capture page...</div> : null}
-                {showAuthMessageBanner ? <div className={`rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
           </div>
@@ -15165,14 +15771,14 @@ export default function App() {
       </div>
       <main className="relative mx-auto max-w-7xl overflow-x-clip px-3 py-6 sm:px-6 lg:px-8">
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-          <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture while teaching and get notes automatically.</p></div>
+          <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
               <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
-              {isAdminAccount ? <button type="button" onClick={() => setCurrentPage(authSessionMode === "admin" ? "admin" : "mode-select")} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
+              {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
               <label className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-slate-200">
@@ -15199,8 +15805,8 @@ export default function App() {
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
             <div className="flex flex-wrap items-center gap-4">
-              <button type="button" onClick={() => setCurrentPage("about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
-              <button type="button" onClick={() => { setSupportFeedback(""); setCurrentPage("support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support and Contact</button>
+              <button type="button" onClick={() => navigateToPath("/company/about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support and Contact</button>
             </div>
           </div>
 
@@ -15229,11 +15835,11 @@ export default function App() {
                       <div className="grid gap-3 sm:min-w-[260px]">
                         <label className="inline-flex items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-medium text-emerald-50">
                           <input type="checkbox" checked={includeSystemAudioInRecording} onChange={(event) => setIncludeSystemAudioInRecording(event.target.checked)} disabled={loading || recording} className="h-4 w-4 accent-emerald-400" />
-                          <span>{includeSystemAudioInRecording ? "Shared audio on" : "Shared audio off"}</span>
+                          <span>{includeSystemAudioInRecording ? "Include tab audio" : "Mic only"}</span>
                         </label>
                         <label className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-white">
                           <input type="checkbox" checked={monitorSharedAudioDuringRecording} onChange={(event) => setMonitorSharedAudioDuringRecording(event.target.checked)} disabled={loading || recording || !canMonitorSharedAudio} className="h-4 w-4 accent-violet-500" />
-                          <span>{canMonitorSharedAudio ? (monitorSharedAudioDuringRecording ? "Keep shared audio audible" : "Do not monitor shared audio") : "Audio monitor not available here"}</span>
+                          <span>{canMonitorSharedAudio ? (monitorSharedAudioDuringRecording ? "Hear tab audio while recording" : "Do not play tab audio") : "Audio preview not available here"}</span>
                         </label>
                       </div>
                     </div>
@@ -15250,7 +15856,7 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
                     <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
-                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}</div> : null}
+                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
@@ -15313,7 +15919,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing tutor session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
             </aside>
         </section> : null}
 
@@ -15327,27 +15933,24 @@ export default function App() {
           </div>
 
           <div className="mt-6 space-y-5">
-            <div className={`min-w-0 rounded-[28px] ${activeTab === "tutor" ? "" : "border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"}`}>
-              {activeTab !== "tutor" ? (
-                <>
-                  <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
-                    <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
-                    <div className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">{hasResults ? "Generated" : "Awaiting lecture"}</div>
+            <div className="min-w-0 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
+              <>
+                <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
+                  <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
+                  <div className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">{hasResults ? "Generated" : "Awaiting lecture"}</div>
+                </div>
+                <div className="force-mobile-stack mb-4 flex flex-wrap gap-3">
+                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
+                  <div className="relative">
+                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
+                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
                   </div>
-                  <div className="force-mobile-stack mb-4 flex flex-wrap gap-3">
-                    <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
-                    <div className="relative">
-                      <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
-                      {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
-                    </div>
-                    {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
-                    <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
-                  </div>
-                </>
-              ) : null}
+                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
+                  <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
+                </div>
+              </>
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] ${activeTab === "tutor" ? "border-0 bg-transparent p-0" : `border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}`}>
-                {activeTab === "tutor" ? renderTutorInterface() : null}
+              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
                   <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
                     <div
@@ -15363,7 +15966,7 @@ export default function App() {
                         <div className="min-w-0">
                           <p className="study-guide-kicker">Lecture Topic</p>
                           <h4 className="study-guide-topic mt-2">{guideTopic}</h4>
-                          {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Tutor is teaching this section</p> : null}
+                          {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Audio focus on this section</p> : null}
                         </div>
                       </div>
                       {guideSummarySection?.content ? (
@@ -15411,7 +16014,7 @@ export default function App() {
                               }}
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
-                              {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this section</p> : null}
+                              {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                               <div className="phone-safe-copy mt-3 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
@@ -15427,20 +16030,32 @@ export default function App() {
                     )}
 
                     <div className="space-y-3">
-                      {chatMessages.length ? (
-                        <div className="space-y-4 rounded-[22px] border border-white/10 bg-slate-950/80 p-4">
-                          {chatMessages.map((message, index) => (
-                            <div
-                              key={`${message.role}-${index}`}
-                              className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}
-                            >
-                              <p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p>
-                              <div className="whitespace-pre-wrap break-words">{message.content}</div>
-                            </div>
-                          ))}
-                          {isAskingChat ? <p className="text-xs text-slate-400">Working through your lecture question...</p> : null}
+                      <div className="rounded-[22px] border border-white/10 bg-slate-950/80 p-4">
+                        <div className="force-mobile-stack flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Assistant</p>
+                            <h5 className="mt-2 text-lg font-semibold text-white">Streaming chat with memory, fallback models, and voice input</h5>
+                            <p className="mt-2 text-sm leading-7 text-slate-300">{lectureAssistant.statusText}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => lectureAssistant.openPanel({ focusComposer: true })}
+                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                          >
+                            Open Full Chat
+                          </button>
                         </div>
-                      ) : isAskingChat ? <div className="rounded-[22px] border border-white/10 bg-slate-950/80 px-4 py-3 text-xs text-slate-400">Working through your lecture question...</div> : null}
+                        {latestLectureAssistantReply ? (
+                          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4">
+                            <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Latest reply</p>
+                            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{latestLectureAssistantReply.content}</p>
+                          </div>
+                        ) : (
+                          <div className="mt-4 rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-4 text-sm leading-7 text-slate-300">
+                            Ask for a simpler explanation, exam tips, a step-by-step formula walkthrough, or help connecting ideas from the transcript and guide.
+                          </div>
+                        )}
+                      </div>
 
                       <div className="rounded-[22px] border border-white/10 bg-slate-950/80 p-3 sm:p-4">
                         <div className="force-mobile-stack flex items-end gap-3">
@@ -15489,7 +16104,7 @@ export default function App() {
                           }}
                           className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                         >
-                          {isActiveSection ? <p className="study-guide-focus-badge mb-3">Tutor is teaching this example</p> : null}
+                          {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this example</p> : null}
                           <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                           <div className="phone-safe-copy mt-3 max-w-none">
                             <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
@@ -15545,7 +16160,91 @@ export default function App() {
                 ) : null}
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
-                {activeTab === "chat" ? <div className="flex h-full min-h-[360px] flex-col gap-4"><div className="flex-1 space-y-4 rounded-2xl border border-white/10 bg-slate-950/80 p-4">{chatMessages.length ? chatMessages.map((message, index) => <div key={`${message.role}-${index}`} className={`max-w-[92%] rounded-2xl px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border border-emerald-300/15 bg-emerald-300/10 text-slate-100" : "ml-auto border border-white/10 bg-white/10 text-white"}`}><p className="mb-2 text-xs uppercase tracking-[0.24em] text-emerald-100/70">{message.role === "assistant" ? "MABASO" : "You"}</p><div className="whitespace-pre-wrap break-words">{message.content}</div></div>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">Ask for a simpler explanation, exam tips, a formula walkthrough, or help from a reference image.</div>}</div><div className="rounded-[26px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><label className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"><span className="text-xl">+</span><input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} /></label><textarea value={chatQuestion} onChange={(event) => setChatQuestion(event.target.value)} onKeyDown={handleStudyChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={askStudyAssistant} disabled={isAskingChat} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><div className="mt-3 flex flex-wrap items-center gap-2">{chatReferenceImages.length ? chatReferenceImages.map((item) => <span key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">{item.name}<button type="button" onClick={() => removeChatReferenceImage(item.id)} className="text-slate-400 transition hover:text-white">x</button></span>) : <span className="text-xs text-slate-400">Add screenshots, notes, or handwritten references if they help the question.</span>}{chatReferenceImages.length ? <button type="button" onClick={() => setChatReferenceImages([])} disabled={!chatReferenceImages.length || isAskingChat} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white disabled:opacity-50">Clear images</button> : null}</div></div></div> : null}
+                {activeTab === "chat" ? (
+                  <div className="space-y-4">
+                    <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(15,23,42,0.82))] p-5 sm:p-6">
+                      <div className="force-mobile-stack flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Modern Conversation</p>
+                          <h3 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Your lecture chat now lives in the floating assistant.</h3>
+                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
+                            It streams replies from the backend, remembers past messages in this browser, supports voice input, and falls back from Gemini to Groq to OpenRouter automatically.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => lectureAssistant.openPanel({ focusComposer: true })}
+                            className="rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] px-4 py-2 text-sm font-semibold text-white"
+                          >
+                            Open Assistant
+                          </button>
+                          <button
+                            type="button"
+                            onClick={lectureAssistant.createConversation}
+                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                          >
+                            New Chat
+                          </button>
+                          <button
+                            type="button"
+                            onClick={lectureAssistant.startListening}
+                            className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${lectureAssistant.isListening ? "border-fuchsia-300/30 bg-fuchsia-400/15 text-fuchsia-100" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
+                          >
+                            {lectureAssistant.isListening ? "Stop Mic" : "Use Mic"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50">Streaming replies</span>
+                        <span className="rounded-full bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100">{lectureAssistant.providerLabel || "Gemini → Groq → OpenRouter"}</span>
+                        <span className={`rounded-full px-3 py-2 text-xs font-semibold ${lectureAssistant.ttsEnabled ? "bg-fuchsia-400/10 text-fuchsia-100" : "bg-white/5 text-slate-300"}`}>
+                          {lectureAssistant.ttsEnabled ? "Voice replies on" : "Voice replies off"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                      <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Quick question</p>
+                        <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/85 p-4">
+                          <div className="force-mobile-stack flex items-end gap-3">
+                            <textarea
+                              value={chatQuestion}
+                              onChange={(event) => setChatQuestion(event.target.value)}
+                              onKeyDown={handleStudyChatKeyDown}
+                              rows={2}
+                              className="min-h-[72px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500"
+                              placeholder="Ask anything from this lecture..."
+                            />
+                            <button
+                              type="button"
+                              onClick={askStudyAssistant}
+                              disabled={isAskingChat}
+                              className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
+                              aria-label="Send lecture question"
+                            >
+                              <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                                <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-xs text-slate-400">{lectureAssistant.statusText}</p>
+                      </div>
+
+                      <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
+                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest reply</p>
+                        {latestLectureAssistantReply ? (
+                          <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{latestLectureAssistantReply.content}</p>
+                        ) : (
+                          <p className="mt-4 text-sm leading-7 text-slate-300">Open the assistant and ask your first follow-up question. Your saved chats stay in this browser for the current signed-in user.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
@@ -15555,8 +16254,10 @@ export default function App() {
 
         {currentPage === "about" ? renderHelpAboutPage() : null}
         {currentPage === "support" ? renderSupportPage() : null}
+        {currentPage === "voice" ? renderBrowserVoicePage() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}
+        <LectureAssistantPanel assistant={lectureAssistant} visible={showLectureAssistantFloatingButton} />
 
         <input
           ref={pastQuestionPaperFileInputRef}

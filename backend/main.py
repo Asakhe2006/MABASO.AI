@@ -31,10 +31,16 @@ from xml.etree import ElementTree as ET
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
 import requests
+from chat_assistant import (
+    ProviderStreamError,
+    format_provider_name,
+    iter_provider_stream,
+    resolve_provider_attempts,
+)
 try:
     from curl_cffi import requests as curl_requests
 except ImportError:
@@ -188,6 +194,19 @@ REGISTRATION_TOKEN_TTL_MINUTES = int(os.getenv("REGISTRATION_TOKEN_TTL_MINUTES",
 SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
+LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
+LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS", "1200"))
+LECTURE_ASSISTANT_SYSTEM_PROMPT = (
+    os.getenv(
+        "LECTURE_ASSISTANT_SYSTEM_PROMPT",
+        (
+            "You are a friendly AI assistant that talks naturally like a real person. "
+            "Keep responses conversational, warm, intelligent, and concise unless detail is needed. "
+            "Maintain context from previous messages. Avoid robotic wording."
+        ),
+    )
+    or ""
+).strip()
 MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
 ADMIN_DASHBOARD_AUDIT_LOG_LIMIT = int(os.getenv("ADMIN_DASHBOARD_AUDIT_LOG_LIMIT", "8000"))
 ADMIN_DASHBOARD_HISTORY_LIMIT = int(os.getenv("ADMIN_DASHBOARD_HISTORY_LIMIT", "1200"))
@@ -795,6 +814,29 @@ class StudyChatRequest(BaseModel):
     auto_simplify: bool = True
     exam_mode: bool = False
     interactive_mode: bool = True
+
+
+class LectureAssistantMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: str = ""
+
+
+class LectureAssistantRequest(BaseModel):
+    question: str
+    transcript: str = ""
+    summary: str = ""
+    formulas: str = ""
+    worked_examples: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    messages: list[LectureAssistantMessage] = []
+    language: str = "English"
+    session_id: str = ""
+    conversation_id: str = ""
+    lecture_label: str = ""
+    client_request_id: str = ""
 
 
 class RealtimeTutorConfigRequest(BaseModel):
@@ -3651,6 +3693,85 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     return messages
 
 
+def sanitize_lecture_assistant_history(messages: list[LectureAssistantMessage] | None, *, limit: int = 14) -> list[dict[str, str]]:
+    sanitized: list[dict[str, str]] = []
+    for message in messages or []:
+        role = compact_text(getattr(message, "role", "")).lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = compact_text(getattr(message, "content", ""))
+        if not content:
+            continue
+        sanitized.append(
+            {
+                "role": role,
+                "content": content[:2400],
+            }
+        )
+    return sanitized[-limit:]
+
+
+def build_lecture_assistant_context(payload: LectureAssistantRequest) -> str:
+    section_limit = max(2400, MAX_CHAT_CONTEXT_CHARS // 4)
+
+    def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
+        cleaned = compact_text(value)
+        if not cleaned:
+            return ""
+        if len(cleaned) > limit:
+            shortened = cleaned[:limit].rsplit(" ", 1)[0].strip() or cleaned[:limit].strip()
+            cleaned = f"{shortened}\n\n[Trimmed for assistant context]"
+        return f"{label}\n{cleaned}"
+
+    context_parts = [
+        trimmed_block("STUDY GUIDE", payload.summary, section_limit),
+        trimmed_block("IMPORTANT FORMULAS", payload.formulas, section_limit),
+        trimmed_block("WORKED EXAMPLES", payload.worked_examples, section_limit),
+        trimmed_block("LECTURE NOTES", payload.lecture_notes, section_limit),
+        trimmed_block("LECTURE SLIDES", payload.lecture_slides, section_limit),
+        trimmed_block("PAST QUESTION PAPERS", payload.past_question_papers, section_limit),
+        trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(5000, MAX_CHAT_CONTEXT_CHARS // 2)),
+    ]
+    context_text = "\n\n".join(part for part in context_parts if part).strip()
+    if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
+        context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
+    return context_text
+
+
+def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> str:
+    output_language = normalize_output_language(payload.language)
+    lecture_label = compact_text(payload.lecture_label)
+    context_text = build_lecture_assistant_context(payload)
+    rules = [
+        LECTURE_ASSISTANT_SYSTEM_PROMPT,
+        "You are answering inside Mabaso AI for a lecture-specific study workspace.",
+        "Use markdown formatting when it helps readability.",
+        "Support code blocks when code is requested.",
+        "When maths helps, format it with LaTeX using $...$ or $$...$$.",
+        "Use the lecture context below whenever it is relevant.",
+        "If the lecture context does not clearly support an answer, say that clearly instead of pretending.",
+        "Keep simple answers short, but expand naturally when the student needs detail.",
+        f"Reply in {output_language}.",
+    ]
+    if lecture_label:
+        rules.append(f"Current lecture label: {lecture_label}.")
+    if context_text:
+        rules.append(f"Lecture context:\n\n{context_text}")
+    return "\n\n".join(part for part in rules if compact_text(part))
+
+
+def build_lecture_assistant_messages(payload: LectureAssistantRequest) -> list[dict[str, str]]:
+    history = sanitize_lecture_assistant_history(payload.messages)
+    question = compact_text(payload.question)
+    if question:
+        history.append({"role": "user", "content": question[:2400]})
+    return history
+
+
+def build_sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {compact_text(event, 'message')}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 def ensure_study_chat_follow_up(answer: str, question: str, delivery_mode: str = "chat") -> str:
     cleaned = (answer or "").strip()
     if compact_text(delivery_mode, "chat").lower() == "teacher_interrupt":
@@ -4486,7 +4607,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             continue
         sessions_by_email[email] = sessions_by_email.get(email, 0) + 1
 
-    last_login_by_email: dict[str, dict[str, str]] = {}
+    last_login_by_email_all: dict[str, dict[str, str]] = {}
+    last_login_by_email_in_range: dict[str, dict[str, str]] = {}
     uploads_by_email: dict[str, int] = {}
     generations_by_email: dict[str, int] = {}
     failed_auth_by_email: dict[str, int] = {}
@@ -4527,16 +4649,29 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         "podcast.completed",
     }
 
+    def build_last_login_map(source_logs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        login_map: dict[str, dict[str, str]] = {}
+        for log in sorted(source_logs, key=lambda entry: entry["created_at_dt"], reverse=True):
+            email = normalize_email(log.get("email", ""))
+            action = (log.get("action") or "").lower()
+            if action not in successful_login_actions or log.get("status") != "success" or not email:
+                continue
+            if email in login_map:
+                continue
+            login_map[email] = {
+                "created_at": log.get("created_at", ""),
+                "ip_address": log.get("ip_address", ""),
+            }
+        return login_map
+
+    last_login_by_email_all = build_last_login_map(logs_all)
+    last_login_by_email_in_range = build_last_login_map(logs)
+
     for log in logs:
         email = normalize_email(log["email"])
         action = (log["action"] or "").lower()
         if email:
             unique_ips_by_email.setdefault(email, set()).add(log["ip_address"])
-        if action in successful_login_actions and log["status"] == "success" and email and email not in last_login_by_email:
-            last_login_by_email[email] = {
-                "created_at": log["created_at"],
-                "ip_address": log["ip_address"],
-            }
         if action in upload_actions and email:
             uploads_by_email[email] = uploads_by_email.get(email, 0) + 1
         if action in generation_actions and email:
@@ -4548,7 +4683,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         feature = classify_audit_feature(log)
         feature_counts[feature] = feature_counts.get(feature, 0) + 1
 
-    session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email, now, window=time_window)
+    session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email_all, now, window=time_window)
     session_table_by_email = {
         normalize_email(item.get("email", "")): item
         for item in session_analytics.get("table_full", [])
@@ -4563,7 +4698,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         failed_attempts = failed_auth_by_email.get(email, 0)
         ip_count = len(unique_ips_by_email.get(email, set()))
         risk_score = "high" if failed_attempts >= 3 or ip_count >= 4 else "medium" if failed_attempts or ip_count >= 2 else "low"
-        last_login = last_login_by_email.get(email, {})
+        last_login = last_login_by_email_all.get(email, {})
+        last_login_in_range = last_login_by_email_in_range.get(email, {})
         session_profile = session_table_by_email.get(email, {})
         user_records.append(
             {
@@ -4573,21 +4709,42 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 "created_at": row["created_at"],
                 "last_login_at": last_login.get("created_at", ""),
                 "last_login_ip": last_login.get("ip_address", ""),
+                "last_login_in_range_at": last_login_in_range.get("created_at", ""),
+                "last_login_in_range_ip": last_login_in_range.get("ip_address", ""),
                 "sessions_count": sessions_by_email.get(email, 0),
+                "active_sessions_now": session_profile.get("active_sessions", sessions_by_email.get(email, 0)),
+                "tracked_sessions_in_range": session_profile.get("total_sessions_in_range", 0),
                 "total_uploads": uploads_by_email.get(email, 0),
+                "uploads_in_range": uploads_by_email.get(email, 0),
                 "total_generations": generations_by_email.get(email, 0),
+                "generations_in_range": generations_by_email.get(email, 0),
                 "lectures_transcribed": transcriptions_by_email.get(email, 0),
+                "lectures_transcribed_in_range": transcriptions_by_email.get(email, 0),
                 "study_materials": saved_items_by_email.get(email, 0),
+                "study_materials_in_range": saved_items_by_email.get(email, 0),
                 "tests_generated": tests_by_email.get(email, 0),
+                "tests_generated_in_range": tests_by_email.get(email, 0),
                 "avg_session_duration_seconds": session_profile.get("avg_session_duration_seconds", 0),
                 "avg_session_duration": session_profile.get("avg_session_duration_seconds", 0),
                 "next_timeout_at": session_profile.get("next_timeout_at", ""),
                 "latest_timeout_at": session_profile.get("latest_timeout_at", ""),
                 "total_actions_30d": session_profile.get("total_actions", 0),
+                "total_actions_in_range": session_profile.get("total_actions", 0),
                 "storage_bytes": storage_bytes_by_email.get(email, 0),
+                "storage_bytes_in_range": storage_bytes_by_email.get(email, 0),
                 "risk_score": risk_score,
             }
         )
+
+    user_records.sort(
+        key=lambda item: (
+            item.get("total_actions_in_range", 0),
+            item.get("tracked_sessions_in_range", 0),
+            item.get("lectures_transcribed_in_range", 0),
+            item.get("last_login_in_range_at") or item.get("last_login_at") or item.get("created_at") or "",
+        ),
+        reverse=True,
+    )
 
     total_users = len(user_records)
     new_users_in_range = sum(
@@ -4805,7 +4962,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         normalize_email(row["email"])
         for row in user_rows
         if normalize_email(row["email"])
-    } | set(saved_items_by_email) | set(last_login_by_email) | set(transcriptions_by_email)
+    } | set(saved_items_by_email) | set(last_login_by_email_all) | set(transcriptions_by_email)
     top_users_by_usage = sorted(
         (
             {
@@ -14379,6 +14536,281 @@ async def ask_study_assistant(
     answer = await asyncio.to_thread(_ask)
     answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question, payload.delivery_mode)
     return {"answer": make_formulas_human_readable(answer_with_follow_up)}
+
+
+def create_lecture_assistant_stream(
+    *,
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str,
+    forced_provider: str = "",
+) -> StreamingResponse:
+    enforce_rate_limit(
+        scope="lecture_assistant_stream",
+        request=request,
+        limit=60,
+        window_seconds=10 * 60,
+        identity=current_user,
+    )
+    if not compact_text(payload.question):
+        raise HTTPException(status_code=400, detail="A question is required.")
+
+    if not any(
+        compact_text(value)
+        for value in (
+            payload.summary,
+            payload.transcript,
+            payload.formulas,
+            payload.worked_examples,
+            payload.lecture_notes,
+            payload.lecture_slides,
+            payload.past_question_papers,
+        )
+    ):
+        raise HTTPException(status_code=400, detail="Load a lecture transcript or study guide first.")
+
+    started_at = utc_now()
+    system_prompt = build_lecture_assistant_system_prompt(payload)
+    messages = build_lecture_assistant_messages(payload)
+    attempts = resolve_provider_attempts(forced_provider)
+
+    def event_stream():
+        selected_attempt: dict[str, str] | None = None
+        emitted_characters = 0
+        fallback_count = 0
+        terminal_error = ""
+        terminal_provider = compact_text(forced_provider) or (attempts[0]["provider"] if attempts else "")
+
+        try:
+            yield build_sse_event(
+                "ready",
+                {
+                    "conversation_id": compact_text(payload.conversation_id),
+                    "session_id": compact_text(payload.session_id),
+                    "provider_order": [attempt["provider"] for attempt in attempts],
+                },
+            )
+
+            for index, attempt in enumerate(attempts, start=1):
+                token_started = False
+                terminal_provider = attempt["provider"]
+                yield build_sse_event(
+                    "provider_attempt",
+                    {
+                        "provider": attempt["provider"],
+                        "label": attempt["label"],
+                        "model": attempt["model"],
+                        "attempt": index,
+                    },
+                )
+                try:
+                    for delta in iter_provider_stream(
+                        attempt["provider"],
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        temperature=0.55,
+                        max_output_tokens=LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS,
+                        timeout_seconds=LECTURE_ASSISTANT_MODEL_TIMEOUT,
+                    ):
+                        if not token_started:
+                            token_started = True
+                            selected_attempt = attempt
+                            yield build_sse_event(
+                                "provider_selected",
+                                {
+                                    "provider": attempt["provider"],
+                                    "label": attempt["label"],
+                                    "model": attempt["model"],
+                                    "attempt": index,
+                                },
+                            )
+                        emitted_characters += len(delta)
+                        yield build_sse_event(
+                            "delta",
+                            {
+                                "text": delta,
+                                "provider": attempt["provider"],
+                                "model": attempt["model"],
+                            },
+                        )
+
+                    if not token_started:
+                        raise ProviderStreamError(
+                            attempt["provider"],
+                            f"{attempt['label']} returned no answer text.",
+                            status_code=502,
+                        )
+
+                    yield build_sse_event(
+                        "done",
+                        {
+                            "provider": attempt["provider"],
+                            "label": attempt["label"],
+                            "model": attempt["model"],
+                            "fallback_count": fallback_count,
+                            "characters": emitted_characters,
+                        },
+                    )
+                    return
+                except ProviderStreamError as exc:
+                    terminal_error = compact_text(exc.user_message, f"{attempt['label']} could not answer right now.")
+                    logger.warning(
+                        "Lecture assistant provider failed",
+                        extra={
+                            "provider": attempt["provider"],
+                            "model": attempt["model"],
+                            "status_code": exc.status_code,
+                            "user": current_user,
+                        },
+                    )
+                    if not token_started and index < len(attempts):
+                        fallback_count += 1
+                        next_attempt = attempts[index]
+                        yield build_sse_event(
+                            "fallback",
+                            {
+                                "from": attempt["provider"],
+                                "from_label": attempt["label"],
+                                "to": next_attempt["provider"],
+                                "to_label": next_attempt["label"],
+                                "message": f"{attempt['label']} could not answer right now. Switching to {next_attempt['label']}.",
+                                "reason": terminal_error,
+                            },
+                        )
+                        continue
+                    yield build_sse_event(
+                        "error",
+                        {
+                            "provider": attempt["provider"],
+                            "label": attempt["label"],
+                            "model": attempt["model"],
+                            "message": terminal_error,
+                        },
+                    )
+                    return
+                except Exception:
+                    terminal_error = f"{attempt['label']} hit an unexpected streaming error."
+                    logger.exception(
+                        "Lecture assistant provider crashed unexpectedly",
+                        extra={
+                            "provider": attempt["provider"],
+                            "model": attempt["model"],
+                            "user": current_user,
+                        },
+                    )
+                    if not token_started and index < len(attempts):
+                        fallback_count += 1
+                        next_attempt = attempts[index]
+                        yield build_sse_event(
+                            "fallback",
+                            {
+                                "from": attempt["provider"],
+                                "from_label": attempt["label"],
+                                "to": next_attempt["provider"],
+                                "to_label": next_attempt["label"],
+                                "message": f"{attempt['label']} had a connection problem. Switching to {next_attempt['label']}.",
+                                "reason": terminal_error,
+                            },
+                        )
+                        continue
+                    yield build_sse_event(
+                        "error",
+                        {
+                            "provider": attempt["provider"],
+                            "label": attempt["label"],
+                            "model": attempt["model"],
+                            "message": terminal_error,
+                        },
+                    )
+                    return
+
+            if not selected_attempt:
+                yield build_sse_event(
+                    "error",
+                    {
+                        "provider": terminal_provider,
+                        "message": terminal_error or "All lecture assistant providers are unavailable right now.",
+                    },
+                )
+        finally:
+            record_audit_log(
+                action="lecture_assistant.chat",
+                email=current_user,
+                request=request,
+                resource_type="lecture_assistant",
+                resource_name=(selected_attempt or {}).get("model", terminal_provider or "lecture-assistant"),
+                duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+                metadata={
+                    "provider": (selected_attempt or {}).get("provider", terminal_provider),
+                    "fallback_count": fallback_count,
+                    "characters": emitted_characters,
+                    "conversation_id": compact_text(payload.conversation_id),
+                    "session_id": compact_text(payload.session_id),
+                    "client_request_id": compact_text(payload.client_request_id),
+                    "errored": bool(terminal_error and not selected_attempt),
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/api/chat/stream")
+async def stream_lecture_assistant_chat(
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return create_lecture_assistant_stream(payload=payload, request=request, current_user=current_user)
+
+
+@app.post("/api/chat/gemini")
+async def stream_lecture_assistant_gemini(
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return create_lecture_assistant_stream(
+        payload=payload,
+        request=request,
+        current_user=current_user,
+        forced_provider="gemini",
+    )
+
+
+@app.post("/api/chat/groq")
+async def stream_lecture_assistant_groq(
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return create_lecture_assistant_stream(
+        payload=payload,
+        request=request,
+        current_user=current_user,
+        forced_provider="groq",
+    )
+
+
+@app.post("/api/chat/openrouter")
+async def stream_lecture_assistant_openrouter(
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return create_lecture_assistant_stream(
+        payload=payload,
+        request=request,
+        current_user=current_user,
+        forced_provider="openrouter",
+    )
 
 
 @app.get("/collaboration/rooms")

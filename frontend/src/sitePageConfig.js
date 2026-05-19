@@ -69,7 +69,6 @@ export const footerLinkGroups = [
   {
     title: "AI Tools",
     links: [
-      { label: "Mabaso AI Tutor", route: "/ai-tools/mabaso-ai-tutor" },
       { label: "Podcast Generator", route: "/ai-tools/podcast-generator" },
       { label: "PowerPoint Generator", route: "/ai-tools/powerpoint-generator" },
       { label: "Study Chat", route: "/ai-tools/study-chat" },
@@ -343,7 +342,7 @@ export const sitePages = [
     },
     hero: {
       eyebrow: "Product / AI Study Guide",
-      headline: "Structured study guides that teach, not just summarize.",
+      headline: "Structured study guides built for revision, not just summaries.",
       description: "The AI Study Guide page explains how Mabaso AI transforms lecture context into subject-aware notes, sectioned explanations, formulas, visuals, and practice questions that feel closer to a premium revision product than a raw transcript dump.",
       ctas: [
         primaryCta("Generate a Study Guide", "open-app", "capture"),
@@ -623,7 +622,7 @@ export const sitePages = [
     hero: {
       eyebrow: "Product / Worked Examples",
       headline: "Step-by-step worked examples with method, reasoning, and exam flow.",
-      description: "Worked Examples is where the platform moves from knowing the topic to solving with it. The page explains how Mabaso AI generates subject-aware solution paths that teach the method, not just the answer.",
+      description: "Worked Examples is where the platform moves from knowing the topic to solving with it. The page explains how Mabaso AI generates subject-aware solution paths that clarify the method, not just the answer.",
       ctas: [
         primaryCta("Build Worked Examples", "open-app", "capture"),
         secondaryCta("Open Formula Extraction", "route", "/product/formula-extraction"),
@@ -648,7 +647,7 @@ export const sitePages = [
     contains: [
       { icon: "list-ordered", title: "Step-by-step solving", description: "Examples are split into logical stages so students can follow the reasoning path." },
       { icon: "brain", title: "Adaptive explanation structure", description: "The solution style adjusts to the subject and problem type." },
-      { icon: "graduation-cap", title: "Exam-style teaching", description: "Worked examples clarify both process and likely assessment logic." },
+      { icon: "graduation-cap", title: "Exam-style reasoning", description: "Worked examples clarify both process and likely assessment logic." },
     ],
     layout: [
       { title: "Hero example rail", description: "Start with a large example preview that feels like a guided solver canvas." },
@@ -698,7 +697,7 @@ export const sitePages = [
       "Use strong hierarchy between step numbers, formulas, and explanatory text.",
       "Keep each step chunk short enough to scan on mobile while still feeling serious on desktop.",
     ],
-    relatedPages: ["/product/formula-extraction", "/product/ai-test-generator", "/ai-tools/mabaso-ai-tutor"],
+    relatedPages: ["/product/formula-extraction", "/product/ai-test-generator", "/ai-tools/study-chat"],
     footerCrossLinks: ["/support/help-center", "/resources/ai-accuracy-guide", "/company/terms"],
     lockedPreview: {
       title: "Saved worked examples require sign-in",
@@ -706,7 +705,7 @@ export const sitePages = [
       benefits: [
         "Generate examples from your own lecture content",
         "Save solution sets to history and collaboration rooms",
-        "Move directly from examples into exams and Mabaso AI Tutor",
+        "Move directly from examples into exams and Study Chat",
       ],
     },
   }),
@@ -752,7 +751,7 @@ export const sitePages = [
     layout: [
       { title: "Hero flip-card canvas", description: "Use a centered flashcard stack with subtle 3D motion and a progress strip." },
       { title: "Study strategy section", description: "Explain when students should switch from reading into recall mode." },
-      { title: "Cross-tool CTA strip", description: "Connect cards to tests, worked examples, and Mabaso AI Tutor." },
+      { title: "Cross-tool CTA strip", description: "Connect cards to tests, worked examples, and Study Chat." },
     ],
     modules: [
       {
@@ -797,7 +796,7 @@ export const sitePages = [
       "Use large type and short copy blocks to keep flashcards instantly scannable.",
       "Cards should visually connect to the rest of the study workspace through shared accent colors.",
     ],
-    relatedPages: ["/product/ai-study-guide", "/product/ai-test-generator", "/ai-tools/mabaso-ai-tutor"],
+    relatedPages: ["/product/ai-study-guide", "/product/ai-test-generator", "/ai-tools/study-chat"],
     footerCrossLinks: ["/resources/study-workflow", "/support/faq", "/company/about"],
   }),
   page({
@@ -900,107 +899,6 @@ export const sitePages = [
     },
   }),
   page({
-    route: "/ai-tools/mabaso-ai-tutor",
-    aliases: ["/ai-tools/teacher-mode"],
-    title: "Mabaso AI Tutor",
-    category: "AI Tools",
-    access: "login",
-    metadata: {
-      title: "Mabaso AI Tutor | Mabaso AI",
-      description: "Low-latency AI tutoring with a hybrid realtime voice stack, VAD-powered interruptions, workspace-aware teaching, and premium tutor controls inside Mabaso AI.",
-    },
-    hero: {
-      eyebrow: "AI Tools / Mabaso AI Tutor",
-      headline: "A premium AI tutor session built on smart realtime voice, not expensive always-on streaming.",
-      description: "Mabaso AI Tutor uses a hybrid architecture: live teaching runs on a cheaper realtime voice engine with VAD, smart mic sleep, and interruption handling, while study guides, transcripts, exams, and exports stay on background text workflows. The result still feels premium, fast, and deeply grounded in your workspace.",
-      ctas: [
-        primaryCta("Start Teach Session", "open-app", "workspace"),
-        secondaryCta("View Study Guide", "route", "/product/ai-study-guide"),
-      ],
-      metrics: [
-        { label: "Realtime lane", value: "Smart saver by default" },
-        { label: "Interruptions", value: "VAD + natural handoff" },
-        { label: "Free voice", value: "5 min per day" },
-      ],
-      preview: {
-        kicker: "Tutor session interface",
-        title: "Voice orb, live transcript, tutor controls, and study-context memory",
-        subtitle: "Design the page like a premium AI copilot: animated speaking states, tutor settings, smart-saver voice controls, live question capture, and a guide-aware transcript rail.",
-        tabs: ["Session", "Voice", "Transcript", "Guide Sync"],
-        rows: [
-          { label: "Experience", value: "Hybrid realtime teaching flow" },
-          { label: "Controls", value: "Start, speak, interrupt, sleep, end" },
-          { label: "Protection", value: "Tutor sessions require login" },
-        ],
-      },
-    },
-    contains: [
-      { icon: "audio-waveform", title: "Hybrid realtime tutoring", description: "A live tutor flow uses a cheaper realtime voice engine by default, then reserves heavier reasoning for the moments that need it." },
-      { icon: "message-square-more", title: "Natural interruption handling", description: "Students can cut in with questions, let VAD detect speech, and receive in-context answers without losing their place." },
-      { icon: "files", title: "Multi-modal teaching context", description: "The tutor can explain notes, slides, transcripts, formulas, graphs, and uploaded revision materials together." },
-    ],
-    layout: [
-      { title: "Tutor hero with live session shell", description: "Lead with an AI tutor interface that includes a speaking orb, waveform motion, transcript, and active section handoff." },
-      { title: "Settings and teaching controls", description: "Explain voice, speaking pace, teaching style, response depth, interruption controls, and session-state visibility." },
-      { title: "Cross-tool learning rail", description: "Connect Mabaso AI Tutor back to the guide, worked examples, Study Chat, and revision outputs." },
-    ],
-    modules: [
-      {
-        icon: "headphones",
-        title: "Main modules",
-        items: [
-          "Animated tutor orb, waveform, and session status states",
-          "Voice selector, speaking pace, teaching style, response-depth, and smart-saver engine controls",
-          "Live transcript, question capture, and guide-following context panel",
-        ],
-      },
-      {
-        icon: "mic-2",
-        title: "Tutor behavior",
-        items: [
-          "Teach concepts step by step with examples and understanding checks",
-          "Slow down when the topic becomes difficult or formula-heavy",
-          "Answer with warm, human-like language instead of robotic text dumps",
-        ],
-      },
-      {
-        icon: "lock-keyhole",
-        title: "Access rules",
-        items: [
-          "Public page explains the tutor experience and shows a polished voice-session preview",
-          "Generated tutor sessions, transcripts, and active voice interactions require login",
-          "Blurred tutor controls appear behind the enterprise login wall when protected session playback is requested without a session",
-        ],
-      },
-    ],
-    visuals: [
-      "Speaking orb with subtle electric-blue glow states",
-      "Waveform and transcript rail beside the active guide section",
-      "Tutor settings panel with voice, pace, style, and response-depth controls",
-    ],
-    emptyState: {
-      title: "Tutor session not prepared yet",
-      description: "Display a premium tutor card with a disabled orb, muted waveform, inactive controls, and a CTA to start the session from the workspace.",
-    },
-    designNotes: [
-      "The experience should feel premium, intelligent, smooth, and highly responsive rather than like a basic TTS player.",
-      "Treat the live voice lane as a cost-controlled premium layer: smart mic activation, silence timeout, VAD, and short spoken confirmations by default.",
-      "Use dark backgrounds, electric-blue accents, glass surfaces, and subtle glow to push the interface toward a modern AI copilot feel.",
-      "Keep the live teaching state, transcript, and guide-following behavior visibly connected so the tutor always feels grounded in study context.",
-    ],
-    relatedPages: ["/product/ai-study-guide", "/product/worked-examples", "/ai-tools/study-chat"],
-    footerCrossLinks: ["/support/faq", "/company/about", "/company/terms"],
-    lockedPreview: {
-      title: "Interactive tutor sessions require sign-in",
-      description: "The voice tutor, saved transcript state, and student-question context are generated from your own protected lecture workspace.",
-      benefits: [
-        "Start a guide-aware AI teaching session from your study materials",
-        "Interrupt naturally with questions without losing context",
-        "Resume Mabaso AI Tutor later from saved workspace history",
-      ],
-    },
-  }),
-  page({
     route: "/ai-tools/podcast-generator",
     title: "Podcast Generator",
     category: "AI Tools",
@@ -1087,7 +985,7 @@ export const sitePages = [
       "Use warm amber accents to differentiate the audio tool family from the broader blue enterprise shell.",
       "Keep the player controls large, calm, and trustworthy.",
     ],
-    relatedPages: ["/ai-tools/mabaso-ai-tutor", "/product/study-workspace", "/product/ai-study-guide"],
+    relatedPages: ["/ai-tools/study-chat", "/product/study-workspace", "/product/ai-study-guide"],
     footerCrossLinks: ["/support/help-center", "/company/security", "/company/privacy"],
     lockedPreview: {
       title: "Podcast generation and downloads require sign-in",
@@ -1615,7 +1513,7 @@ export const sitePages = [
       "Upload lecture files or record live",
       "Transcribe and extract lecture context",
       "Generate study guide, formulas, examples, flashcards, and test",
-      "Use Mabaso AI Tutor, Study Chat, podcast, and presentation tools",
+      "Use Study Chat, podcast, and presentation tools",
       "Collaborate in shared rooms",
       "Download study outputs and reopen history later",
     ],
@@ -2641,6 +2539,12 @@ export const protectedWorkspaceRoutes = [
     route: "/app/collaboration",
     title: "Collaboration Rooms",
     description: "Access shared study rooms, room notes, synced tools, and collaborative answer visibility settings.",
+    access: "login",
+  },
+  {
+    route: "/app/voice-study",
+    title: "Browser Voice Practice",
+    description: "Speak about your lecture with a browser-powered voice page that searches your guide, transcript, formulas, and examples without paid model calls.",
     access: "login",
   },
 ];

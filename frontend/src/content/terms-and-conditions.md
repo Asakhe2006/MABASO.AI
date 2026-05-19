@@ -104,7 +104,6 @@ The platform may include:
 - AI-generated tests and marking feedback
 - PowerPoint presentation generation
 - AI-generated podcasts
-- Mabaso AI Tutor spoken lessons
 - Study chat assistance
 - PDF exports and downloads
 - Collaboration rooms

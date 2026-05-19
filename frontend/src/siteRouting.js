@@ -9,6 +9,7 @@ export const APP_ROUTE_BY_PAGE = {
   workspace: "/app/workspace",
   materials: "/app/materials",
   collaboration: "/app/collaboration",
+  voice: "/app/voice-study",
   admin: "/admin/dashboard",
 };
 
@@ -89,4 +90,3 @@ export function resolveMetadataForRoute({
     description: "Mabaso AI turns lectures, notes, slides, and past papers into transcripts, study guides, tests, collaboration rooms, presentations, podcasts, and AI study support.",
   };
 }
-

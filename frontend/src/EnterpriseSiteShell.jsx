@@ -153,7 +153,9 @@ function AuthOverlayButtons({
       >
         {isGoogleSigningIn ? "Finishing Google Sign-In..." : "Get Started"}
       </button>
-      <div ref={googleButtonRef} className="absolute inset-0 z-20 overflow-hidden opacity-0" aria-hidden="true" />
+      <div className="mt-3 flex justify-center">
+        <div ref={googleButtonRef} className="min-h-[44px] w-full max-w-[320px]" />
+      </div>
     </div>
   );
 }

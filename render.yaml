@@ -9,6 +9,26 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_CHAT_MODEL
+        value: "gemini-2.5-flash"
+      - key: GROQ_CHAT_MODEL
+        value: "llama-3.3-70b-versatile"
+      - key: OPENROUTER_CHAT_MODEL
+        value: "deepseek/deepseek-chat"
+      - key: OPENROUTER_HTTP_REFERER
+        value: "https://mabaso-ai-web.onrender.com"
+      - key: OPENROUTER_APP_TITLE
+        value: "Mabaso AI Lecture Assistant"
+      - key: LECTURE_ASSISTANT_MODEL_TIMEOUT
+        value: "75"
+      - key: LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS
+        value: "1200"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: APPLE_CLIENT_ID
