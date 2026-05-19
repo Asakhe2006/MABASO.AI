@@ -8,18 +8,22 @@ const VOICE_CHAT_RESTART_DELAY_MS = 1100;
 const VOICE_CHAT_NETWORK_RETRY_DELAY_MS = 1800;
 const VOICE_CHAT_MAX_NETWORK_RETRIES = 3;
 const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 15000;
-const VOICE_CHAT_SILENCE_TIMEOUT_MS = 3800;
+const VOICE_CHAT_SILENCE_TIMEOUT_MS = 3200;
 const VOICE_CHAT_NO_SPEECH_RETRY_DELAY_MS = 650;
 const VOICE_CHAT_MAX_NO_SPEECH_RETRIES = 3;
 const VOICE_REPLY_CHUNK_PAUSE_MS = 120;
-const VOICE_STREAM_MIN_CHARS = 120;
-const VOICE_STREAM_MAX_CHARS = 240;
+const VOICE_STREAM_MIN_CHARS = 75;
+const VOICE_STREAM_MAX_CHARS = 170;
 const VOICE_CHAT_UNEXPECTED_END_RETRY_DELAY_MS = 900;
 const VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES = 3;
-const VOICE_TRANSCRIPTION_DEBOUNCE_MS = 900;
+const VOICE_TRANSCRIPTION_DEBOUNCE_MS = 600;
 const VOICE_TRANSCRIPTION_MIN_CHUNKS = 1;
 const VOICE_TRANSCRIPTION_SILENCE_THRESHOLD = 0.014;
 const VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD = 0.028;
+const VOICE_FAST_FINALIZE_WITH_PUNCTUATION_MS = 900;
+const VOICE_FAST_FINALIZE_WITH_CONFIDENCE_MS = 1250;
+const VOICE_DEFAULT_POST_SPEECH_SILENCE_MS = 1700;
+const VOICE_MIN_CONFIDENT_TRANSCRIPT_CHARS = 28;
 const RECORDING_MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
   "audio/webm",
@@ -181,13 +185,105 @@ function getMicrophoneAccessErrorMessage(error) {
   return "The browser could not start microphone capture for voice chat.";
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeVoiceTranscript(value = "", { preserveCase = true } = {}) {
+  let cleaned = String(value || "").replace(/\u0000/g, " ");
+  cleaned = cleaned
+    .replace(/\b(uh|um|erm|hmm|mm+|ah|eh)\b/gi, " ")
+    .replace(/(\b\w+\b)(\s+\1\b){2,}/gi, "$1")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s*\n\s*/g, " ")
+    .trim();
+  if (!preserveCase) cleaned = cleaned.toLowerCase();
+  return cleaned;
+}
+
+function estimateTranscriptConfidence(transcript = "", previewTranscript = "") {
+  const cleaned = normalizeVoiceTranscript(transcript);
+  if (!cleaned) return 0;
+  let score = 0.52;
+  const preview = normalizeVoiceTranscript(previewTranscript, { preserveCase: false });
+  const normalized = cleaned.toLowerCase();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length >= 4) score += 0.1;
+  if (cleaned.length >= VOICE_MIN_CONFIDENT_TRANSCRIPT_CHARS) score += 0.12;
+  if (/[.?!]$/.test(cleaned)) score += 0.08;
+  if (/(\b\w+\b)(\s+\1\b)/i.test(normalized)) score -= 0.12;
+  if (/\b(uh|um|erm|hmm)\b/i.test(transcript)) score -= 0.08;
+  if (preview) {
+    const previewWords = new Set(preview.split(/\s+/).filter(Boolean));
+    const overlapCount = words.filter((word) => previewWords.has(word)).length;
+    if (words.length > 0) {
+      score += clampNumber(overlapCount / words.length, 0, 0.18);
+    }
+  }
+  return clampNumber(score, 0, 0.98);
+}
+
+function buildSpeechFriendlyText(value = "") {
+  let text = String(value || "");
+  if (!text.trim()) return "";
+  text = text
+    .replace(/```[\s\S]*?```/g, " Code example shown in the chat. ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\$\$?([^$]+)\$\$?/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/\|/g, ", ")
+    .replace(/\b(?:#{1,6}|[-*+])\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  text = text.replace(/\b([A-Z]{2,})\b/g, (match) => {
+    if (match.length <= 4) return match.split("").join(" ");
+    return match;
+  });
+  return text;
+}
+
+function chooseAcknowledgementPrefix(question = "") {
+  const normalized = normalizeVoiceTranscript(question, { preserveCase: false });
+  if (!normalized) return "";
+  if (normalized.startsWith("why") || normalized.startsWith("how")) return "Right, ";
+  if (normalized.includes("can you") || normalized.includes("could you")) return "Okay, ";
+  if (normalized.includes("i don't understand") || normalized.includes("im confused") || normalized.includes("i am confused")) {
+    return "I see, ";
+  }
+  return "";
+}
+
+function resolveAdaptiveVoicePauseMs({ transcript = "", previewTranscript = "", speechDetected = false } = {}) {
+  if (!speechDetected) return VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS;
+  const cleaned = normalizeVoiceTranscript(transcript);
+  const confidence = estimateTranscriptConfidence(cleaned, previewTranscript);
+  if (/[.?!]["']?$/.test(cleaned) && cleaned.length >= VOICE_MIN_CONFIDENT_TRANSCRIPT_CHARS) {
+    return VOICE_FAST_FINALIZE_WITH_PUNCTUATION_MS;
+  }
+  if (confidence >= 0.74 && cleaned.length >= VOICE_MIN_CONFIDENT_TRANSCRIPT_CHARS) {
+    return VOICE_FAST_FINALIZE_WITH_CONFIDENCE_MS;
+  }
+  return VOICE_DEFAULT_POST_SPEECH_SILENCE_MS;
+}
+
 function pickSpeechSynthesisVoice(locale = "", voices = []) {
   if (!Array.isArray(voices) || !voices.length) return null;
   const normalizedLocale = compactText(locale).toLowerCase();
   if (!normalizedLocale) return voices[0] || null;
   const languageCode = normalizedLocale.split("-")[0];
   return (
-    voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale)
+    voices.find((voice) => /natural|neural|aria|samantha|serena|google uk english female|microsoft david|microsoft ava/i.test(compactText(voice?.name)))
+    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
+    || voices.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`) && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
+    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale)
     || voices.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`))
     || voices.find((voice) => compactText(voice?.lang).toLowerCase() === languageCode)
     || voices[0]
@@ -674,6 +770,8 @@ export function useLectureAssistant({
     const utterance = new window.SpeechSynthesisUtterance(nextChunk);
     utterance.lang = preferredLocale;
     utterance.voice = selectedVoice;
+    utterance.rate = 1.03;
+    utterance.pitch = 1;
     utterance.onstart = () => {
       if (voiceReplyRunRef.current !== runId) return;
       setIsSpeaking(true);
@@ -683,10 +781,15 @@ export function useLectureAssistant({
     utterance.onend = () => {
       if (voiceReplyRunRef.current !== runId) return;
       voiceSpeechPlaybackActiveRef.current = false;
+      const trailingPauseMs = /[.?!]["']?$/.test(nextChunk)
+        ? 90
+        : /[,;:]["']?$/.test(nextChunk)
+          ? 60
+          : VOICE_REPLY_CHUNK_PAUSE_MS;
       voiceReplyChunkTimerRef.current = window.setTimeout(() => {
         voiceReplyChunkTimerRef.current = 0;
         playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
-      }, VOICE_REPLY_CHUNK_PAUSE_MS);
+      }, trailingPauseMs);
     };
     utterance.onerror = () => {
       if (voiceReplyRunRef.current !== runId) return;
@@ -707,7 +810,7 @@ export function useLectureAssistant({
     const { ready, remaining } = extractReadySpeechChunks(voiceSpeechBufferRef.current, { flush });
     voiceSpeechBufferRef.current = remaining;
     if (ready.length) {
-      voiceSpeechQueueRef.current.push(...ready);
+      voiceSpeechQueueRef.current.push(...ready.map((chunk) => buildSpeechFriendlyText(chunk)).filter(Boolean));
     }
   };
 
@@ -741,7 +844,7 @@ export function useLectureAssistant({
   };
 
   const speakReply = (text = "") => {
-    const spokenText = compactText(text);
+    const spokenText = compactText(buildSpeechFriendlyText(text));
     if (!ttsEnabledRef.current || !spokenText) return;
     if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
       if (voiceModeEnabledRef.current) {
@@ -1156,7 +1259,7 @@ export function useLectureAssistant({
         throw new Error(await readErrorResponse(response));
       }
       const data = await response.json().catch(() => ({}));
-      const text = compactText(data.text || data.transcript);
+      const text = normalizeVoiceTranscript(data.text || data.transcript);
       if (text) {
         voiceWhisperTranscriptRef.current = text;
         voiceHasWhisperTranscriptRef.current = true;
@@ -1358,11 +1461,11 @@ export function useLectureAssistant({
               if (result.isFinal) previewFinalTranscript += `${transcriptText} `;
               else previewInterimTranscript = transcriptText;
             }
-            const previewText = compactText(`${previewFinalTranscript} ${previewInterimTranscript}`);
+            const previewText = normalizeVoiceTranscript(`${previewFinalTranscript} ${previewInterimTranscript}`);
             voicePreviewTranscriptRef.current = previewText;
             if (!voiceHasWhisperTranscriptRef.current && previewText) {
               setDraft(previewText);
-              setStatusText("Listening...");
+              setStatusText("Listening... partial transcript updating live.");
             }
           };
           previewRecognition.onerror = () => {
@@ -1416,7 +1519,11 @@ export function useLectureAssistant({
           }
         }
 
-        finalTranscript = compactText(finalTranscript, previewTranscript);
+        finalTranscript = normalizeVoiceTranscript(compactText(finalTranscript, previewTranscript));
+        const transcriptConfidence = estimateTranscriptConfidence(finalTranscript, previewTranscript);
+        if (transcriptConfidence < 0.4 && compactText(previewTranscript).length > finalTranscript.length) {
+          finalTranscript = normalizeVoiceTranscript(previewTranscript);
+        }
         if (!finalTranscript) {
           if (voiceModeEnabledRef.current && continueVoiceChat && voiceNoSpeechRetryCountRef.current < VOICE_CHAT_MAX_NO_SPEECH_RETRIES) {
             voiceNoSpeechRetryCountRef.current += 1;
@@ -1431,14 +1538,18 @@ export function useLectureAssistant({
           setStatusText("I couldn't hear a clear voice question. Check the mic level and try again.");
           return;
         }
+        if (transcriptConfidence < 0.32 && finalTranscript.length < 18) {
+          setStatusText("I only caught a weak partial voice turn. Try speaking a little longer or closer to the microphone.");
+          return;
+        }
 
         resetVoiceRecoveryState();
         setDraft(finalTranscript);
-        setStatusText("Sending your voice question...");
+        setStatusText(transcriptConfidence < 0.55 ? "Sending your voice question with low-confidence transcription..." : "Sending your voice question...");
         await sendMessage({ promptText: finalTranscript });
       };
 
-      recorder.start(1200);
+      recorder.start(800);
       setIsListening(true);
       setStatusText(continueVoiceChat
         ? "Listening with Groq Whisper for your next question..."
@@ -1473,11 +1584,20 @@ export function useLectureAssistant({
         }
 
         const now = Date.now();
+        const candidateTranscript = compactText(
+          voiceWhisperTranscriptRef.current,
+          voicePreviewTranscriptRef.current,
+        );
+        const pauseWindowMs = resolveAdaptiveVoicePauseMs({
+          transcript: candidateTranscript,
+          previewTranscript: voicePreviewTranscriptRef.current,
+          speechDetected,
+        });
         if (!speechDetected && now - listenStartedAt >= VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS) {
           void finalizeWhisperTurn("silence_timeout");
           return;
         }
-        if (speechDetected && now - lastSpeechDetectedAt >= VOICE_CHAT_SILENCE_TIMEOUT_MS) {
+        if (speechDetected && now - lastSpeechDetectedAt >= pauseWindowMs) {
           void finalizeWhisperTurn("silence_timeout");
           return;
         }
@@ -1542,7 +1662,7 @@ export function useLectureAssistant({
     baseMessages = null,
     appendUserMessage = true,
   } = {}) => {
-    const question = compactText(promptText);
+    const question = compactText(normalizeVoiceTranscript(promptText) || promptText);
     if (!question) {
       setStatusText("Type or speak a question first.");
       return false;
@@ -1610,6 +1730,7 @@ export function useLectureAssistant({
           timestamp: message.timestamp,
         })),
         language: outputLanguage,
+        voice_mode: Boolean(voiceModeEnabledRef.current),
         session_id: targetConversationId,
         conversation_id: targetConversationId,
         lecture_label: compactText(lectureLabel),
@@ -1820,6 +1941,15 @@ export function useLectureAssistant({
   useEffect(() => {
     voiceModeEnabledRef.current = voiceModeEnabled;
   }, [voiceModeEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    try {
+      window.speechSynthesis.getVoices();
+    } catch {
+      // Ignore speech-synthesis warmup failures.
+    }
+  }, []);
 
   useEffect(() => {
     voiceRecognitionLocalesRef.current = resolveSpeechRecognitionLocales(outputLanguage);

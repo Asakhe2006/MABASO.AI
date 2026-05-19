@@ -200,13 +200,17 @@ SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES",
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
 LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS", "1200"))
+LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "320"))
 LECTURE_ASSISTANT_SYSTEM_PROMPT = (
     os.getenv(
         "LECTURE_ASSISTANT_SYSTEM_PROMPT",
         (
-            "You are a friendly AI assistant that talks naturally like a real person. "
-            "Keep responses conversational, warm, intelligent, and concise unless detail is needed. "
-            "Maintain context from previous messages. Avoid robotic wording."
+            "You are an advanced conversational AI assistant with natural human-like communication. "
+            "Your responses should feel fast, intelligent, concise, emotionally natural, and conversational. "
+            "Prioritize quick understanding, short natural responses, conversational clarity, intelligent summarization, and low-latency interaction. "
+            "Avoid robotic explanations, unnecessary detail, repeating the user's question, and markdown-heavy output in voice mode. "
+            "When speaking, sound natural, avoid reading symbols literally, and convert formatting into conversational language. "
+            "Respond like a real-time voice assistant, not a documentation bot."
         ),
     )
     or ""
@@ -837,6 +841,7 @@ class LectureAssistantRequest(BaseModel):
     past_question_papers: str = ""
     messages: list[LectureAssistantMessage] = []
     language: str = "English"
+    voice_mode: bool = False
     session_id: str = ""
     conversation_id: str = ""
     lecture_label: str = ""
@@ -3746,15 +3751,35 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
     output_language = normalize_output_language(payload.language)
     lecture_label = compact_text(payload.lecture_label)
     context_text = build_lecture_assistant_context(payload)
+    voice_mode = bool(payload.voice_mode)
     rules = [
         LECTURE_ASSISTANT_SYSTEM_PROMPT,
         "You are answering inside Mabaso AI for a lecture-specific study workspace.",
-        "Use markdown formatting when it helps readability.",
-        "Support code blocks when code is requested.",
-        "When maths helps, format it with LaTeX using $...$ or $$...$$.",
+        "Understand quickly and respond with the most helpful answer first.",
         "Keep simple answers short, but expand naturally when the student needs detail.",
+        "Do not repeat the user's question back to them.",
         f"Reply in {output_language}.",
     ]
+    if voice_mode:
+        rules.extend(
+            [
+                "You are in live voice conversation mode.",
+                "Keep replies highly speakable: short sentences, fast understanding, and natural transitions.",
+                "Use one very brief acknowledgement like 'Okay', 'Right', or 'I see' only when it sounds natural, and not in every answer.",
+                "Prefer plain conversational wording over markdown or formal structure.",
+                "Do not use headings, bullet-heavy layouts, or symbol-heavy formatting unless absolutely necessary.",
+                "If code or formulas matter, summarize the meaning first in natural language before any detailed formatting.",
+                "Aim for low latency: answer concisely first, then add one or two helpful details if needed.",
+            ]
+        )
+    else:
+        rules.extend(
+            [
+                "Use markdown formatting when it helps readability.",
+                "Support code blocks when code is requested.",
+                "When maths helps, format it with LaTeX using $...$ or $$...$$.",
+            ]
+        )
     if lecture_label:
         rules.append(f"Current lecture label: {lecture_label}.")
     if context_text:
@@ -3765,6 +3790,12 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         rules.append("No lecture transcript or study guide is loaded yet.")
         rules.append("Answer as a general study assistant until lecture context is added.")
     return "\n\n".join(part for part in rules if compact_text(part))
+
+
+def resolve_lecture_assistant_max_output_tokens(payload: LectureAssistantRequest) -> int:
+    if bool(payload.voice_mode):
+        return max(160, min(LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS, LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
+    return LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS
 
 
 def build_lecture_assistant_messages(payload: LectureAssistantRequest) -> list[dict[str, str]]:
@@ -14670,6 +14701,8 @@ def create_lecture_assistant_stream(
     system_prompt = build_lecture_assistant_system_prompt(payload)
     messages = build_lecture_assistant_messages(payload)
     attempts = resolve_provider_attempts(forced_provider)
+    max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
+    generation_temperature = 0.45 if bool(payload.voice_mode) else 0.55
 
     def event_stream():
         selected_attempt: dict[str, str] | None = None
@@ -14705,8 +14738,8 @@ def create_lecture_assistant_stream(
                         attempt["provider"],
                         system_prompt=system_prompt,
                         messages=messages,
-                        temperature=0.55,
-                        max_output_tokens=LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS,
+                        temperature=generation_temperature,
+                        max_output_tokens=max_output_tokens,
                         timeout_seconds=LECTURE_ASSISTANT_MODEL_TIMEOUT,
                     ):
                         if not token_started:
