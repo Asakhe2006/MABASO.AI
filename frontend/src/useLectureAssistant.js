@@ -4,6 +4,10 @@ const ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v1";
 const ASSISTANT_THEME_STORAGE_KEY = "mabaso-lecture-assistant-theme";
 const ASSISTANT_TTS_STORAGE_KEY = "mabaso-lecture-assistant-tts";
 const MAX_SAVED_CONVERSATIONS = 24;
+const LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE = "English";
+const LECTURE_ASSISTANT_VOICE_TRANSCRIPTION_LANGUAGE = "en";
+const LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES = ["en-US", "en-GB"];
+const LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE = LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES[0];
 const VOICE_CHAT_RESTART_DELAY_MS = 1100;
 const VOICE_CHAT_NETWORK_RETRY_DELAY_MS = 1800;
 const VOICE_CHAT_MAX_NETWORK_RETRIES = 3;
@@ -20,6 +24,14 @@ const VOICE_TRANSCRIPTION_DEBOUNCE_MS = 600;
 const VOICE_TRANSCRIPTION_MIN_CHUNKS = 1;
 const VOICE_TRANSCRIPTION_SILENCE_THRESHOLD = 0.014;
 const VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD = 0.028;
+const VOICE_VAD_MIN_SPEECH_MS = 700;
+const VOICE_VAD_MIN_ACTIVE_FRAMES = 4;
+const VOICE_VAD_MIN_SILENCE_FRAMES = 8;
+const VOICE_VAD_MIN_TRANSCRIPT_CHARS = 6;
+const VOICE_VAD_MIN_NOISE_FLOOR = 0.004;
+const VOICE_VAD_NOISE_FLOOR_SMOOTHING = 0.1;
+const VOICE_VAD_RMS_MULTIPLIER = 2.4;
+const VOICE_VAD_PEAK_MULTIPLIER = 1.9;
 const VOICE_FAST_FINALIZE_WITH_PUNCTUATION_MS = 900;
 const VOICE_FAST_FINALIZE_WITH_CONFIDENCE_MS = 1250;
 const VOICE_DEFAULT_POST_SPEECH_SILENCE_MS = 1700;
@@ -59,6 +71,10 @@ function buildConversationStorageKey(email = "") {
 function deriveConversationTitle(question = "", lectureLabel = "") {
   const cleaned = compactText(question) || compactText(lectureLabel) || "New lecture chat";
   return cleaned.length > 56 ? `${cleaned.slice(0, 53).trim()}...` : cleaned;
+}
+
+function resolveLectureAssistantVoiceRecognitionLocales() {
+  return [...LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES];
 }
 
 function resolveSpeechRecognitionLocales(language = "English") {
@@ -154,7 +170,7 @@ function getSpeechRecognitionErrorMessage(errorCode = "") {
   }
   if (normalized === "network") return "Browser microphone transcription lost its connection. The AI models are still available, so tap the mic again in Chrome or Edge.";
   if (normalized === "aborted") return "Voice chat was stopped before speech was captured.";
-  if (normalized === "language-not-supported") return "This browser does not support the selected speech language.";
+  if (normalized === "language-not-supported") return "This browser does not support the lecture assistant's English speech mode.";
   return "Voice input had a browser error. You can type your question instead.";
 }
 
@@ -274,20 +290,38 @@ function resolveAdaptiveVoicePauseMs({ transcript = "", previewTranscript = "", 
   return VOICE_DEFAULT_POST_SPEECH_SILENCE_MS;
 }
 
-function pickSpeechSynthesisVoice(locale = "", voices = []) {
-  if (!Array.isArray(voices) || !voices.length) return null;
+function isEnglishSpeechSynthesisVoice(voice) {
+  return compactText(voice?.lang).toLowerCase().startsWith("en");
+}
+
+function pickSpeechSynthesisVoice(locale = "", voices = [], { englishOnly = false } = {}) {
+  const voicePool = englishOnly ? voices.filter((voice) => isEnglishSpeechSynthesisVoice(voice)) : voices;
+  if (!Array.isArray(voicePool) || !voicePool.length) return englishOnly ? pickSpeechSynthesisVoice(locale, voices) : null;
   const normalizedLocale = compactText(locale).toLowerCase();
-  if (!normalizedLocale) return voices[0] || null;
+  if (!normalizedLocale) return voicePool[0] || null;
   const languageCode = normalizedLocale.split("-")[0];
   return (
-    voices.find((voice) => /natural|neural|aria|samantha|serena|google uk english female|microsoft david|microsoft ava/i.test(compactText(voice?.name)))
-    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
-    || voices.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`) && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
-    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale)
-    || voices.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`))
-    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === languageCode)
-    || voices[0]
+    voicePool.find((voice) => /natural|neural|aria|samantha|serena|google uk english female|microsoft david|microsoft ava/i.test(compactText(voice?.name)))
+    || voicePool.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
+    || voicePool.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`) && /natural|neural|google|microsoft/i.test(compactText(voice?.name)))
+    || voicePool.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale)
+    || voicePool.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`))
+    || voicePool.find((voice) => compactText(voice?.lang).toLowerCase() === languageCode)
+    || voicePool[0]
     || null
+  );
+}
+
+function buildLectureAssistantVoiceTranscriptionPrompt({ lectureLabel = "", partialTranscript = "" } = {}) {
+  return compactText(
+    [
+      "English only transcription.",
+      "The student is asking a lecture question in English.",
+      "Do not auto-detect another language.",
+      "Do not translate or answer the question.",
+      compactText(lectureLabel) ? `Lecture label: ${compactText(lectureLabel).slice(0, 100)}.` : "",
+      compactText(partialTranscript) ? `Existing partial English transcript: ${compactText(partialTranscript).slice(-180)}.` : "",
+    ].filter(Boolean).join(" "),
   );
 }
 
@@ -553,7 +587,7 @@ export function useLectureAssistant({
   const voiceNetworkRetryCountRef = useRef(0);
   const voiceNoSpeechRetryCountRef = useRef(0);
   const voiceUnexpectedEndRetryCountRef = useRef(0);
-  const voiceRecognitionLocalesRef = useRef(resolveSpeechRecognitionLocales(outputLanguage));
+  const voiceRecognitionLocalesRef = useRef(resolveLectureAssistantVoiceRecognitionLocales());
   const voiceRecognitionLocaleIndexRef = useRef(0);
   const voiceReplyRunRef = useRef(0);
   const voiceReplyChunkTimerRef = useRef(0);
@@ -686,7 +720,7 @@ export function useLectureAssistant({
   };
 
   const syncRecognitionLocales = ({ resetIndex = false } = {}) => {
-    const nextLocales = resolveSpeechRecognitionLocales(outputLanguage);
+    const nextLocales = resolveLectureAssistantVoiceRecognitionLocales();
     voiceRecognitionLocalesRef.current = nextLocales;
     if (resetIndex || voiceRecognitionLocaleIndexRef.current >= nextLocales.length) {
       voiceRecognitionLocaleIndexRef.current = 0;
@@ -819,8 +853,12 @@ export function useLectureAssistant({
       return false;
     }
     stopSpeaking();
-    const preferredLocale = resolveSpeechLocale(outputLanguage);
-    const selectedVoice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
+    const preferredLocale = LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE;
+    const selectedVoice = pickSpeechSynthesisVoice(
+      preferredLocale,
+      window.speechSynthesis.getVoices?.() || [],
+      { englishOnly: true },
+    ) || null;
     const runId = voiceReplyRunRef.current + 1;
     voiceReplyRunRef.current = runId;
     voiceSpeechQueueRef.current = [];
@@ -1001,7 +1039,7 @@ export function useLectureAssistant({
       resetVoiceRecoveryState({ resetLocale: true });
     }
     const recognitionLocales = syncRecognitionLocales({ resetIndex: !continueVoiceChat });
-    const recognitionLocale = recognitionLocales[voiceRecognitionLocaleIndexRef.current] || recognitionLocales[0] || "en-ZA";
+    const recognitionLocale = recognitionLocales[voiceRecognitionLocaleIndexRef.current] || recognitionLocales[0] || LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE;
     setIsVoiceReconnecting(false);
     speechRecognitionErrorRef.current = "";
     manualRecognitionStopRef.current = false;
@@ -1085,12 +1123,12 @@ export function useLectureAssistant({
             delayMs: 500,
             continueVoiceChat: true,
             reconnecting: true,
-            statusMessage: "Switching to a fallback speech language for the microphone...",
+            statusMessage: "Switching to the backup English microphone locale...",
           });
           return;
         }
         setIsVoiceReconnecting(false);
-        setStatusText("The selected speech language is not supported in this browser. Try Chrome or Edge, or switch the study language.");
+        setStatusText("This browser could not start the lecture assistant's English speech mode. Try Chrome or Edge.");
         return;
       }
       if (errorCode === "no-speech" && voiceModeEnabledRef.current) {
@@ -1105,13 +1143,13 @@ export function useLectureAssistant({
             continueVoiceChat: true,
             reconnecting: switchedLocale || voiceNoSpeechRetryCountRef.current > 1,
             statusMessage: switchedLocale
-              ? "Trying the microphone again with a fallback speech language..."
+              ? "Trying the microphone again with the backup English locale..."
               : "Still listening. Speak whenever you are ready...",
           });
           return;
         }
         setIsVoiceReconnecting(false);
-        setStatusText("I couldn't hear a clear voice signal from the microphone. Check the selected mic, browser permission, and speech language, then tap the mic again.");
+        setStatusText("I couldn't hear a clear English voice signal from the microphone. Check the selected mic, permission, and distance from the mic, then tap the mic again.");
         return;
       }
       if (errorCode === "network" && voiceModeEnabledRef.current) {
@@ -1241,13 +1279,14 @@ export function useLectureAssistant({
     const filename = `lecture-voice-${captureId}.${extension}`;
     const formData = new FormData();
     formData.append("file", audioBlob, filename);
-    formData.append("language", resolveSpeechLanguageCode(outputLanguage));
-    formData.append("output_language", outputLanguage);
+    formData.append("language", LECTURE_ASSISTANT_VOICE_TRANSCRIPTION_LANGUAGE);
+    formData.append("output_language", LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE);
     formData.append("lecture_label", compactText(lectureLabel));
     formData.append("partial", final ? "false" : "true");
-    if (compactText(voiceWhisperTranscriptRef.current) && !final) {
-      formData.append("prompt", compactText(voiceWhisperTranscriptRef.current).slice(-180));
-    }
+    formData.append("prompt", buildLectureAssistantVoiceTranscriptionPrompt({
+      lectureLabel,
+      partialTranscript: !final ? voiceWhisperTranscriptRef.current : "",
+    }));
 
     const controller = new AbortController();
     voiceTranscriptionAbortRef.current = controller;
@@ -1266,7 +1305,7 @@ export function useLectureAssistant({
         if (captureId === voiceCaptureRunRef.current) {
           setDraft(text);
           if (!final) {
-            setStatusText("Listening with Groq Whisper...");
+            setStatusText("Listening in English with Groq Whisper...");
           }
         }
       }
@@ -1322,7 +1361,7 @@ export function useLectureAssistant({
       resetVoiceRecoveryState({ resetLocale: true });
     }
     const recognitionLocales = syncRecognitionLocales({ resetIndex: !continueVoiceChat });
-    const recognitionLocale = recognitionLocales[voiceRecognitionLocaleIndexRef.current] || recognitionLocales[0] || "en-ZA";
+    const recognitionLocale = recognitionLocales[voiceRecognitionLocaleIndexRef.current] || recognitionLocales[0] || LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE;
     setIsVoiceReconnecting(false);
     speechRecognitionErrorRef.current = "";
     manualRecognitionStopRef.current = false;
@@ -1413,8 +1452,10 @@ export function useLectureAssistant({
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          channelCount: { ideal: 1 },
+          channelCount: { ideal: 1, max: 1 },
           sampleRate: { ideal: 16000 },
+          sampleSize: { ideal: 16 },
+          latency: { ideal: 0.02 },
         },
       });
       if (captureId !== voiceCaptureRunRef.current) {
@@ -1431,7 +1472,7 @@ export function useLectureAssistant({
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
       if (AudioContextCtor) {
         try {
-          const audioContext = new AudioContextCtor();
+          const audioContext = new AudioContextCtor({ sampleRate: 16000 });
           const analyser = audioContext.createAnalyser();
           analyser.fftSize = 2048;
           const sourceNode = audioContext.createMediaStreamSource(microphoneStream);
@@ -1465,7 +1506,7 @@ export function useLectureAssistant({
             voicePreviewTranscriptRef.current = previewText;
             if (!voiceHasWhisperTranscriptRef.current && previewText) {
               setDraft(previewText);
-              setStatusText("Listening... partial transcript updating live.");
+              setStatusText("Listening in English... partial transcript updating live.");
             }
           };
           previewRecognition.onerror = () => {
@@ -1549,20 +1590,26 @@ export function useLectureAssistant({
         await sendMessage({ promptText: finalTranscript });
       };
 
-      recorder.start(800);
+      recorder.start(650);
       setIsListening(true);
       setStatusText(continueVoiceChat
-        ? "Listening with Groq Whisper for your next question..."
-        : "Voice chat is on. Speak your question now.");
+        ? "Listening in English with Groq Whisper for your next question..."
+        : "Voice chat is on in English. Speak your question now.");
 
       const listenStartedAt = Date.now();
       let lastSpeechDetectedAt = listenStartedAt;
       let speechDetected = false;
+      let speechStartedAt = 0;
+      let activeFrameCount = 0;
+      let silenceFrameCount = 0;
+      let noiseFloorRms = VOICE_VAD_MIN_NOISE_FLOOR;
+      let noiseFloorPeak = VOICE_TRANSCRIPTION_SILENCE_THRESHOLD;
       const audioSampleBuffer = new Uint8Array(2048);
 
       const monitorSilence = () => {
         if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
         const analyser = voiceAnalyserRef.current;
+        const now = Date.now();
         if (analyser) {
           analyser.getByteTimeDomainData(audioSampleBuffer);
           let sumSquares = 0;
@@ -1574,16 +1621,48 @@ export function useLectureAssistant({
             if (magnitude > peak) peak = magnitude;
           }
           const rms = Math.sqrt(sumSquares / audioSampleBuffer.length);
-          if (rms >= VOICE_TRANSCRIPTION_SILENCE_THRESHOLD || peak >= VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD) {
-            if (!speechDetected) {
-              setStatusText("Listening with Groq Whisper...");
+          const dynamicRmsThreshold = Math.max(
+            VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+            VOICE_VAD_MIN_NOISE_FLOOR,
+            noiseFloorRms * VOICE_VAD_RMS_MULTIPLIER,
+          );
+          const dynamicPeakThreshold = Math.max(
+            VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
+            noiseFloorPeak * VOICE_VAD_PEAK_MULTIPLIER,
+          );
+          const isSpeechFrame = rms >= dynamicRmsThreshold || peak >= dynamicPeakThreshold;
+          if (!isSpeechFrame) {
+            noiseFloorRms = clampNumber(
+              noiseFloorRms + (rms - noiseFloorRms) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+              VOICE_VAD_MIN_NOISE_FLOOR,
+              VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+            );
+            noiseFloorPeak = clampNumber(
+              noiseFloorPeak + (peak - noiseFloorPeak) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+              VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+              VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
+            );
+          }
+
+          if (isSpeechFrame) {
+            activeFrameCount += 1;
+            silenceFrameCount = 0;
+            if (activeFrameCount >= VOICE_VAD_MIN_ACTIVE_FRAMES) {
+              if (!speechDetected) {
+                speechStartedAt = now;
+                setStatusText("Listening in English with Groq Whisper...");
+              }
+              speechDetected = true;
+              lastSpeechDetectedAt = now;
             }
-            speechDetected = true;
-            lastSpeechDetectedAt = Date.now();
+          } else {
+            activeFrameCount = 0;
+            if (speechDetected) {
+              silenceFrameCount += 1;
+            }
           }
         }
 
-        const now = Date.now();
         const candidateTranscript = compactText(
           voiceWhisperTranscriptRef.current,
           voicePreviewTranscriptRef.current,
@@ -1597,7 +1676,29 @@ export function useLectureAssistant({
           void finalizeWhisperTurn("silence_timeout");
           return;
         }
-        if (speechDetected && now - lastSpeechDetectedAt >= pauseWindowMs) {
+        if (
+          speechDetected
+          && silenceFrameCount >= VOICE_VAD_MIN_SILENCE_FRAMES
+          && now - lastSpeechDetectedAt >= pauseWindowMs
+        ) {
+          const speechDurationMs = speechStartedAt ? now - speechStartedAt : 0;
+          if (speechDurationMs < VOICE_VAD_MIN_SPEECH_MS && candidateTranscript.length < VOICE_VAD_MIN_TRANSCRIPT_CHARS) {
+            speechDetected = false;
+            speechStartedAt = 0;
+            activeFrameCount = 0;
+            silenceFrameCount = 0;
+            lastSpeechDetectedAt = now;
+            voiceRecorderChunksRef.current = [];
+            voiceRecorderChunkCountRef.current = 0;
+            voiceLastRequestedChunkCountRef.current = 0;
+            voiceWhisperTranscriptRef.current = "";
+            voicePreviewTranscriptRef.current = "";
+            voiceHasWhisperTranscriptRef.current = false;
+            setDraft("");
+            setStatusText("Small background noise ignored. Still listening in English...");
+            voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+            return;
+          }
           void finalizeWhisperTurn("silence_timeout");
           return;
         }
@@ -1729,7 +1830,7 @@ export function useLectureAssistant({
           content: message.content,
           timestamp: message.timestamp,
         })),
-        language: outputLanguage,
+        language: voiceModeEnabledRef.current ? LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE : outputLanguage,
         voice_mode: Boolean(voiceModeEnabledRef.current),
         session_id: targetConversationId,
         conversation_id: targetConversationId,
@@ -1952,9 +2053,9 @@ export function useLectureAssistant({
   }, []);
 
   useEffect(() => {
-    voiceRecognitionLocalesRef.current = resolveSpeechRecognitionLocales(outputLanguage);
+    voiceRecognitionLocalesRef.current = resolveLectureAssistantVoiceRecognitionLocales();
     voiceRecognitionLocaleIndexRef.current = 0;
-  }, [outputLanguage]);
+  }, []);
 
   useEffect(() => {
     onLegacyMessagesChange?.(

@@ -3758,18 +3758,20 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         "Understand quickly and respond with the most helpful answer first.",
         "Keep simple answers short, but expand naturally when the student needs detail.",
         "Do not repeat the user's question back to them.",
-        f"Reply in {output_language}.",
+        f"Reply in {'English' if voice_mode else output_language}.",
     ]
     if voice_mode:
         rules.extend(
             [
                 "You are in live voice conversation mode.",
+                "Always respond in English only.",
                 "Keep replies highly speakable: short sentences, fast understanding, and natural transitions.",
                 "Use one very brief acknowledgement like 'Okay', 'Right', or 'I see' only when it sounds natural, and not in every answer.",
                 "Prefer plain conversational wording over markdown or formal structure.",
                 "Do not use headings, bullet-heavy layouts, or symbol-heavy formatting unless absolutely necessary.",
                 "If code or formulas matter, summarize the meaning first in natural language before any detailed formatting.",
                 "Aim for low latency: answer concisely first, then add one or two helpful details if needed.",
+                "Never switch languages, accents, or multilingual modes during the reply.",
             ]
         )
     else:
@@ -14966,9 +14968,12 @@ async def transcribe_lecture_assistant_voice(
     content_type = compact_text(file.content_type, mimetypes.guess_type(filename)[0] or "audio/webm")
     file_bytes = await file.read()
     try:
-        language_code = normalize_speech_transcription_language(language or output_language)
+        language_code = "en"
         prompt_text = " ".join(
             part for part in [
+                "English only transcription.",
+                "Transcribe the student's lecture question in English.",
+                "Do not auto-detect another language.",
                 compact_text(lecture_label),
                 compact_text(prompt),
             ] if part
