@@ -382,7 +382,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               ) : (
                 <div className={`rounded-[20px] border border-dashed px-4 py-5 ${themed(theme, "border-white/10 bg-white/[0.02] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
                   <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask naturally, like you would in Copilot or ChatGPT.</p>
-                  <p className="mt-3 text-sm leading-7">This chat keeps lecture memory in your browser, streams replies from the backend, and supports browser-native voice turns without paid voice APIs.</p>
+                  <p className="mt-3 text-sm leading-7">This chat keeps lecture memory in your browser, streams replies from the backend, and uses Groq Whisper transcription for more accurate voice turns with browser fallback when needed.</p>
                 </div>
               )}
             </div>
@@ -444,7 +444,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
         </div>
         <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
           <span>Enter sends. Shift+Enter adds a new line.</span>
-          <span>{voiceModeEnabled ? "Voice mode stays active across turns and can be interrupted with the mic." : "Tap the mic for continuous browser voice conversation."}</span>
+          <span>{voiceModeEnabled ? "Voice mode stays active across turns and can be interrupted with the mic." : "Tap the mic for Groq Whisper voice conversation with browser fallback."}</span>
         </div>
       </div>
     </section>

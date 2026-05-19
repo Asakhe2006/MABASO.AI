@@ -118,6 +118,10 @@ FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whispe
 STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
 STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
+GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
+GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
+MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES = int(os.getenv("MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES", str(12 * 1024 * 1024)))
 ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
@@ -3868,6 +3872,110 @@ def compact_text(value: Any, fallback: str = "") -> str:
         return fallback
     text = str(value).replace("\r\n", "\n").strip()
     return text or fallback
+
+
+def normalize_speech_transcription_language(value: str = "") -> str:
+    normalized = normalize_output_language(value).strip().lower()
+    return {
+        "english": "en",
+        "isizulu": "zu",
+        "afrikaans": "af",
+        "isixhosa": "xh",
+        "sesotho": "st",
+        "setswana": "tn",
+        "french": "fr",
+        "portuguese": "pt",
+    }.get(normalized, "en")
+
+
+def extract_request_error_message(response: requests.Response, fallback: str) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if isinstance(payload, dict):
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            for key in ("message", "detail", "status", "code"):
+                value = compact_text(error_payload.get(key))
+                if value:
+                    return value
+        for key in ("detail", "message", "error"):
+            value = compact_text(payload.get(key))
+            if value:
+                return value
+    return compact_text(response.text, fallback)
+
+
+def transcribe_audio_with_groq_whisper(
+    *,
+    filename: str,
+    file_bytes: bytes,
+    content_type: str = "",
+    language: str = "",
+    prompt: str = "",
+) -> dict[str, Any]:
+    groq_api_key = compact_text(os.getenv("GROQ_API_KEY"))
+    if not groq_api_key:
+        raise HTTPException(status_code=503, detail="Groq Whisper is not configured on the backend yet.")
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded voice clip was empty.")
+    if len(file_bytes) > MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Voice clip is too large ({len(file_bytes) / (1024 * 1024):.1f} MB). "
+                f"Please keep each voice turn below {MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES / (1024 * 1024):.0f} MB."
+            ),
+        )
+
+    normalized_filename = compact_text(filename, "voice-turn.webm")
+    normalized_type = compact_text(content_type, mimetypes.guess_type(normalized_filename)[0] or "audio/webm")
+    form_data: dict[str, Any] = {
+        "model": GROQ_SPEECH_MODEL,
+        "response_format": "json",
+        "temperature": "0",
+    }
+    if compact_text(language):
+        form_data["language"] = compact_text(language)
+    if compact_text(prompt):
+        form_data["prompt"] = compact_text(prompt)[:240]
+
+    try:
+        response = requests.post(
+            GROQ_SPEECH_API_URL,
+            headers={"Authorization": f"Bearer {groq_api_key}"},
+            data=form_data,
+            files={"file": (normalized_filename, file_bytes, normalized_type)},
+            timeout=GROQ_SPEECH_TIMEOUT_SECONDS,
+        )
+    except requests.Timeout as exc:
+        raise HTTPException(status_code=504, detail="Groq Whisper took too long to transcribe the voice turn.") from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="The backend could not reach Groq Whisper right now.") from exc
+
+    if not response.ok:
+        detail = extract_request_error_message(response, "Groq Whisper could not transcribe the voice turn.")
+        if response.status_code == 429:
+            detail = "Groq Whisper is rate-limited right now. The browser fallback can still be used."
+        elif response.status_code in {401, 403}:
+            detail = "Groq Whisper rejected the backend API key."
+        elif response.status_code >= 500:
+            detail = "Groq Whisper is temporarily unavailable right now."
+        raise HTTPException(status_code=502 if response.status_code >= 500 else int(response.status_code), detail=detail)
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="Groq Whisper returned an unreadable transcription response.") from exc
+
+    transcript_text = compact_text(payload.get("text"))
+    return {
+        "text": transcript_text,
+        "provider": "groq_whisper",
+        "model": GROQ_SPEECH_MODEL,
+        "request_id": compact_text((payload.get("x_groq") or {}).get("id")),
+    }
 
 
 def trimmed_context_block(label: str, value: str, limit: int) -> str:
@@ -14800,6 +14908,52 @@ async def stream_lecture_assistant_openrouter(
         current_user=current_user,
         forced_provider="openrouter",
     )
+
+
+@app.post("/api/voice/transcribe")
+async def transcribe_lecture_assistant_voice(
+    request: Request,
+    file: UploadFile = File(...),
+    language: str = Form("English"),
+    output_language: str = Form("English"),
+    lecture_label: str = Form(""),
+    prompt: str = Form(""),
+    partial: str = Form("false"),
+    current_user: str = Depends(require_authenticated_user),
+):
+    enforce_rate_limit(
+        scope="lecture_assistant_voice_transcribe",
+        request=request,
+        limit=360,
+        window_seconds=10 * 60,
+        identity=current_user,
+    )
+
+    filename = compact_text(file.filename, "voice-turn.webm")
+    content_type = compact_text(file.content_type, mimetypes.guess_type(filename)[0] or "audio/webm")
+    file_bytes = await file.read()
+    try:
+        language_code = normalize_speech_transcription_language(language or output_language)
+        prompt_text = " ".join(
+            part for part in [
+                compact_text(lecture_label),
+                compact_text(prompt),
+            ] if part
+        )
+        result = transcribe_audio_with_groq_whisper(
+            filename=filename,
+            file_bytes=file_bytes,
+            content_type=content_type,
+            language=language_code,
+            prompt=prompt_text,
+        )
+        return {
+            **result,
+            "language": language_code,
+            "partial": compact_text(partial).lower() == "true",
+        }
+    finally:
+        await file.close()
 
 
 @app.get("/collaboration/rooms")

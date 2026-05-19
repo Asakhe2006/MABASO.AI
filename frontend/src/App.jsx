@@ -10238,6 +10238,13 @@ export default function App() {
     signal,
   });
 
+  const requestLectureAssistantTranscription = (formData, signal) => authFetch("/api/voice/transcribe", {
+    method: "POST",
+    body: formData,
+    timeoutMs: 45000,
+    signal,
+  });
+
   const lectureAssistantContextKey = [
     activeHistoryId,
     file?.name || "",
@@ -10254,6 +10261,7 @@ export default function App() {
 
   const lectureAssistant = useLectureAssistant({
     requestStream: requestLectureAssistantStream,
+    requestTranscription: requestLectureAssistantTranscription,
     authEmail,
     contextKey: lectureAssistantContextKey,
     lectureLabel: lectureAssistantLabel,
