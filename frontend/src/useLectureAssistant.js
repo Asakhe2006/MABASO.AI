@@ -55,6 +55,33 @@ function formatProviderLabel(provider = "") {
   }[normalized] || "Lecture Assistant";
 }
 
+function getSpeechRecognitionErrorMessage(errorCode = "") {
+  const normalized = compactText(errorCode).toLowerCase();
+  if (normalized === "no-speech") return "No speech was detected. Try again and speak a little closer to the microphone.";
+  if (normalized === "audio-capture") return "No working microphone was found. Check your browser microphone device.";
+  if (normalized === "not-allowed" || normalized === "service-not-allowed") {
+    return "Microphone permission was blocked. Allow microphone access for this site and try again.";
+  }
+  if (normalized === "network") return "Browser speech recognition lost its connection. Try again in Chrome or Edge.";
+  if (normalized === "aborted") return "Voice chat was stopped before speech was captured.";
+  if (normalized === "language-not-supported") return "This browser does not support the selected speech language.";
+  return "Voice input had a browser error. You can type your question instead.";
+}
+
+function pickSpeechSynthesisVoice(locale = "", voices = []) {
+  if (!Array.isArray(voices) || !voices.length) return null;
+  const normalizedLocale = compactText(locale).toLowerCase();
+  if (!normalizedLocale) return voices[0] || null;
+  const languageCode = normalizedLocale.split("-")[0];
+  return (
+    voices.find((voice) => compactText(voice?.lang).toLowerCase() === normalizedLocale)
+    || voices.find((voice) => compactText(voice?.lang).toLowerCase().startsWith(`${languageCode}-`))
+    || voices.find((voice) => compactText(voice?.lang).toLowerCase() === languageCode)
+    || voices[0]
+    || null
+  );
+}
+
 function createConversationRecord({ contextKey = "", lectureLabel = "", title = "New lecture chat" } = {}) {
   const timestamp = nowIso();
   return {
@@ -230,6 +257,7 @@ export function useLectureAssistant({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [statusText, setStatusText] = useState("Ask a follow-up question and the lecture assistant will answer here with a streaming reply.");
   const [activeProvider, setActiveProvider] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -241,6 +269,11 @@ export function useLectureAssistant({
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
   const copyResetTimerRef = useRef(0);
+  const speechRestartTimerRef = useRef(0);
+  const speechRecognitionErrorRef = useRef("");
+  const manualRecognitionStopRef = useRef(false);
+  const ttsEnabledRef = useRef(false);
+  const voiceModeEnabledRef = useRef(false);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0] || null,
@@ -249,24 +282,61 @@ export function useLectureAssistant({
   const messages = activeConversation?.messages || [];
 
   const stopSpeaking = () => {
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+    }
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
   };
 
+  const setVoiceRepliesEnabled = (nextValue) => {
+    const resolved = Boolean(nextValue);
+    ttsEnabledRef.current = resolved;
+    setTtsEnabled(resolved);
+  };
+
+  const toggleVoiceReplies = () => {
+    setTtsEnabled((current) => {
+      const nextValue = !current;
+      ttsEnabledRef.current = nextValue;
+      return nextValue;
+    });
+  };
+
+  const applyVoiceModeEnabled = (nextValue) => {
+    const resolved = Boolean(nextValue);
+    voiceModeEnabledRef.current = resolved;
+    setVoiceModeEnabled(resolved);
+  };
+
   const speakReply = (text = "") => {
     const spokenText = compactText(text);
-    if (!ttsEnabled || !spokenText) return;
+    if (!ttsEnabledRef.current || !spokenText) return;
     if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
       setStatusText("This browser cannot read replies aloud, but the answer is ready.");
       return;
     }
     stopSpeaking();
     const utterance = new window.SpeechSynthesisUtterance(spokenText);
-    utterance.lang = resolveSpeechLocale(outputLanguage);
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
+    const preferredLocale = resolveSpeechLocale(outputLanguage);
+    utterance.lang = preferredLocale;
+    utterance.voice = pickSpeechSynthesisVoice(preferredLocale, window.speechSynthesis.getVoices?.() || []) || null;
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setStatusText("Speaking the answer aloud...");
+    };
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      if (!voiceModeEnabledRef.current) return;
+      setStatusText("Reply spoken. Listening for your next question...");
+      speechRestartTimerRef.current = window.setTimeout(() => {
+        speechRestartTimerRef.current = 0;
+        if (!voiceModeEnabledRef.current) return;
+        startListening({ continueVoiceChat: true });
+      }, 450);
+    };
     utterance.onerror = () => {
       setIsSpeaking(false);
       setStatusText("The reply is ready, but browser text-to-speech could not play it.");
@@ -275,6 +345,7 @@ export function useLectureAssistant({
   };
 
   const stopListening = () => {
+    manualRecognitionStopRef.current = true;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -284,6 +355,17 @@ export function useLectureAssistant({
       recognitionRef.current = null;
     }
     setIsListening(false);
+  };
+
+  const stopVoiceChat = ({ message = "Voice chat stopped." } = {}) => {
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+      speechRestartTimerRef.current = 0;
+    }
+    applyVoiceModeEnabled(false);
+    stopListening();
+    stopSpeaking();
+    setStatusText(message);
   };
 
   const updateConversation = (conversationId, updater) => {
@@ -358,20 +440,43 @@ export function useLectureAssistant({
     else openPanel();
   };
 
-  const startListening = () => {
+  const startListening = ({ continueVoiceChat = false } = {}) => {
     if (isListening) {
-      stopListening();
+      stopVoiceChat();
+      return;
+    }
+    if (isSpeaking) {
+      stopVoiceChat();
+      return;
+    }
+    if (isGenerating) {
+      setStatusText("Wait for the current reply to finish, or press Stop first.");
       return;
     }
     const SpeechRecognitionCtor = typeof window !== "undefined"
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
     if (!SpeechRecognitionCtor) {
-      setStatusText("Browser voice input is not available here.");
+      applyVoiceModeEnabled(false);
+      setStatusText("Browser voice chat needs Chrome or Edge with microphone access.");
+      return;
+    }
+    if (!hasLectureContext) {
+      setStatusText("Load a lecture transcript or study guide first.");
       return;
     }
 
     openPanel({ focusComposer: false });
+    if (!ttsEnabledRef.current) {
+      setVoiceRepliesEnabled(true);
+    }
+    applyVoiceModeEnabled(true);
+    speechRecognitionErrorRef.current = "";
+    manualRecognitionStopRef.current = false;
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+      speechRestartTimerRef.current = 0;
+    }
 
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = resolveSpeechLocale(outputLanguage);
@@ -383,7 +488,9 @@ export function useLectureAssistant({
     let finalTranscript = "";
     recognition.onstart = () => {
       setIsListening(true);
-      setStatusText("Listening... speak naturally, then stop when you are done.");
+      setStatusText(continueVoiceChat
+        ? "Listening for your next question..."
+        : "Voice chat is on. Speak your question now.");
     };
     recognition.onresult = (event) => {
       let interimTranscript = "";
@@ -395,19 +502,40 @@ export function useLectureAssistant({
       }
       setDraft(`${finalTranscript}${interimTranscript}`.trimStart());
     };
-    recognition.onerror = () => {
-      setStatusText("Voice input had a browser error. You can type your question instead.");
+    recognition.onerror = (event) => {
+      if (manualRecognitionStopRef.current && event?.error === "aborted") return;
+      speechRecognitionErrorRef.current = getSpeechRecognitionErrorMessage(event?.error);
+      if (event?.error !== "aborted") {
+        applyVoiceModeEnabled(false);
+      }
+      setStatusText(speechRecognitionErrorRef.current);
       setIsListening(false);
     };
-    recognition.onend = () => {
+    recognition.onend = async () => {
       recognitionRef.current = null;
       setIsListening(false);
-      setStatusText(finalTranscript.trim() ? "Voice captured. Review it or send it now." : "Voice input stopped.");
+      const spokenQuestion = compactText(finalTranscript);
+      if (manualRecognitionStopRef.current) {
+        manualRecognitionStopRef.current = false;
+        return;
+      }
+      if (spokenQuestion) {
+        setDraft(spokenQuestion);
+        setStatusText("Sending your voice question...");
+        await sendMessage({ promptText: spokenQuestion });
+        return;
+      }
+      if (speechRecognitionErrorRef.current) return;
+      setStatusText("No speech was captured. Tap the mic and try again.");
+      if (voiceModeEnabledRef.current) {
+        applyVoiceModeEnabled(false);
+      }
     };
 
     try {
       recognition.start();
     } catch {
+      applyVoiceModeEnabled(false);
       setStatusText("Voice input could not start in this browser tab.");
       setIsListening(false);
     }
@@ -636,7 +764,9 @@ export function useLectureAssistant({
       setConversations(normalized.length ? sortConversations(normalized) : [fallbackConversation]);
       setActiveConversationId(storedActiveConversationId || normalized[0]?.id || fallbackConversation.id);
       setTheme(compactText(window.localStorage.getItem(ASSISTANT_THEME_STORAGE_KEY), "dark"));
-      setTtsEnabled(window.localStorage.getItem(ASSISTANT_TTS_STORAGE_KEY) === "true");
+      const storedVoiceRepliesEnabled = window.localStorage.getItem(ASSISTANT_TTS_STORAGE_KEY) === "true";
+      ttsEnabledRef.current = storedVoiceRepliesEnabled;
+      setTtsEnabled(storedVoiceRepliesEnabled);
     } catch {
       const fallbackConversation = createConversationRecord({ contextKey: normalizedContextKey, lectureLabel });
       setConversations([fallbackConversation]);
@@ -664,6 +794,14 @@ export function useLectureAssistant({
     if (typeof window === "undefined") return;
     window.localStorage.setItem(ASSISTANT_TTS_STORAGE_KEY, String(ttsEnabled));
   }, [ttsEnabled]);
+
+  useEffect(() => {
+    ttsEnabledRef.current = ttsEnabled;
+  }, [ttsEnabled]);
+
+  useEffect(() => {
+    voiceModeEnabledRef.current = voiceModeEnabled;
+  }, [voiceModeEnabled]);
 
   useEffect(() => {
     onLegacyMessagesChange?.(
@@ -728,6 +866,9 @@ export function useLectureAssistant({
 
   useEffect(() => () => {
     abortControllerRef.current?.abort?.();
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+    }
     stopListening();
     stopSpeaking();
     window.clearTimeout(copyResetTimerRef.current);
@@ -751,6 +892,7 @@ export function useLectureAssistant({
     isListening,
     isOpen,
     isSpeaking,
+    voiceModeEnabled,
     lectureLabel: compactText(lectureLabel),
     messages,
     messagesEndRef,
@@ -766,11 +908,19 @@ export function useLectureAssistant({
     stopGenerating,
     stopListening,
     stopSpeaking,
+    stopVoiceChat,
     theme,
     toggleListening: startListening,
     togglePanel,
     toggleTheme: () => setTheme((current) => current === "dark" ? "light" : "dark"),
-    toggleTts: () => setTtsEnabled((current) => !current),
+    toggleTts: toggleVoiceReplies,
+    toggleVoiceChat: () => {
+      if (isListening || isSpeaking || voiceModeEnabledRef.current) {
+        stopVoiceChat();
+        return;
+      }
+      startListening();
+    },
     ttsEnabled,
   };
 }

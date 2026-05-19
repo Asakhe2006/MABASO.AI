@@ -49,6 +49,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     isGenerating,
     isListening,
     isOpen,
+    isSpeaking,
     lectureLabel,
     messages,
     messagesEndRef,
@@ -58,18 +59,19 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     selectConversation,
     sendMessage,
     setDraft,
-    startListening,
     statusText,
     stopGenerating,
     theme,
     toggleTheme,
     toggleTts,
+    toggleVoiceChat,
     ttsEnabled,
+    voiceModeEnabled,
   } = assistant;
 
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
   const savedMessageCount = messages.length;
-  const isExpanded = Boolean(isOpen || isGenerating || isListening || String(draft || "").trim());
+  const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
   const recentConversations = conversations.slice(0, 5);
 
   const handleComposerKeyDown = (event) => {
@@ -156,7 +158,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               ? themed(theme, "bg-fuchsia-400/12 text-fuchsia-100", "bg-fuchsia-50 text-fuchsia-700")
               : themed(theme, "bg-white/5 text-slate-300", "bg-slate-100 text-slate-600")}`}
             >
-              {isListening ? "Listening now" : "Voice input ready"}
+              {isListening ? "Listening now" : isSpeaking ? "Speaking reply" : voiceModeEnabled ? "Voice chat on" : "Voice input ready"}
             </span>
           </div>
 
@@ -315,12 +317,12 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               type="button"
               onClick={() => {
                 handleComposerFocus();
-                startListening();
+                toggleVoiceChat();
               }}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${isListening
+              className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${(isListening || isSpeaking || voiceModeEnabled)
                 ? themed(theme, "border-fuchsia-300/35 bg-fuchsia-400/15 text-fuchsia-100", "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700")
                 : themed(theme, "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10", "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100")}`}
-              aria-label={isListening ? "Stop voice input" : "Start voice input"}
+              aria-label={(isListening || isSpeaking || voiceModeEnabled) ? "Stop voice chat" : "Start voice chat"}
             >
               <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                 <path d="M12 4a3 3 0 0 1 3 3v4a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Zm-6 7a1 1 0 0 1 2 0 4 4 0 1 0 8 0 1 1 0 1 1 2 0 6 6 0 0 1-5 5.91V20h2a1 1 0 1 1 0 2H9a1 1 0 0 1 0-2h2v-2.09A6 6 0 0 1 6 11Z" fill="currentColor" />
