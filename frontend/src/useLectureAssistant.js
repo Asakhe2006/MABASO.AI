@@ -230,7 +230,7 @@ export function useLectureAssistant({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [statusText, setStatusText] = useState("Open the lecture assistant to ask follow-up questions with streaming replies.");
+  const [statusText, setStatusText] = useState("Ask a follow-up question and the lecture assistant will answer here with a streaming reply.");
   const [activeProvider, setActiveProvider] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
 
@@ -370,6 +370,8 @@ export function useLectureAssistant({
       setStatusText("Browser voice input is not available here.");
       return;
     }
+
+    openPanel({ focusComposer: false });
 
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = resolveSpeechLocale(outputLanguage);
