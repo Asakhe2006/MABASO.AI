@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Archive,
@@ -25,8 +25,11 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import AssistantMarkdown from "./AssistantMarkdown";
+
+const ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY = "mabaso-lecture-assistant-voice-onboarded";
 
 function themed(theme, darkValue, lightValue) {
   return theme === "light" ? lightValue : darkValue;
@@ -213,6 +216,25 @@ function formatTranscriptConfidence(confidence = 0) {
   return `${Math.round(bounded * 100)}%`;
 }
 
+function VoiceWaveform({ theme = "dark", active = false }) {
+  return (
+    <div className="inline-flex items-end gap-1">
+      {[0, 1, 2, 3].map((index) => (
+        <span
+          key={index}
+          className={`w-1 rounded-full transition-all ${active ? "animate-pulse " : ""}${active
+            ? themed(theme, "bg-cyan-200", "bg-cyan-600")
+            : themed(theme, "bg-slate-500/35", "bg-slate-300")}`}
+          style={{
+            height: `${10 + ((index + 1) % 3) * 6}px`,
+            animationDelay: active ? `${index * 120}ms` : "0ms",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function VoiceProfileCard({
   theme = "dark",
   profile,
@@ -293,6 +315,59 @@ function VoiceProfileCard({
   );
 }
 
+function VoiceListRow({
+  theme = "dark",
+  profile,
+  selected = false,
+  previewing = false,
+  preparing = false,
+  onSelect,
+  onPreview,
+}) {
+  return (
+    <motion.div
+      layout
+      className={`rounded-[24px] border px-4 py-3 transition ${selected
+        ? themed(theme, "border-emerald-300/24 bg-emerald-300/10", "border-emerald-200 bg-emerald-50/70")
+        : themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/88")}`}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <button
+          type="button"
+          onClick={onSelect}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${selected
+            ? themed(theme, "border-emerald-200 bg-emerald-300/16 text-emerald-50", "border-emerald-300 bg-emerald-500 text-white")
+            : themed(theme, "border-white/14 bg-white/[0.05] text-slate-300", "border-slate-300 bg-white text-slate-500")}`}
+          >
+            {selected ? <Check className="h-4 w-4" /> : <span className="h-2.5 w-2.5 rounded-full bg-current opacity-70" />}
+          </span>
+          <div className="min-w-0">
+            <p className={`truncate text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{profile.name}</p>
+            <p className={`mt-1 truncate text-xs ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+              {profile.style} | {profile.accent} | {profile.energy}
+            </p>
+            <p className={`mt-1 truncate text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>{profile.personality}</p>
+          </div>
+        </button>
+
+        <div className="flex items-center gap-3 sm:justify-end">
+          <VoiceWaveform theme={theme} active={previewing || preparing} />
+          <button
+            type="button"
+            onClick={onPreview}
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.06] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+          >
+            {preparing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            {previewing || preparing ? "Playing" : "Preview"}
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function LectureAssistantPanel({ assistant, visible = true }) {
   if (!visible || !assistant) return null;
 
@@ -368,6 +443,9 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   } = assistant;
 
   const [actionMenuId, setActionMenuId] = useState("");
+  const [voiceSelectorOpen, setVoiceSelectorOpen] = useState(false);
+  const [voiceOnboardingReady, setVoiceOnboardingReady] = useState(false);
+  const [voiceOnboardingComplete, setVoiceOnboardingComplete] = useState(true);
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
   const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
   const filteredConversations = useMemo(
@@ -377,6 +455,8 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const groupedConversations = useMemo(() => groupConversationsByDate(filteredConversations), [filteredConversations]);
   const transcriptSourceLabel = formatTranscriptSource(voiceTranscriptSource);
   const transcriptConfidenceLabel = formatTranscriptConfidence(voiceTranscriptConfidence);
+  const compactVoiceLabel = selectedVoiceProfile?.name || "Wave";
+  const showVoiceOnboarding = voiceOnboardingReady && !voiceOnboardingComplete;
 
   const voiceStateMode = isVoiceReconnecting
     ? "reconnecting"
@@ -411,6 +491,43 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
 
   const handleComposerFocus = () => {
     if (!isOpen) openPanel({ focusComposer: false });
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isOnboarded = window.localStorage.getItem(ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY) === "true";
+    setVoiceOnboardingComplete(isOnboarded);
+    setVoiceOnboardingReady(true);
+    if (!isOnboarded) {
+      setVoiceSelectorOpen(true);
+    }
+  }, []);
+
+  const markVoiceOnboardingComplete = () => {
+    setVoiceOnboardingComplete(true);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY, "true");
+    }
+  };
+
+  const openVoiceSelector = () => {
+    setVoiceSelectorOpen(true);
+  };
+
+  const closeVoiceSelector = () => {
+    setVoiceSelectorOpen(false);
+  };
+
+  const handleVoiceSelection = (profileId, { preview = true, closeAfter = false, completeOnboarding = true } = {}) => {
+    selectVoiceProfile(profileId, { preview });
+    if (showVoiceOnboarding && completeOnboarding) {
+      markVoiceOnboardingComplete();
+    }
+    if (closeAfter) {
+      window.setTimeout(() => {
+        setVoiceSelectorOpen(false);
+      }, 180);
+    }
   };
 
   const handleRenameConversation = async (conversation) => {
@@ -719,6 +836,15 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={openVoiceSelector}
+                      className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                    >
+                      <AudioLines className="h-3.5 w-3.5" />
+                      Voice: {compactVoiceLabel}
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
                     <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
                       {providerLabel || "OpenAI text + voice routing ready"}
                     </span>
@@ -735,121 +861,6 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                       </span>
                     ) : null}
                   </div>
-                </div>
-              </div>
-
-              <div className={`overflow-hidden rounded-[30px] border p-4 sm:p-5 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_36%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.94))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.97))]")}`}>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
-                        <AudioLines className="h-5 w-5" />
-                      </span>
-                      <div>
-                        <p className={`text-xs font-semibold uppercase tracking-[0.26em] ${themed(theme, "text-cyan-100/78", "text-cyan-700")}`}>Voice Studio</p>
-                        <h4 className={`mt-1 text-lg font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
-                          {selectedVoiceProfile?.name || "Wave"} is ready for live conversation
-                        </h4>
-                      </div>
-                    </div>
-                    <p className={`mt-4 max-w-3xl text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                      Pick a voice, hear it instantly, and keep that personality for streaming replies. The assistant listens in English only, uses browser live captions for speed, and corrects the final turn with Groq Whisper.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
-                      {voiceListeningEngine}
-                    </span>
-                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
-                      {transcriptSourceLabel}
-                    </span>
-                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
-                      Transcript confidence {transcriptConfidenceLabel}
-                    </span>
-                  </div>
-                </div>
-
-                <motion.div layout className="mt-5 grid gap-3 xl:grid-cols-4 md:grid-cols-2">
-                  {voiceProfiles.map((profile) => (
-                    <VoiceProfileCard
-                      key={profile.id}
-                      theme={theme}
-                      profile={profile}
-                      selected={profile.id === selectedVoiceProfileId}
-                      previewing={previewingVoiceId === profile.id}
-                      preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
-                      onSelect={() => selectVoiceProfile(profile.id)}
-                    />
-                  ))}
-                </motion.div>
-
-                <div className={`mt-5 rounded-[28px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/88")}`}>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Try this voice</p>
-                      <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                        Type any sentence and the selected voice will read it back with the same pacing used in live responses.
-                      </p>
-                    </div>
-                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
-                      Saved on this device
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-white/10 bg-slate-950/45", "border-slate-200 bg-slate-50")}`}>
-                      <div className="flex items-center gap-2">
-                        <SlidersHorizontal className={`h-4 w-4 ${themed(theme, "text-cyan-100", "text-cyan-700")}`} />
-                        <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/75", "text-cyan-700")}`}>
-                          Custom Preview
-                        </p>
-                      </div>
-                      <textarea
-                        value={voicePreviewDraft}
-                        onChange={(event) => setVoicePreviewDraft(event.target.value)}
-                        rows={2}
-                        placeholder="Explain black holes simply."
-                        className={`mt-3 min-h-[88px] w-full resize-none bg-transparent text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
-                      />
-                    </div>
-
-                    <div className="flex flex-col gap-3">
-                      <button
-                        type="button"
-                        onClick={previewSelectedVoiceWithDraft}
-                        className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
-                      >
-                        {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                        Preview Voice
-                      </button>
-                      <div className={`rounded-2xl border px-4 py-3 text-sm ${themed(theme, "border-white/10 bg-black/20 text-slate-200", "border-slate-200 bg-slate-50 text-slate-600")}`}>
-                        <p className="font-semibold">{selectedVoiceProfile?.name || "Wave"}</p>
-                        <p className="mt-1 text-xs leading-6">
-                          {selectedVoiceProfile?.style || "Polished"}
-                          {" | "}
-                          {selectedVoiceProfile?.energy || "Focused"} energy
-                          {" | "}
-                          {selectedVoiceProfile?.accent || "English"}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <AnimatePresence mode="wait">
-                    <motion.div
-                      key={`${selectedVoiceProfileId}-${previewingVoiceId || "idle"}`}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -8 }}
-                      transition={{ duration: 0.18 }}
-                      className={`mt-4 rounded-[22px] px-4 py-3 text-sm ${themed(theme, "bg-white/[0.05] text-slate-200", "bg-slate-50 text-slate-600")}`}
-                    >
-                      {previewingVoiceId
-                        ? `${selectedVoiceProfile?.name || "That voice"} is playing now.`
-                        : `${selectedVoiceProfile?.name || "This voice"} will be used for streaming voice replies and restored the next time you come back.`}
-                    </motion.div>
-                  </AnimatePresence>
                 </div>
               </div>
 
@@ -1085,6 +1096,200 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
           {sidebarContent}
         </div>
       </div>
+
+      <AnimatePresence>
+        {voiceSelectorOpen ? (
+          <div className="fixed inset-0 z-40">
+            <motion.button
+              type="button"
+              aria-label="Close voice selector"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeVoiceSelector}
+              className="absolute inset-0 h-full w-full bg-slate-950/55 backdrop-blur-md"
+            />
+
+            <div className="absolute inset-0 flex items-end justify-center p-0 sm:items-center sm:p-6">
+              <motion.div
+                initial={{ opacity: 0, y: 28, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 24, scale: 0.98 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className={`relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-[32px] border shadow-[0_28px_80px_rgba(2,8,23,0.45)] ${showVoiceOnboarding ? "sm:max-w-[1100px]" : "sm:max-w-[760px]"} sm:rounded-[32px] ${themed(theme, "border-white/12 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.13),transparent_34%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))]")}`}
+              >
+                <div className={`border-b px-5 py-4 sm:px-6 ${themed(theme, "border-white/10", "border-slate-200")}`}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                          <AudioLines className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/78", "text-cyan-700")}`}>
+                            {showVoiceOnboarding ? "Voice Setup" : "Voice Selector"}
+                          </p>
+                          <h4 className={`mt-1 text-lg font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
+                            {showVoiceOnboarding
+                              ? "Choose how Mabaso AI should sound"
+                              : `Current voice: ${compactVoiceLabel}`}
+                          </h4>
+                        </div>
+                      </div>
+                      <p className={`mt-4 max-w-3xl text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                        {showVoiceOnboarding
+                          ? "Pick a voice for your real-time conversations. You can preview each one now, then the assistant will remember your choice and keep the main chat clean."
+                          : "Switch voices, hear a quick sample, and keep more room for the actual conversation."}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={closeVoiceSelector}
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                      {voiceListeningEngine}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      {transcriptSourceLabel}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      Confidence {transcriptConfidenceLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                  {showVoiceOnboarding ? (
+                    <div className="space-y-5">
+                      <motion.div layout className="grid gap-3 lg:grid-cols-4 md:grid-cols-2">
+                        {voiceProfiles.map((profile) => (
+                          <VoiceProfileCard
+                            key={profile.id}
+                            theme={theme}
+                            profile={profile}
+                            selected={profile.id === selectedVoiceProfileId}
+                            previewing={previewingVoiceId === profile.id}
+                            preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
+                            onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false, completeOnboarding: false })}
+                          />
+                        ))}
+                      </motion.div>
+
+                      <div className={`rounded-[28px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/88")}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Try this voice</p>
+                            <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                              Type a line and hear it with your selected voice before you start talking.
+                            </p>
+                          </div>
+                          <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                            Saved on this device
+                          </span>
+                        </div>
+
+                        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+                          <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-white/10 bg-slate-950/45", "border-slate-200 bg-slate-50")}`}>
+                            <div className="flex items-center gap-2">
+                              <SlidersHorizontal className={`h-4 w-4 ${themed(theme, "text-cyan-100", "text-cyan-700")}`} />
+                              <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/75", "text-cyan-700")}`}>
+                                Custom Preview
+                              </p>
+                            </div>
+                            <textarea
+                              value={voicePreviewDraft}
+                              onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                              rows={2}
+                              placeholder="Explain black holes simply."
+                              className={`mt-3 min-h-[88px] w-full resize-none bg-transparent text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-3">
+                            <button
+                              type="button"
+                              onClick={previewSelectedVoiceWithDraft}
+                              className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                            >
+                              {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                              Preview Voice
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markVoiceOnboardingComplete();
+                                setVoiceSelectorOpen(false);
+                              }}
+                              className={`inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-white hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                            >
+                              Continue with {compactVoiceLabel}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="space-y-3">
+                        {voiceProfiles.map((profile) => (
+                          <VoiceListRow
+                            key={profile.id}
+                            theme={theme}
+                            profile={profile}
+                            selected={profile.id === selectedVoiceProfileId}
+                            previewing={previewingVoiceId === profile.id}
+                            preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
+                            onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: true })}
+                            onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false })}
+                          />
+                        ))}
+                      </div>
+
+                      <div className={`rounded-[26px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Quick test</p>
+                            <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                              Test the current voice with your own sentence.
+                            </p>
+                          </div>
+                          <div className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                            {compactVoiceLabel} selected
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                          <input
+                            value={voicePreviewDraft}
+                            onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                            placeholder="Explain black holes simply."
+                            className={`min-h-[52px] rounded-2xl border bg-transparent px-4 text-sm outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={previewSelectedVoiceWithDraft}
+                            className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                          >
+                            {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                            Preview
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          </div>
+        ) : null}
+      </AnimatePresence>
 
       <button
         type="button"

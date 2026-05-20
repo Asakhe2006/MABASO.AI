@@ -282,7 +282,11 @@ function buildOnnxWasmPaths(basePath = VOICE_VAD_ASSET_BASE_PATH) {
   };
 }
 
-function buildLectureAssistantVoiceTranscriptionPrompt({ lectureLabel = "", partialTranscript = "" } = {}) {
+function buildLectureAssistantVoiceTranscriptionPrompt({
+  lectureLabel = "",
+  partialTranscript = "",
+  contextHint = "",
+} = {}) {
   return compactText(
     [
       "English only transcription.",
@@ -290,6 +294,7 @@ function buildLectureAssistantVoiceTranscriptionPrompt({ lectureLabel = "", part
       "Do not auto-detect another language.",
       "Do not translate or answer the question.",
       compactText(lectureLabel) ? `Lecture label: ${compactText(lectureLabel).slice(0, 100)}.` : "",
+      compactText(contextHint) ? `Lecture topic hints: ${compactText(contextHint).slice(0, 220)}.` : "",
       compactText(partialTranscript) ? `Existing partial English transcript: ${compactText(partialTranscript).slice(-180)}.` : "",
     ].filter(Boolean).join(" "),
   );
@@ -756,6 +761,7 @@ export function useLectureAssistant({
   const voicePreviewRecognitionRef = useRef(null);
   const ttsEnabledRef = useRef(false);
   const voiceModeEnabledRef = useRef(false);
+  const voicePreviewMuteUntilRef = useRef(0);
   const sileroVadModuleRef = useRef(null);
   const sileroVadImportPromiseRef = useRef(null);
   const sileroVadInstanceRef = useRef(null);
@@ -778,6 +784,19 @@ export function useLectureAssistant({
     () => resolveVoiceProfile(voiceProfiles, selectedVoiceProfileId),
     [selectedVoiceProfileId, voiceProfiles],
   );
+  const voiceTranscriptionContextHint = useMemo(
+    () => [
+      compactText(lectureLabel),
+      compactText(summary).slice(0, 160),
+      compactText(formulas).slice(0, 120),
+      compactText(workedExamples).slice(0, 120),
+      compactText(lectureNotes).slice(0, 120),
+      compactText(lectureSlides).slice(0, 120),
+    ].filter(Boolean).join(" "),
+    [formulas, lectureLabel, lectureNotes, lectureSlides, summary, workedExamples],
+  );
+
+  const isVoicePreviewMuted = () => Date.now() < voicePreviewMuteUntilRef.current;
 
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
@@ -937,6 +956,12 @@ export function useLectureAssistant({
       return false;
     }
 
+    const previewMuteMs = Math.max(3200, previewText.length * 68);
+    voicePreviewMuteUntilRef.current = Date.now() + previewMuteMs;
+    if (isListening || voiceModeEnabledRef.current) {
+      stopVoiceChat({ message: `Previewing ${profile.name}. Voice chat paused so the sample is not transcribed.` });
+    }
+    abortControllerRef.current?.abort?.();
     stopSpeaking();
     const playbackProfile = resolveVoicePlaybackProfile(profile);
     const runId = previewVoiceRunRef.current + 1;
@@ -956,6 +981,7 @@ export function useLectureAssistant({
     };
     utterance.onend = () => {
       if (previewVoiceRunRef.current !== runId) return;
+      voicePreviewMuteUntilRef.current = Math.max(voicePreviewMuteUntilRef.current, Date.now() + 700);
       setPreviewingVoiceId("");
       setIsPreparingVoicePreview(false);
       if (!isGenerating && !isListening && !voiceModeEnabledRef.current) {
@@ -964,6 +990,7 @@ export function useLectureAssistant({
     };
     utterance.onerror = () => {
       if (previewVoiceRunRef.current !== runId) return;
+      voicePreviewMuteUntilRef.current = Date.now() + 500;
       setPreviewingVoiceId("");
       setIsPreparingVoicePreview(false);
       setStatusText("That voice preview could not play in this browser.");
@@ -1721,6 +1748,7 @@ export function useLectureAssistant({
       );
     };
     recognition.onresult = (event) => {
+      if (isVoicePreviewMuted()) return;
       let interimTranscript = "";
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
@@ -1823,6 +1851,11 @@ export function useLectureAssistant({
         setIsVoiceReconnecting(false);
         return;
       }
+      if (isVoicePreviewMuted()) {
+        setIsVoiceReconnecting(false);
+        setStatusText("Voice preview finished. Tap the mic when you want to speak.");
+        return;
+      }
       if (spokenQuestion) {
         setIsVoiceReconnecting(false);
         resetVoiceRecoveryState();
@@ -1887,6 +1920,9 @@ export function useLectureAssistant({
     captureId,
     final = false,
   } = {}) => {
+    if (isVoicePreviewMuted()) {
+      return "";
+    }
     if (!requestTranscription || !audioBlob || !audioBlob.size) {
       return compactText(voiceWhisperTranscriptRef.current);
     }
@@ -1914,6 +1950,7 @@ export function useLectureAssistant({
     formData.append("partial", final ? "false" : "true");
     formData.append("prompt", buildLectureAssistantVoiceTranscriptionPrompt({
       lectureLabel,
+      contextHint: voiceTranscriptionContextHint,
       partialTranscript: !final ? voiceWhisperTranscriptRef.current : "",
     }));
 
@@ -2118,6 +2155,7 @@ export function useLectureAssistant({
           let previewFinalTranscript = "";
           let previewInterimTranscript = "";
           previewRecognition.onresult = (event) => {
+            if (isVoicePreviewMuted()) return;
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
               const result = event.results[index];
               const transcriptText = compactText(result?.[0]?.transcript);
@@ -2250,6 +2288,10 @@ export function useLectureAssistant({
         }
 
         finalTranscript = normalizeVoiceTranscript(compactText(finalTranscript, previewTranscript));
+        if (isVoicePreviewMuted()) {
+          setStatusText("Voice preview finished. Tap the mic when you want to speak.");
+          return;
+        }
         const transcriptConfidence = estimateTranscriptConfidence(finalTranscript, previewTranscript);
         if (transcriptConfidence < 0.4 && compactText(previewTranscript).length > finalTranscript.length) {
           finalTranscript = normalizeVoiceTranscript(previewTranscript);
@@ -2442,6 +2484,10 @@ export function useLectureAssistant({
   };
 
   const startListening = ({ continueVoiceChat = false } = {}) => {
+    if (isVoicePreviewMuted()) {
+      setStatusText("Voice preview is still finishing. Wait a moment, then start talking.");
+      return;
+    }
     if (
       typeof requestTranscription === "function"
       && typeof window !== "undefined"
@@ -2492,6 +2538,10 @@ export function useLectureAssistant({
   } = {}) => {
     const resolvedInteractionMode = compactText(interactionMode, "text").toLowerCase() === "voice" ? "voice" : "text";
     const useVoiceInteraction = resolvedInteractionMode === "voice";
+    if (useVoiceInteraction && isVoicePreviewMuted()) {
+      setStatusText("Voice preview just played. Wait a moment, then speak again.");
+      return false;
+    }
     const question = compactText(
       useVoiceInteraction
         ? (normalizeVoiceTranscript(promptText) || promptText)
