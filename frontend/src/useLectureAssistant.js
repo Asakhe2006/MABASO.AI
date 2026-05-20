@@ -1,9 +1,16 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildVoicePreviewText,
+  buildVoiceProfileOptions,
+  resolveVoiceProfile,
+} from "./assistantVoiceProfiles";
 
 const ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v2";
 const LEGACY_ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v1";
 const ASSISTANT_THEME_STORAGE_KEY = "mabaso-lecture-assistant-theme";
 const ASSISTANT_TTS_STORAGE_KEY = "mabaso-lecture-assistant-tts";
+const ASSISTANT_VOICE_PROFILE_STORAGE_KEY = "mabaso-lecture-assistant-voice-profile";
+const ASSISTANT_VOICE_PREVIEW_DRAFT_STORAGE_KEY = "mabaso-lecture-assistant-voice-preview-draft";
 const MAX_SAVED_CONVERSATIONS = 120;
 const CONVERSATION_LIST_PAGE_SIZE = 30;
 const CONVERSATION_MESSAGE_PAGE_SIZE = 80;
@@ -12,6 +19,8 @@ const LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE = "English";
 const LECTURE_ASSISTANT_VOICE_TRANSCRIPTION_LANGUAGE = "en";
 const LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES = ["en-US", "en-GB"];
 const LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE = LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES[0];
+const VOICE_VAD_ASSET_BASE_PATH = "/voice-vad/";
+const VOICE_DEFAULT_PREVIEW_TEXT = "Explain black holes simply.";
 const VOICE_CHAT_RESTART_DELAY_MS = 1100;
 const VOICE_CHAT_NETWORK_RETRY_DELAY_MS = 1800;
 const VOICE_CHAT_MAX_NETWORK_RETRIES = 3;
@@ -19,19 +28,24 @@ const VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS = 15000;
 const VOICE_CHAT_SILENCE_TIMEOUT_MS = 3200;
 const VOICE_CHAT_NO_SPEECH_RETRY_DELAY_MS = 650;
 const VOICE_CHAT_MAX_NO_SPEECH_RETRIES = 3;
-const VOICE_REPLY_CHUNK_PAUSE_MS = 120;
+const VOICE_REPLY_CHUNK_PAUSE_MS = 95;
 const VOICE_STREAM_MIN_CHARS = 75;
 const VOICE_STREAM_MAX_CHARS = 170;
 const VOICE_CHAT_UNEXPECTED_END_RETRY_DELAY_MS = 900;
 const VOICE_CHAT_MAX_UNEXPECTED_END_RETRIES = 3;
-const VOICE_TRANSCRIPTION_DEBOUNCE_MS = 600;
+const VOICE_TRANSCRIPTION_DEBOUNCE_MS = 480;
 const VOICE_TRANSCRIPTION_MIN_CHUNKS = 1;
 const VOICE_TRANSCRIPTION_SILENCE_THRESHOLD = 0.014;
 const VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD = 0.028;
-const VOICE_VAD_MIN_SPEECH_MS = 700;
+const VOICE_SILERO_POSITIVE_THRESHOLD = 0.72;
+const VOICE_SILERO_NEGATIVE_THRESHOLD = 0.48;
+const VOICE_SILERO_REDEMPTION_MS = 1550;
+const VOICE_SILERO_PRE_SPEECH_PAD_MS = 240;
+const VOICE_SILERO_MIN_SPEECH_MS = 420;
+const VOICE_VAD_MIN_SPEECH_MS = 420;
 const VOICE_VAD_MIN_ACTIVE_FRAMES = 4;
 const VOICE_VAD_MIN_SILENCE_FRAMES = 8;
-const VOICE_VAD_MIN_TRANSCRIPT_CHARS = 6;
+const VOICE_VAD_MIN_TRANSCRIPT_CHARS = 3;
 const VOICE_VAD_MIN_NOISE_FLOOR = 0.004;
 const VOICE_VAD_NOISE_FLOOR_SMOOTHING = 0.1;
 const VOICE_VAD_RMS_MULTIPLIER = 2.4;
@@ -81,78 +95,15 @@ function resolveLectureAssistantVoiceRecognitionLocales() {
   return [...LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES];
 }
 
-function resolveSpeechRecognitionLocales(language = "English") {
-  const normalized = compactText(language, "English").toLowerCase();
-  const locales = [];
-  const pushLocale = (locale) => {
-    const normalizedLocale = compactText(locale);
-    if (normalizedLocale && !locales.includes(normalizedLocale)) {
-      locales.push(normalizedLocale);
-    }
-  };
-
-  if (normalized === "isizulu") {
-    pushLocale("zu-ZA");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "afrikaans") {
-    pushLocale("af-ZA");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "isixhosa") {
-    pushLocale("xh-ZA");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "sesotho") {
-    pushLocale("st-ZA");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "setswana") {
-    pushLocale("tn-ZA");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "french") {
-    pushLocale("fr-FR");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-  if (normalized === "portuguese") {
-    pushLocale("pt-PT");
-    pushLocale("en-ZA");
-    pushLocale("en-US");
-    return locales;
-  }
-
-  pushLocale("en-ZA");
-  pushLocale("en-GB");
-  pushLocale("en-US");
-  return locales;
+function resolveSpeechRecognitionLocales() {
+  return [...LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES];
 }
 
-function resolveSpeechLocale(language = "English") {
-  return resolveSpeechRecognitionLocales(language)[0] || "en-ZA";
+function resolveSpeechLocale() {
+  return resolveSpeechRecognitionLocales()[0] || LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE;
 }
 
-function resolveSpeechLanguageCode(language = "English") {
-  const normalized = compactText(language, "English").toLowerCase();
-  if (normalized === "isizulu") return "zu";
-  if (normalized === "afrikaans") return "af";
-  if (normalized === "isixhosa") return "xh";
-  if (normalized === "sesotho") return "st";
-  if (normalized === "setswana") return "tn";
-  if (normalized === "french") return "fr";
-  if (normalized === "portuguese") return "pt";
+function resolveSpeechLanguageCode() {
   return "en";
 }
 
@@ -323,6 +274,14 @@ function pickSpeechSynthesisVoice(locale = "", voices = [], { englishOnly = fals
   );
 }
 
+function buildOnnxWasmPaths(basePath = VOICE_VAD_ASSET_BASE_PATH) {
+  const normalizedBasePath = compactText(basePath, VOICE_VAD_ASSET_BASE_PATH).replace(/\/?$/, "/");
+  return {
+    mjs: `${normalizedBasePath}ort-wasm-simd-threaded.mjs`,
+    wasm: `${normalizedBasePath}ort-wasm-simd-threaded.wasm`,
+  };
+}
+
 function buildLectureAssistantVoiceTranscriptionPrompt({ lectureLabel = "", partialTranscript = "" } = {}) {
   return compactText(
     [
@@ -362,9 +321,10 @@ function buildSpeechChunks(text = "", maxChars = 320) {
   return chunks;
 }
 
-function extractReadySpeechChunks(buffer = "", { flush = false } = {}) {
+function extractReadySpeechChunks(buffer = "", { flush = false, maxChars = VOICE_STREAM_MAX_CHARS } = {}) {
   let remaining = String(buffer || "").replace(/\s+/g, " ").trim();
   const ready = [];
+  const safeMaxChars = Math.max(VOICE_STREAM_MIN_CHARS, Number(maxChars) || VOICE_STREAM_MAX_CHARS);
 
   while (remaining) {
     const punctuationMatch = remaining.match(/^([\s\S]*?[.!?](?=\s|$))/);
@@ -374,8 +334,8 @@ function extractReadySpeechChunks(buffer = "", { flush = false } = {}) {
       continue;
     }
 
-    if (remaining.length >= VOICE_STREAM_MAX_CHARS) {
-      const candidate = remaining.slice(0, VOICE_STREAM_MAX_CHARS);
+    if (remaining.length >= safeMaxChars) {
+      const candidate = remaining.slice(0, safeMaxChars);
       const splitIndex = Math.max(
         candidate.lastIndexOf(". "),
         candidate.lastIndexOf("? "),
@@ -385,7 +345,7 @@ function extractReadySpeechChunks(buffer = "", { flush = false } = {}) {
         candidate.lastIndexOf(": "),
         candidate.lastIndexOf(" "),
       );
-      const boundary = splitIndex >= VOICE_STREAM_MIN_CHARS ? splitIndex + 1 : VOICE_STREAM_MAX_CHARS;
+      const boundary = splitIndex >= VOICE_STREAM_MIN_CHARS ? splitIndex + 1 : safeMaxChars;
       ready.push(candidate.slice(0, boundary).trim());
       remaining = remaining.slice(boundary).trimStart();
       continue;
@@ -731,6 +691,14 @@ export function useLectureAssistant({
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [totalConversationCount, setTotalConversationCount] = useState(0);
+  const [speechVoices, setSpeechVoices] = useState([]);
+  const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState("wave");
+  const [voicePreviewDraft, setVoicePreviewDraft] = useState(VOICE_DEFAULT_PREVIEW_TEXT);
+  const [previewingVoiceId, setPreviewingVoiceId] = useState("");
+  const [isPreparingVoicePreview, setIsPreparingVoicePreview] = useState(false);
+  const [voiceListeningEngine, setVoiceListeningEngine] = useState("Hybrid English voice mode");
+  const [voiceTranscriptConfidence, setVoiceTranscriptConfidence] = useState(0);
+  const [voiceTranscriptSource, setVoiceTranscriptSource] = useState("idle");
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const remoteSyncAvailable = Boolean(
     compactText(authEmail)
@@ -788,6 +756,12 @@ export function useLectureAssistant({
   const voicePreviewRecognitionRef = useRef(null);
   const ttsEnabledRef = useRef(false);
   const voiceModeEnabledRef = useRef(false);
+  const sileroVadModuleRef = useRef(null);
+  const sileroVadImportPromiseRef = useRef(null);
+  const sileroVadInstanceRef = useRef(null);
+  const sileroVadEnabledRef = useRef(false);
+  const previewVoiceRunRef = useRef(0);
+  const selectedVoiceProfileRef = useRef(null);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0] || null,
@@ -799,6 +773,11 @@ export function useLectureAssistant({
     [conversations],
   );
   const canLoadMoreConversations = remoteSyncAvailable && serverConversationCount < totalConversationCount;
+  const voiceProfiles = useMemo(() => buildVoiceProfileOptions(speechVoices), [speechVoices]);
+  const selectedVoiceProfile = useMemo(
+    () => resolveVoiceProfile(voiceProfiles, selectedVoiceProfileId),
+    [selectedVoiceProfileId, voiceProfiles],
+  );
 
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
@@ -806,6 +785,7 @@ export function useLectureAssistant({
       window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
     voiceReplyRunRef.current += 1;
+    previewVoiceRunRef.current += 1;
     voiceSpeechQueueRef.current = [];
     voiceSpeechBufferRef.current = "";
     voiceSpeechPlaybackActiveRef.current = false;
@@ -813,7 +793,59 @@ export function useLectureAssistant({
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    setPreviewingVoiceId("");
+    setIsPreparingVoicePreview(false);
     setIsSpeaking(false);
+  };
+
+  const resolveSpeechSynthesisVoiceForProfile = (profile = selectedVoiceProfileRef.current) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return null;
+    const browserVoices = window.speechSynthesis.getVoices?.() || [];
+    const normalizedVoiceUri = compactText(profile?.voiceURI);
+    if (normalizedVoiceUri) {
+      const exactMatch = browserVoices.find((voice) => compactText(voice?.voiceURI) === normalizedVoiceUri);
+      if (exactMatch) return exactMatch;
+    }
+    return pickSpeechSynthesisVoice(
+      compactText(profile?.voiceLang, compactText(profile?.locale, LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE)),
+      browserVoices,
+      { englishOnly: true },
+    ) || null;
+  };
+
+  const resolveVoicePlaybackProfile = (profile = selectedVoiceProfileRef.current) => ({
+    locale: compactText(profile?.voiceLang, compactText(profile?.locale, LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE)),
+    voice: resolveSpeechSynthesisVoiceForProfile(profile),
+    rate: Number(profile?.rate) || 1,
+    pitch: Number(profile?.pitch) || 1,
+    chunkPauseMs: Number(profile?.chunkPauseMs) || VOICE_REPLY_CHUNK_PAUSE_MS,
+    streamMaxChars: Number(profile?.streamMaxChars) || VOICE_STREAM_MAX_CHARS,
+  });
+
+  const loadSileroVadModule = async () => {
+    if (sileroVadModuleRef.current) return sileroVadModuleRef.current;
+    if (sileroVadImportPromiseRef.current) return sileroVadImportPromiseRef.current;
+    sileroVadImportPromiseRef.current = import("@ricky0123/vad-web")
+      .then((module) => {
+        sileroVadModuleRef.current = module;
+        return module;
+      })
+      .finally(() => {
+        sileroVadImportPromiseRef.current = null;
+      });
+    return sileroVadImportPromiseRef.current;
+  };
+
+  const destroySileroVad = async () => {
+    sileroVadEnabledRef.current = false;
+    const activeVad = sileroVadInstanceRef.current;
+    sileroVadInstanceRef.current = null;
+    if (!activeVad) return;
+    try {
+      await activeVad.destroy?.();
+    } catch {
+      // Ignore Silero VAD teardown failures.
+    }
   };
 
   const stopPreviewRecognition = () => {
@@ -835,6 +867,7 @@ export function useLectureAssistant({
       window.cancelAnimationFrame?.(voiceAnimationFrameRef.current);
       voiceAnimationFrameRef.current = 0;
     }
+    void destroySileroVad();
     stopPreviewRecognition();
     if (abortTranscription && voiceTranscriptionAbortRef.current) {
       try {
@@ -886,6 +919,77 @@ export function useLectureAssistant({
       return nextValue;
     });
   };
+
+  const previewVoiceProfile = ({
+    profileId = selectedVoiceProfileRef.current?.id,
+    customText = "",
+    updateDraft = false,
+  } = {}) => {
+    const profile = resolveVoiceProfile(voiceProfiles, profileId);
+    if (!profile) return false;
+    const previewText = compactText(buildSpeechFriendlyText(buildVoicePreviewText(profile, customText)));
+    if (!previewText) return false;
+    if (updateDraft) {
+      setVoicePreviewDraft(compactText(customText, previewText));
+    }
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setStatusText("Voice previews need browser speech synthesis support.");
+      return false;
+    }
+
+    stopSpeaking();
+    const playbackProfile = resolveVoicePlaybackProfile(profile);
+    const runId = previewVoiceRunRef.current + 1;
+    previewVoiceRunRef.current = runId;
+    setPreviewingVoiceId(profile.id);
+    setIsPreparingVoicePreview(true);
+
+    const utterance = new window.SpeechSynthesisUtterance(previewText);
+    utterance.lang = compactText(playbackProfile.locale, LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE);
+    utterance.voice = playbackProfile.voice;
+    utterance.rate = playbackProfile.rate;
+    utterance.pitch = playbackProfile.pitch;
+    utterance.onstart = () => {
+      if (previewVoiceRunRef.current !== runId) return;
+      setIsPreparingVoicePreview(false);
+      setStatusText(`Previewing ${profile.name}.`);
+    };
+    utterance.onend = () => {
+      if (previewVoiceRunRef.current !== runId) return;
+      setPreviewingVoiceId("");
+      setIsPreparingVoicePreview(false);
+      if (!isGenerating && !isListening && !voiceModeEnabledRef.current) {
+        setStatusText("Voice preview finished.");
+      }
+    };
+    utterance.onerror = () => {
+      if (previewVoiceRunRef.current !== runId) return;
+      setPreviewingVoiceId("");
+      setIsPreparingVoicePreview(false);
+      setStatusText("That voice preview could not play in this browser.");
+    };
+
+    window.speechSynthesis.speak(utterance);
+    return true;
+  };
+
+  const selectVoiceProfile = (profileId, { preview = true } = {}) => {
+    const profile = resolveVoiceProfile(voiceProfiles, profileId);
+    if (!profile) return false;
+    setSelectedVoiceProfileId(profile.id);
+    if (preview) {
+      window.setTimeout(() => {
+        previewVoiceProfile({ profileId: profile.id });
+      }, 40);
+    }
+    return true;
+  };
+
+  const previewSelectedVoiceWithDraft = () => previewVoiceProfile({
+    profileId: selectedVoiceProfileRef.current?.id,
+    customText: voicePreviewDraft,
+    updateDraft: true,
+  });
 
   const applyVoiceModeEnabled = (nextValue) => {
     const resolved = Boolean(nextValue);
@@ -966,7 +1070,7 @@ export function useLectureAssistant({
     });
   };
 
-  const playNextVoiceSpeechChunk = (runId, preferredLocale, selectedVoice) => {
+  const playNextVoiceSpeechChunk = (runId, playbackProfile) => {
     if (voiceReplyRunRef.current !== runId) return;
     if (voiceSpeechPlaybackActiveRef.current) return;
     const nextChunk = voiceSpeechQueueRef.current.shift();
@@ -976,10 +1080,10 @@ export function useLectureAssistant({
     }
     voiceSpeechPlaybackActiveRef.current = true;
     const utterance = new window.SpeechSynthesisUtterance(nextChunk);
-    utterance.lang = preferredLocale;
-    utterance.voice = selectedVoice;
-    utterance.rate = 1.03;
-    utterance.pitch = 1;
+    utterance.lang = compactText(playbackProfile?.locale, LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE);
+    utterance.voice = playbackProfile?.voice || null;
+    utterance.rate = Number(playbackProfile?.rate) || 1.03;
+    utterance.pitch = Number(playbackProfile?.pitch) || 1;
     utterance.onstart = () => {
       if (voiceReplyRunRef.current !== runId) return;
       setIsSpeaking(true);
@@ -993,10 +1097,10 @@ export function useLectureAssistant({
         ? 90
         : /[,;:]["']?$/.test(nextChunk)
           ? 60
-          : VOICE_REPLY_CHUNK_PAUSE_MS;
+          : Number(playbackProfile?.chunkPauseMs) || VOICE_REPLY_CHUNK_PAUSE_MS;
       voiceReplyChunkTimerRef.current = window.setTimeout(() => {
         voiceReplyChunkTimerRef.current = 0;
-        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+        playNextVoiceSpeechChunk(runId, playbackProfile);
       }, trailingPauseMs);
     };
     utterance.onerror = () => {
@@ -1011,11 +1115,11 @@ export function useLectureAssistant({
     window.speechSynthesis.speak(utterance);
   };
 
-  const queueVoiceSpeechFromText = (textFragment = "", { flush = false } = {}) => {
+  const queueVoiceSpeechFromText = (textFragment = "", { flush = false, maxChars = VOICE_STREAM_MAX_CHARS } = {}) => {
     const fragment = String(textFragment || "");
     if (!fragment && !flush) return;
     voiceSpeechBufferRef.current = `${voiceSpeechBufferRef.current}${fragment}`;
-    const { ready, remaining } = extractReadySpeechChunks(voiceSpeechBufferRef.current, { flush });
+    const { ready, remaining } = extractReadySpeechChunks(voiceSpeechBufferRef.current, { flush, maxChars });
     voiceSpeechBufferRef.current = remaining;
     if (ready.length) {
       voiceSpeechQueueRef.current.push(...ready.map((chunk) => buildSpeechFriendlyText(chunk)).filter(Boolean));
@@ -1027,12 +1131,7 @@ export function useLectureAssistant({
       return false;
     }
     stopSpeaking();
-    const preferredLocale = LECTURE_ASSISTANT_VOICE_PRIMARY_LOCALE;
-    const selectedVoice = pickSpeechSynthesisVoice(
-      preferredLocale,
-      window.speechSynthesis.getVoices?.() || [],
-      { englishOnly: true },
-    ) || null;
+    const playbackProfile = resolveVoicePlaybackProfile();
     const runId = voiceReplyRunRef.current + 1;
     voiceReplyRunRef.current = runId;
     voiceSpeechQueueRef.current = [];
@@ -1041,16 +1140,20 @@ export function useLectureAssistant({
     voiceSpeechStreamDoneRef.current = false;
     return {
       runId,
-      preferredLocale,
-      selectedVoice,
       enqueueText: (fragment = "", options = {}) => {
-        queueVoiceSpeechFromText(fragment, options);
-        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+        queueVoiceSpeechFromText(fragment, {
+          ...options,
+          maxChars: Number(playbackProfile?.streamMaxChars) || VOICE_STREAM_MAX_CHARS,
+        });
+        playNextVoiceSpeechChunk(runId, playbackProfile);
       },
       markDone: () => {
         voiceSpeechStreamDoneRef.current = true;
-        queueVoiceSpeechFromText("", { flush: true });
-        playNextVoiceSpeechChunk(runId, preferredLocale, selectedVoice);
+        queueVoiceSpeechFromText("", {
+          flush: true,
+          maxChars: Number(playbackProfile?.streamMaxChars) || VOICE_STREAM_MAX_CHARS,
+        });
+        playNextVoiceSpeechChunk(runId, playbackProfile);
       },
     };
   };
@@ -1107,6 +1210,9 @@ export function useLectureAssistant({
     resetVoiceRecoveryState({ resetLocale: true });
     syncRecognitionLocales({ resetIndex: true });
     setIsVoiceReconnecting(false);
+    setVoiceTranscriptConfidence(0);
+    setVoiceTranscriptSource("idle");
+    setVoiceListeningEngine("Hybrid English voice mode");
     applyVoiceModeEnabled(false);
     stopListening();
     stopSpeaking();
@@ -1552,6 +1658,9 @@ export function useLectureAssistant({
     if (!ttsEnabledRef.current) {
       setVoiceRepliesEnabled(true);
     }
+    setVoiceListeningEngine("Browser SpeechRecognition only");
+    setVoiceTranscriptSource("idle");
+    setVoiceTranscriptConfidence(0);
     applyVoiceModeEnabled(true);
     if (!continueVoiceChat) {
       resetVoiceRecoveryState({ resetLocale: true });
@@ -1621,6 +1730,8 @@ export function useLectureAssistant({
       }
       latestTranscript = `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim();
       resetVoiceRecoveryState();
+      setVoiceTranscriptSource("browser");
+      setVoiceTranscriptConfidence(estimateTranscriptConfidence(latestTranscript));
       setDraft(latestTranscript);
       scheduleListeningTimeout(
         VOICE_CHAT_SILENCE_TIMEOUT_MS,
@@ -1820,6 +1931,13 @@ export function useLectureAssistant({
       if (text) {
         voiceWhisperTranscriptRef.current = text;
         voiceHasWhisperTranscriptRef.current = true;
+        const transcriptConfidence = estimateTranscriptConfidence(text, voicePreviewTranscriptRef.current);
+        setVoiceTranscriptConfidence(transcriptConfidence);
+        setVoiceTranscriptSource(
+          compactText(voicePreviewTranscriptRef.current) && normalizeVoiceTranscript(voicePreviewTranscriptRef.current) !== text
+            ? "hybrid"
+            : "whisper",
+        );
         if (captureId === voiceCaptureRunRef.current) {
           setDraft(text);
           if (!final) {
@@ -1901,6 +2019,9 @@ export function useLectureAssistant({
     voiceHasWhisperTranscriptRef.current = false;
     voiceCaptureFinalizingRef.current = false;
     voiceLastWhisperRequestAtRef.current = 0;
+    setVoiceTranscriptConfidence(0);
+    setVoiceTranscriptSource("idle");
+    setVoiceListeningEngine("Groq Whisper + browser live preview");
 
     const schedulePartialWhisperTranscription = async ({ force = false } = {}) => {
       if (captureId !== voiceCaptureRunRef.current) return "";
@@ -1987,22 +2108,6 @@ export function useLectureAssistant({
         : new window.MediaRecorder(microphoneStream);
       mediaRecorderRef.current = recorder;
 
-      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-      if (AudioContextCtor) {
-        try {
-          const audioContext = new AudioContextCtor({ sampleRate: 16000 });
-          const analyser = audioContext.createAnalyser();
-          analyser.fftSize = 2048;
-          const sourceNode = audioContext.createMediaStreamSource(microphoneStream);
-          sourceNode.connect(analyser);
-          voiceAudioContextRef.current = audioContext;
-          voiceAnalyserRef.current = analyser;
-        } catch {
-          voiceAudioContextRef.current = null;
-          voiceAnalyserRef.current = null;
-        }
-      }
-
       const PreviewRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (PreviewRecognitionCtor) {
         try {
@@ -2023,6 +2128,8 @@ export function useLectureAssistant({
             const previewText = normalizeVoiceTranscript(`${previewFinalTranscript} ${previewInterimTranscript}`);
             voicePreviewTranscriptRef.current = previewText;
             if (!voiceHasWhisperTranscriptRef.current && previewText) {
+              setVoiceTranscriptSource("browser");
+              setVoiceTranscriptConfidence(estimateTranscriptConfidence(previewText));
               setDraft(previewText);
               setStatusText("Listening in English... partial transcript updating live.");
             }
@@ -2047,6 +2154,70 @@ export function useLectureAssistant({
         } catch {
           voicePreviewRecognitionRef.current = null;
         }
+      }
+
+      let sileroVadStarted = false;
+      try {
+        const vadModule = await loadSileroVadModule();
+        if (captureId === voiceCaptureRunRef.current && vadModule?.MicVAD?.new) {
+          const vadInstance = await vadModule.MicVAD.new({
+            model: "v5",
+            baseAssetPath: VOICE_VAD_ASSET_BASE_PATH,
+            onnxWASMBasePath: buildOnnxWasmPaths(),
+            getStream: async () => microphoneStream,
+            pauseStream: async () => {},
+            resumeStream: async () => microphoneStream,
+            positiveSpeechThreshold: VOICE_SILERO_POSITIVE_THRESHOLD,
+            negativeSpeechThreshold: VOICE_SILERO_NEGATIVE_THRESHOLD,
+            redemptionMs: VOICE_SILERO_REDEMPTION_MS,
+            preSpeechPadMs: VOICE_SILERO_PRE_SPEECH_PAD_MS,
+            minSpeechMs: VOICE_SILERO_MIN_SPEECH_MS,
+            submitUserSpeechOnPause: true,
+            onSpeechStart: () => {
+              if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+              clearVoiceListeningTimer();
+              setVoiceTranscriptSource((current) => current === "idle" ? "browser" : current);
+              setStatusText("Speech detected. Groq Whisper is validating the transcript...");
+            },
+            onSpeechRealStart: () => {
+              if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+              setStatusText("Listening in English with Groq Whisper and Silero VAD...");
+            },
+            onVADMisfire: () => {
+              if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+              const candidateTranscript = compactText(
+                voiceWhisperTranscriptRef.current,
+                voicePreviewTranscriptRef.current,
+              );
+              if (!candidateTranscript) {
+                setStatusText("Small background noise ignored. Still listening in English...");
+              }
+              clearVoiceListeningTimer();
+              if (typeof window !== "undefined") {
+                voiceListeningTimerRef.current = window.setTimeout(() => {
+                  if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+                  void finalizeWhisperTurn("silence_timeout");
+                }, compactText(candidateTranscript) ? 900 : VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS);
+              }
+            },
+            onSpeechEnd: async () => {
+              if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+              await schedulePartialWhisperTranscription({ force: false });
+              void finalizeWhisperTurn("silence_timeout");
+            },
+          });
+          if (captureId === voiceCaptureRunRef.current) {
+            sileroVadInstanceRef.current = vadInstance;
+            sileroVadEnabledRef.current = true;
+            sileroVadStarted = true;
+            setVoiceListeningEngine("Silero VAD + Groq Whisper + browser preview");
+          } else {
+            await vadInstance.destroy?.();
+          }
+        }
+      } catch {
+        sileroVadStarted = false;
+        sileroVadEnabledRef.current = false;
       }
 
       recorder.ondataavailable = (event) => {
@@ -2103,131 +2274,168 @@ export function useLectureAssistant({
         }
 
         resetVoiceRecoveryState();
+        setVoiceTranscriptConfidence(transcriptConfidence);
+        setVoiceTranscriptSource(
+          compactText(previewTranscript) && normalizeVoiceTranscript(previewTranscript) !== finalTranscript
+            ? "hybrid"
+            : "whisper",
+        );
         setDraft(finalTranscript);
         setStatusText(transcriptConfidence < 0.55 ? "Sending your voice question with low-confidence transcription..." : "Sending your voice question...");
         await sendMessage({ promptText: finalTranscript, interactionMode: "voice" });
       };
 
-      recorder.start(650);
+      recorder.start(520);
       setIsListening(true);
       setStatusText(continueVoiceChat
-        ? "Listening in English with Groq Whisper for your next question..."
-        : "Voice chat is on in English. Speak your question now.");
+        ? `Listening in English with ${sileroVadStarted ? "Silero VAD and " : ""}Groq Whisper for your next question...`
+        : `Voice chat is on in English. ${sileroVadStarted ? "Silero VAD is active. " : ""}Speak your question now.`);
 
-      const listenStartedAt = Date.now();
-      let lastSpeechDetectedAt = listenStartedAt;
-      let speechDetected = false;
-      let speechStartedAt = 0;
-      let activeFrameCount = 0;
-      let silenceFrameCount = 0;
-      let noiseFloorRms = VOICE_VAD_MIN_NOISE_FLOOR;
-      let noiseFloorPeak = VOICE_TRANSCRIPTION_SILENCE_THRESHOLD;
-      const audioSampleBuffer = new Uint8Array(2048);
-
-      const monitorSilence = () => {
-        if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
-        const analyser = voiceAnalyserRef.current;
-        const now = Date.now();
-        if (analyser) {
-          analyser.getByteTimeDomainData(audioSampleBuffer);
-          let sumSquares = 0;
-          let peak = 0;
-          for (let index = 0; index < audioSampleBuffer.length; index += 1) {
-            const normalized = (audioSampleBuffer[index] - 128) / 128;
-            const magnitude = Math.abs(normalized);
-            sumSquares += normalized * normalized;
-            if (magnitude > peak) peak = magnitude;
-          }
-          const rms = Math.sqrt(sumSquares / audioSampleBuffer.length);
-          const dynamicRmsThreshold = Math.max(
-            VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
-            VOICE_VAD_MIN_NOISE_FLOOR,
-            noiseFloorRms * VOICE_VAD_RMS_MULTIPLIER,
-          );
-          const dynamicPeakThreshold = Math.max(
-            VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
-            noiseFloorPeak * VOICE_VAD_PEAK_MULTIPLIER,
-          );
-          const isSpeechFrame = rms >= dynamicRmsThreshold || peak >= dynamicPeakThreshold;
-          if (!isSpeechFrame) {
-            noiseFloorRms = clampNumber(
-              noiseFloorRms + (rms - noiseFloorRms) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
-              VOICE_VAD_MIN_NOISE_FLOOR,
-              VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
-            );
-            noiseFloorPeak = clampNumber(
-              noiseFloorPeak + (peak - noiseFloorPeak) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
-              VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
-              VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
-            );
-          }
-
-          if (isSpeechFrame) {
-            activeFrameCount += 1;
-            silenceFrameCount = 0;
-            if (activeFrameCount >= VOICE_VAD_MIN_ACTIVE_FRAMES) {
-              if (!speechDetected) {
-                speechStartedAt = now;
-                setStatusText("Listening in English with Groq Whisper...");
-              }
-              speechDetected = true;
-              lastSpeechDetectedAt = now;
-            }
-          } else {
-            activeFrameCount = 0;
-            if (speechDetected) {
-              silenceFrameCount += 1;
-            }
-          }
-        }
-
-        const candidateTranscript = compactText(
-          voiceWhisperTranscriptRef.current,
-          voicePreviewTranscriptRef.current,
-        );
-        const pauseWindowMs = resolveAdaptiveVoicePauseMs({
-          transcript: candidateTranscript,
-          previewTranscript: voicePreviewTranscriptRef.current,
-          speechDetected,
-        });
-        if (!speechDetected && now - listenStartedAt >= VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS) {
+      clearVoiceListeningTimer();
+      if (typeof window !== "undefined") {
+        voiceListeningTimerRef.current = window.setTimeout(() => {
+          if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
           void finalizeWhisperTurn("silence_timeout");
-          return;
+        }, VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS);
+      }
+
+      if (!sileroVadStarted) {
+        setVoiceListeningEngine("Groq Whisper + browser preview + fallback VAD");
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextCtor) {
+          try {
+            const audioContext = new AudioContextCtor({ sampleRate: 16000 });
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            const sourceNode = audioContext.createMediaStreamSource(microphoneStream);
+            sourceNode.connect(analyser);
+            voiceAudioContextRef.current = audioContext;
+            voiceAnalyserRef.current = analyser;
+          } catch {
+            voiceAudioContextRef.current = null;
+            voiceAnalyserRef.current = null;
+          }
         }
-        if (
-          speechDetected
-          && silenceFrameCount >= VOICE_VAD_MIN_SILENCE_FRAMES
-          && now - lastSpeechDetectedAt >= pauseWindowMs
-        ) {
-          const speechDurationMs = speechStartedAt ? now - speechStartedAt : 0;
-          if (speechDurationMs < VOICE_VAD_MIN_SPEECH_MS && candidateTranscript.length < VOICE_VAD_MIN_TRANSCRIPT_CHARS) {
-            speechDetected = false;
-            speechStartedAt = 0;
-            activeFrameCount = 0;
-            silenceFrameCount = 0;
-            lastSpeechDetectedAt = now;
-            voiceRecorderChunksRef.current = [];
-            voiceRecorderChunkCountRef.current = 0;
-            voiceLastRequestedChunkCountRef.current = 0;
-            voiceWhisperTranscriptRef.current = "";
-            voicePreviewTranscriptRef.current = "";
-            voiceHasWhisperTranscriptRef.current = false;
-            setDraft("");
-            setStatusText("Small background noise ignored. Still listening in English...");
-            voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+
+        const listenStartedAt = Date.now();
+        let lastSpeechDetectedAt = listenStartedAt;
+        let speechDetected = false;
+        let speechStartedAt = 0;
+        let activeFrameCount = 0;
+        let silenceFrameCount = 0;
+        let noiseFloorRms = VOICE_VAD_MIN_NOISE_FLOOR;
+        let noiseFloorPeak = VOICE_TRANSCRIPTION_SILENCE_THRESHOLD;
+        const audioSampleBuffer = new Uint8Array(2048);
+
+        const monitorSilence = () => {
+          if (captureId !== voiceCaptureRunRef.current || voiceCaptureFinalizingRef.current) return;
+          const analyser = voiceAnalyserRef.current;
+          const now = Date.now();
+          if (analyser) {
+            analyser.getByteTimeDomainData(audioSampleBuffer);
+            let sumSquares = 0;
+            let peak = 0;
+            for (let index = 0; index < audioSampleBuffer.length; index += 1) {
+              const normalized = (audioSampleBuffer[index] - 128) / 128;
+              const magnitude = Math.abs(normalized);
+              sumSquares += normalized * normalized;
+              if (magnitude > peak) peak = magnitude;
+            }
+            const rms = Math.sqrt(sumSquares / audioSampleBuffer.length);
+            const dynamicRmsThreshold = Math.max(
+              VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+              VOICE_VAD_MIN_NOISE_FLOOR,
+              noiseFloorRms * VOICE_VAD_RMS_MULTIPLIER,
+            );
+            const dynamicPeakThreshold = Math.max(
+              VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
+              noiseFloorPeak * VOICE_VAD_PEAK_MULTIPLIER,
+            );
+            const isSpeechFrame = rms >= dynamicRmsThreshold || peak >= dynamicPeakThreshold;
+            if (!isSpeechFrame) {
+              noiseFloorRms = clampNumber(
+                noiseFloorRms + (rms - noiseFloorRms) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+                VOICE_VAD_MIN_NOISE_FLOOR,
+                VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+              );
+              noiseFloorPeak = clampNumber(
+                noiseFloorPeak + (peak - noiseFloorPeak) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+                VOICE_TRANSCRIPTION_SILENCE_THRESHOLD,
+                VOICE_TRANSCRIPTION_ACTIVITY_THRESHOLD,
+              );
+            }
+
+            if (isSpeechFrame) {
+              activeFrameCount += 1;
+              silenceFrameCount = 0;
+              if (activeFrameCount >= VOICE_VAD_MIN_ACTIVE_FRAMES) {
+                if (!speechDetected) {
+                  speechStartedAt = now;
+                  clearVoiceListeningTimer();
+                  setStatusText("Listening in English with Groq Whisper...");
+                }
+                speechDetected = true;
+                lastSpeechDetectedAt = now;
+              }
+            } else {
+              activeFrameCount = 0;
+              if (speechDetected) {
+                silenceFrameCount += 1;
+              }
+            }
+          }
+
+          const candidateTranscript = compactText(
+            voiceWhisperTranscriptRef.current,
+            voicePreviewTranscriptRef.current,
+          );
+          const pauseWindowMs = resolveAdaptiveVoicePauseMs({
+            transcript: candidateTranscript,
+            previewTranscript: voicePreviewTranscriptRef.current,
+            speechDetected,
+          });
+          if (!speechDetected && now - listenStartedAt >= VOICE_CHAT_INITIAL_IDLE_TIMEOUT_MS) {
+            void finalizeWhisperTurn("silence_timeout");
             return;
           }
-          void finalizeWhisperTurn("silence_timeout");
-          return;
-        }
-        voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
-      };
+          if (
+            speechDetected
+            && silenceFrameCount >= VOICE_VAD_MIN_SILENCE_FRAMES
+            && now - lastSpeechDetectedAt >= pauseWindowMs
+          ) {
+            const speechDurationMs = speechStartedAt ? now - speechStartedAt : 0;
+            if (speechDurationMs < VOICE_VAD_MIN_SPEECH_MS && candidateTranscript.length < VOICE_VAD_MIN_TRANSCRIPT_CHARS) {
+              speechDetected = false;
+              speechStartedAt = 0;
+              activeFrameCount = 0;
+              silenceFrameCount = 0;
+              lastSpeechDetectedAt = now;
+              voiceRecorderChunksRef.current = [];
+              voiceRecorderChunkCountRef.current = 0;
+              voiceLastRequestedChunkCountRef.current = 0;
+              voiceWhisperTranscriptRef.current = "";
+              voicePreviewTranscriptRef.current = "";
+              voiceHasWhisperTranscriptRef.current = false;
+              setVoiceTranscriptConfidence(0);
+              setVoiceTranscriptSource("idle");
+              setDraft("");
+              setStatusText("Small background noise ignored. Still listening in English...");
+              voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+              return;
+            }
+            void finalizeWhisperTurn("silence_timeout");
+            return;
+          }
+          voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+        };
 
-      voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+        voiceAnimationFrameRef.current = window.requestAnimationFrame(monitorSilence);
+      }
     } catch (error) {
       clearWhisperCaptureArtifacts();
       setIsListening(false);
       setIsVoiceReconnecting(false);
+      setVoiceListeningEngine("Browser SpeechRecognition fallback");
       setStatusText(`${getMicrophoneAccessErrorMessage(error)} Falling back to browser speech recognition if available.`);
       startBrowserListening({ continueVoiceChat });
     }
@@ -2563,6 +2771,8 @@ export function useLectureAssistant({
       });
       setTheme(compactText(window.localStorage.getItem(ASSISTANT_THEME_STORAGE_KEY), "dark"));
       const storedVoiceRepliesEnabled = window.localStorage.getItem(ASSISTANT_TTS_STORAGE_KEY) === "true";
+      setSelectedVoiceProfileId(compactText(window.localStorage.getItem(ASSISTANT_VOICE_PROFILE_STORAGE_KEY), "wave"));
+      setVoicePreviewDraft(compactText(window.localStorage.getItem(ASSISTANT_VOICE_PREVIEW_DRAFT_STORAGE_KEY), VOICE_DEFAULT_PREVIEW_TEXT));
       ttsEnabledRef.current = storedVoiceRepliesEnabled;
       setTtsEnabled(storedVoiceRepliesEnabled);
     } catch {
@@ -2621,6 +2831,16 @@ export function useLectureAssistant({
   }, [ttsEnabled]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ASSISTANT_VOICE_PROFILE_STORAGE_KEY, compactText(selectedVoiceProfileId, "wave"));
+  }, [selectedVoiceProfileId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ASSISTANT_VOICE_PREVIEW_DRAFT_STORAGE_KEY, compactText(voicePreviewDraft, VOICE_DEFAULT_PREVIEW_TEXT));
+  }, [voicePreviewDraft]);
+
+  useEffect(() => {
     ttsEnabledRef.current = ttsEnabled;
   }, [ttsEnabled]);
 
@@ -2629,12 +2849,29 @@ export function useLectureAssistant({
   }, [voiceModeEnabled]);
 
   useEffect(() => {
+    selectedVoiceProfileRef.current = selectedVoiceProfile;
+  }, [selectedVoiceProfile]);
+
+  useEffect(() => {
+    if (!voiceProfiles.length || selectedVoiceProfile) return;
+    setSelectedVoiceProfileId(voiceProfiles[0].id);
+  }, [selectedVoiceProfile, voiceProfiles]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
-    try {
-      window.speechSynthesis.getVoices();
-    } catch {
-      // Ignore speech-synthesis warmup failures.
-    }
+    const hydrateSpeechVoices = () => {
+      try {
+        const nextVoices = window.speechSynthesis.getVoices?.() || [];
+        setSpeechVoices(nextVoices);
+      } catch {
+        setSpeechVoices([]);
+      }
+    };
+    hydrateSpeechVoices();
+    window.speechSynthesis.addEventListener?.("voiceschanged", hydrateSpeechVoices);
+    return () => {
+      window.speechSynthesis.removeEventListener?.("voiceschanged", hydrateSpeechVoices);
+    };
   }, []);
 
   useEffect(() => {
@@ -2749,6 +2986,7 @@ export function useLectureAssistant({
     isSpeaking,
     isSyncingConversation,
     isVoiceReconnecting,
+    isPreparingVoicePreview,
     voiceModeEnabled,
     lectureLabel: compactText(lectureLabel),
     loadMoreConversations,
@@ -2759,16 +2997,23 @@ export function useLectureAssistant({
     openPanel,
     openMobileSidebar: () => setMobileSidebarOpen(true),
     providerLabel: formatProviderLabel(activeProvider || messages[messages.length - 1]?.provider),
+    previewingVoiceId,
+    previewSelectedVoiceWithDraft,
+    previewVoiceProfile,
     regenerateLastResponse,
     renameConversation,
     searchQuery,
+    selectedVoiceProfile,
+    selectedVoiceProfileId,
     sendMessage,
+    selectVoiceProfile,
     setDraft,
     setMobileSidebarOpen,
     setSearchQuery,
     setShowArchived,
     setSidebarCollapsed,
     setTheme,
+    setVoicePreviewDraft,
     selectConversation,
     showArchived,
     sidebarCollapsed,
@@ -2804,5 +3049,10 @@ export function useLectureAssistant({
     },
     totalConversationCount,
     ttsEnabled,
+    voiceListeningEngine,
+    voicePreviewDraft,
+    voiceProfiles,
+    voiceTranscriptConfidence,
+    voiceTranscriptSource,
   };
 }

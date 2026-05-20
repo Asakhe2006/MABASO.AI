@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Archive,
+  AudioLines,
+  Check,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -14,7 +17,9 @@ import {
   PanelLeftOpen,
   Pencil,
   Pin,
+  Play,
   Search,
+  SlidersHorizontal,
   Sparkles,
   SunMedium,
   Trash2,
@@ -194,6 +199,100 @@ function SidebarActionButton({ children, onClick, theme = "dark", danger = false
   );
 }
 
+function formatTranscriptSource(source = "") {
+  return {
+    idle: "Waiting",
+    browser: "Browser live transcript",
+    whisper: "Whisper final transcript",
+    hybrid: "Hybrid corrected transcript",
+  }[String(source || "").toLowerCase()] || "Hybrid voice mode";
+}
+
+function formatTranscriptConfidence(confidence = 0) {
+  const bounded = Number.isFinite(Number(confidence)) ? Math.max(0, Math.min(1, Number(confidence))) : 0;
+  return `${Math.round(bounded * 100)}%`;
+}
+
+function VoiceProfileCard({
+  theme = "dark",
+  profile,
+  selected = false,
+  previewing = false,
+  preparing = false,
+  onSelect,
+}) {
+  return (
+    <motion.button
+      type="button"
+      layout
+      onClick={onSelect}
+      whileHover={{ y: -3, scale: 1.01 }}
+      whileTap={{ scale: 0.99 }}
+      aria-pressed={selected}
+      className={`relative overflow-hidden rounded-[28px] border p-4 text-left transition ${
+        selected
+          ? themed(
+            theme,
+            "border-emerald-300/28 bg-[radial-gradient(circle_at_top_right,rgba(52,211,153,0.22),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0.88),rgba(2,6,23,0.96))] text-white shadow-[0_22px_50px_rgba(16,185,129,0.2)]",
+            "border-emerald-200 bg-[radial-gradient(circle_at_top_right,rgba(16,185,129,0.16),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,253,250,0.98))] text-slate-900 shadow-[0_22px_44px_rgba(15,23,42,0.08)]",
+          )
+          : themed(
+            theme,
+            "border-white/10 bg-white/[0.04] text-slate-100 hover:border-white/16 hover:bg-white/[0.06]",
+            "border-slate-200 bg-white/82 text-slate-800 hover:bg-white",
+          )
+      }`}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),transparent_36%,transparent)] opacity-80" />
+      <div className="relative z-10">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${themed(theme, selected ? "text-emerald-100/78" : "text-emerald-200/70", selected ? "text-emerald-700" : "text-emerald-700")}`}>
+              Voice {profile.rank}
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <h4 className="text-lg font-semibold">{profile.name}</h4>
+              {selected ? (
+                <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full ${themed(theme, "bg-emerald-300/16 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                  <Check className="h-4 w-4" />
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <span className={`rounded-full px-3 py-1 text-[11px] font-semibold ${themed(theme, selected ? "bg-white/10 text-white" : "bg-white/[0.06] text-slate-200", selected ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600")}`}>
+            {profile.accent}
+          </span>
+        </div>
+
+        <p className={`mt-3 text-sm leading-6 ${themed(theme, selected ? "text-slate-100/92" : "text-slate-300", selected ? "text-slate-600" : "text-slate-600")}`}>
+          {profile.personality}
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {[profile.style, `${profile.energy} energy`, profile.voiceName].map((item) => (
+            <span
+              key={item}
+              className={`rounded-full px-3 py-1 text-[11px] ${themed(theme, selected ? "bg-white/10 text-white/92" : "bg-white/[0.06] text-slate-300", selected ? "bg-white text-slate-700" : "bg-slate-100 text-slate-600")}`}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <p className={`text-xs ${themed(theme, selected ? "text-emerald-50/80" : "text-slate-400", selected ? "text-emerald-700/90" : "text-slate-500")}`}>
+            {previewing || preparing ? "Preview playing..." : "Tap to select and hear a preview"}
+          </p>
+          <div className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold ${themed(theme, selected ? "bg-black/20 text-white" : "bg-black/20 text-slate-200", selected ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600")}`}>
+            {preparing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+            {selected ? "Selected" : "Preview"}
+          </div>
+        </div>
+      </div>
+    </motion.button>
+  );
+}
+
 export default function LectureAssistantPanel({ assistant, visible = true }) {
   if (!visible || !assistant) return null;
 
@@ -218,6 +317,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     isLoadingMoreConversations,
     isLoadingMoreMessages,
     isOpen,
+    isPreparingVoicePreview,
     isSpeaking,
     isSyncingConversation,
     isVoiceReconnecting,
@@ -230,14 +330,20 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     openMobileSidebar,
     openPanel,
     providerLabel,
+    previewingVoiceId,
+    previewSelectedVoiceWithDraft,
     regenerateLastResponse,
     renameConversation,
     searchQuery,
+    selectedVoiceProfile,
+    selectedVoiceProfileId,
     selectConversation,
+    selectVoiceProfile,
     sendMessage,
     setDraft,
     setMobileSidebarOpen,
     setSearchQuery,
+    setVoicePreviewDraft,
     showArchived,
     sidebarCollapsed,
     statusText,
@@ -253,7 +359,12 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     toggleVoiceChat,
     totalConversationCount,
     ttsEnabled,
+    voiceListeningEngine,
     voiceModeEnabled,
+    voicePreviewDraft,
+    voiceProfiles,
+    voiceTranscriptConfidence,
+    voiceTranscriptSource,
   } = assistant;
 
   const [actionMenuId, setActionMenuId] = useState("");
@@ -264,6 +375,8 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     [conversations, searchQuery],
   );
   const groupedConversations = useMemo(() => groupConversationsByDate(filteredConversations), [filteredConversations]);
+  const transcriptSourceLabel = formatTranscriptSource(voiceTranscriptSource);
+  const transcriptConfidenceLabel = formatTranscriptConfidence(voiceTranscriptConfidence);
 
   const voiceStateMode = isVoiceReconnecting
     ? "reconnecting"
@@ -361,7 +474,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               </p>
               <div className={`mt-2 flex items-center gap-2 text-[11px] ${themed(theme, isActive ? "text-emerald-50/75" : "text-slate-400", isActive ? "text-emerald-700/80" : "text-slate-500")}`}>
                 <span>{formatConversationTime(conversation.updatedAt || conversation.lastMessageAt || conversation.createdAt)}</span>
-                <span className="opacity-60">•</span>
+                <span className="opacity-60">|</span>
                 <span>{Math.max(conversation.messageCount || 0, conversation.messages?.length || 0)} messages</span>
               </div>
             </div>
@@ -622,6 +735,121 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                       </span>
                     ) : null}
                   </div>
+                </div>
+              </div>
+
+              <div className={`overflow-hidden rounded-[30px] border p-4 sm:p-5 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_36%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.94))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.97))]")}`}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex h-10 w-10 items-center justify-center rounded-2xl ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                        <AudioLines className="h-5 w-5" />
+                      </span>
+                      <div>
+                        <p className={`text-xs font-semibold uppercase tracking-[0.26em] ${themed(theme, "text-cyan-100/78", "text-cyan-700")}`}>Voice Studio</p>
+                        <h4 className={`mt-1 text-lg font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
+                          {selectedVoiceProfile?.name || "Wave"} is ready for live conversation
+                        </h4>
+                      </div>
+                    </div>
+                    <p className={`mt-4 max-w-3xl text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                      Pick a voice, hear it instantly, and keep that personality for streaming replies. The assistant listens in English only, uses browser live captions for speed, and corrects the final turn with Groq Whisper.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                      {voiceListeningEngine}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      {transcriptSourceLabel}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      Transcript confidence {transcriptConfidenceLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <motion.div layout className="mt-5 grid gap-3 xl:grid-cols-4 md:grid-cols-2">
+                  {voiceProfiles.map((profile) => (
+                    <VoiceProfileCard
+                      key={profile.id}
+                      theme={theme}
+                      profile={profile}
+                      selected={profile.id === selectedVoiceProfileId}
+                      previewing={previewingVoiceId === profile.id}
+                      preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
+                      onSelect={() => selectVoiceProfile(profile.id)}
+                    />
+                  ))}
+                </motion.div>
+
+                <div className={`mt-5 rounded-[28px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/88")}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Try this voice</p>
+                      <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                        Type any sentence and the selected voice will read it back with the same pacing used in live responses.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                      Saved on this device
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-white/10 bg-slate-950/45", "border-slate-200 bg-slate-50")}`}>
+                      <div className="flex items-center gap-2">
+                        <SlidersHorizontal className={`h-4 w-4 ${themed(theme, "text-cyan-100", "text-cyan-700")}`} />
+                        <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/75", "text-cyan-700")}`}>
+                          Custom Preview
+                        </p>
+                      </div>
+                      <textarea
+                        value={voicePreviewDraft}
+                        onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                        rows={2}
+                        placeholder="Explain black holes simply."
+                        className={`mt-3 min-h-[88px] w-full resize-none bg-transparent text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-3">
+                      <button
+                        type="button"
+                        onClick={previewSelectedVoiceWithDraft}
+                        className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                      >
+                        {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                        Preview Voice
+                      </button>
+                      <div className={`rounded-2xl border px-4 py-3 text-sm ${themed(theme, "border-white/10 bg-black/20 text-slate-200", "border-slate-200 bg-slate-50 text-slate-600")}`}>
+                        <p className="font-semibold">{selectedVoiceProfile?.name || "Wave"}</p>
+                        <p className="mt-1 text-xs leading-6">
+                          {selectedVoiceProfile?.style || "Polished"}
+                          {" | "}
+                          {selectedVoiceProfile?.energy || "Focused"} energy
+                          {" | "}
+                          {selectedVoiceProfile?.accent || "English"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={`${selectedVoiceProfileId}-${previewingVoiceId || "idle"}`}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.18 }}
+                      className={`mt-4 rounded-[22px] px-4 py-3 text-sm ${themed(theme, "bg-white/[0.05] text-slate-200", "bg-slate-50 text-slate-600")}`}
+                    >
+                      {previewingVoiceId
+                        ? `${selectedVoiceProfile?.name || "That voice"} is playing now.`
+                        : `${selectedVoiceProfile?.name || "This voice"} will be used for streaming voice replies and restored the next time you come back.`}
+                    </motion.div>
+                  </AnimatePresence>
                 </div>
               </div>
 
