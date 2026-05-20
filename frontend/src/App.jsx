@@ -4297,7 +4297,7 @@ export default function App() {
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const landingAuthMessageIsGuidance = /continue with google or apple|create your mabaso ai account by continuing with google or apple/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
-  const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn || (Boolean(authMessage.trim()) && browserPath === "/" && !authToken);
+  const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
@@ -10000,60 +10000,15 @@ export default function App() {
     }
   };
 
-  const triggerRenderedGoogleButton = (container) => {
-    if (typeof window === "undefined" || !container) return false;
-    const candidates = [
-      ...container.querySelectorAll('div[role="button"], button, [tabindex="0"], iframe[title*="Google"], iframe'),
-    ];
-    if (!candidates.length) return false;
-
-    for (const candidate of candidates) {
-      try {
-        candidate.focus?.();
-        if (typeof window.PointerEvent === "function") {
-          candidate.dispatchEvent(new window.PointerEvent("pointerdown", {
-            bubbles: true,
-            cancelable: true,
-            pointerType: "mouse",
-            isPrimary: true,
-          }));
-          candidate.dispatchEvent(new window.PointerEvent("pointerup", {
-            bubbles: true,
-            cancelable: true,
-            pointerType: "mouse",
-            isPrimary: true,
-          }));
-        }
-        candidate.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
-        candidate.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
-        candidate.click?.();
-        candidate.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-        return true;
-      } catch {
-        // Try the next Google-rendered candidate.
-      }
-    }
-    return false;
-  };
-
   const startDirectGoogleSignIn = (redirectPath = "") => {
     prepareGoogleRedirect(redirectPath);
     if (!GOOGLE_CLIENT_ID) {
       setAuthMessage("Google sign-in is not available on this website yet.");
       return;
     }
-    if (triggerRenderedGoogleButton(landingPrimaryGoogleButtonRef.current) || triggerRenderedGoogleButton(googleButtonRef.current) || triggerRenderedGoogleButton(enterpriseGoogleButtonRef.current)) {
-      return;
+    if (!window.google?.accounts?.id) {
+      setAuthMessage("Google sign-in is still loading. Try again in a moment.");
     }
-    if (window.google?.accounts?.id?.prompt) {
-      try {
-        window.google.accounts.id.prompt();
-        return;
-      } catch {
-        // Fall through to the loading message below.
-      }
-    }
-    setAuthMessage("Google sign-in is still loading. Tap Get Started again in a moment.");
   };
 
   const openProtectedAppRoute = (target = "capture") => {
@@ -15757,22 +15712,23 @@ export default function App() {
                       </button>
                       .
                     </p>
-                    <div className="relative mt-6">
-                      <button
-                        type="button"
-                        onClick={() => startDirectGoogleSignIn("/app/capture")}
-                        className="flex w-full items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-left text-white transition hover:brightness-105"
-                      >
-                        <span className="text-lg font-semibold">Get Started</span>
-                        <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                          <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                        </svg>
-                      </button>
-                      <div
-                        ref={landingPrimaryGoogleButtonRef}
-                        data-fullwidth="true"
-                        className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-hidden opacity-0"
-                      />
+                    <div
+                      className="mt-6 rounded-[22px] border border-emerald-300/20 bg-[linear-gradient(135deg,rgba(22,163,74,0.22),rgba(34,197,94,0.14))] p-4"
+                      onPointerDownCapture={() => prepareGoogleRedirect("/app/capture")}
+                      onClickCapture={() => prepareGoogleRedirect("/app/capture")}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">Get Started</p>
+                          <p className="mt-1 text-xs leading-6 text-emerald-100/80">Continue straight with Google and open your capture workspace.</p>
+                        </div>
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-400/20 text-emerald-100">
+                          <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                            <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                          </svg>
+                        </div>
+                      </div>
+                      <div ref={landingPrimaryGoogleButtonRef} data-fullwidth="true" className="mt-4 min-h-[46px] w-full" />
                     </div>
                   </div>
                 </div>
@@ -15797,6 +15753,7 @@ export default function App() {
                   </div>
                 ) : null}
                 {isGoogleSigningIn ? <div className="max-w-[360px] rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-slate-100">Finishing Google sign-in and opening your capture page...</div> : null}
+                {!showLandingAuthPanel && showAuthMessageBanner ? <div className={`max-w-[360px] rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
               </div>
             </section>
           </div>

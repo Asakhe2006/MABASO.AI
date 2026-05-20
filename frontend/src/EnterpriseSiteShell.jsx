@@ -141,22 +141,20 @@ function AuthOverlayButtons({
   isGoogleSigningIn,
 }) {
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => {
-          onPrepareSignIn?.();
-          onSignIn?.();
-        }}
-        className="w-full rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white shadow-[0_20px_60px_rgba(37,99,235,0.32)] transition hover:shadow-[0_24px_70px_rgba(37,99,235,0.38)]"
-      >
-        {isGoogleSigningIn ? "Finishing Google Sign-In..." : "Get Started"}
-      </button>
-      <div
-        ref={googleButtonRef}
-        data-fullwidth="true"
-        className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-hidden opacity-0"
-      />
+    <div
+      className="rounded-[24px] border border-cyan-300/15 bg-white/[0.04] p-4"
+      onPointerDownCapture={() => onPrepareSignIn?.()}
+      onClickCapture={() => onPrepareSignIn?.()}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-white">Get Started</p>
+          <p className="mt-1 text-xs leading-6 text-slate-300">Use the same Google sign-in flow directly from here.</p>
+        </div>
+        <LucideIcons.ArrowRight className="h-5 w-5 text-cyan-100" aria-hidden="true" />
+      </div>
+      <div ref={googleButtonRef} data-fullwidth="true" className="mt-4 min-h-[46px] w-full" />
+      {isGoogleSigningIn ? <p className="mt-3 text-xs text-cyan-100">Finishing Google Sign-In...</p> : null}
     </div>
   );
 }
