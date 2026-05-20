@@ -3765,6 +3765,7 @@ export default function App() {
   const recordingStopReasonRef = useRef("");
   const audioChunksRef = useRef([]);
   const googleButtonRef = useRef(null);
+  const landingPrimaryGoogleButtonRef = useRef(null);
   const enterpriseGoogleButtonRef = useRef(null);
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
@@ -4296,7 +4297,7 @@ export default function App() {
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const landingAuthMessageIsGuidance = /continue with google or apple|create your mabaso ai account by continuing with google or apple/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
-  const showLandingAuthPanel = showLandingAuthOptions || isGoogleSigningIn || isAppleSigningIn || (Boolean(authMessage.trim()) && browserPath === "/" && !authToken);
+  const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn || (Boolean(authMessage.trim()) && browserPath === "/" && !authToken);
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
@@ -9991,6 +9992,25 @@ export default function App() {
     navigateToPath("/");
   };
 
+  const prepareGoogleRedirect = (redirectPath = "") => {
+    persistPostAuthRedirectPath(redirectPath);
+    setShowLandingAuthOptions(false);
+    if (authMessage) {
+      setAuthMessage("");
+    }
+  };
+
+  const startDirectGoogleSignIn = (redirectPath = "") => {
+    prepareGoogleRedirect(redirectPath);
+    if (!GOOGLE_CLIENT_ID) {
+      setAuthMessage("Google sign-in is not available on this website yet.");
+      return;
+    }
+    if (!window.google?.accounts?.id || !landingPrimaryGoogleButtonRef.current?.childElementCount) {
+      setAuthMessage("Google sign-in is still loading. Tap Get Started again in a moment.");
+    }
+  };
+
   const openProtectedAppRoute = (target = "capture") => {
     const normalizedTarget = String(target || "capture").trim().toLowerCase();
     const nextPath = normalizedTarget === "admin"
@@ -10125,7 +10145,7 @@ export default function App() {
     let cancelled = false;
     const renderGoogleButton = () => {
       if (cancelled || !window.google?.accounts?.id) return;
-      const containers = [googleButtonRef.current, enterpriseGoogleButtonRef.current].filter(Boolean);
+      const containers = [landingPrimaryGoogleButtonRef.current, googleButtonRef.current, enterpriseGoogleButtonRef.current].filter(Boolean);
       if (!containers.length) return;
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
@@ -10139,7 +10159,10 @@ export default function App() {
       });
       containers.forEach((container) => {
         container.innerHTML = "";
-        const buttonWidth = Math.min(320, container.clientWidth || container.parentElement?.clientWidth || 320);
+        const measuredWidth = Math.round(container.clientWidth || container.parentElement?.clientWidth || 320);
+        const buttonWidth = container.dataset.fullwidth === "true"
+          ? Math.max(220, measuredWidth)
+          : Math.min(320, measuredWidth);
         window.google.accounts.id.renderButton(container, {
           theme: "filled_black",
           size: "large",
@@ -15596,8 +15619,8 @@ export default function App() {
           isAuthenticated={false}
           onNavigate={(route) => navigateToPath(route)}
           onOpenApp={(target) => openProtectedAppRoute(target)}
-          onOpenSignIn={() => openAuthLanding("login", activeSitePage.route)}
-          onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeSitePage.route)}
+          onOpenSignIn={() => startDirectGoogleSignIn(activeSitePage.route)}
+          onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeSitePage.route)}
           onOpenCreateAccount={() => openAuthLanding("register", activeSitePage.route)}
           onStartApple={startAppleLogin}
           googleButtonRef={enterpriseGoogleButtonRef}
@@ -15625,8 +15648,8 @@ export default function App() {
           route={activeProtectedWorkspaceRoute}
           onNavigate={(route) => navigateToPath(route)}
           onOpenApp={(target) => openProtectedAppRoute(target)}
-          onOpenSignIn={() => openAuthLanding("login", activeProtectedWorkspaceRoute.route)}
-          onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeProtectedWorkspaceRoute.route)}
+          onOpenSignIn={() => startDirectGoogleSignIn(activeProtectedWorkspaceRoute.route)}
+          onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeProtectedWorkspaceRoute.route)}
           onOpenCreateAccount={() => openAuthLanding("register", activeProtectedWorkspaceRoute.route)}
           onStartApple={startAppleLogin}
           googleButtonRef={enterpriseGoogleButtonRef}
@@ -15689,16 +15712,27 @@ export default function App() {
                       </button>
                       .
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => openAuthLanding("login", "/app/capture")}
-                      className="mt-6 flex w-full items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-left text-white transition hover:brightness-105"
+                    <div
+                      className="relative mt-6"
+                      onPointerDownCapture={() => prepareGoogleRedirect("/app/capture")}
+                      onClickCapture={() => prepareGoogleRedirect("/app/capture")}
                     >
-                      <span className="text-lg font-semibold">Get Started</span>
-                      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                        <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                      </svg>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => startDirectGoogleSignIn("/app/capture")}
+                        className="flex w-full items-center justify-between rounded-[22px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-6 py-4 text-left text-white transition hover:brightness-105"
+                      >
+                        <span className="text-lg font-semibold">Get Started</span>
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                          <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                        </svg>
+                      </button>
+                      <div
+                        ref={landingPrimaryGoogleButtonRef}
+                        data-fullwidth="true"
+                        className="absolute inset-0 overflow-hidden rounded-[22px] opacity-0"
+                      />
+                    </div>
                   </div>
                 </div>
                 {showLandingAuthPanel ? (
@@ -15788,8 +15822,8 @@ export default function App() {
         adminBlocked={activeSitePage.access === "admin" && authSessionMode !== "admin"}
         onNavigate={(route) => navigateToPath(route)}
         onOpenApp={(target) => openProtectedAppRoute(target)}
-        onOpenSignIn={() => openAuthLanding("login", activeSitePage.route)}
-        onPrepareSignIn={(route) => persistPostAuthRedirectPath(route || activeSitePage.route)}
+        onOpenSignIn={() => startDirectGoogleSignIn(activeSitePage.route)}
+        onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeSitePage.route)}
         onOpenCreateAccount={() => openAuthLanding("register", activeSitePage.route)}
         onStartApple={startAppleLogin}
         googleButtonRef={enterpriseGoogleButtonRef}
