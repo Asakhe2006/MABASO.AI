@@ -155,8 +155,9 @@ function resolveSpeechLanguageCode(language = "English") {
 function formatProviderLabel(provider = "") {
   const normalized = compactText(provider).toLowerCase();
   return {
+    openai: "OpenAI",
     gemini: "Gemini 2.5 Flash",
-    groq: "Groq Llama 3.3 70B",
+    groq: "Groq Llama",
     openrouter: "OpenRouter DeepSeek",
   }[normalized] || "Lecture Assistant";
 }
@@ -411,6 +412,7 @@ function createConversationMessage(role, content = "", extra = {}) {
     timestamp: nowIso(),
     provider: compactText(extra.provider),
     model: compactText(extra.model),
+    interactionMode: compactText(extra.interactionMode, role === "user" ? "text" : ""),
     status: compactText(extra.status, "complete"),
   };
 }
@@ -439,6 +441,7 @@ function normalizeConversationRecord(rawConversation, index = 0) {
           timestamp: compactText(message.timestamp, rawConversation.updatedAt || rawConversation.createdAt || nowIso()),
           provider: compactText(message.provider),
           model: compactText(message.model),
+          interactionMode: compactText(message.interactionMode, role === "user" ? "text" : ""),
           status: compactText(message.status, "complete"),
         };
       })
@@ -1199,7 +1202,7 @@ export function useLectureAssistant({
         resetVoiceRecoveryState();
         setDraft(spokenQuestion);
         setStatusText("Sending your voice question...");
-        await sendMessage({ promptText: spokenQuestion });
+        await sendMessage({ promptText: spokenQuestion, interactionMode: "voice" });
         return;
       }
       if (speechRecognitionErrorRef.current) return;
@@ -1587,7 +1590,7 @@ export function useLectureAssistant({
         resetVoiceRecoveryState();
         setDraft(finalTranscript);
         setStatusText(transcriptConfidence < 0.55 ? "Sending your voice question with low-confidence transcription..." : "Sending your voice question...");
-        await sendMessage({ promptText: finalTranscript });
+        await sendMessage({ promptText: finalTranscript, interactionMode: "voice" });
       };
 
       recorder.start(650);
@@ -1762,8 +1765,15 @@ export function useLectureAssistant({
     promptText = draft,
     baseMessages = null,
     appendUserMessage = true,
+    interactionMode = "text",
   } = {}) => {
-    const question = compactText(normalizeVoiceTranscript(promptText) || promptText);
+    const resolvedInteractionMode = compactText(interactionMode, "text").toLowerCase() === "voice" ? "voice" : "text";
+    const useVoiceInteraction = resolvedInteractionMode === "voice";
+    const question = compactText(
+      useVoiceInteraction
+        ? (normalizeVoiceTranscript(promptText) || promptText)
+        : promptText,
+    );
     if (!question) {
       setStatusText("Type or speak a question first.");
       return false;
@@ -1780,8 +1790,13 @@ export function useLectureAssistant({
     const targetConversation = ensureActiveConversation();
     const targetConversationId = targetConversation.id;
     const currentMessages = Array.isArray(baseMessages) ? baseMessages : targetConversation.messages;
-    const nextUserMessage = appendUserMessage ? createConversationMessage("user", question) : null;
-    const nextAssistantMessage = createConversationMessage("assistant", "", { status: "streaming" });
+    const nextUserMessage = appendUserMessage
+      ? createConversationMessage("user", question, { interactionMode: resolvedInteractionMode })
+      : null;
+    const nextAssistantMessage = createConversationMessage("assistant", "", {
+      status: "streaming",
+      interactionMode: resolvedInteractionMode,
+    });
     const requestMessages = (appendUserMessage
       ? [...currentMessages, nextUserMessage]
       : [...currentMessages]
@@ -1804,15 +1819,15 @@ export function useLectureAssistant({
 
     setDraft("");
     setIsGenerating(true);
-    setStatusText(voiceModeEnabledRef.current
+    setStatusText(useVoiceInteraction
       ? (hasLectureContext ? "Processing your voice question..." : "Processing your voice question without lecture context...")
-      : (hasLectureContext ? "Connecting to Gemini..." : "Connecting to Gemini without lecture context..."));
+      : (hasLectureContext ? "Connecting to OpenAI..." : "Connecting to OpenAI without lecture context..."));
     setActiveProvider("");
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
     let streamedText = "";
-    const shouldStreamVoiceReply = Boolean(voiceModeEnabledRef.current && ttsEnabledRef.current);
+    const shouldStreamVoiceReply = Boolean(useVoiceInteraction && ttsEnabledRef.current);
     const voiceSpeechStream = shouldStreamVoiceReply ? startVoiceSpeechStream() : null;
 
     try {
@@ -1830,8 +1845,8 @@ export function useLectureAssistant({
           content: message.content,
           timestamp: message.timestamp,
         })),
-        language: voiceModeEnabledRef.current ? LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE : outputLanguage,
-        voice_mode: Boolean(voiceModeEnabledRef.current),
+        language: useVoiceInteraction ? LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE : outputLanguage,
+        voice_mode: useVoiceInteraction,
         session_id: targetConversationId,
         conversation_id: targetConversationId,
         lecture_label: compactText(lectureLabel),
@@ -1857,7 +1872,7 @@ export function useLectureAssistant({
             provider: compactText(data.provider),
             model: compactText(data.model),
           });
-          setStatusText(voiceModeEnabledRef.current
+          setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} is replying in voice mode...`
             : `${data.label || formatProviderLabel(data.provider)} is replying...`);
           return;
@@ -1889,7 +1904,7 @@ export function useLectureAssistant({
             model: compactText(data.model, message.model),
             status: "complete",
           }));
-          setStatusText(voiceModeEnabledRef.current
+          setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} finished streaming. Voice reply may still be speaking...`
             : `${data.label || formatProviderLabel(data.provider)} finished the reply.`);
           return;
@@ -1903,10 +1918,10 @@ export function useLectureAssistant({
         throw new Error("The lecture assistant did not return any text.");
       }
 
-      if (!voiceSpeechStream) {
-        speakReply(streamedText);
-      } else {
+      if (voiceSpeechStream) {
         voiceSpeechStream.markDone();
+      } else if (useVoiceInteraction) {
+        speakReply(streamedText);
       }
       return true;
     } catch (error) {
@@ -1917,7 +1932,7 @@ export function useLectureAssistant({
           voiceInterruptionRequestedRef.current = false;
           return false;
         }
-        if (voiceModeEnabledRef.current) {
+        if (useVoiceInteraction && voiceModeEnabledRef.current) {
           applyVoiceModeEnabled(false);
         }
         setStatusText("Generation stopped.");
@@ -1926,7 +1941,7 @@ export function useLectureAssistant({
       if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
       else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
       stopSpeaking();
-      if (voiceModeEnabledRef.current) {
+      if (useVoiceInteraction && voiceModeEnabledRef.current) {
         applyVoiceModeEnabled(false);
       }
       setStatusText(compactText(error?.message, "The lecture assistant could not answer right now."));
@@ -1956,6 +1971,7 @@ export function useLectureAssistant({
       promptText: lastUserMessage.content,
       baseMessages: trimmedMessages,
       appendUserMessage: false,
+      interactionMode: compactText(lastUserMessage.interactionMode, "text"),
     });
   };
 

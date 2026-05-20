@@ -7,7 +7,9 @@ from typing import Any, Iterator
 import requests
 
 
-DEFAULT_CHAT_PROVIDER_ORDER = ("gemini", "groq", "openrouter")
+TEXT_CHAT_PROVIDER_ORDER = ("openai",)
+VOICE_CHAT_PROVIDER_ORDER = ("gemini", "groq")
+SUPPORTED_CHAT_PROVIDERS = ("openai", "gemini", "groq", "openrouter")
 
 
 class ProviderStreamError(Exception):
@@ -34,18 +36,19 @@ def compact_text(value: Any, fallback: str = "") -> str:
 def format_provider_name(provider: str) -> str:
     normalized = compact_text(provider).lower()
     return {
+        "openai": "OpenAI",
         "gemini": "Gemini",
         "groq": "Groq",
         "openrouter": "OpenRouter",
     }.get(normalized, normalized.title() or "Provider")
 
 
-def resolve_provider_attempts(forced_provider: str = "") -> list[dict[str, str]]:
+def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = False) -> list[dict[str, str]]:
     normalized_forced = compact_text(forced_provider).lower()
-    if normalized_forced in DEFAULT_CHAT_PROVIDER_ORDER:
+    if normalized_forced in SUPPORTED_CHAT_PROVIDERS:
         ordered_names = [normalized_forced]
     else:
-        ordered_names = list(DEFAULT_CHAT_PROVIDER_ORDER)
+        ordered_names = list(VOICE_CHAT_PROVIDER_ORDER if voice_mode else TEXT_CHAT_PROVIDER_ORDER)
 
     attempts: list[dict[str, str]] = []
     for provider in ordered_names:
@@ -53,17 +56,23 @@ def resolve_provider_attempts(forced_provider: str = "") -> list[dict[str, str]]
             {
                 "provider": provider,
                 "label": format_provider_name(provider),
-                "model": resolve_provider_model(provider),
+                "model": resolve_provider_model(provider, voice_mode=voice_mode),
             }
         )
     return attempts
 
 
-def resolve_provider_model(provider: str) -> str:
+def resolve_provider_model(provider: str, *, voice_mode: bool = False) -> str:
     normalized = compact_text(provider).lower()
+    if normalized == "openai":
+        return compact_text(os.getenv("OPENAI_CHAT_MODEL"), "gpt-4.1-mini")
     if normalized == "gemini":
+        if voice_mode:
+            return compact_text(os.getenv("GEMINI_VOICE_CHAT_MODEL"), "gemini-2.5-flash")
         return compact_text(os.getenv("GEMINI_CHAT_MODEL"), "gemini-2.5-flash")
     if normalized == "groq":
+        if voice_mode:
+            return compact_text(os.getenv("GROQ_VOICE_CHAT_MODEL"), "llama-3.1-8b-instant")
         return compact_text(os.getenv("GROQ_CHAT_MODEL"), "llama-3.3-70b-versatile")
     if normalized == "openrouter":
         return compact_text(os.getenv("OPENROUTER_CHAT_MODEL"), "deepseek/deepseek-chat")
@@ -72,6 +81,8 @@ def resolve_provider_model(provider: str) -> str:
 
 def _resolve_provider_api_key(provider: str) -> str:
     normalized = compact_text(provider).lower()
+    if normalized == "openai":
+        return compact_text(os.getenv("OPENAI_API_KEY"))
     if normalized == "gemini":
         return compact_text(os.getenv("GEMINI_API_KEY"))
     if normalized == "groq":
@@ -152,6 +163,7 @@ def iter_gemini_stream(
     *,
     system_prompt: str,
     messages: list[dict[str, str]],
+    model: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,
     timeout_seconds: float = 75,
@@ -160,7 +172,7 @@ def iter_gemini_stream(
     if not api_key:
         raise ProviderStreamError("gemini", "Gemini is not configured on the backend.")
 
-    model = resolve_provider_model("gemini")
+    model = compact_text(model, resolve_provider_model("gemini"))
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
     payload: dict[str, Any] = {
         "contents": _convert_messages_to_gemini_contents(messages),
@@ -234,6 +246,7 @@ def iter_openai_compatible_stream(
     base_url: str,
     system_prompt: str,
     messages: list[dict[str, str]],
+    model: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,
     timeout_seconds: float = 75,
@@ -243,7 +256,7 @@ def iter_openai_compatible_stream(
     if not api_key:
         raise ProviderStreamError(provider, f"{format_provider_name(provider)} is not configured on the backend.")
 
-    model = resolve_provider_model(provider)
+    model = compact_text(model, resolve_provider_model(provider))
     request_messages = []
     if compact_text(system_prompt):
         request_messages.append({"role": "system", "content": compact_text(system_prompt)})
@@ -259,7 +272,7 @@ def iter_openai_compatible_stream(
         "temperature": temperature,
         "stream": True,
     }
-    if compact_text(provider).lower() == "groq":
+    if compact_text(provider).lower() in {"groq", "openai"}:
         payload["max_completion_tokens"] = max_output_tokens
     else:
         payload["max_tokens"] = max_output_tokens
@@ -307,6 +320,7 @@ def iter_provider_stream(
     *,
     system_prompt: str,
     messages: list[dict[str, str]],
+    model: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,
     timeout_seconds: float = 75,
@@ -316,6 +330,18 @@ def iter_provider_stream(
         return iter_gemini_stream(
             system_prompt=system_prompt,
             messages=messages,
+            model=model,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+    if normalized == "openai":
+        return iter_openai_compatible_stream(
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            system_prompt=system_prompt,
+            messages=messages,
+            model=model,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
@@ -326,6 +352,7 @@ def iter_provider_stream(
             base_url="https://api.groq.com/openai/v1",
             system_prompt=system_prompt,
             messages=messages,
+            model=model,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
@@ -336,6 +363,7 @@ def iter_provider_stream(
             base_url="https://openrouter.ai/api/v1",
             system_prompt=system_prompt,
             messages=messages,
+            model=model,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,

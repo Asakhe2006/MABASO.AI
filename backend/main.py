@@ -200,17 +200,53 @@ SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES",
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
 LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS", "1200"))
-LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "320"))
-LECTURE_ASSISTANT_SYSTEM_PROMPT = (
+LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS = int(
+    os.getenv("LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS", str(LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
+)
+LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "220"))
+LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS = int(
+    os.getenv("LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS", "520")
+)
+LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS = int(
+    os.getenv("LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS", "10000")
+)
+LECTURE_ASSISTANT_VOICE_HISTORY_TURNS = max(
+    4,
+    int(os.getenv("LECTURE_ASSISTANT_VOICE_HISTORY_TURNS", "8")),
+)
+LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS = max(
+    2,
+    int(os.getenv("LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS", "4")),
+)
+LECTURE_ASSISTANT_VOICE_HISTORY_SUMMARY_CHARS = max(
+    240,
+    int(os.getenv("LECTURE_ASSISTANT_VOICE_HISTORY_SUMMARY_CHARS", "700")),
+)
+LECTURE_ASSISTANT_TEXT_SYSTEM_PROMPT = (
     os.getenv(
-        "LECTURE_ASSISTANT_SYSTEM_PROMPT",
+        "LECTURE_ASSISTANT_TEXT_SYSTEM_PROMPT",
+        os.getenv(
+            "LECTURE_ASSISTANT_SYSTEM_PROMPT",
+            (
+                "You are an advanced academic study assistant inside Mabaso AI. "
+                "Answer clearly, directly, and accurately. "
+                "Use markdown and code blocks when they help. "
+                "Keep simple answers concise, but expand with structured teaching when the student needs detail."
+            ),
+        ),
+    )
+    or ""
+).strip()
+LECTURE_ASSISTANT_VOICE_SYSTEM_PROMPT = (
+    os.getenv(
+        "LECTURE_ASSISTANT_VOICE_SYSTEM_PROMPT",
         (
-            "You are an advanced conversational AI assistant with natural human-like communication. "
-            "Your responses should feel fast, intelligent, concise, emotionally natural, and conversational. "
-            "Prioritize quick understanding, short natural responses, conversational clarity, intelligent summarization, and low-latency interaction. "
-            "Avoid robotic explanations, unnecessary detail, repeating the user's question, and markdown-heavy output in voice mode. "
-            "When speaking, sound natural, avoid reading symbols literally, and convert formatting into conversational language. "
-            "Respond like a real-time voice assistant, not a documentation bot."
+            "You are a real-time conversational voice assistant. "
+            "Keep spoken responses short, intelligent, conversational, and natural. "
+            "Answer directly using concise summaries unless the user explicitly asks for detailed explanations. "
+            "Prioritize low latency, fast responses, natural speech, conversational flow, and token efficiency. "
+            "Avoid long explanations, excessive formatting, repeating the user's question, and verbose responses. "
+            "Speak like a human in a real conversation."
         ),
     )
     or ""
@@ -3702,8 +3738,129 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     return messages
 
 
-def sanitize_lecture_assistant_history(messages: list[LectureAssistantMessage] | None, *, limit: int = 14) -> list[dict[str, str]]:
+VOICE_DETAIL_REQUEST_PHRASES = (
+    "explain more",
+    "go deeper",
+    "tell me more",
+    "full explanation",
+    "details please",
+    "teach me",
+    "step by step",
+    "full answer",
+    "expand",
+    "elaborate",
+    "more detail",
+    "more details",
+    "dive deeper",
+)
+
+
+def lecture_assistant_voice_wants_detail(question: str) -> bool:
+    normalized = compact_text(question).lower()
+    if not normalized:
+        return False
+    if normalized in {"why", "why?", "how", "how?"}:
+        return True
+    if normalized.startswith("why ") or normalized.startswith("how "):
+        return True
+    return "explain" in normalized or "details" in normalized or any(
+        phrase in normalized for phrase in VOICE_DETAIL_REQUEST_PHRASES
+    )
+
+
+def shorten_assistant_context_text(value: str, limit: int) -> str:
+    cleaned = compact_text(value)
+    if not cleaned or len(cleaned) <= limit:
+        return cleaned
+    shortened = cleaned[:limit].rsplit(" ", 1)[0].strip() or cleaned[:limit].strip()
+    return f"{shortened}..."
+
+
+def extract_voice_context_points(value: str, *, max_points: int = 5, item_limit: int = 180) -> list[str]:
+    cleaned = compact_text(value).replace("\r\n", "\n")
+    if not cleaned:
+        return []
+
+    points: list[str] = []
+    seen: set[str] = set()
+
+    def push(candidate: str) -> None:
+        normalized_candidate = compact_text(
+            re.sub(r"^[#>*\-\d\.\)\(\s]+", "", candidate).replace("`", " ")
+        )
+        if not normalized_candidate:
+            return
+        lowered = normalized_candidate.lower()
+        if lowered in seen:
+            return
+        seen.add(lowered)
+        points.append(shorten_assistant_context_text(normalized_candidate, item_limit))
+
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```") or line == "[Trimmed for assistant context]":
+            continue
+        push(line)
+        if len(points) >= max_points:
+            return points[:max_points]
+
+    for sentence in re.split(r"(?<=[.!?])\s+", cleaned):
+        push(sentence)
+        if len(points) >= max_points:
+            return points[:max_points]
+
+    return points[:max_points]
+
+
+def build_voice_context_block(label: str, value: str, *, char_limit: int, max_points: int) -> str:
+    points = extract_voice_context_points(
+        value,
+        max_points=max_points,
+        item_limit=max(90, min(220, max(90, char_limit // max(2, max_points)))),
+    )
+    if not points:
+        return ""
+
+    block_lines = [label]
+    for point in points:
+        candidate = f"- {point}"
+        projected = "\n".join([*block_lines, candidate])
+        if len(projected) > char_limit and len(block_lines) > 1:
+            break
+        if len(projected) > char_limit:
+            compact_point = shorten_assistant_context_text(point, max(48, char_limit - len(label) - 4))
+            return f"{label}\n- {compact_point}"
+        block_lines.append(candidate)
+    return "\n".join(block_lines)
+
+
+def summarize_lecture_assistant_history(messages: list[dict[str, str]], *, char_limit: int) -> str:
+    recap_lines = []
+    for message in messages[-6:]:
+        role_label = "Student" if compact_text(message.get("role")).lower() == "user" else "Tutor"
+        snippet = shorten_assistant_context_text(message.get("content", ""), 140)
+        if snippet:
+            recap_lines.append(f"- {role_label}: {snippet}")
+
+    if not recap_lines:
+        return ""
+
+    recap = "Earlier conversation recap for context only:\n" + "\n".join(recap_lines)
+    while len(recap) > char_limit and len(recap_lines) > 1:
+        recap_lines.pop(0)
+        recap = "Earlier conversation recap for context only:\n" + "\n".join(recap_lines)
+    return shorten_assistant_context_text(recap, char_limit)
+
+
+def sanitize_lecture_assistant_history(
+    messages: list[LectureAssistantMessage] | None,
+    *,
+    limit: int = 14,
+    voice_mode: bool = False,
+    wants_detail: bool = False,
+) -> list[dict[str, str]]:
     sanitized: list[dict[str, str]] = []
+    message_limit = 1400 if voice_mode else 2400
     for message in messages or []:
         role = compact_text(getattr(message, "role", "")).lower()
         if role not in {"user", "assistant"}:
@@ -3714,13 +3871,53 @@ def sanitize_lecture_assistant_history(messages: list[LectureAssistantMessage] |
         sanitized.append(
             {
                 "role": role,
-                "content": content[:2400],
+                "content": content[:message_limit],
             }
         )
-    return sanitized[-limit:]
+
+    if not voice_mode:
+        return sanitized[-limit:]
+
+    history_limit = max(LECTURE_ASSISTANT_VOICE_HISTORY_TURNS, LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS + 1)
+    trimmed = sanitized[-history_limit:]
+    recent_turns = min(
+        len(trimmed),
+        max(LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS, LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS + (2 if wants_detail else 0)),
+    )
+    older_turns = trimmed[:-recent_turns]
+    recent_history = trimmed[-recent_turns:]
+    if not older_turns:
+        return recent_history
+
+    recap = summarize_lecture_assistant_history(
+        older_turns,
+        char_limit=LECTURE_ASSISTANT_VOICE_HISTORY_SUMMARY_CHARS,
+    )
+    if not recap:
+        return recent_history
+    return [{"role": "assistant", "content": recap}, *recent_history]
 
 
 def build_lecture_assistant_context(payload: LectureAssistantRequest) -> str:
+    voice_mode = bool(payload.voice_mode)
+    wants_detail = lecture_assistant_voice_wants_detail(payload.question) if voice_mode else False
+
+    if voice_mode:
+        total_limit = max(4000, min(LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS, MAX_CHAT_CONTEXT_CHARS))
+        section_limit = max(650, total_limit // 7)
+        transcript_limit = max(1200, total_limit // 4)
+        context_parts = [
+            build_voice_context_block("STUDY GUIDE", payload.summary, char_limit=section_limit, max_points=7 if wants_detail else 5),
+            build_voice_context_block("IMPORTANT FORMULAS", payload.formulas, char_limit=section_limit, max_points=6 if wants_detail else 4),
+            build_voice_context_block("WORKED EXAMPLES", payload.worked_examples, char_limit=section_limit, max_points=6 if wants_detail else 4),
+            build_voice_context_block("LECTURE NOTES", payload.lecture_notes, char_limit=section_limit, max_points=5 if wants_detail else 4),
+            build_voice_context_block("LECTURE SLIDES", payload.lecture_slides, char_limit=section_limit, max_points=5 if wants_detail else 4),
+            build_voice_context_block("PAST QUESTION PAPERS", payload.past_question_papers, char_limit=section_limit, max_points=4 if wants_detail else 3),
+            build_voice_context_block("LECTURE TRANSCRIPT", payload.transcript, char_limit=transcript_limit, max_points=8 if wants_detail else 5),
+        ]
+        context_text = "\n\n".join(part for part in context_parts if part).strip()
+        return shorten_assistant_context_text(context_text, total_limit)
+
     section_limit = max(2400, MAX_CHAT_CONTEXT_CHARS // 4)
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
@@ -3742,9 +3939,7 @@ def build_lecture_assistant_context(payload: LectureAssistantRequest) -> str:
         trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(5000, MAX_CHAT_CONTEXT_CHARS // 2)),
     ]
     context_text = "\n\n".join(part for part in context_parts if part).strip()
-    if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
-        context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
-    return context_text
+    return shorten_assistant_context_text(context_text, MAX_CHAT_CONTEXT_CHARS)
 
 
 def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> str:
@@ -3752,11 +3947,11 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
     lecture_label = compact_text(payload.lecture_label)
     context_text = build_lecture_assistant_context(payload)
     voice_mode = bool(payload.voice_mode)
+    wants_detail = lecture_assistant_voice_wants_detail(payload.question) if voice_mode else False
     rules = [
-        LECTURE_ASSISTANT_SYSTEM_PROMPT,
+        LECTURE_ASSISTANT_VOICE_SYSTEM_PROMPT if voice_mode else LECTURE_ASSISTANT_TEXT_SYSTEM_PROMPT,
         "You are answering inside Mabaso AI for a lecture-specific study workspace.",
         "Understand quickly and respond with the most helpful answer first.",
-        "Keep simple answers short, but expand naturally when the student needs detail.",
         "Do not repeat the user's question back to them.",
         f"Reply in {'English' if voice_mode else output_language}.",
     ]
@@ -3765,20 +3960,27 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
             [
                 "You are in live voice conversation mode.",
                 "Always respond in English only.",
-                "Keep replies highly speakable: short sentences, fast understanding, and natural transitions.",
-                "Use one very brief acknowledgement like 'Okay', 'Right', or 'I see' only when it sounds natural, and not in every answer.",
+                "Default to 1 to 3 short sentences when the user has not asked for extra detail.",
                 "Prefer plain conversational wording over markdown or formal structure.",
-                "Do not use headings, bullet-heavy layouts, or symbol-heavy formatting unless absolutely necessary.",
-                "If code or formulas matter, summarize the meaning first in natural language before any detailed formatting.",
-                "Aim for low latency: answer concisely first, then add one or two helpful details if needed.",
+                "Do not use headings, bullet-heavy layouts, or symbol-heavy formatting unless the user explicitly asks for them.",
+                "Compress the answer to the essential idea first so the spoken reply feels fast.",
+                "If formulas or code matter, explain the meaning first in natural language before giving detail.",
                 "Never switch languages, accents, or multilingual modes during the reply.",
             ]
         )
+        if wants_detail:
+            rules.append(
+                "The student explicitly asked for more detail. Give a fuller spoken explanation with short clear steps and one helpful example if needed."
+            )
+        else:
+            rules.append("The student did not ask for more detail. Keep the reply brief, direct, and high-signal.")
     else:
         rules.extend(
             [
+                "Text chat mode uses OpenAI only.",
                 "Use markdown formatting when it helps readability.",
                 "Support code blocks when code is requested.",
+                "Longer educational explanations are allowed when they help the student learn.",
                 "When maths helps, format it with LaTeX using $...$ or $$...$$.",
             ]
         )
@@ -3796,12 +3998,22 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
 
 def resolve_lecture_assistant_max_output_tokens(payload: LectureAssistantRequest) -> int:
     if bool(payload.voice_mode):
-        return max(160, min(LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS, LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
-    return LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS
+        wants_detail = lecture_assistant_voice_wants_detail(payload.question)
+        voice_limit = (
+            LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS
+            if wants_detail
+            else LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS
+        )
+        return max(120, min(voice_limit, LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
+    return max(256, min(LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS, LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
 
 
 def build_lecture_assistant_messages(payload: LectureAssistantRequest) -> list[dict[str, str]]:
-    history = sanitize_lecture_assistant_history(payload.messages)
+    history = sanitize_lecture_assistant_history(
+        payload.messages,
+        voice_mode=bool(payload.voice_mode),
+        wants_detail=lecture_assistant_voice_wants_detail(payload.question) if bool(payload.voice_mode) else False,
+    )
     question = compact_text(payload.question)
     if question:
         history.append({"role": "user", "content": question[:2400]})
@@ -14710,9 +14922,9 @@ def create_lecture_assistant_stream(
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)
     messages = build_lecture_assistant_messages(payload)
-    attempts = resolve_provider_attempts(forced_provider)
+    attempts = resolve_provider_attempts(forced_provider, voice_mode=bool(payload.voice_mode))
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
-    generation_temperature = 0.45 if bool(payload.voice_mode) else 0.55
+    generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 
     def event_stream():
         selected_attempt: dict[str, str] | None = None
@@ -14748,6 +14960,7 @@ def create_lecture_assistant_stream(
                         attempt["provider"],
                         system_prompt=system_prompt,
                         messages=messages,
+                        model=attempt["model"],
                         temperature=generation_temperature,
                         max_output_tokens=max_output_tokens,
                         timeout_seconds=LECTURE_ASSISTANT_MODEL_TIMEOUT,
@@ -14936,6 +15149,20 @@ async def stream_lecture_assistant_groq(
         request=request,
         current_user=current_user,
         forced_provider="groq",
+    )
+
+
+@app.post("/api/chat/openai")
+async def stream_lecture_assistant_openai(
+    payload: LectureAssistantRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return create_lecture_assistant_stream(
+        payload=payload,
+        request=request,
+        current_user=current_user,
+        forced_provider="openai",
     )
 
 
