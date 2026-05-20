@@ -141,14 +141,13 @@ function AuthOverlayButtons({
   isGoogleSigningIn,
 }) {
   return (
-    <div
-      className="relative"
-      onPointerDownCapture={() => onPrepareSignIn?.()}
-      onClickCapture={() => onPrepareSignIn?.()}
-    >
+    <div className="relative">
       <button
         type="button"
-        onClick={onSignIn}
+        onClick={() => {
+          onPrepareSignIn?.();
+          onSignIn?.();
+        }}
         className="w-full rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white shadow-[0_20px_60px_rgba(37,99,235,0.32)] transition hover:shadow-[0_24px_70px_rgba(37,99,235,0.38)]"
       >
         {isGoogleSigningIn ? "Finishing Google Sign-In..." : "Get Started"}
@@ -156,7 +155,7 @@ function AuthOverlayButtons({
       <div
         ref={googleButtonRef}
         data-fullwidth="true"
-        className="absolute inset-0 overflow-hidden rounded-full opacity-0"
+        className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-hidden opacity-0"
       />
     </div>
   );

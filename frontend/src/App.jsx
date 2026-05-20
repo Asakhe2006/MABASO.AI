@@ -10000,15 +10000,60 @@ export default function App() {
     }
   };
 
+  const triggerRenderedGoogleButton = (container) => {
+    if (typeof window === "undefined" || !container) return false;
+    const candidates = [
+      ...container.querySelectorAll('div[role="button"], button, [tabindex="0"], iframe[title*="Google"], iframe'),
+    ];
+    if (!candidates.length) return false;
+
+    for (const candidate of candidates) {
+      try {
+        candidate.focus?.();
+        if (typeof window.PointerEvent === "function") {
+          candidate.dispatchEvent(new window.PointerEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            pointerType: "mouse",
+            isPrimary: true,
+          }));
+          candidate.dispatchEvent(new window.PointerEvent("pointerup", {
+            bubbles: true,
+            cancelable: true,
+            pointerType: "mouse",
+            isPrimary: true,
+          }));
+        }
+        candidate.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        candidate.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        candidate.click?.();
+        candidate.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        return true;
+      } catch {
+        // Try the next Google-rendered candidate.
+      }
+    }
+    return false;
+  };
+
   const startDirectGoogleSignIn = (redirectPath = "") => {
     prepareGoogleRedirect(redirectPath);
     if (!GOOGLE_CLIENT_ID) {
       setAuthMessage("Google sign-in is not available on this website yet.");
       return;
     }
-    if (!window.google?.accounts?.id || !landingPrimaryGoogleButtonRef.current?.childElementCount) {
-      setAuthMessage("Google sign-in is still loading. Tap Get Started again in a moment.");
+    if (triggerRenderedGoogleButton(landingPrimaryGoogleButtonRef.current) || triggerRenderedGoogleButton(googleButtonRef.current) || triggerRenderedGoogleButton(enterpriseGoogleButtonRef.current)) {
+      return;
     }
+    if (window.google?.accounts?.id?.prompt) {
+      try {
+        window.google.accounts.id.prompt();
+        return;
+      } catch {
+        // Fall through to the loading message below.
+      }
+    }
+    setAuthMessage("Google sign-in is still loading. Tap Get Started again in a moment.");
   };
 
   const openProtectedAppRoute = (target = "capture") => {
@@ -15712,11 +15757,7 @@ export default function App() {
                       </button>
                       .
                     </p>
-                    <div
-                      className="relative mt-6"
-                      onPointerDownCapture={() => prepareGoogleRedirect("/app/capture")}
-                      onClickCapture={() => prepareGoogleRedirect("/app/capture")}
-                    >
+                    <div className="relative mt-6">
                       <button
                         type="button"
                         onClick={() => startDirectGoogleSignIn("/app/capture")}
@@ -15730,7 +15771,7 @@ export default function App() {
                       <div
                         ref={landingPrimaryGoogleButtonRef}
                         data-fullwidth="true"
-                        className="absolute inset-0 overflow-hidden rounded-[22px] opacity-0"
+                        className="pointer-events-none absolute left-0 top-0 h-px w-px overflow-hidden opacity-0"
                       />
                     </div>
                   </div>
