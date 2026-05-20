@@ -503,20 +503,6 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     }
   }, []);
 
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    const previousOverflow = document.body.style.overflow;
-    const previousTouchAction = document.body.style.touchAction;
-    if (voiceSelectorOpen || mobileSidebarOpen) {
-      document.body.style.overflow = "hidden";
-      document.body.style.touchAction = "none";
-    }
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.body.style.touchAction = previousTouchAction;
-    };
-  }, [mobileSidebarOpen, voiceSelectorOpen]);
-
   const markVoiceOnboardingComplete = () => {
     setVoiceOnboardingComplete(true);
     if (typeof window !== "undefined") {
@@ -1093,7 +1079,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
           onClick={() => setMobileSidebarOpen(false)}
           aria-hidden="true"
         />
-        <div className={`absolute inset-y-0 left-0 w-[88vw] max-w-[360px] overflow-hidden border-r shadow-[0_24px_70px_rgba(2,8,23,0.35)] transition ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"} ${themed(theme, "border-white/10 bg-slate-950/96", "border-slate-200 bg-slate-50/98")}`}>
+        <div className={`absolute inset-y-0 left-0 w-[88vw] max-w-[360px] overflow-hidden overscroll-contain border-r shadow-[0_24px_70px_rgba(2,8,23,0.35)] transition ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"} ${themed(theme, "border-white/10 bg-slate-950/96", "border-slate-200 bg-slate-50/98")}`}>
           <div className={`flex items-center justify-between border-b px-4 py-4 ${themed(theme, "border-white/8", "border-slate-200")}`}>
             <div>
               <p className={`text-xs uppercase tracking-[0.24em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Chat history</p>
@@ -1130,7 +1116,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.98 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
-                className={`relative flex max-h-[88vh] w-full flex-col overflow-hidden rounded-t-[32px] border shadow-[0_28px_80px_rgba(2,8,23,0.45)] ${showVoiceOnboarding ? "sm:max-w-[860px]" : "sm:max-w-[760px]"} sm:rounded-[32px] ${themed(theme, "border-white/12 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.13),transparent_34%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))]")}`}
+                className={`relative flex max-h-[88vh] w-full touch-pan-y flex-col overflow-hidden overscroll-contain rounded-t-[32px] border shadow-[0_28px_80px_rgba(2,8,23,0.45)] ${showVoiceOnboarding ? "sm:max-w-[860px]" : "sm:max-w-[760px]"} sm:rounded-[32px] ${themed(theme, "border-white/12 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.13),transparent_34%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))]")}`}
               >
                 <div className={`border-b px-5 py-4 sm:px-6 ${themed(theme, "border-white/10", "border-slate-200")}`}>
                   <div className="flex items-start justify-between gap-4">
@@ -1179,7 +1165,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+                <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
                   {showVoiceOnboarding ? (
                     <div className="space-y-4">
                       <div className={`rounded-[28px] border p-4 sm:p-5 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_30%),linear-gradient(180deg,rgba(15,23,42,0.9),rgba(2,6,23,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(240,253,250,0.98))]")}`}>
