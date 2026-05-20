@@ -1,3 +1,26 @@
+import { useMemo, useState } from "react";
+import {
+  Archive,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  LoaderCircle,
+  Menu,
+  MessageSquarePlus,
+  Mic,
+  MoonStar,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Pin,
+  Search,
+  Sparkles,
+  SunMedium,
+  Trash2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import AssistantMarkdown from "./AssistantMarkdown";
 
 function themed(theme, darkValue, lightValue) {
@@ -11,17 +34,76 @@ function formatMessageTime(timestamp = "") {
   return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
-function formatConversationDate(timestamp = "") {
+function formatConversationTime(timestamp = "") {
   if (!timestamp) return "";
   const parsed = new Date(timestamp);
   if (Number.isNaN(parsed.getTime())) return "";
+  const now = new Date();
+  const sameDay = parsed.toDateString() === now.toDateString();
+  if (sameDay) return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return parsed.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-function buildMessagePreview(content = "", fallback = "New lecture chat") {
+function buildMessagePreview(content = "", fallback = "Ready for your first question") {
   const text = String(content || "").replace(/\s+/g, " ").trim();
   if (!text) return fallback;
-  return text.length > 44 ? `${text.slice(0, 41).trim()}...` : text;
+  return text.length > 86 ? `${text.slice(0, 83).trim()}...` : text;
+}
+
+function startOfDay(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function groupConversationsByDate(conversations = []) {
+  const now = new Date();
+  const today = startOfDay(now);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const previousWeek = new Date(today);
+  previousWeek.setDate(previousWeek.getDate() - 7);
+
+  const buckets = {
+    Today: [],
+    Yesterday: [],
+    "Previous 7 Days": [],
+    Older: [],
+  };
+
+  conversations.forEach((conversation) => {
+    const stamp = new Date(conversation.updatedAt || conversation.lastMessageAt || conversation.createdAt || now.toISOString());
+    const day = startOfDay(stamp);
+    if (day.getTime() === today.getTime()) {
+      buckets.Today.push(conversation);
+      return;
+    }
+    if (day.getTime() === yesterday.getTime()) {
+      buckets.Yesterday.push(conversation);
+      return;
+    }
+    if (day > previousWeek) {
+      buckets["Previous 7 Days"].push(conversation);
+      return;
+    }
+    buckets.Older.push(conversation);
+  });
+
+  return Object.entries(buckets).filter(([, items]) => items.length > 0);
+}
+
+function conversationMatchesLocalFilter(conversation, query = "") {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [
+    conversation?.title,
+    conversation?.previewText,
+    conversation?.lastMessagePreview,
+    conversation?.lectureLabel,
+    conversation?.memorySummary,
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .some((value) => value.includes(normalizedQuery));
 }
 
 function TypingIndicator({ theme = "dark" }) {
@@ -59,11 +141,65 @@ function VoiceStateIndicator({ theme = "dark", mode = "idle" }) {
   );
 }
 
+function SidebarSkeleton({ theme = "dark" }) {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2, 3, 4].map((index) => (
+        <div
+          key={index}
+          className={`animate-pulse rounded-[22px] border px-4 py-4 ${themed(theme, "border-white/8 bg-white/[0.04]", "border-slate-200 bg-white/70")}`}
+        >
+          <div className={`h-4 rounded-full ${themed(theme, "bg-white/10", "bg-slate-200")}`} />
+          <div className={`mt-3 h-3 w-3/4 rounded-full ${themed(theme, "bg-white/8", "bg-slate-100")}`} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MessageSkeleton({ theme = "dark" }) {
+  return (
+    <div className="space-y-4">
+      {[0, 1, 2].map((index) => (
+        <div key={index} className={`flex gap-3 ${index % 2 ? "justify-end" : "justify-start"}`}>
+          {index % 2 ? null : (
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">
+              AI
+            </div>
+          )}
+          <div className={`w-full max-w-[78%] animate-pulse rounded-[24px] border px-4 py-4 ${themed(theme, "border-white/10 bg-white/[0.05]", "border-slate-200 bg-white")}`}>
+            <div className={`h-3 rounded-full ${themed(theme, "bg-white/12", "bg-slate-200")}`} />
+            <div className={`mt-3 h-3 w-5/6 rounded-full ${themed(theme, "bg-white/8", "bg-slate-100")}`} />
+            <div className={`mt-2 h-3 w-2/3 rounded-full ${themed(theme, "bg-white/8", "bg-slate-100")}`} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SidebarActionButton({ children, onClick, theme = "dark", danger = false }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2 text-left text-sm transition ${
+        danger
+          ? themed(theme, "text-rose-100 hover:bg-rose-500/12", "text-rose-700 hover:bg-rose-50")
+          : themed(theme, "text-slate-200 hover:bg-white/8", "text-slate-700 hover:bg-slate-100")
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function LectureAssistantPanel({ assistant, visible = true }) {
   if (!visible || !assistant) return null;
 
   const {
     activeConversation,
+    canLoadMoreConversations,
     closePanel,
     copiedMessageId,
     composerRef,
@@ -72,48 +208,86 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     createConversation,
     deleteConversation,
     draft,
+    exportConversation,
     hasLectureContext,
     isGenerating,
+    interruptAssistantAndListen,
     isListening,
+    isLoadingConversationMessages,
+    isLoadingConversations,
+    isLoadingMoreConversations,
+    isLoadingMoreMessages,
     isOpen,
     isSpeaking,
+    isSyncingConversation,
     isVoiceReconnecting,
     lectureLabel,
+    loadMoreConversations,
+    loadOlderMessages,
     messages,
     messagesEndRef,
+    mobileSidebarOpen,
+    openMobileSidebar,
     openPanel,
     providerLabel,
     regenerateLastResponse,
+    renameConversation,
+    searchQuery,
     selectConversation,
     sendMessage,
     setDraft,
+    setMobileSidebarOpen,
+    setSearchQuery,
+    showArchived,
+    sidebarCollapsed,
     statusText,
     stopGenerating,
     stopVoiceChat,
     theme,
+    toggleArchiveConversation,
+    togglePinnedConversation,
+    toggleShowArchived,
+    toggleSidebarCollapsed,
     toggleTheme,
     toggleTts,
     toggleVoiceChat,
+    totalConversationCount,
     ttsEnabled,
     voiceModeEnabled,
   } = assistant;
 
+  const [actionMenuId, setActionMenuId] = useState("");
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
-  const savedMessageCount = messages.length;
   const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
-  const savedConversations = conversations.slice(0, 8);
-  const voiceStateMode = isVoiceReconnecting ? "reconnecting" : isListening ? "listening" : isSpeaking ? "speaking" : isGenerating && voiceModeEnabled ? "processing" : voiceModeEnabled ? "ready" : "idle";
+  const filteredConversations = useMemo(
+    () => conversations.filter((conversation) => conversationMatchesLocalFilter(conversation, searchQuery)),
+    [conversations, searchQuery],
+  );
+  const groupedConversations = useMemo(() => groupConversationsByDate(filteredConversations), [filteredConversations]);
+
+  const voiceStateMode = isVoiceReconnecting
+    ? "reconnecting"
+    : isListening
+      ? "listening"
+      : isSpeaking
+        ? "speaking"
+        : isGenerating && voiceModeEnabled
+          ? "processing"
+          : voiceModeEnabled
+            ? "ready"
+            : "idle";
+
   const voiceStateLabel = isVoiceReconnecting
     ? "Reconnecting..."
     : isListening
-    ? "Listening..."
-    : isSpeaking
-      ? "Speaking..."
-      : isGenerating && voiceModeEnabled
-        ? "Processing..."
-      : voiceModeEnabled
-        ? "Voice turn active"
-        : "Voice ready";
+      ? "Listening..."
+      : isSpeaking
+        ? "Speaking..."
+        : isGenerating && voiceModeEnabled
+          ? "Processing..."
+          : voiceModeEnabled
+            ? "Voice turn active"
+            : "Voice ready";
 
   const handleComposerKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -126,192 +300,359 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     if (!isOpen) openPanel({ focusComposer: false });
   };
 
-  const handleDeleteCurrentConversation = () => {
-    if (!activeConversation?.id) return;
-    if (typeof window !== "undefined" && !window.confirm("Delete this saved lecture conversation?")) return;
-    deleteConversation(activeConversation.id);
+  const handleRenameConversation = async (conversation) => {
+    const nextTitle = typeof window !== "undefined"
+      ? window.prompt("Rename chat", conversation.title || "")
+      : "";
+    if (!nextTitle || nextTitle.trim() === conversation.title) return;
+    await renameConversation(conversation.id, nextTitle);
+    setActionMenuId("");
   };
 
+  const handleDeleteConversation = async (conversation) => {
+    if (typeof window !== "undefined" && !window.confirm("Delete this saved conversation?")) return;
+    await deleteConversation(conversation.id);
+    setActionMenuId("");
+  };
+
+  const renderConversationCard = (conversation) => {
+    const isActive = conversation.id === activeConversation?.id;
+    return (
+      <div key={conversation.id} className="relative">
+        <button
+          type="button"
+          onClick={() => {
+            setActionMenuId("");
+            selectConversation(conversation.id);
+          }}
+          className={`group w-full rounded-[24px] border px-4 py-3 text-left transition duration-200 ${
+            isActive
+              ? themed(
+                theme,
+                "border-emerald-300/30 bg-emerald-300/12 text-white shadow-[0_18px_40px_rgba(16,185,129,0.12)]",
+                "border-emerald-200 bg-white text-slate-900 shadow-[0_18px_40px_rgba(15,23,42,0.08)]",
+              )
+              : themed(
+                theme,
+                "border-white/10 bg-slate-950/45 text-slate-200 hover:border-white/20 hover:bg-white/[0.05]",
+                "border-slate-200 bg-white/80 text-slate-700 hover:bg-white",
+              )
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <div className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${isActive
+              ? themed(theme, "bg-white/10 text-emerald-50", "bg-emerald-50 text-emerald-700")
+              : themed(theme, "bg-white/6 text-slate-200", "bg-slate-100 text-slate-600")}`}
+            >
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-semibold">{conversation.title || "Untitled chat"}</p>
+                {conversation.isPinned ? (
+                  <Pin className={`h-3.5 w-3.5 shrink-0 ${themed(theme, "text-amber-200", "text-amber-600")}`} />
+                ) : null}
+                {conversation.isArchived ? (
+                  <Archive className={`h-3.5 w-3.5 shrink-0 ${themed(theme, "text-slate-400", "text-slate-500")}`} />
+                ) : null}
+              </div>
+              <p className={`mt-1 truncate text-xs ${themed(theme, isActive ? "text-emerald-50/85" : "text-slate-400", isActive ? "text-emerald-700/90" : "text-slate-500")}`}>
+                {buildMessagePreview(conversation.lastMessagePreview || conversation.previewText)}
+              </p>
+              <div className={`mt-2 flex items-center gap-2 text-[11px] ${themed(theme, isActive ? "text-emerald-50/75" : "text-slate-400", isActive ? "text-emerald-700/80" : "text-slate-500")}`}>
+                <span>{formatConversationTime(conversation.updatedAt || conversation.lastMessageAt || conversation.createdAt)}</span>
+                <span className="opacity-60">•</span>
+                <span>{Math.max(conversation.messageCount || 0, conversation.messages?.length || 0)} messages</span>
+              </div>
+            </div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActionMenuId((current) => current === conversation.id ? "" : conversation.id)}
+          className={`absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full transition ${
+            isActive
+              ? themed(theme, "bg-white/10 text-white hover:bg-white/16", "bg-slate-100 text-slate-700 hover:bg-slate-200")
+              : themed(theme, "bg-black/20 text-slate-200 hover:bg-white/10", "bg-white text-slate-600 hover:bg-slate-100")
+          }`}
+          aria-label="Conversation actions"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+
+        {actionMenuId === conversation.id ? (
+          <div className={`absolute right-3 top-14 z-20 w-52 rounded-[24px] border p-2 shadow-[0_24px_60px_rgba(15,23,42,0.22)] backdrop-blur-xl ${themed(theme, "border-white/12 bg-slate-950/92", "border-slate-200 bg-white/96")}`}>
+            <SidebarActionButton theme={theme} onClick={() => handleRenameConversation(conversation)}>
+              <Pencil className="h-4 w-4" />
+              Rename chat
+            </SidebarActionButton>
+            <SidebarActionButton theme={theme} onClick={() => togglePinnedConversation(conversation.id)}>
+              <Pin className="h-4 w-4" />
+              {conversation.isPinned ? "Unpin chat" : "Pin chat"}
+            </SidebarActionButton>
+            <SidebarActionButton theme={theme} onClick={() => toggleArchiveConversation(conversation.id)}>
+              <Archive className="h-4 w-4" />
+              {conversation.isArchived ? "Restore chat" : "Archive chat"}
+            </SidebarActionButton>
+            <SidebarActionButton theme={theme} onClick={() => exportConversation(conversation.id)}>
+              <Download className="h-4 w-4" />
+              Export chat
+            </SidebarActionButton>
+            <SidebarActionButton theme={theme} danger onClick={() => handleDeleteConversation(conversation)}>
+              <Trash2 className="h-4 w-4" />
+              Delete chat
+            </SidebarActionButton>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const sidebarContent = (
+    <div className={`flex h-full flex-col ${themed(theme, "bg-white/[0.03]", "bg-white/80")}`}>
+      <div className={`border-b px-4 py-4 ${themed(theme, "border-white/8", "border-slate-200/80")}`}>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={createConversation}
+            className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0f766e,#22c55e)] px-4 py-3 text-sm font-semibold text-white shadow-[0_16px_34px_rgba(34,197,94,0.28)] transition hover:translate-y-[-1px]"
+          >
+            <MessageSquarePlus className="h-4 w-4" />
+            New Chat
+          </button>
+          <button
+            type="button"
+            onClick={toggleSidebarCollapsed}
+            className={`hidden h-11 w-11 items-center justify-center rounded-2xl transition lg:flex ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-200 hover:bg-white/[0.08]", "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100")}`}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+        </div>
+
+        <div className={`mt-4 flex items-center gap-3 rounded-[22px] border px-4 py-3 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white")}`}>
+          <Search className={`h-4 w-4 ${themed(theme, "text-slate-400", "text-slate-500")}`} />
+          <input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search chats"
+            className={`w-full bg-transparent text-sm outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
+          />
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={toggleShowArchived}
+            className={`rounded-full px-3 py-2 text-xs font-semibold transition ${showArchived
+              ? themed(theme, "bg-emerald-300/14 text-emerald-50", "bg-emerald-50 text-emerald-700")
+              : themed(theme, "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]", "bg-slate-100 text-slate-600 hover:bg-slate-200")}`}
+          >
+                    {showArchived ? "Showing archived" : "Hide archived"}
+                  </button>
+                  <span className={`text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
+            {totalConversationCount || filteredConversations.length} saved chats
+                  </span>
+                </div>
+              </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-4">
+        {isLoadingConversations && !filteredConversations.length ? <SidebarSkeleton theme={theme} /> : null}
+
+        {!isLoadingConversations && !filteredConversations.length ? (
+          <div className={`rounded-[24px] border border-dashed px-4 py-6 text-sm ${themed(theme, "border-white/10 bg-white/[0.03] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
+            No saved chats yet. Start a new conversation and it will appear here.
+          </div>
+        ) : null}
+
+        <div className="space-y-6">
+          {groupedConversations.map(([label, items]) => (
+            <section key={label}>
+              <div className="mb-3 flex items-center justify-between px-2">
+                <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>{label}</p>
+                <span className={`text-[11px] ${themed(theme, "text-slate-500", "text-slate-400")}`}>{items.length}</span>
+              </div>
+              <div className="space-y-3">
+                {items.map(renderConversationCard)}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        {canLoadMoreConversations ? (
+          <button
+            type="button"
+            onClick={loadMoreConversations}
+            disabled={isLoadingMoreConversations}
+            className={`mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${themed(theme, "border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.08]", "border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+          >
+            {isLoadingMoreConversations ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+            Load more chats
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+
   return (
-    <section className={`rounded-[28px] border p-4 shadow-[0_24px_60px_rgba(2,8,23,0.22)] backdrop-blur-xl sm:p-5 ${themed(theme, "border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.92))]", "border-slate-200 bg-white/95")}`}>
-      {isExpanded ? (
-        <>
-          <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className={`relative overflow-hidden rounded-[30px] border p-3 shadow-[0_24px_70px_rgba(2,8,23,0.22)] backdrop-blur-2xl sm:p-4 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(52,211,153,0.12),transparent_30%),linear-gradient(180deg,rgba(2,6,23,0.97),rgba(15,23,42,0.93))]", "border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.94))]")}`}>
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.04),transparent)]" />
+
+      <div className="relative z-10">
+        <div className="flex flex-wrap items-start justify-between gap-3 px-1 pb-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <button
+              type="button"
+              onClick={openMobileSidebar}
+              className={`flex h-11 w-11 items-center justify-center rounded-2xl transition lg:hidden ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+              aria-label="Open chat history"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
             <div className="min-w-0">
-              <p className={`text-xs uppercase tracking-[0.28em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Lecture Assistant</p>
-              <h3 className={`mt-2 text-xl font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask anything from this lecture</h3>
-              <p className={`mt-2 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>{lectureLabel || "Use the loaded transcript, guide, formulas, and examples as context."}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={createConversation}
-                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-              >
-                New Chat
-              </button>
-              <button
-                type="button"
-                onClick={toggleTts}
-                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${ttsEnabled
-                  ? themed(theme, "border border-emerald-300/25 bg-emerald-300/12 text-emerald-50", "border border-emerald-200 bg-emerald-50 text-emerald-700")
-                  : themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-              >
-                {ttsEnabled ? "Voice Replies On" : "Voice Replies Off"}
-              </button>
-              <button
-                type="button"
-                onClick={toggleTheme}
-                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-              >
-                {theme === "dark" ? "Light Mode" : "Dark Mode"}
-              </button>
-              {voiceModeEnabled ? (
-                <button
-                  type="button"
-                  onClick={() => stopVoiceChat({ message: "Voice conversation ended." })}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-fuchsia-300/20 bg-fuchsia-400/10 text-fuchsia-100 hover:bg-fuchsia-400/15", "border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100")}`}
-                >
-                  End Voice
-                </button>
-              ) : null}
-              {activeConversation?.messages?.length ? (
-                <button
-                  type="button"
-                  onClick={handleDeleteCurrentConversation}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-rose-300/20 bg-rose-500/10 text-rose-100 hover:bg-rose-500/15", "border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100")}`}
-                >
-                  Delete Chat
-                </button>
-              ) : null}
-              {!isGenerating && !isListening && !String(draft || "").trim() ? (
-                <button
-                  type="button"
-                  onClick={closePanel}
-                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white", "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900")}`}
-                >
-                  Minimize
-                </button>
-              ) : null}
+              <p className={`text-xs uppercase tracking-[0.28em] ${themed(theme, "text-emerald-200/75", "text-emerald-700")}`}>Lecture Assistant</p>
+              <h3 className={`mt-2 truncate text-xl font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
+                {activeConversation?.title || "Ask anything from this lecture"}
+              </h3>
+              <p className={`mt-2 max-w-2xl text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                {lectureLabel || "Use the loaded transcript, formulas, notes, and examples as context."}
+              </p>
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>{providerLabel || "Gemini to Groq fallback ready"}</span>
-            <span className={`rounded-full px-3 py-2 text-xs font-semibold ${hasLectureContext
-              ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
-              : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}
-            >
-              {hasLectureContext ? "Lecture context loaded" : "General mode until a lecture is loaded"}
-            </span>
-            <span className={`rounded-full px-3 py-2 text-xs font-semibold ${isListening
-              ? themed(theme, "bg-fuchsia-400/12 text-fuchsia-100", "bg-fuchsia-50 text-fuchsia-700")
-              : themed(theme, "bg-white/5 text-slate-300", "bg-slate-100 text-slate-600")}`}
-            >
-              {isListening ? "Listening now" : isSpeaking ? "Speaking reply" : voiceModeEnabled ? "Voice chat on" : "Voice input ready"}
-            </span>
-          </div>
-
-          <p className={`mt-4 text-xs uppercase tracking-[0.2em] ${themed(theme, "text-slate-400", "text-slate-500")}`}>
-            Saved chats restore automatically in this browser for the current signed-in account.
-          </p>
-        </>
-      ) : (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className={`text-xs uppercase tracking-[0.28em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Lecture Assistant</p>
-            <p className={`mt-2 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-              {savedMessageCount
-                ? `${savedMessageCount} saved message${savedMessageCount === 1 ? "" : "s"} in this lecture chat.`
-                : "Tap inside the Ask anything box to open the full lecture chat here."}
-            </p>
-          </div>
           <div className="flex flex-wrap gap-2">
-            <span className={`rounded-full px-3 py-2 text-xs font-semibold ${hasLectureContext
-              ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
-              : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}
+            <button
+              type="button"
+              onClick={toggleTts}
+              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${ttsEnabled
+                ? themed(theme, "border border-emerald-300/25 bg-emerald-300/12 text-emerald-50", "border border-emerald-200 bg-emerald-50 text-emerald-700")
+                : themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
             >
-              {hasLectureContext ? "Ready here" : "General AI ready"}
-            </span>
-            <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/5 text-slate-300", "bg-slate-100 text-slate-600")}`}>
-              {providerLabel || "Secure streaming chat"}
-            </span>
+              <span className="inline-flex items-center gap-2">
+                {ttsEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                {ttsEnabled ? "Voice replies on" : "Voice replies off"}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+            >
+              <span className="inline-flex items-center gap-2">
+                {theme === "dark" ? <SunMedium className="h-3.5 w-3.5" /> : <MoonStar className="h-3.5 w-3.5" />}
+                {theme === "dark" ? "Light mode" : "Dark mode"}
+              </span>
+            </button>
+            {voiceModeEnabled ? (
+              <button
+                type="button"
+                onClick={() => stopVoiceChat({ message: "Voice conversation ended." })}
+                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-fuchsia-300/20 bg-fuchsia-400/10 text-fuchsia-100 hover:bg-fuchsia-400/15", "border border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100")}`}
+              >
+                End voice
+              </button>
+            ) : null}
+            {!isGenerating && !isListening && !String(draft || "").trim() ? (
+              <button
+                type="button"
+                onClick={closePanel}
+                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10 hover:text-white", "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900")}`}
+              >
+                Minimize
+              </button>
+            ) : null}
           </div>
         </div>
-      )}
 
-      {isExpanded ? (
-        <div className="mt-4 grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className={`rounded-[24px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.03]", "border-slate-200 bg-slate-50/80")}`}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className={`text-xs uppercase tracking-[0.24em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Saved Chats</p>
-                <p className={`mt-2 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Stored locally in this browser.</p>
-              </div>
-              <button
-                type="button"
-                onClick={createConversation}
-                className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-              >
-                New Chat
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {savedConversations.map((conversation) => {
-                const isActive = conversation.id === activeConversation?.id;
-                return (
+        {isExpanded ? (
+          <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+            <aside className={`hidden overflow-hidden rounded-[28px] border lg:block ${sidebarCollapsed ? "lg:w-[82px]" : ""} ${themed(theme, "border-white/10 bg-slate-950/45", "border-slate-200 bg-slate-50/70")}`}>
+              {sidebarCollapsed ? (
+                <div className="flex h-full flex-col items-center gap-3 px-3 py-4">
                   <button
-                    key={conversation.id}
                     type="button"
-                    onClick={() => selectConversation(conversation.id)}
-                    className={`w-full rounded-[20px] border px-4 py-3 text-left transition ${isActive
-                      ? themed(theme, "border-emerald-300/20 bg-emerald-300/10 text-white", "border-emerald-200 bg-white text-slate-900 shadow-[0_12px_30px_rgba(15,23,42,0.08)]")
-                      : themed(theme, "border-white/10 bg-slate-950/45 text-slate-200 hover:bg-white/[0.06]", "border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                    onClick={toggleSidebarCollapsed}
+                    className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white shadow-[0_18px_34px_rgba(34,197,94,0.28)]`}
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-semibold">{buildMessagePreview(conversation.title)}</p>
-                      <span className={`text-[11px] uppercase tracking-[0.18em] ${themed(theme, isActive ? "text-emerald-50/85" : "text-slate-400", isActive ? "text-emerald-700" : "text-slate-500")}`}>
-                        {formatConversationDate(conversation.updatedAt || conversation.createdAt)}
-                      </span>
-                    </div>
-                    <p className={`mt-2 text-xs ${themed(theme, isActive ? "text-emerald-50/80" : "text-slate-400", isActive ? "text-emerald-700/90" : "text-slate-500")}`}>
-                      {(conversation.messages || []).length} message{(conversation.messages || []).length === 1 ? "" : "s"}
-                    </p>
+                    <ChevronRight className="h-4 w-4" />
                   </button>
-                );
-              })}
-            </div>
-          </aside>
+                  <button
+                    type="button"
+                    onClick={createConversation}
+                    className={`flex h-12 w-12 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.06] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                  >
+                    <MessageSquarePlus className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openMobileSidebar}
+                    className={`flex h-12 w-12 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.06] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                  >
+                    <Search className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : sidebarContent}
+            </aside>
 
-          <div className="min-w-0 space-y-4">
-            <div className={`rounded-[24px] border px-4 py-4 ${themed(theme, "border-white/10 bg-white/[0.03]", "border-slate-200 bg-slate-50")}`}>
-              <div className="flex flex-wrap items-center gap-3">
-                <VoiceStateIndicator theme={theme} mode={voiceStateMode} />
-                <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{voiceStateLabel}</p>
-                <span className={`rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] ${themed(theme, "bg-white/5 text-slate-300", "bg-white text-slate-600")}`}>
-                  {isVoiceReconnecting ? "Reconnecting" : isListening ? "Listening" : isSpeaking ? "Speaking" : isGenerating ? "Thinking" : "Ready"}
-                </span>
+            <div className="min-w-0 space-y-4">
+              <div className={`rounded-[28px] border px-4 py-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/75")}`}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <VoiceStateIndicator theme={theme} mode={voiceStateMode} />
+                    <div className="min-w-0">
+                      <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{voiceStateLabel}</p>
+                      <p className={`mt-1 truncate text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>{statusText}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                      {providerLabel || "OpenAI text + voice routing ready"}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-xs font-semibold ${hasLectureContext
+                      ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
+                      : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}
+                    >
+                      {hasLectureContext ? "Lecture context loaded" : "General mode until a lecture is loaded"}
+                    </span>
+                    {isSyncingConversation ? (
+                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                        Saving...
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-              <p className={`mt-3 text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>{statusText}</p>
-              {voiceModeEnabled ? (
-                <p className={`mt-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
-                  {isSpeaking || isGenerating ? "Tap the mic to interrupt the assistant and start talking immediately." : "Voice mode stays active across turns until you end it."}
-                </p>
-              ) : null}
-            </div>
 
-            <div className={`rounded-[24px] border px-4 py-4 sm:px-5 ${themed(theme, "border-white/10 bg-slate-950/70", "border-slate-200 bg-slate-50/80")}`}>
-              {messages.length ? (
-                <div className="space-y-4">
+              <div className={`rounded-[28px] border px-4 py-4 sm:px-5 ${themed(theme, "border-white/10 bg-slate-950/60", "border-slate-200 bg-slate-50/75")}`}>
+                {activeConversation?.hasMoreMessages ? (
+                  <div className="mb-4 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => loadOlderMessages(activeConversation.id)}
+                      disabled={isLoadingMoreMessages}
+                      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${themed(theme, "border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.08]", "border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                    >
+                      {isLoadingMoreMessages ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
+                      Load older messages
+                    </button>
+                  </div>
+                ) : null}
+
+                {isLoadingConversationMessages && !messages.length ? <MessageSkeleton theme={theme} /> : null}
+
+                {!isLoadingConversationMessages && messages.length ? (
+                  <div className="space-y-4">
                   {messages.map((message) => (
                     <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                       {message.role === "assistant" ? (
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
                       ) : null}
-                      <div className={`max-w-[88%] rounded-[24px] border px-4 py-3 ${message.role === "assistant"
+
+                      <div className={`max-w-[90%] rounded-[26px] border px-4 py-3 ${message.role === "assistant"
                         ? themed(theme, "border-emerald-300/18 bg-emerald-300/10 text-slate-100", "border-emerald-100 bg-white text-slate-800")
-                        : themed(theme, "border-white/10 bg-white/8 text-white", "border-slate-200 bg-slate-900 text-white")}`}
+                        : themed(theme, "border-white/10 bg-white/[0.08] text-white", "border-slate-200 bg-slate-900 text-white")}`}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${message.role === "assistant"
@@ -326,6 +667,14 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                               : "bg-white/10 text-white/80"}`}
                             >
                               {message.provider}
+                            </span>
+                          ) : null}
+                          {message.interactionMode === "voice" ? (
+                            <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.18em] ${message.role === "assistant"
+                              ? themed(theme, "bg-fuchsia-400/12 text-fuchsia-100", "bg-fuchsia-50 text-fuchsia-700")
+                              : "bg-white/10 text-white/80"}`}
+                            >
+                              Voice
                             </span>
                           ) : null}
                           {formatMessageTime(message.timestamp) ? (
@@ -362,6 +711,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                           ) : null}
                         </div>
                       </div>
+
                       {message.role === "user" ? (
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">You</div>
                       ) : null}
@@ -378,75 +728,144 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                   ) : null}
 
                   <div ref={messagesEndRef} />
-                </div>
+                  </div>
+                ) : null}
+
+                {!isLoadingConversationMessages && !messages.length ? (
+                  <div className={`rounded-[24px] border border-dashed px-5 py-6 ${themed(theme, "border-white/10 bg-white/[0.03] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
+                    <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask naturally, like you would in ChatGPT or Copilot.</p>
+                    <p className="mt-3 text-sm leading-7">
+                      This chat now keeps persistent history, restores older conversations, saves voice transcripts, and continues threads without needing a page refresh.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className={`rounded-[28px] border px-4 py-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/75")}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
+                  {activeConversation?.messageCount || messages.length
+                    ? `${Math.max(activeConversation?.messageCount || 0, messages.length)} saved messages in this chat`
+                    : "Open a fresh chat or pick one from history"}
+                </p>
+                <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                  {statusText}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectConversation(activeConversation?.id || createConversation(), { focusComposer: true })}
+                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                >
+                  Resume chat
+                </button>
+                <button
+                  type="button"
+                  onClick={openMobileSidebar}
+                  className={`rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/5 text-white hover:bg-white/10", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                >
+                  History
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className={`mt-4 rounded-[28px] border p-3 ${themed(theme, "border-white/10 bg-slate-950/82", "border-slate-200 bg-white/92")}`}>
+          <div className="flex items-end gap-3">
+            <textarea
+              ref={composerRef}
+              value={draft}
+              onFocus={handleComposerFocus}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              rows={isExpanded ? 2 : 1}
+              placeholder={hasLectureContext ? "Ask anything from this lecture..." : "Ask a question, or load a lecture for grounded answers..."}
+              className={`min-h-[56px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
+            />
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  handleComposerFocus();
+                  if (isSpeaking || isGenerating) {
+                    interruptAssistantAndListen();
+                    return;
+                  }
+                  toggleVoiceChat();
+                }}
+                className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${(isListening || isSpeaking || isVoiceReconnecting || voiceModeEnabled)
+                  ? themed(theme, "border-fuchsia-300/35 bg-fuchsia-400/15 text-fuchsia-100", "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700")
+                  : themed(theme, "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10", "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100")}`}
+                aria-label={isSpeaking || isGenerating ? "Interrupt assistant and listen" : isListening ? "Stop voice chat" : voiceModeEnabled ? "Resume voice listening" : "Start voice chat"}
+              >
+                <Mic className="h-5 w-5" />
+              </button>
+
+              {isGenerating ? (
+                <button
+                  type="button"
+                  onClick={stopGenerating}
+                  className={`rounded-full px-4 py-3 text-sm font-semibold transition ${themed(theme, "bg-rose-500/90 text-white hover:bg-rose-500", "bg-rose-600 text-white hover:bg-rose-700")}`}
+                >
+                  Stop
+                </button>
               ) : (
-                <div className={`rounded-[20px] border border-dashed px-4 py-5 ${themed(theme, "border-white/10 bg-white/[0.02] text-slate-300", "border-slate-200 bg-white text-slate-600")}`}>
-                  <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Ask naturally, like you would in Copilot or ChatGPT.</p>
-                  <p className="mt-3 text-sm leading-7">This chat keeps lecture memory in your browser, streams replies from the backend, and uses Groq Whisper transcription for more accurate voice turns with browser fallback when needed.</p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => sendMessage()}
+                  disabled={!assistant.canSend}
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white shadow-[0_16px_34px_rgba(34,197,94,0.28)] transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Send message"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
               )}
             </div>
           </div>
-        </div>
-      ) : null}
-
-      <div className={`mt-4 rounded-[24px] border p-3 ${themed(theme, "border-white/10 bg-slate-950/82", "border-slate-200 bg-white")}`}>
-        <div className="flex items-end gap-3">
-          <textarea
-            ref={composerRef}
-            value={draft}
-            onFocus={handleComposerFocus}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleComposerKeyDown}
-            rows={isExpanded ? 2 : 1}
-            placeholder={hasLectureContext ? "Ask anything from this lecture..." : "Ask a question, or load a lecture for grounded answers..."}
-            className={`min-h-[56px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
-          />
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                handleComposerFocus();
-                toggleVoiceChat();
-              }}
-              className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${(isListening || isSpeaking || isVoiceReconnecting || voiceModeEnabled)
-                ? themed(theme, "border-fuchsia-300/35 bg-fuchsia-400/15 text-fuchsia-100", "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700")
-                : themed(theme, "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10", "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100")}`}
-              aria-label={isSpeaking || isGenerating ? "Interrupt assistant and listen" : isListening ? "Stop voice chat" : voiceModeEnabled ? "Resume voice listening" : "Start voice chat"}
-            >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                <path d="M12 4a3 3 0 0 1 3 3v4a3 3 0 1 1-6 0V7a3 3 0 0 1 3-3Zm-6 7a1 1 0 0 1 2 0 4 4 0 1 0 8 0 1 1 0 1 1 2 0 6 6 0 0 1-5 5.91V20h2a1 1 0 1 1 0 2H9a1 1 0 0 1 0-2h2v-2.09A6 6 0 0 1 6 11Z" fill="currentColor" />
-              </svg>
-            </button>
-
-            {isGenerating ? (
-              <button
-                type="button"
-                onClick={stopGenerating}
-                className={`rounded-full px-4 py-3 text-sm font-semibold transition ${themed(theme, "bg-rose-500/90 text-white hover:bg-rose-500", "bg-rose-600 text-white hover:bg-rose-700")}`}
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => sendMessage()}
-                disabled={!assistant.canSend}
-                className="flex h-12 w-12 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Send message"
-              >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                  <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                </svg>
-              </button>
-            )}
+          <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
+            <span>Enter sends. Shift+Enter adds a new line.</span>
+            <span>{voiceModeEnabled ? "Voice mode stays active across turns and can be interrupted with the mic." : "Tap the mic for fast voice conversation with saved transcript history."}</span>
           </div>
         </div>
-        <div className={`mt-3 flex flex-wrap items-center justify-between gap-2 px-2 text-xs ${themed(theme, "text-slate-400", "text-slate-500")}`}>
-          <span>Enter sends. Shift+Enter adds a new line.</span>
-          <span>{voiceModeEnabled ? "Voice mode stays active across turns and can be interrupted with the mic." : "Tap the mic for Groq Whisper voice conversation with browser fallback."}</span>
+      </div>
+
+      <div className={`fixed inset-0 z-30 transition lg:hidden ${mobileSidebarOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}>
+        <div
+          className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-hidden="true"
+        />
+        <div className={`absolute inset-y-0 left-0 w-[88vw] max-w-[360px] overflow-hidden border-r shadow-[0_24px_70px_rgba(2,8,23,0.35)] transition ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"} ${themed(theme, "border-white/10 bg-slate-950/96", "border-slate-200 bg-slate-50/98")}`}>
+          <div className={`flex items-center justify-between border-b px-4 py-4 ${themed(theme, "border-white/8", "border-slate-200")}`}>
+            <div>
+              <p className={`text-xs uppercase tracking-[0.24em] ${themed(theme, "text-emerald-200/70", "text-emerald-700")}`}>Chat history</p>
+              <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Persistent conversations</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(false)}
+              className={`flex h-11 w-11 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          </div>
+          {sidebarContent}
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={createConversation}
+        className="fixed bottom-6 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white shadow-[0_18px_34px_rgba(34,197,94,0.32)] transition hover:scale-[1.02] lg:hidden"
+        aria-label="New chat"
+      >
+        <MessageSquarePlus className="h-5 w-5" />
+      </button>
     </section>
   );
 }

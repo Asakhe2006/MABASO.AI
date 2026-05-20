@@ -41,6 +41,10 @@ from chat_assistant import (
     iter_provider_stream,
     resolve_provider_attempts,
 )
+from supabase_chat_history import (
+    SupabaseChatHistoryError,
+    SupabaseChatHistoryStore,
+)
 try:
     from curl_cffi import requests as curl_requests
 except ImportError:
@@ -112,6 +116,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 client = OpenAI()
+chat_history_store = SupabaseChatHistoryStore.from_env()
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
@@ -203,6 +208,9 @@ LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPU
 LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS = int(
     os.getenv("LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS", str(LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
 )
+LECTURE_ASSISTANT_TITLE_MODEL = (os.getenv("LECTURE_ASSISTANT_TITLE_MODEL", "gpt-4.1-mini") or "gpt-4.1-mini").strip()
+LECTURE_ASSISTANT_TITLE_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_TITLE_TIMEOUT", "20"))
+LECTURE_ASSISTANT_TITLE_MAX_WORDS = max(3, int(os.getenv("LECTURE_ASSISTANT_TITLE_MAX_WORDS", "6")))
 LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "220"))
 LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS = int(
     os.getenv("LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS", "520")
@@ -880,8 +888,36 @@ class LectureAssistantRequest(BaseModel):
     voice_mode: bool = False
     session_id: str = ""
     conversation_id: str = ""
+    context_key: str = ""
     lecture_label: str = ""
     client_request_id: str = ""
+    interaction_mode: str = "text"
+    append_user_message: bool = True
+    regenerate_last_assistant: bool = False
+    user_message_id: str = ""
+    assistant_message_id: str = ""
+
+
+class AssistantConversationUpdateRequest(BaseModel):
+    title: str | None = None
+    is_archived: bool | None = None
+    is_pinned: bool | None = None
+
+
+class AssistantConversationListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int = 0
+    limit: int = 0
+    offset: int = 0
+    storage_mode: str = "supabase"
+
+
+class AssistantConversationMessagesResponse(BaseModel):
+    items: list[dict[str, Any]]
+    total: int = 0
+    has_more: bool = False
+    next_before: str = ""
+    storage_mode: str = "supabase"
 
 
 class RealtimeTutorConfigRequest(BaseModel):
@@ -4008,12 +4044,30 @@ def resolve_lecture_assistant_max_output_tokens(payload: LectureAssistantRequest
     return max(256, min(LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS, LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
 
 
-def build_lecture_assistant_messages(payload: LectureAssistantRequest) -> list[dict[str, str]]:
+def build_lecture_assistant_messages(
+    payload: LectureAssistantRequest,
+    *,
+    persisted_recent_messages: list[dict[str, Any]] | None = None,
+    memory_summary: str = "",
+) -> list[dict[str, str]]:
+    voice_mode = bool(payload.voice_mode)
+    wants_detail = lecture_assistant_voice_wants_detail(payload.question) if voice_mode else False
     history = sanitize_lecture_assistant_history(
         payload.messages,
-        voice_mode=bool(payload.voice_mode),
-        wants_detail=lecture_assistant_voice_wants_detail(payload.question) if bool(payload.voice_mode) else False,
+        voice_mode=voice_mode,
+        wants_detail=wants_detail,
     )
+    if persisted_recent_messages:
+        history = [
+            {
+                "role": "assistant" if compact_text(item.get("role")).lower() == "assistant" else "user",
+                "content": compact_text(item.get("content"))[:1400 if voice_mode else 2400],
+            }
+            for item in persisted_recent_messages
+            if compact_text(item.get("content"))
+        ]
+    if compact_text(memory_summary):
+        history = [{"role": "assistant", "content": compact_text(memory_summary)[:1800]}] + history
     question = compact_text(payload.question)
     if question:
         history.append({"role": "user", "content": question[:2400]})
@@ -4117,6 +4171,148 @@ def compact_text(value: Any, fallback: str = "") -> str:
         return fallback
     text = str(value).replace("\r\n", "\n").strip()
     return text or fallback
+
+
+GENERIC_CONVERSATION_TITLES = {
+    "",
+    "new chat",
+    "conversation",
+    "new conversation",
+    "untitled chat",
+    "ready for your first question",
+    "fresh lecture chat",
+    "start a new question",
+}
+TITLE_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "be",
+    "for",
+    "from",
+    "help",
+    "how",
+    "i",
+    "in",
+    "into",
+    "is",
+    "it",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "please",
+    "question",
+    "that",
+    "the",
+    "this",
+    "to",
+    "understand",
+    "what",
+    "why",
+    "with",
+}
+
+
+def normalize_chat_history_json(value: Any, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return dict(fallback or {})
+        return parsed if isinstance(parsed, dict) else dict(fallback or {})
+    return dict(fallback or {})
+
+
+def is_generic_conversation_title(title: str = "") -> bool:
+    normalized = compact_text(title).lower()
+    if not normalized:
+        return True
+    if normalized in GENERIC_CONVERSATION_TITLES:
+        return True
+    return normalized.startswith("new chat ") or normalized.startswith("conversation ")
+
+
+def cleanup_generated_conversation_title(title: str, fallback: str) -> str:
+    cleaned = compact_text(title).strip("\"'` ").replace("\n", " ")
+    cleaned = re.sub(r"^(title|chat title)\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:,.")
+    if not cleaned:
+        return fallback
+    words = [word for word in cleaned.split() if compact_text(word)]
+    if not words:
+        return fallback
+    cleaned = " ".join(words[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]).strip()
+    return cleaned[:80].strip() or fallback
+
+
+def build_fallback_conversation_title(question: str, lecture_label: str = "") -> str:
+    source = compact_text(question) or compact_text(lecture_label) or "Study Chat"
+    candidates = re.findall(r"[A-Za-z0-9][A-Za-z0-9'/-]*", source)
+    selected: list[str] = []
+    for word in candidates:
+        lowered = word.lower()
+        if lowered in TITLE_STOP_WORDS:
+            continue
+        selected.append(word.capitalize() if len(word) > 2 else word.upper())
+        if len(selected) >= LECTURE_ASSISTANT_TITLE_MAX_WORDS:
+            break
+    if not selected:
+        selected = [part.capitalize() for part in compact_text(lecture_label, "Study Chat").split()[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]]
+    return " ".join(selected[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]).strip() or "Study Chat"
+
+
+def generate_conversation_title(
+    *,
+    question: str,
+    lecture_label: str = "",
+    assistant_preview: str = "",
+    existing_title: str = "",
+) -> str:
+    fallback = build_fallback_conversation_title(question, lecture_label)
+    if not compact_text(os.getenv("OPENAI_API_KEY")):
+        return fallback
+
+    prompt_parts = [
+        f"Lecture label: {compact_text(lecture_label, 'Unknown lecture')}",
+        f"User message: {compact_text(question)[:800]}",
+    ]
+    if compact_text(assistant_preview):
+        prompt_parts.append(f"Assistant reply preview: {compact_text(assistant_preview)[:500]}")
+    if compact_text(existing_title):
+        prompt_parts.append(f"Current title: {compact_text(existing_title)[:120]}")
+
+    try:
+        response = client.with_options(timeout=LECTURE_ASSISTANT_TITLE_TIMEOUT).chat.completions.create(
+            model=LECTURE_ASSISTANT_TITLE_MODEL,
+            temperature=0.2,
+            max_completion_tokens=24,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Create a concise professional chat title for a student AI conversation. "
+                        "Return only the title, with no quotes, no markdown, and no punctuation-heavy phrasing. "
+                        f"Use {max(3, LECTURE_ASSISTANT_TITLE_MAX_WORDS - 2)} to {LECTURE_ASSISTANT_TITLE_MAX_WORDS} words."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "\n".join(part for part in prompt_parts if part),
+                },
+            ],
+        )
+        generated = compact_text(response.choices[0].message.content if response.choices else "")
+        return cleanup_generated_conversation_title(generated, fallback)
+    except Exception:
+        logger.exception("Conversation title generation failed")
+        return fallback
+
 
 
 def normalize_speech_transcription_language(value: str = "") -> str:
@@ -14902,6 +15098,209 @@ async def ask_study_assistant(
     return {"answer": make_formulas_human_readable(answer_with_follow_up)}
 
 
+def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": compact_text(row.get("id")),
+        "conversationId": compact_text(row.get("conversation_id")),
+        "role": "assistant" if compact_text(row.get("role")).lower() == "assistant" else "user",
+        "content": compact_text(row.get("content")),
+        "timestamp": compact_text(row.get("timestamp")),
+        "interactionMode": compact_text(row.get("interaction_mode"), "text"),
+        "provider": compact_text(row.get("provider")),
+        "model": compact_text(row.get("model")),
+        "metadata": normalize_chat_history_json(row.get("metadata_json")),
+    }
+
+
+def format_chat_history_conversation(row: dict[str, Any], *, include_messages: bool = False, messages: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    payload = {
+        "id": compact_text(row.get("id")),
+        "title": compact_text(row.get("title"), "Ready for your first question"),
+        "previewText": compact_text(row.get("preview_text"), compact_text(row.get("last_message_preview"))),
+        "lastMessagePreview": compact_text(row.get("last_message_preview"), compact_text(row.get("preview_text"))),
+        "lectureLabel": compact_text(row.get("lecture_label")),
+        "contextKey": compact_text(row.get("context_key")),
+        "memorySummary": compact_text(row.get("memory_summary")),
+        "messageCount": int(row.get("message_count") or 0),
+        "isPinned": bool(row.get("is_pinned")),
+        "isArchived": bool(row.get("is_archived")),
+        "createdAt": compact_text(row.get("created_at")),
+        "updatedAt": compact_text(row.get("updated_at"), compact_text(row.get("created_at"))),
+        "lastMessageAt": compact_text(row.get("last_message_at"), compact_text(row.get("updated_at"), compact_text(row.get("created_at")))),
+        "metadata": normalize_chat_history_json(row.get("metadata_json")),
+    }
+    if include_messages:
+        payload["messages"] = [format_chat_history_message(item) for item in (messages or [])]
+    return payload
+
+
+def load_persisted_lecture_assistant_context(current_user: str, payload: LectureAssistantRequest) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
+    conversation_id = compact_text(payload.conversation_id)
+    if not chat_history_store.available or not conversation_id:
+        return None, [], ""
+    try:
+        bundle = chat_history_store.load_context_bundle(
+            email=current_user,
+            conversation_id=conversation_id,
+            recent_limit=10 if bool(payload.voice_mode) else 12,
+        )
+    except SupabaseChatHistoryError:
+        logger.exception("Failed to load persisted lecture assistant context")
+        return None, [], ""
+    conversation = bundle.get("conversation") or None
+    recent_messages = bundle.get("recent_messages") or []
+    memory_summary = compact_text((conversation or {}).get("memory_summary"))
+    return conversation, recent_messages, memory_summary
+
+
+def persist_lecture_assistant_turn(
+    *,
+    current_user: str,
+    payload: LectureAssistantRequest,
+    assistant_text: str,
+    selected_attempt: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    conversation_id = compact_text(payload.conversation_id)
+    if not chat_history_store.available or not conversation_id:
+        return None
+
+    title_hint = build_fallback_conversation_title(payload.question, payload.lecture_label)
+    try:
+        conversation = chat_history_store.ensure_conversation(
+            email=current_user,
+            conversation_id=conversation_id,
+            title=title_hint,
+            lecture_label=payload.lecture_label,
+            context_key=payload.context_key,
+            metadata={
+                "last_client_request_id": compact_text(payload.client_request_id),
+                "last_interaction_mode": compact_text(payload.interaction_mode, "text"),
+            },
+        )
+
+        if bool(payload.regenerate_last_assistant):
+            chat_history_store.delete_last_assistant_message(email=current_user, conversation_id=conversation_id)
+
+        if bool(payload.append_user_message):
+            chat_history_store.insert_messages(
+                email=current_user,
+                conversation_id=conversation_id,
+                messages=[
+                    {
+                        "id": compact_text(payload.user_message_id, f"{conversation_id}-user-{uuid4().hex}"),
+                        "role": "user",
+                        "content": compact_text(payload.question),
+                        "timestamp": utc_now().isoformat(),
+                        "interaction_mode": compact_text(payload.interaction_mode, "text"),
+                        "metadata_json": {
+                            "client_request_id": compact_text(payload.client_request_id),
+                            "voice_mode": bool(payload.voice_mode),
+                        },
+                    }
+                ],
+            )
+
+        if compact_text(assistant_text):
+            chat_history_store.insert_messages(
+                email=current_user,
+                conversation_id=conversation_id,
+                messages=[
+                    {
+                        "id": compact_text(payload.assistant_message_id, f"{conversation_id}-assistant-{uuid4().hex}"),
+                        "role": "assistant",
+                        "content": compact_text(assistant_text),
+                        "timestamp": utc_now().isoformat(),
+                        "interaction_mode": compact_text(payload.interaction_mode, "text"),
+                        "provider": compact_text((selected_attempt or {}).get("provider")),
+                        "model": compact_text((selected_attempt or {}).get("model")),
+                        "metadata_json": {
+                            "client_request_id": compact_text(payload.client_request_id),
+                            "voice_mode": bool(payload.voice_mode),
+                        },
+                    }
+                ],
+            )
+
+        recent_bundle = chat_history_store.get_messages(
+            email=current_user,
+            conversation_id=conversation_id,
+            limit=24,
+        )
+        all_messages = chat_history_store.fetch_all_messages(
+            email=current_user,
+            conversation_id=conversation_id,
+            batch_size=200,
+            max_messages=80,
+        )
+        last_message = all_messages[-1] if all_messages else None
+        existing_title = compact_text((conversation or {}).get("title"), title_hint)
+        user_messages = [message for message in all_messages if compact_text(message.get("role")).lower() == "user"]
+        should_generate_title = (
+            len(user_messages) <= 2
+            and (
+                is_generic_conversation_title(existing_title)
+                or len(existing_title.split()) > LECTURE_ASSISTANT_TITLE_MAX_WORDS
+            )
+        )
+        next_title = (
+            generate_conversation_title(
+                question="\n".join(compact_text(message.get("content")) for message in user_messages[-2:] if compact_text(message.get("content"))),
+                lecture_label=payload.lecture_label,
+                assistant_preview=assistant_text,
+                existing_title=existing_title,
+            )
+            if should_generate_title
+            else existing_title
+        )
+        memory_summary = chat_history_store.build_memory_summary(
+            all_messages,
+            compact_text((conversation or {}).get("memory_summary")),
+        )
+        preview_text = shorten_text((last_message or {}).get("content", ""), 220)
+        conversation_metadata = normalize_chat_history_json((conversation or {}).get("metadata_json"))
+        conversation_metadata.update(
+            {
+                "last_client_request_id": compact_text(payload.client_request_id),
+                "last_interaction_mode": compact_text(payload.interaction_mode, "text"),
+                "last_provider": compact_text((selected_attempt or {}).get("provider")),
+                "last_model": compact_text((selected_attempt or {}).get("model")),
+            }
+        )
+        updated = chat_history_store.update_conversation(
+            email=current_user,
+            conversation_id=conversation_id,
+            updates={
+                "title": compact_text(next_title, title_hint),
+                "lecture_label": compact_text(payload.lecture_label),
+                "context_key": compact_text(payload.context_key),
+                "preview_text": preview_text,
+                "last_message_preview": preview_text,
+                "memory_summary": memory_summary,
+                "search_document": shorten_text(
+                    " ".join(
+                        part
+                        for part in [
+                            compact_text(next_title, title_hint),
+                            compact_text(payload.lecture_label),
+                            preview_text,
+                            memory_summary,
+                            " ".join(shorten_text(message.get("content", ""), 160) for message in all_messages[-12:]),
+                        ]
+                        if compact_text(part)
+                    ),
+                    6000,
+                ),
+                "message_count": int(recent_bundle.get("total") or len(all_messages)),
+                "last_message_at": compact_text((last_message or {}).get("timestamp"), utc_now().isoformat()),
+                "metadata_json": conversation_metadata,
+            },
+        )
+        return updated or conversation
+    except SupabaseChatHistoryError:
+        logger.exception("Failed to persist lecture assistant conversation history")
+        return None
+
+
 def create_lecture_assistant_stream(
     *,
     payload: LectureAssistantRequest,
@@ -14920,8 +15319,21 @@ def create_lecture_assistant_stream(
         raise HTTPException(status_code=400, detail="A question is required.")
 
     started_at = utc_now()
+    persisted_conversation, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
+        current_user,
+        payload,
+    )
+    if bool(payload.regenerate_last_assistant) and persisted_recent_messages:
+        trimmed_recent_messages = list(persisted_recent_messages)
+        if compact_text(trimmed_recent_messages[-1].get("role")).lower() == "assistant":
+            trimmed_recent_messages = trimmed_recent_messages[:-1]
+        persisted_recent_messages = trimmed_recent_messages
     system_prompt = build_lecture_assistant_system_prompt(payload)
-    messages = build_lecture_assistant_messages(payload)
+    messages = build_lecture_assistant_messages(
+        payload,
+        persisted_recent_messages=persisted_recent_messages,
+        memory_summary=persisted_memory_summary,
+    )
     attempts = resolve_provider_attempts(forced_provider, voice_mode=bool(payload.voice_mode))
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
@@ -14932,6 +15344,7 @@ def create_lecture_assistant_stream(
         fallback_count = 0
         terminal_error = ""
         terminal_provider = compact_text(forced_provider) or (attempts[0]["provider"] if attempts else "")
+        streamed_answer_parts: list[str] = []
 
         try:
             yield build_sse_event(
@@ -14978,6 +15391,7 @@ def create_lecture_assistant_stream(
                                 },
                             )
                         emitted_characters += len(delta)
+                        streamed_answer_parts.append(delta)
                         yield build_sse_event(
                             "delta",
                             {
@@ -14994,6 +15408,7 @@ def create_lecture_assistant_stream(
                             status_code=502,
                         )
 
+                    assistant_text = "".join(streamed_answer_parts).strip()
                     yield build_sse_event(
                         "done",
                         {
@@ -15004,6 +15419,25 @@ def create_lecture_assistant_stream(
                             "characters": emitted_characters,
                         },
                     )
+                    saved_conversation = persist_lecture_assistant_turn(
+                        current_user=current_user,
+                        payload=payload,
+                        assistant_text=assistant_text,
+                        selected_attempt=attempt,
+                    )
+                    if saved_conversation:
+                        formatted_conversation = format_chat_history_conversation(saved_conversation)
+                        yield build_sse_event("conversation_saved", {"conversation": formatted_conversation})
+                        saved_title = compact_text(saved_conversation.get("title"))
+                        previous_title = compact_text((persisted_conversation or {}).get("title"))
+                        if saved_title and saved_title != previous_title:
+                            yield build_sse_event(
+                                "title_updated",
+                                {
+                                    "conversation_id": formatted_conversation["id"],
+                                    "title": saved_title,
+                                },
+                            )
                     return
                 except ProviderStreamError as exc:
                     terminal_error = compact_text(exc.user_message, f"{attempt['label']} could not answer right now.")
@@ -15178,6 +15612,185 @@ async def stream_lecture_assistant_openrouter(
         current_user=current_user,
         forced_provider="openrouter",
     )
+
+
+def ensure_chat_history_store_configured() -> None:
+    if chat_history_store.available:
+        return
+    raise HTTPException(
+        status_code=503,
+        detail="Supabase chat history is not configured on the backend yet.",
+    )
+
+
+@app.get("/api/assistant/conversations")
+async def list_lecture_assistant_conversations(
+    search: str = Query(default=""),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    archived: bool = Query(default=False),
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    try:
+        result = chat_history_store.list_conversations(
+            email=current_user,
+            search=search,
+            include_archived=archived,
+            limit=limit,
+            offset=offset,
+        )
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return AssistantConversationListResponse(
+        items=[format_chat_history_conversation(item) for item in result.get("items", [])],
+        total=int(result.get("total") or 0),
+        limit=limit,
+        offset=offset,
+        storage_mode="supabase",
+    )
+
+
+@app.get("/api/assistant/conversations/{conversation_id}")
+async def get_lecture_assistant_conversation(
+    conversation_id: str,
+    message_limit: int = Query(default=80, ge=1, le=120),
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    try:
+        conversation = chat_history_store.get_conversation(current_user, conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        message_bundle = chat_history_store.get_messages(
+            email=current_user,
+            conversation_id=conversation_id,
+            limit=message_limit,
+        )
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "conversation": format_chat_history_conversation(
+            conversation,
+            include_messages=True,
+            messages=message_bundle.get("items", []),
+        ),
+        "has_more": bool(message_bundle.get("has_more")),
+        "next_before": compact_text(message_bundle.get("next_before")),
+        "total_messages": int(message_bundle.get("total") or 0),
+        "storage_mode": "supabase",
+    }
+
+
+@app.get("/api/assistant/conversations/{conversation_id}/messages")
+async def get_lecture_assistant_conversation_messages(
+    conversation_id: str,
+    before: str = Query(default=""),
+    limit: int = Query(default=80, ge=1, le=120),
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    try:
+        conversation = chat_history_store.get_conversation(current_user, conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        bundle = chat_history_store.get_messages(
+            email=current_user,
+            conversation_id=conversation_id,
+            limit=limit,
+            before=before,
+        )
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return AssistantConversationMessagesResponse(
+        items=[format_chat_history_message(item) for item in bundle.get("items", [])],
+        total=int(bundle.get("total") or 0),
+        has_more=bool(bundle.get("has_more")),
+        next_before=compact_text(bundle.get("next_before")),
+        storage_mode="supabase",
+    )
+
+
+@app.patch("/api/assistant/conversations/{conversation_id}")
+async def update_lecture_assistant_conversation(
+    conversation_id: str,
+    payload: AssistantConversationUpdateRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    updates: dict[str, Any] = {}
+    if payload.title is not None:
+        normalized_title = cleanup_generated_conversation_title(
+            compact_text(payload.title),
+            build_fallback_conversation_title(payload.title or "", ""),
+        )
+        updates["title"] = normalized_title[:80]
+    if payload.is_archived is not None:
+        updates["is_archived"] = bool(payload.is_archived)
+    if payload.is_pinned is not None:
+        updates["is_pinned"] = bool(payload.is_pinned)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No conversation updates were provided.")
+    try:
+        updated = chat_history_store.update_conversation(
+            email=current_user,
+            conversation_id=conversation_id,
+            updates=updates,
+        )
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not updated:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"conversation": format_chat_history_conversation(updated), "storage_mode": "supabase"}
+
+
+@app.delete("/api/assistant/conversations/{conversation_id}")
+async def delete_lecture_assistant_conversation(
+    conversation_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    try:
+        conversation = chat_history_store.get_conversation(current_user, conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        chat_history_store.delete_conversation(email=current_user, conversation_id=conversation_id)
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"deleted": True, "conversation_id": compact_text(conversation_id), "storage_mode": "supabase"}
+
+
+@app.get("/api/assistant/conversations/{conversation_id}/export")
+async def export_lecture_assistant_conversation(
+    conversation_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    ensure_chat_history_store_configured()
+    try:
+        bundle = chat_history_store.export_conversation(email=current_user, conversation_id=conversation_id)
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+
+    conversation = bundle["conversation"]
+    messages = bundle["messages"]
+    title = compact_text(conversation.get("title"), "Lecture Assistant Chat")
+    transcript_lines = [f"# {title}", ""]
+    for message in messages:
+        role_label = "Assistant" if compact_text(message.get("role")).lower() == "assistant" else "User"
+        timestamp = compact_text(message.get("timestamp"))
+        transcript_lines.append(f"## {role_label} {f'({timestamp})' if timestamp else ''}".strip())
+        transcript_lines.append(compact_text(message.get("content")))
+        transcript_lines.append("")
+
+    return {
+        "title": title,
+        "markdown": "\n".join(transcript_lines).strip(),
+        "conversation": format_chat_history_conversation(conversation),
+        "messages": [format_chat_history_message(item) for item in messages],
+        "storage_mode": "supabase",
+    }
 
 
 @app.post("/api/voice/transcribe")

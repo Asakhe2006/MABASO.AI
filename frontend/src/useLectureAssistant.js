@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
-const ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v1";
+const ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v2";
+const LEGACY_ASSISTANT_STORAGE_PREFIX = "mabaso-lecture-assistant-v1";
 const ASSISTANT_THEME_STORAGE_KEY = "mabaso-lecture-assistant-theme";
 const ASSISTANT_TTS_STORAGE_KEY = "mabaso-lecture-assistant-tts";
-const MAX_SAVED_CONVERSATIONS = 24;
+const MAX_SAVED_CONVERSATIONS = 120;
+const CONVERSATION_LIST_PAGE_SIZE = 30;
+const CONVERSATION_MESSAGE_PAGE_SIZE = 80;
+const CONVERSATION_SEARCH_DEBOUNCE_MS = 260;
 const LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE = "English";
 const LECTURE_ASSISTANT_VOICE_TRANSCRIPTION_LANGUAGE = "en";
 const LECTURE_ASSISTANT_VOICE_RECOGNITION_LOCALES = ["en-US", "en-GB"];
@@ -69,7 +73,7 @@ function buildConversationStorageKey(email = "") {
 }
 
 function deriveConversationTitle(question = "", lectureLabel = "") {
-  const cleaned = compactText(question) || compactText(lectureLabel) || "New lecture chat";
+  const cleaned = compactText(question) || compactText(lectureLabel) || "Ready for your first question";
   return cleaned.length > 56 ? `${cleaned.slice(0, 53).trim()}...` : cleaned;
 }
 
@@ -217,6 +221,12 @@ function normalizeVoiceTranscript(value = "", { preserveCase = true } = {}) {
     .trim();
   if (!preserveCase) cleaned = cleaned.toLowerCase();
   return cleaned;
+}
+
+function buildMessagePreview(content = "", fallback = "Ready for your first question") {
+  const text = String(content || "").replace(/\s+/g, " ").trim();
+  if (!text) return fallback;
+  return text.length > 110 ? `${text.slice(0, 107).trim()}...` : text;
 }
 
 function estimateTranscriptConfidence(transcript = "", previewTranscript = "") {
@@ -391,16 +401,60 @@ function extractReadySpeechChunks(buffer = "", { flush = false } = {}) {
   return { ready, remaining };
 }
 
-function createConversationRecord({ contextKey = "", lectureLabel = "", title = "New lecture chat" } = {}) {
+function normalizeBoolean(value, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function buildConversationPreview(messages = [], fallback = "") {
+  const latestMessage = [...messages].reverse().find((message) => compactText(message?.content));
+  return buildMessagePreview(latestMessage?.content || "", fallback);
+}
+
+function createConversationRecord({
+  id = "",
+  contextKey = "",
+  lectureLabel = "",
+  title = "Ready for your first question",
+  messages = [],
+  previewText = "",
+  lastMessagePreview = "",
+  messageCount = 0,
+  isPinned = false,
+  isArchived = false,
+  createdAt = "",
+  updatedAt = "",
+  lastMessageAt = "",
+  memorySummary = "",
+  metadata = {},
+  hasMoreMessages = false,
+  nextBefore = "",
+  source = "local",
+  isDraft = true,
+} = {}) {
   const timestamp = nowIso();
+  const normalizedMessages = Array.isArray(messages) ? messages : [];
+  const effectiveCreatedAt = compactText(createdAt, timestamp);
+  const effectiveUpdatedAt = compactText(updatedAt, normalizedMessages[normalizedMessages.length - 1]?.timestamp || effectiveCreatedAt);
   return {
-    id: createClientId("conversation"),
-    title,
+    id: compactText(id, createClientId("conversation")),
+    title: compactText(title, deriveConversationTitle("", lectureLabel)),
     lectureLabel: compactText(lectureLabel),
     contextKey: compactText(contextKey),
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    messages: [],
+    createdAt: effectiveCreatedAt,
+    updatedAt: effectiveUpdatedAt,
+    lastMessageAt: compactText(lastMessageAt, effectiveUpdatedAt),
+    previewText: compactText(previewText, buildConversationPreview(normalizedMessages)),
+    lastMessagePreview: compactText(lastMessagePreview, compactText(previewText, buildConversationPreview(normalizedMessages))),
+    messageCount: Math.max(normalizedMessages.length, Number(messageCount) || 0),
+    isPinned: normalizeBoolean(isPinned),
+    isArchived: normalizeBoolean(isArchived),
+    memorySummary: compactText(memorySummary),
+    metadata: metadata && typeof metadata === "object" ? metadata : {},
+    hasMoreMessages: normalizeBoolean(hasMoreMessages),
+    nextBefore: compactText(nextBefore),
+    source: compactText(source, "local"),
+    isDraft: normalizeBoolean(isDraft, source !== "server"),
+    messages: normalizedMessages,
   };
 }
 
@@ -419,7 +473,12 @@ function createConversationMessage(role, content = "", extra = {}) {
 
 function sortConversations(conversations = []) {
   return [...conversations]
-    .sort((left, right) => new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime())
+    .sort((left, right) => {
+      if (Boolean(right.isPinned) !== Boolean(left.isPinned)) {
+        return Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned));
+      }
+      return new Date(right.updatedAt || right.lastMessageAt || 0).getTime() - new Date(left.updatedAt || left.lastMessageAt || 0).getTime();
+    })
     .slice(0, MAX_SAVED_CONVERSATIONS);
 }
 
@@ -451,15 +510,93 @@ function normalizeConversationRecord(rawConversation, index = 0) {
   const createdAt = compactText(rawConversation.createdAt, nowIso());
   const updatedAt = compactText(rawConversation.updatedAt, messages[messages.length - 1]?.timestamp || createdAt);
 
-  return {
+  return createConversationRecord({
     id,
-    title: compactText(rawConversation.title, messages.find((message) => message.role === "user")?.content || "New lecture chat"),
+    title: compactText(rawConversation.title, messages.find((message) => message.role === "user")?.content || "Ready for your first question"),
     lectureLabel: compactText(rawConversation.lectureLabel),
     contextKey: compactText(rawConversation.contextKey),
     createdAt,
     updatedAt,
+    lastMessageAt: compactText(rawConversation.lastMessageAt, updatedAt),
+    previewText: compactText(rawConversation.previewText),
+    lastMessagePreview: compactText(rawConversation.lastMessagePreview),
+    messageCount: Number(rawConversation.messageCount) || messages.length,
+    isPinned: Boolean(rawConversation.isPinned),
+    isArchived: Boolean(rawConversation.isArchived),
+    memorySummary: compactText(rawConversation.memorySummary),
+    metadata: rawConversation.metadata && typeof rawConversation.metadata === "object" ? rawConversation.metadata : {},
+    hasMoreMessages: Boolean(rawConversation.hasMoreMessages),
+    nextBefore: compactText(rawConversation.nextBefore),
+    source: compactText(rawConversation.source, messages.length ? "local" : "server"),
+    isDraft: normalizeBoolean(rawConversation.isDraft, !messages.length && compactText(rawConversation.source) !== "server"),
     messages,
+  });
+}
+
+function conversationMatchesSearch(conversation, query = "") {
+  const normalizedQuery = compactText(query).toLowerCase();
+  if (!normalizedQuery) return true;
+  const haystack = [
+    conversation?.title,
+    conversation?.previewText,
+    conversation?.lastMessagePreview,
+    conversation?.memorySummary,
+    conversation?.lectureLabel,
+    ...(Array.isArray(conversation?.messages) ? conversation.messages.map((message) => message?.content) : []),
+  ]
+    .map((value) => compactText(value).toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+  return haystack.includes(normalizedQuery);
+}
+
+function mergeConversationRecord(existingConversation, incomingConversation, { source = "server" } = {}) {
+  const normalizedIncoming = normalizeConversationRecord({
+    ...(incomingConversation || {}),
+    source: compactText(incomingConversation?.source, source),
+    isDraft: normalizeBoolean(incomingConversation?.isDraft, compactText(incomingConversation?.source, source) !== "server"),
+  });
+  if (!normalizedIncoming) return existingConversation || null;
+
+  const existingMessages = Array.isArray(existingConversation?.messages) ? existingConversation.messages : [];
+  const incomingMessages = Array.isArray(normalizedIncoming.messages) ? normalizedIncoming.messages : [];
+  const mergedMessages = incomingMessages.length ? incomingMessages : existingMessages;
+  const mergedMetadata = {
+    ...(existingConversation?.metadata && typeof existingConversation.metadata === "object" ? existingConversation.metadata : {}),
+    ...(normalizedIncoming.metadata && typeof normalizedIncoming.metadata === "object" ? normalizedIncoming.metadata : {}),
   };
+  const effectiveSource = compactText(normalizedIncoming.source, compactText(existingConversation?.source, source));
+
+  return createConversationRecord({
+    ...(existingConversation || {}),
+    ...normalizedIncoming,
+    title: compactText(normalizedIncoming.title, compactText(existingConversation?.title, "Ready for your first question")),
+    lectureLabel: compactText(normalizedIncoming.lectureLabel, compactText(existingConversation?.lectureLabel)),
+    contextKey: compactText(normalizedIncoming.contextKey, compactText(existingConversation?.contextKey)),
+    messages: mergedMessages,
+    previewText: compactText(
+      normalizedIncoming.previewText,
+      compactText(existingConversation?.previewText, buildConversationPreview(mergedMessages)),
+    ),
+    lastMessagePreview: compactText(
+      normalizedIncoming.lastMessagePreview,
+      compactText(existingConversation?.lastMessagePreview, buildConversationPreview(mergedMessages)),
+    ),
+    messageCount: Math.max(
+      Number(normalizedIncoming.messageCount) || 0,
+      Number(existingConversation?.messageCount) || 0,
+      mergedMessages.length,
+    ),
+    hasMoreMessages: normalizeBoolean(
+      normalizedIncoming.hasMoreMessages,
+      normalizeBoolean(existingConversation?.hasMoreMessages),
+    ),
+    nextBefore: compactText(normalizedIncoming.nextBefore, compactText(existingConversation?.nextBefore)),
+    memorySummary: compactText(normalizedIncoming.memorySummary, compactText(existingConversation?.memorySummary)),
+    source: effectiveSource,
+    isDraft: normalizeBoolean(normalizedIncoming.isDraft, effectiveSource !== "server"),
+    metadata: mergedMetadata,
+  });
 }
 
 function parseSseEventBlock(rawBlock = "") {
@@ -527,6 +664,12 @@ async function consumeAssistantStream(response, onEvent) {
 export function useLectureAssistant({
   requestStream,
   requestTranscription,
+  requestConversationList,
+  requestConversation,
+  requestConversationMessages,
+  requestConversationUpdate,
+  requestConversationDelete,
+  requestConversationExport,
   authEmail = "",
   contextKey = "",
   lectureLabel = "",
@@ -543,6 +686,10 @@ export function useLectureAssistant({
   onLegacyMessagesChange,
 }) {
   const storageKey = useMemo(() => buildConversationStorageKey(authEmail), [authEmail]);
+  const legacyStorageKey = useMemo(
+    () => buildConversationStorageKey(authEmail).replace(ASSISTANT_STORAGE_PREFIX, LEGACY_ASSISTANT_STORAGE_PREFIX),
+    [authEmail],
+  );
   const hasLectureContext = Boolean(
     compactText(summary)
     || compactText(transcript)
@@ -574,9 +721,28 @@ export function useLectureAssistant({
   const [statusText, setStatusText] = useState("Ask a follow-up question and the lecture assistant will answer here with a streaming reply.");
   const [activeProvider, setActiveProvider] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
+  const [isLoadingConversationMessages, setIsLoadingConversationMessages] = useState(false);
+  const [isLoadingMoreMessages, setIsLoadingMoreMessages] = useState(false);
+  const [isSyncingConversation, setIsSyncingConversation] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [totalConversationCount, setTotalConversationCount] = useState(0);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const remoteSyncAvailable = Boolean(
+    compactText(authEmail)
+    && typeof requestConversationList === "function"
+    && typeof requestConversation === "function",
+  );
 
   const hasLoadedStorageRef = useRef(false);
   const lastContextKeyRef = useRef("");
+  const remoteSyncEnabledRef = useRef(false);
+  const remoteHydratedRef = useRef(false);
+  const searchTimerRef = useRef(0);
   const abortControllerRef = useRef(null);
   const recognitionRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -628,6 +794,11 @@ export function useLectureAssistant({
     [activeConversationId, conversations],
   );
   const messages = activeConversation?.messages || [];
+  const serverConversationCount = useMemo(
+    () => conversations.filter((conversation) => compactText(conversation?.source) === "server" && !conversation?.isDraft).length,
+    [conversations],
+  );
+  const canLoadMoreConversations = remoteSyncAvailable && serverConversationCount < totalConversationCount;
 
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
@@ -947,10 +1118,12 @@ export function useLectureAssistant({
       const next = current.map((conversation) => {
         if (conversation.id !== conversationId) return conversation;
         const updated = typeof updater === "function" ? updater(conversation) : updater;
-        return {
+        return mergeConversationRecord(conversation, {
           ...updated,
-          updatedAt: compactText(updated.updatedAt, nowIso()),
-        };
+          updatedAt: compactText(updated?.updatedAt, nowIso()),
+          source: compactText(updated?.source, conversation.source || "local"),
+          isDraft: normalizeBoolean(updated?.isDraft, normalizeBoolean(conversation.isDraft, compactText(conversation.source, "local") !== "server")),
+        }, { source: compactText(updated?.source, conversation.source || "local") });
       });
       return sortConversations(next);
     });
@@ -981,6 +1154,8 @@ export function useLectureAssistant({
     const nextConversation = createConversationRecord({
       contextKey: normalizedContextKey,
       lectureLabel,
+      source: remoteSyncAvailable ? "local" : "local",
+      isDraft: true,
     });
     setConversations((current) => sortConversations([nextConversation, ...current]));
     setActiveConversationId(nextConversation.id);
@@ -988,12 +1163,27 @@ export function useLectureAssistant({
   };
 
   const createConversation = () => {
+    const existingEmptyConversation = conversations.find(
+      (conversation) => conversation.isDraft && !conversation.messages.length && !conversation.isArchived,
+    );
+    if (existingEmptyConversation) {
+      setActiveConversationId(existingEmptyConversation.id);
+      setMobileSidebarOpen(false);
+      openPanel();
+      setDraft("");
+      setStatusText("Fresh chat ready.");
+      setActiveProvider("");
+      return existingEmptyConversation.id;
+    }
     const nextConversation = createConversationRecord({
       contextKey: normalizedContextKey,
       lectureLabel,
+      source: "local",
+      isDraft: true,
     });
     setConversations((current) => sortConversations([nextConversation, ...current]));
     setActiveConversationId(nextConversation.id);
+    setMobileSidebarOpen(false);
     setDraft("");
     setStatusText("Started a fresh lecture conversation.");
     setActiveProvider("");
@@ -1012,6 +1202,331 @@ export function useLectureAssistant({
   const togglePanel = () => {
     if (isOpen) closePanel();
     else openPanel();
+  };
+
+  const hydrateConversationList = async ({
+    search = "",
+    offset = 0,
+    append = false,
+  } = {}) => {
+    if (!remoteSyncAvailable || typeof requestConversationList !== "function") return false;
+    if (append) setIsLoadingMoreConversations(true);
+    else setIsLoadingConversations(true);
+
+    try {
+      const data = await requestConversationList({
+        search,
+        limit: CONVERSATION_LIST_PAGE_SIZE,
+        offset,
+        archived: showArchived,
+      });
+      const remoteItems = Array.isArray(data?.items) ? data.items : [];
+      setTotalConversationCount(Number(data?.total) || remoteItems.length);
+      remoteSyncEnabledRef.current = true;
+
+      startTransition(() => {
+        setConversations((current) => {
+          const nextMap = new Map();
+          const rememberConversation = (conversationLike, fallbackSource = "local") => {
+            if (!conversationLike?.id) return;
+            const existing = nextMap.get(conversationLike.id) || current.find((item) => item.id === conversationLike.id) || null;
+            const merged = mergeConversationRecord(existing, conversationLike, {
+              source: compactText(conversationLike.source, existing?.source || fallbackSource),
+            });
+            if (merged) nextMap.set(merged.id, merged);
+          };
+
+          if (append) {
+            current.forEach((conversation) => rememberConversation(conversation, compactText(conversation.source, "local")));
+          } else {
+            current
+              .filter((conversation) => conversation.isDraft || compactText(conversation.source) !== "server")
+              .forEach((conversation) => {
+                if (!showArchived && conversation.isArchived && conversation.id !== activeConversationId) return;
+                if (!conversationMatchesSearch(conversation, search) && conversation.id !== activeConversationId) return;
+                rememberConversation(conversation, compactText(conversation.source, "local"));
+              });
+            const activeExisting = current.find((conversation) => conversation.id === activeConversationId);
+            if (activeExisting) rememberConversation(activeExisting, compactText(activeExisting.source, "local"));
+          }
+
+          remoteItems.forEach((item) => {
+            rememberConversation({
+              ...item,
+              source: "server",
+              isDraft: false,
+            }, "server");
+          });
+
+          const next = sortConversations([...nextMap.values()]);
+          return next.length ? next : [createConversationRecord({ contextKey: normalizedContextKey, lectureLabel })];
+        });
+      });
+      return true;
+    } catch (error) {
+      const message = compactText(error?.message, "Conversation history could not sync right now.");
+      if (/not configured/i.test(message)) {
+        remoteSyncEnabledRef.current = false;
+      }
+      if (!append) {
+        setStatusText(message);
+      }
+      return false;
+    } finally {
+      if (append) setIsLoadingMoreConversations(false);
+      else setIsLoadingConversations(false);
+    }
+  };
+
+  const loadConversation = async (conversationId, { silent = false } = {}) => {
+    const normalizedConversationId = compactText(conversationId);
+    if (!normalizedConversationId || !remoteSyncAvailable || typeof requestConversation !== "function") return null;
+    if (!silent) setIsLoadingConversationMessages(true);
+
+    try {
+      const data = await requestConversation(normalizedConversationId, {
+        messageLimit: CONVERSATION_MESSAGE_PAGE_SIZE,
+      });
+      const mergedConversation = {
+        ...(data?.conversation || {}),
+        hasMoreMessages: Boolean(data?.has_more),
+        nextBefore: compactText(data?.next_before),
+        messageCount: Number(data?.total_messages) || Number(data?.conversation?.messageCount) || 0,
+        source: "server",
+        isDraft: false,
+      };
+      startTransition(() => {
+        setConversations((current) => sortConversations(current.map((conversation) => (
+          conversation.id === normalizedConversationId
+            ? mergeConversationRecord(conversation, mergedConversation, { source: "server" })
+            : conversation
+        ))));
+      });
+      return mergedConversation;
+    } catch (error) {
+      if (!silent) {
+        setStatusText(compactText(error?.message, "That conversation could not be loaded right now."));
+      }
+      return null;
+    } finally {
+      if (!silent) setIsLoadingConversationMessages(false);
+    }
+  };
+
+  const loadOlderMessages = async (conversationId = activeConversation?.id) => {
+    const normalizedConversationId = compactText(conversationId);
+    const targetConversation = conversations.find((conversation) => conversation.id === normalizedConversationId) || activeConversation;
+    if (
+      !normalizedConversationId
+      || !targetConversation?.hasMoreMessages
+      || isLoadingMoreMessages
+      || typeof requestConversationMessages !== "function"
+    ) {
+      return false;
+    }
+
+    setIsLoadingMoreMessages(true);
+    try {
+      const data = await requestConversationMessages(normalizedConversationId, {
+        before: compactText(targetConversation.nextBefore),
+        limit: CONVERSATION_MESSAGE_PAGE_SIZE,
+      });
+      const incomingItems = Array.isArray(data?.items)
+        ? data.items.map((item) => normalizeConversationRecord({
+          id: normalizedConversationId,
+          messages: [item],
+          createdAt: targetConversation.createdAt,
+          updatedAt: targetConversation.updatedAt,
+        })?.messages?.[0]).filter(Boolean)
+        : [];
+      updateConversation(normalizedConversationId, (conversation) => ({
+        ...conversation,
+        messages: [...incomingItems, ...conversation.messages],
+        hasMoreMessages: Boolean(data?.has_more),
+        nextBefore: compactText(data?.next_before),
+        messageCount: Math.max(Number(data?.total) || 0, conversation.messageCount || 0, conversation.messages.length + incomingItems.length),
+        source: "server",
+        isDraft: false,
+      }));
+      return incomingItems.length > 0;
+    } catch (error) {
+      setStatusText(compactText(error?.message, "Older messages could not be loaded right now."));
+      return false;
+    } finally {
+      setIsLoadingMoreMessages(false);
+    }
+  };
+
+  const selectConversation = (conversationId, { focusComposer = false } = {}) => {
+    const normalizedConversationId = compactText(conversationId);
+    if (!normalizedConversationId) return;
+    setActiveConversationId(normalizedConversationId);
+    setMobileSidebarOpen(false);
+    openPanel({ focusComposer });
+
+    const selectedConversation = conversations.find((conversation) => conversation.id === normalizedConversationId);
+    if (remoteSyncAvailable && selectedConversation && !selectedConversation.isDraft) {
+      void loadConversation(normalizedConversationId, { silent: Boolean(selectedConversation.messages.length) });
+    }
+  };
+
+  const syncConversationPatch = async (conversationId, patch = {}, successMessage = "") => {
+    const normalizedConversationId = compactText(conversationId);
+    if (!normalizedConversationId) return false;
+    const existingConversation = conversations.find((conversation) => conversation.id === normalizedConversationId);
+    if (!existingConversation) return false;
+
+    const previousSnapshot = existingConversation;
+    updateConversation(normalizedConversationId, (conversation) => ({
+      ...conversation,
+      ...patch,
+      source: compactText(conversation.source, existingConversation.source || "local"),
+      isDraft: normalizeBoolean(conversation.isDraft, existingConversation.isDraft),
+    }));
+
+    if (!remoteSyncAvailable || typeof requestConversationUpdate !== "function" || existingConversation.isDraft) {
+      if (successMessage) setStatusText(successMessage);
+      return true;
+    }
+
+    setIsSyncingConversation(true);
+    try {
+      const data = await requestConversationUpdate(normalizedConversationId, patch);
+      if (data?.conversation) {
+        updateConversation(normalizedConversationId, (conversation) => mergeConversationRecord(conversation, {
+          ...data.conversation,
+          source: "server",
+          isDraft: false,
+        }, { source: "server" }));
+      }
+      if (successMessage) setStatusText(successMessage);
+      return true;
+    } catch (error) {
+      updateConversation(normalizedConversationId, previousSnapshot);
+      setStatusText(compactText(error?.message, "That conversation update could not be saved."));
+      return false;
+    } finally {
+      setIsSyncingConversation(false);
+    }
+  };
+
+  const renameConversation = async (conversationId, nextTitle) => {
+    const normalizedTitle = compactText(nextTitle).slice(0, 80);
+    if (!normalizedTitle) return false;
+    return syncConversationPatch(conversationId, { title: normalizedTitle }, "Conversation renamed.");
+  };
+
+  const togglePinnedConversation = async (conversationId, nextPinnedValue) => {
+    const existingConversation = conversations.find((conversation) => conversation.id === conversationId);
+    if (!existingConversation) return false;
+    const resolvedValue = typeof nextPinnedValue === "boolean" ? nextPinnedValue : !existingConversation.isPinned;
+    return syncConversationPatch(
+      conversationId,
+      { is_pinned: resolvedValue, isPinned: resolvedValue },
+      resolvedValue ? "Conversation pinned." : "Conversation unpinned.",
+    );
+  };
+
+  const toggleArchivedConversation = async (conversationId, nextArchivedValue) => {
+    const existingConversation = conversations.find((conversation) => conversation.id === conversationId);
+    if (!existingConversation) return false;
+    const resolvedValue = typeof nextArchivedValue === "boolean" ? nextArchivedValue : !existingConversation.isArchived;
+    const updated = await syncConversationPatch(
+      conversationId,
+      { is_archived: resolvedValue, isArchived: resolvedValue },
+      resolvedValue ? "Conversation archived." : "Conversation restored.",
+    );
+    if (updated && resolvedValue && !showArchived && activeConversationId === conversationId) {
+      const fallbackConversation = conversations.find(
+        (conversation) => conversation.id !== conversationId && !conversation.isArchived,
+      );
+      if (fallbackConversation?.id) {
+        selectConversation(fallbackConversation.id);
+      } else {
+        createConversation();
+      }
+    }
+    return updated;
+  };
+
+  const deleteConversation = async (conversationId) => {
+    const normalizedConversationId = compactText(conversationId);
+    if (!normalizedConversationId) return false;
+    if (normalizedConversationId === activeConversationId && isGenerating) {
+      stopGenerating();
+    }
+
+    const conversationToDelete = conversations.find((conversation) => conversation.id === normalizedConversationId);
+    if (!conversationToDelete) return false;
+    const previousActiveConversationId = activeConversationId;
+    const remainingConversations = conversations.filter((conversation) => conversation.id !== normalizedConversationId);
+    const fallbackConversation = remainingConversations.length
+      ? null
+      : createConversationRecord({ contextKey: normalizedContextKey, lectureLabel });
+    const fallbackConversationId = remainingConversations[0]?.id || fallbackConversation?.id || "";
+    setConversations(sortConversations(remainingConversations.length ? remainingConversations : [fallbackConversation]));
+    if (normalizedConversationId === activeConversationId) {
+      setActiveConversationId(fallbackConversationId);
+    }
+
+    if (!remoteSyncAvailable || typeof requestConversationDelete !== "function" || conversationToDelete.isDraft) {
+      setStatusText("Conversation deleted.");
+      return true;
+    }
+
+    setIsSyncingConversation(true);
+    try {
+      await requestConversationDelete(normalizedConversationId);
+      setStatusText("Conversation deleted.");
+      return true;
+    } catch (error) {
+      startTransition(() => {
+        setConversations((current) => sortConversations([conversationToDelete, ...current.filter((conversation) => conversation.id !== normalizedConversationId)]));
+      });
+      setActiveConversationId(previousActiveConversationId || conversationToDelete.id);
+      setStatusText(compactText(error?.message, "That conversation could not be deleted."));
+      return false;
+    } finally {
+      setIsSyncingConversation(false);
+    }
+  };
+
+  const exportConversation = async (conversationId = activeConversation?.id) => {
+    const normalizedConversationId = compactText(conversationId);
+    if (!normalizedConversationId || typeof requestConversationExport !== "function") return false;
+    try {
+      const data = await requestConversationExport(normalizedConversationId);
+      const markdown = compactText(data?.markdown);
+      if (!markdown || typeof window === "undefined") {
+        setStatusText("Conversation export is not available here.");
+        return false;
+      }
+      const filename = `${compactText(data?.title, "lecture-assistant-chat")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "lecture-assistant-chat"}.md`;
+      const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.click();
+      window.URL.revokeObjectURL(objectUrl);
+      setStatusText("Conversation exported.");
+      return true;
+    } catch (error) {
+      setStatusText(compactText(error?.message, "That conversation could not be exported."));
+      return false;
+    }
+  };
+
+  const loadMoreConversations = async () => {
+    if (!canLoadMoreConversations || isLoadingMoreConversations) return false;
+    return hydrateConversationList({
+      search: deferredSearchQuery,
+      offset: serverConversationCount,
+      append: true,
+    });
   };
 
   const startBrowserListening = ({ continueVoiceChat = false } = {}) => {
@@ -1797,10 +2312,16 @@ export function useLectureAssistant({
       status: "streaming",
       interactionMode: resolvedInteractionMode,
     });
-    const requestMessages = (appendUserMessage
-      ? [...currentMessages, nextUserMessage]
-      : [...currentMessages]
-    ).filter((message) => ["user", "assistant"].includes(message.role) && compactText(message.content));
+    const baseContextMessages = [...currentMessages];
+    if (!appendUserMessage && baseContextMessages.length) {
+      const lastContextMessage = baseContextMessages[baseContextMessages.length - 1];
+      if (lastContextMessage?.role === "user" && compactText(lastContextMessage.content) === question) {
+        baseContextMessages.pop();
+      }
+    }
+    const requestMessages = baseContextMessages
+      .filter((message) => ["user", "assistant"].includes(message.role) && compactText(message.content))
+      .slice(-10);
 
     updateConversation(targetConversationId, (conversation) => ({
       ...conversation,
@@ -1814,6 +2335,8 @@ export function useLectureAssistant({
         ...(appendUserMessage && nextUserMessage ? [nextUserMessage] : []),
         nextAssistantMessage,
       ],
+      source: compactText(conversation.source, "local"),
+      isDraft: normalizeBoolean(conversation.isDraft, true),
       updatedAt: nowIso(),
     }));
 
@@ -1826,6 +2349,7 @@ export function useLectureAssistant({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    setIsSyncingConversation(true);
     let streamedText = "";
     const shouldStreamVoiceReply = Boolean(useVoiceInteraction && ttsEnabledRef.current);
     const voiceSpeechStream = shouldStreamVoiceReply ? startVoiceSpeechStream() : null;
@@ -1849,8 +2373,14 @@ export function useLectureAssistant({
         voice_mode: useVoiceInteraction,
         session_id: targetConversationId,
         conversation_id: targetConversationId,
+        context_key: normalizedContextKey,
         lecture_label: compactText(lectureLabel),
         client_request_id: createClientId("chat"),
+        interaction_mode: resolvedInteractionMode,
+        append_user_message: appendUserMessage,
+        regenerate_last_assistant: !appendUserMessage,
+        user_message_id: nextUserMessage?.id || "",
+        assistant_message_id: nextAssistantMessage.id,
       }, controller.signal);
 
       if (!response.ok) {
@@ -1909,6 +2439,26 @@ export function useLectureAssistant({
             : `${data.label || formatProviderLabel(data.provider)} finished the reply.`);
           return;
         }
+        if (event === "conversation_saved") {
+          if (data?.conversation?.id !== targetConversationId) return;
+          updateConversation(targetConversationId, (conversation) => mergeConversationRecord(conversation, {
+            ...data.conversation,
+            source: "server",
+            isDraft: false,
+          }, { source: "server" }));
+          setIsSyncingConversation(false);
+          return;
+        }
+        if (event === "title_updated") {
+          if (compactText(data?.conversation_id) !== targetConversationId) return;
+          updateConversation(targetConversationId, (conversation) => ({
+            ...conversation,
+            title: compactText(data?.title, conversation.title),
+            source: "server",
+            isDraft: false,
+          }));
+          return;
+        }
         if (event === "error") {
           throw new Error(compactText(data.message, "The lecture assistant could not finish that reply."));
         }
@@ -1923,11 +2473,13 @@ export function useLectureAssistant({
       } else if (useVoiceInteraction) {
         speakReply(streamedText);
       }
+      setIsSyncingConversation(false);
       return true;
     } catch (error) {
       if (error?.name === "AbortError") {
         if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
         else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+        setIsSyncingConversation(false);
         if (voiceInterruptionRequestedRef.current) {
           voiceInterruptionRequestedRef.current = false;
           return false;
@@ -1941,6 +2493,7 @@ export function useLectureAssistant({
       if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
       else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
       stopSpeaking();
+      setIsSyncingConversation(false);
       if (useVoiceInteraction && voiceModeEnabledRef.current) {
         applyVoiceModeEnabled(false);
       }
@@ -1975,21 +2528,6 @@ export function useLectureAssistant({
     });
   };
 
-  const deleteConversation = (conversationId) => {
-    if (conversationId === activeConversationId && isGenerating) {
-      stopGenerating();
-    }
-    setConversations((current) => {
-      const next = current.filter((conversation) => conversation.id !== conversationId);
-      if (next.length) return sortConversations(next);
-      return [createConversationRecord({ contextKey: normalizedContextKey, lectureLabel })];
-    });
-    if (conversationId === activeConversationId) {
-      setActiveConversationId("");
-    }
-    setStatusText("Conversation deleted.");
-  };
-
   const copyMessage = async (messageId, content) => {
     if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
       setStatusText("Clipboard copy is not available in this browser.");
@@ -2011,14 +2549,18 @@ export function useLectureAssistant({
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const storedConversations = JSON.parse(window.localStorage.getItem(storageKey) || "[]");
+      const primaryPayload = window.localStorage.getItem(storageKey);
+      const legacyPayload = primaryPayload ? "" : window.localStorage.getItem(legacyStorageKey);
+      const storedConversations = JSON.parse(primaryPayload || legacyPayload || "[]");
       const normalized = Array.isArray(storedConversations)
         ? storedConversations.map(normalizeConversationRecord).filter(Boolean)
         : [];
       const fallbackConversation = createConversationRecord({ contextKey: normalizedContextKey, lectureLabel });
       const storedActiveConversationId = compactText(window.localStorage.getItem(`${storageKey}:active`));
-      setConversations(normalized.length ? sortConversations(normalized) : [fallbackConversation]);
-      setActiveConversationId(storedActiveConversationId || normalized[0]?.id || fallbackConversation.id);
+      startTransition(() => {
+        setConversations(normalized.length ? sortConversations(normalized) : [fallbackConversation]);
+        setActiveConversationId(storedActiveConversationId || normalized[0]?.id || fallbackConversation.id);
+      });
       setTheme(compactText(window.localStorage.getItem(ASSISTANT_THEME_STORAGE_KEY), "dark"));
       const storedVoiceRepliesEnabled = window.localStorage.getItem(ASSISTANT_TTS_STORAGE_KEY) === "true";
       ttsEnabledRef.current = storedVoiceRepliesEnabled;
@@ -2030,8 +2572,9 @@ export function useLectureAssistant({
     } finally {
       hasLoadedStorageRef.current = true;
       lastContextKeyRef.current = normalizedContextKey;
+      remoteHydratedRef.current = false;
     }
-  }, [storageKey, normalizedContextKey, lectureLabel]);
+  }, [legacyStorageKey, storageKey, normalizedContextKey, lectureLabel]);
 
   useEffect(() => {
     if (!hasLoadedStorageRef.current || typeof window === "undefined") return;
@@ -2040,6 +2583,32 @@ export function useLectureAssistant({
       window.localStorage.setItem(`${storageKey}:active`, activeConversationId);
     }
   }, [activeConversationId, conversations, storageKey]);
+
+  useEffect(() => {
+    remoteSyncEnabledRef.current = remoteSyncAvailable;
+  }, [remoteSyncAvailable]);
+
+  useEffect(() => {
+    if (!hasLoadedStorageRef.current || !remoteSyncAvailable || remoteHydratedRef.current) return;
+    remoteHydratedRef.current = true;
+    void hydrateConversationList({ search: "", offset: 0, append: false });
+  }, [remoteSyncAvailable, storageKey]);
+
+  useEffect(() => {
+    if (!hasLoadedStorageRef.current || !remoteSyncAvailable || typeof window === "undefined") return undefined;
+    window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => {
+      void hydrateConversationList({
+        search: compactText(deferredSearchQuery),
+        offset: 0,
+        append: false,
+      });
+    }, CONVERSATION_SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = 0;
+    };
+  }, [deferredSearchQuery, remoteSyncAvailable, showArchived]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2115,10 +2684,17 @@ export function useLectureAssistant({
   }, [activeConversation, lectureLabel, normalizedContextKey]);
 
   useEffect(() => {
-    if (!activeConversationId && conversations[0]?.id) {
+    if (!conversations.length) return;
+    if (!activeConversationId || !conversations.some((conversation) => conversation.id === activeConversationId)) {
       setActiveConversationId(conversations[0].id);
     }
   }, [activeConversationId, conversations]);
+
+  useEffect(() => {
+    if (!activeConversation?.id || !remoteSyncAvailable || activeConversation.isDraft) return;
+    if (activeConversation.messages.length) return;
+    void loadConversation(activeConversation.id, { silent: true });
+  }, [activeConversation?.id, activeConversation?.isDraft, activeConversation?.messages.length, remoteSyncAvailable]);
 
   useEffect(() => {
     if (!isOpen || typeof window === "undefined") return;
@@ -2151,6 +2727,7 @@ export function useLectureAssistant({
     activeConversationId,
     activeProvider,
     canSend: Boolean(compactText(draft)) && !isGenerating,
+    canLoadMoreConversations,
     closePanel,
     composerRef,
     conversations,
@@ -2159,24 +2736,42 @@ export function useLectureAssistant({
     createConversation,
     deleteConversation,
     draft,
+    exportConversation,
     hasLectureContext,
     isGenerating,
     interruptAssistantAndListen,
     isListening,
+    isLoadingConversationMessages,
+    isLoadingConversations,
+    isLoadingMoreConversations,
+    isLoadingMoreMessages,
     isOpen,
     isSpeaking,
+    isSyncingConversation,
     isVoiceReconnecting,
     voiceModeEnabled,
     lectureLabel: compactText(lectureLabel),
+    loadMoreConversations,
+    loadOlderMessages,
     messages,
     messagesEndRef,
+    mobileSidebarOpen,
     openPanel,
+    openMobileSidebar: () => setMobileSidebarOpen(true),
     providerLabel: formatProviderLabel(activeProvider || messages[messages.length - 1]?.provider),
     regenerateLastResponse,
-    selectConversation: setActiveConversationId,
+    renameConversation,
+    searchQuery,
     sendMessage,
     setDraft,
+    setMobileSidebarOpen,
+    setSearchQuery,
+    setShowArchived,
+    setSidebarCollapsed,
     setTheme,
+    selectConversation,
+    showArchived,
+    sidebarCollapsed,
     startListening,
     statusText,
     stopGenerating,
@@ -2186,6 +2781,10 @@ export function useLectureAssistant({
     theme,
     toggleListening: startListening,
     togglePanel,
+    toggleArchiveConversation: toggleArchivedConversation,
+    togglePinnedConversation,
+    toggleShowArchived: () => setShowArchived((current) => !current),
+    toggleSidebarCollapsed: () => setSidebarCollapsed((current) => !current),
     toggleTheme: () => setTheme((current) => current === "dark" ? "light" : "dark"),
     toggleTts: toggleVoiceReplies,
     toggleVoiceChat: () => {
@@ -2203,6 +2802,7 @@ export function useLectureAssistant({
       }
       startListening();
     },
+    totalConversationCount,
     ttsEnabled,
   };
 }

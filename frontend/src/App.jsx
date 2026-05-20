@@ -10245,6 +10245,79 @@ export default function App() {
     signal,
   });
 
+  const requestLectureAssistantConversationList = async ({
+    search = "",
+    limit = 30,
+    offset = 0,
+    archived = false,
+  } = {}) => {
+    const query = new URLSearchParams();
+    if (search) query.set("search", search);
+    query.set("limit", String(limit));
+    query.set("offset", String(offset));
+    query.set("archived", archived ? "true" : "false");
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations?${query.toString()}`, {}, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
+  const requestLectureAssistantConversation = async (conversationId, { messageLimit = 80 } = {}) => {
+    const query = new URLSearchParams({ message_limit: String(messageLimit) });
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}?${query.toString()}`, {}, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
+  const requestLectureAssistantConversationMessages = async (conversationId, { before = "", limit = 80 } = {}) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (before) query.set("before", before);
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/messages?${query.toString()}`, {}, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
+  const requestLectureAssistantConversationUpdate = async (conversationId, updates = {}) => {
+    const payload = {};
+    if (typeof updates.title === "string") payload.title = updates.title;
+    if (typeof updates.isArchived === "boolean") payload.is_archived = updates.isArchived;
+    if (typeof updates.isPinned === "boolean") payload.is_pinned = updates.isPinned;
+    if (typeof updates.is_archived === "boolean") payload.is_archived = updates.is_archived;
+    if (typeof updates.is_pinned === "boolean") payload.is_pinned = updates.is_pinned;
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
+  const requestLectureAssistantConversationDelete = async (conversationId) => {
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+    }, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
+  const requestLectureAssistantConversationExport = async (conversationId) => {
+    const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/export`, {}, {
+      timeoutMs: 20000,
+      retries: 1,
+    });
+    return data;
+  };
+
   const lectureAssistantContextKey = [
     activeHistoryId,
     file?.name || "",
@@ -10262,6 +10335,12 @@ export default function App() {
   const lectureAssistant = useLectureAssistant({
     requestStream: requestLectureAssistantStream,
     requestTranscription: requestLectureAssistantTranscription,
+    requestConversationList: requestLectureAssistantConversationList,
+    requestConversation: requestLectureAssistantConversation,
+    requestConversationMessages: requestLectureAssistantConversationMessages,
+    requestConversationUpdate: requestLectureAssistantConversationUpdate,
+    requestConversationDelete: requestLectureAssistantConversationDelete,
+    requestConversationExport: requestLectureAssistantConversationExport,
     authEmail,
     contextKey: lectureAssistantContextKey,
     lectureLabel: lectureAssistantLabel,
