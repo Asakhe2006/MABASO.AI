@@ -896,6 +896,9 @@ class LectureAssistantRequest(BaseModel):
     regenerate_last_assistant: bool = False
     user_message_id: str = ""
     assistant_message_id: str = ""
+    voice_profile_id: str = ""
+    voice_profile_label: str = ""
+    voice_style_prompt: str = ""
 
 
 class AssistantConversationUpdateRequest(BaseModel):
@@ -4000,10 +4003,21 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
                 "Prefer plain conversational wording over markdown or formal structure.",
                 "Do not use headings, bullet-heavy layouts, or symbol-heavy formatting unless the user explicitly asks for them.",
                 "Compress the answer to the essential idea first so the spoken reply feels fast.",
+                "Use subtle conversational acknowledgements only when they sound natural, and keep them brief.",
+                "Do not sound like a screen reader, assistant policy sheet, or rigid tutor script.",
                 "If formulas or code matter, explain the meaning first in natural language before giving detail.",
                 "Never switch languages, accents, or multilingual modes during the reply.",
             ]
         )
+        voice_profile_label = compact_text(payload.voice_profile_label)
+        voice_profile_id = compact_text(payload.voice_profile_id)
+        voice_style_prompt = compact_text(payload.voice_style_prompt)[:420]
+        if voice_profile_label or voice_profile_id:
+            rules.append(
+                f"Selected voice personality: {voice_profile_label or voice_profile_id}."
+            )
+        if voice_style_prompt:
+            rules.append(f"Voice personality guidance: {voice_style_prompt}")
         if wants_detail:
             rules.append(
                 "The student explicitly asked for more detail. Give a fuller spoken explanation with short clear steps and one helpful example if needed."

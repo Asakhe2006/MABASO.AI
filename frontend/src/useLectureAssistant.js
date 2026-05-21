@@ -1,5 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
+  buildVoicePersonalityPrompt,
   buildVoicePreviewText,
   buildVoiceProfileOptions,
   resolveVoiceProfile,
@@ -54,6 +55,14 @@ const VOICE_FAST_FINALIZE_WITH_PUNCTUATION_MS = 900;
 const VOICE_FAST_FINALIZE_WITH_CONFIDENCE_MS = 1250;
 const VOICE_DEFAULT_POST_SPEECH_SILENCE_MS = 1700;
 const VOICE_MIN_CONFIDENT_TRANSCRIPT_CHARS = 28;
+const VOICE_PREVIEW_RESUME_DELAY_MS = 420;
+const VOICE_RECENT_SPOKEN_REFERENCE_LIMIT = 360;
+const VOICE_TURN_INTENT_MIN_SCORE = 0.56;
+const VOICE_TURN_INTENT_RETRY_SCORE = 0.38;
+const VOICE_INTERRUPTION_INTENT_MIN_SCORE = 0.62;
+const VOICE_INTERRUPTION_MIN_WORDS = 2;
+const VOICE_ECHO_REJECTION_OVERLAP = 0.48;
+const VOICE_INTERRUPTION_COOLDOWN_MS = 900;
 const RECORDING_MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
   "audio/webm",
@@ -202,6 +211,115 @@ function estimateTranscriptConfidence(transcript = "", previewTranscript = "") {
   return clampNumber(score, 0, 0.98);
 }
 
+function countTranscriptWords(transcript = "") {
+  const cleaned = normalizeVoiceTranscript(transcript, { preserveCase: false });
+  return cleaned ? cleaned.split(/\s+/).filter(Boolean).length : 0;
+}
+
+function estimateTextOverlapRatio(text = "", reference = "") {
+  const normalizedText = normalizeVoiceTranscript(text, { preserveCase: false });
+  const normalizedReference = normalizeVoiceTranscript(reference, { preserveCase: false });
+  if (!normalizedText || !normalizedReference) return 0;
+  const textWords = normalizedText.split(/\s+/).filter(Boolean);
+  const referenceWords = new Set(normalizedReference.split(/\s+/).filter(Boolean));
+  if (!textWords.length || !referenceWords.size) return 0;
+  const overlap = textWords.filter((word) => referenceWords.has(word)).length;
+  return clampNumber(overlap / Math.max(1, textWords.length), 0, 1);
+}
+
+function analyzeVoiceIntent({
+  transcript = "",
+  previewTranscript = "",
+  spokenReference = "",
+  transcriptConfidence = null,
+} = {}) {
+  const cleaned = normalizeVoiceTranscript(transcript);
+  const normalized = cleaned.toLowerCase();
+  const wordCount = countTranscriptWords(cleaned);
+  const confidence = Number.isFinite(Number(transcriptConfidence))
+    ? clampNumber(Number(transcriptConfidence), 0, 1)
+    : estimateTranscriptConfidence(cleaned, previewTranscript);
+  const echoOverlap = estimateTextOverlapRatio(cleaned, spokenReference);
+  const previewOverlap = estimateTextOverlapRatio(cleaned, previewTranscript);
+
+  if (!cleaned) {
+    return {
+      cleaned,
+      score: 0,
+      confidence,
+      wordCount: 0,
+      echoOverlap,
+      previewOverlap,
+      shouldProcess: false,
+      shouldRetry: false,
+      reason: "empty",
+    };
+  }
+
+  let score = confidence * 0.36;
+  if (wordCount >= 4) score += 0.12;
+  if (wordCount >= 7) score += 0.08;
+  if (/[?]$/.test(cleaned)) score += 0.08;
+  if (/^(what|why|how|when|where|who|can|could|would|will|is|are|do|does|did|should|please|explain|summarize|define|compare|help|show|tell|give|walk|solve|read|list|quiz|test)\b/i.test(normalized)) {
+    score += 0.18;
+  }
+  if (/\b(can you|could you|would you|please|help me|show me|tell me|explain|summarize|compare|walk me through|quiz me|test me)\b/i.test(normalized)) {
+    score += 0.12;
+  }
+  if (/\b(mabaso|assistant|ai)\b/i.test(normalized)) score += 0.08;
+  if (/^(stop|wait|hold on|pause|listen)\b/i.test(normalized)) score += 0.16;
+  if (/^(yeah|yes|okay|ok|right|hmm|mm|uh|um|hello|hi)\b/i.test(normalized) && wordCount <= 3) {
+    score -= 0.18;
+  }
+  if (/\b(he said|she said|they said|the movie|the show|breaking news|subscribe now)\b/i.test(normalized)) {
+    score -= 0.14;
+  }
+  if (echoOverlap >= VOICE_ECHO_REJECTION_OVERLAP) {
+    score -= 0.42;
+  }
+  if (previewOverlap >= 0.6 && wordCount <= 3) {
+    score -= 0.08;
+  }
+
+  const boundedScore = clampNumber(score, 0, 1);
+  const shortCommand = /^(stop|wait|pause|continue|hello|hi)\b/i.test(normalized);
+  const shouldProcess = echoOverlap < VOICE_ECHO_REJECTION_OVERLAP
+    && (
+      boundedScore >= VOICE_TURN_INTENT_MIN_SCORE
+      || (wordCount >= 6 && boundedScore >= 0.5)
+      || (shortCommand && boundedScore >= 0.46)
+    );
+  const shouldRetry = !shouldProcess && boundedScore >= VOICE_TURN_INTENT_RETRY_SCORE;
+
+  return {
+    cleaned,
+    score: boundedScore,
+    confidence,
+    wordCount,
+    echoOverlap,
+    previewOverlap,
+    shouldProcess,
+    shouldRetry,
+    reason: echoOverlap >= VOICE_ECHO_REJECTION_OVERLAP ? "echo" : (shouldRetry ? "ambiguous" : "background"),
+  };
+}
+
+function mergeVoiceSeedTranscript(seedTranscript = "", transcript = "") {
+  const seed = normalizeVoiceTranscript(seedTranscript);
+  const nextTranscript = normalizeVoiceTranscript(transcript);
+  if (!seed) return nextTranscript;
+  if (!nextTranscript) return seed;
+  const normalizedSeed = seed.toLowerCase();
+  const normalizedTranscript = nextTranscript.toLowerCase();
+  if (normalizedTranscript.startsWith(normalizedSeed) || normalizedTranscript.includes(normalizedSeed)) {
+    return nextTranscript;
+  }
+  if (normalizedSeed.includes(normalizedTranscript)) {
+    return seed;
+  }
+  return normalizeVoiceTranscript(`${seed} ${nextTranscript}`);
+}
+
 function buildSpeechFriendlyText(value = "") {
   let text = String(value || "");
   if (!text.trim()) return "";
@@ -209,6 +327,7 @@ function buildSpeechFriendlyText(value = "") {
     .replace(/```[\s\S]*?```/g, " Code example shown in the chat. ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/\bhttps?:\/\/\S+/gi, " link ")
     .replace(/^#{1,6}\s*/gm, "")
     .replace(/^\s*[-*+]\s+/gm, "")
     .replace(/^\s*\d+\.\s+/gm, "")
@@ -217,7 +336,9 @@ function buildSpeechFriendlyText(value = "") {
     .replace(/\*([^*]+)\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
     .replace(/_([^_]+)_/g, "$1")
+    .replace(/&/g, " and ")
     .replace(/\|/g, ", ")
+    .replace(/[<>()[\]{}]/g, " ")
     .replace(/\b(?:#{1,6}|[-*+])\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -704,6 +825,8 @@ export function useLectureAssistant({
   const [voiceListeningEngine, setVoiceListeningEngine] = useState("Hybrid English voice mode");
   const [voiceTranscriptConfidence, setVoiceTranscriptConfidence] = useState(0);
   const [voiceTranscriptSource, setVoiceTranscriptSource] = useState("idle");
+  const [assistantAudioState, setAssistantAudioState] = useState("idle");
+  const [voiceInterrupted, setVoiceInterrupted] = useState(false);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const remoteSyncAvailable = Boolean(
     compactText(authEmail)
@@ -768,6 +891,12 @@ export function useLectureAssistant({
   const sileroVadEnabledRef = useRef(false);
   const previewVoiceRunRef = useRef(0);
   const selectedVoiceProfileRef = useRef(null);
+  const previewResumeStateRef = useRef({ shouldResumeListening: false, continueVoiceChat: false });
+  const voiceSpeechReferenceRef = useRef("");
+  const voiceInterruptionRecognitionRef = useRef(null);
+  const voiceInterruptionSeedRef = useRef("");
+  const voiceInterruptionResetTimerRef = useRef(0);
+  const voiceLastInterruptionAtRef = useRef(0);
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0] || null,
@@ -798,17 +927,62 @@ export function useLectureAssistant({
 
   const isVoicePreviewMuted = () => Date.now() < voicePreviewMuteUntilRef.current;
 
+  const markVoiceInterrupted = () => {
+    if (typeof window !== "undefined") {
+      window.clearTimeout(voiceInterruptionResetTimerRef.current);
+      voiceInterruptionResetTimerRef.current = window.setTimeout(() => {
+        voiceInterruptionResetTimerRef.current = 0;
+        setVoiceInterrupted(false);
+      }, VOICE_INTERRUPTION_COOLDOWN_MS);
+    }
+    voiceLastInterruptionAtRef.current = Date.now();
+    setVoiceInterrupted(true);
+  };
+
+  const clearPreviewResumeState = () => {
+    previewResumeStateRef.current = { shouldResumeListening: false, continueVoiceChat: false };
+  };
+
+  const rememberPreviewResumeState = () => {
+    previewResumeStateRef.current = {
+      shouldResumeListening: Boolean(isListening || voiceModeEnabledRef.current),
+      continueVoiceChat: Boolean(voiceModeEnabledRef.current),
+    };
+  };
+
+  const appendSpokenReference = (text = "") => {
+    const cleaned = compactText(buildSpeechFriendlyText(text));
+    if (!cleaned) return;
+    const combined = compactText(`${voiceSpeechReferenceRef.current} ${cleaned}`.trim());
+    voiceSpeechReferenceRef.current = combined.slice(-VOICE_RECENT_SPOKEN_REFERENCE_LIMIT);
+  };
+
+  const stopVoiceInterruptionRecognition = () => {
+    if (!voiceInterruptionRecognitionRef.current) return;
+    try {
+      voiceInterruptionRecognitionRef.current.onresult = null;
+      voiceInterruptionRecognitionRef.current.onerror = null;
+      voiceInterruptionRecognitionRef.current.onend = null;
+      voiceInterruptionRecognitionRef.current.stop();
+    } catch {
+      // Ignore speech-recognition shutdown errors.
+    }
+    voiceInterruptionRecognitionRef.current = null;
+  };
+
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
       window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
+    stopVoiceInterruptionRecognition();
     voiceReplyRunRef.current += 1;
     previewVoiceRunRef.current += 1;
     voiceSpeechQueueRef.current = [];
     voiceSpeechBufferRef.current = "";
     voiceSpeechPlaybackActiveRef.current = false;
     voiceSpeechStreamDoneRef.current = false;
+    voiceSpeechReferenceRef.current = "";
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -939,6 +1113,130 @@ export function useLectureAssistant({
     });
   };
 
+  const pauseVoiceInputForPreview = () => {
+    rememberPreviewResumeState();
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+      speechRestartTimerRef.current = 0;
+    }
+    clearVoiceListeningTimer();
+    setIsVoiceReconnecting(false);
+    if (recognitionRef.current || isListening || voiceInputModeRef.current === "whisper") {
+      stopListening();
+    }
+  };
+
+  const resumeVoiceInputAfterPreview = ({ fallbackMessage = "Voice preview finished." } = {}) => {
+    const resumeState = { ...previewResumeStateRef.current };
+    clearPreviewResumeState();
+    if (!resumeState.shouldResumeListening) {
+      if (!isGenerating && !isSpeaking) {
+        setStatusText(fallbackMessage);
+      }
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const delayMs = Math.max(
+      VOICE_PREVIEW_RESUME_DELAY_MS,
+      Math.max(voicePreviewMuteUntilRef.current - Date.now(), 0) + 140,
+    );
+    window.clearTimeout(speechRestartTimerRef.current);
+    speechRestartTimerRef.current = window.setTimeout(() => {
+      speechRestartTimerRef.current = 0;
+      if (isVoicePreviewMuted()) {
+        resumeVoiceInputAfterPreview({ fallbackMessage });
+        return;
+      }
+      startListening({ continueVoiceChat: resumeState.continueVoiceChat });
+    }, delayMs);
+    setStatusText("Preview finished. Restoring listening...");
+  };
+
+  const triggerVoiceInterruption = (capturedTranscript = "") => {
+    if (Date.now() - voiceLastInterruptionAtRef.current < VOICE_INTERRUPTION_COOLDOWN_MS) return;
+    const normalizedSeed = normalizeVoiceTranscript(capturedTranscript);
+    if (normalizedSeed) {
+      voiceInterruptionSeedRef.current = normalizedSeed;
+      setDraft(normalizedSeed);
+    }
+    voiceInterruptionRequestedRef.current = true;
+    markVoiceInterrupted();
+    stopSpeaking();
+    if (isGenerating) {
+      stopGenerating({ preserveVoiceMode: true, restartListening: true });
+      return;
+    }
+    scheduleVoiceListeningRestart({
+      delayMs: 120,
+      continueVoiceChat: true,
+      statusMessage: normalizedSeed ? "Interrupted. Listening for the rest of your request..." : "Interrupted. Listening...",
+    });
+  };
+
+  const startVoiceInterruptionRecognition = (runId) => {
+    if (
+      typeof window === "undefined"
+      || isVoicePreviewMuted()
+      || !voiceModeEnabledRef.current
+      || voiceInterruptionRecognitionRef.current
+    ) {
+      return;
+    }
+    const RecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!RecognitionCtor) return;
+
+    try {
+      const recognition = new RecognitionCtor();
+      recognition.lang = resolveSpeechLocale();
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (event) => {
+        let heardText = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const transcriptText = compactText(result?.[0]?.transcript);
+          if (!transcriptText) continue;
+          heardText += `${transcriptText} `;
+        }
+        const analysis = analyzeVoiceIntent({
+          transcript: heardText,
+          spokenReference: voiceSpeechReferenceRef.current,
+        });
+        const interruptionCommand = /^(stop|wait|pause|hold on|listen)\b/i.test(analysis.cleaned);
+        if (
+          analysis.echoOverlap < VOICE_ECHO_REJECTION_OVERLAP
+          && (
+            analysis.score >= VOICE_INTERRUPTION_INTENT_MIN_SCORE
+            || (interruptionCommand && analysis.score >= 0.46)
+          )
+          && (analysis.wordCount >= VOICE_INTERRUPTION_MIN_WORDS || interruptionCommand)
+        ) {
+          triggerVoiceInterruption(analysis.cleaned);
+        }
+      };
+      recognition.onerror = () => {
+        // Auto-interruption is best-effort. Button interruption still works even if this fails.
+      };
+      recognition.onend = () => {
+        if (voiceInterruptionRecognitionRef.current !== recognition) return;
+        voiceInterruptionRecognitionRef.current = null;
+        if (
+          voiceReplyRunRef.current !== runId
+          || isVoicePreviewMuted()
+          || !voiceModeEnabledRef.current
+        ) {
+          return;
+        }
+        startVoiceInterruptionRecognition(runId);
+      };
+      voiceInterruptionRecognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      voiceInterruptionRecognitionRef.current = null;
+    }
+  };
+
   const previewVoiceProfile = ({
     profileId = selectedVoiceProfileRef.current?.id,
     customText = "",
@@ -955,13 +1253,14 @@ export function useLectureAssistant({
       setStatusText("Voice previews need browser speech synthesis support.");
       return false;
     }
+    if (isGenerating) {
+      setStatusText("Finish or interrupt the current reply before previewing a voice.");
+      return false;
+    }
 
     const previewMuteMs = Math.max(3200, previewText.length * 68);
     voicePreviewMuteUntilRef.current = Date.now() + previewMuteMs;
-    if (isListening || voiceModeEnabledRef.current) {
-      stopVoiceChat({ message: `Previewing ${profile.name}. Voice chat paused so the sample is not transcribed.` });
-    }
-    abortControllerRef.current?.abort?.();
+    pauseVoiceInputForPreview();
     stopSpeaking();
     const playbackProfile = resolveVoicePlaybackProfile(profile);
     const runId = previewVoiceRunRef.current + 1;
@@ -984,16 +1283,14 @@ export function useLectureAssistant({
       voicePreviewMuteUntilRef.current = Math.max(voicePreviewMuteUntilRef.current, Date.now() + 700);
       setPreviewingVoiceId("");
       setIsPreparingVoicePreview(false);
-      if (!isGenerating && !isListening && !voiceModeEnabledRef.current) {
-        setStatusText("Voice preview finished.");
-      }
+      resumeVoiceInputAfterPreview();
     };
     utterance.onerror = () => {
       if (previewVoiceRunRef.current !== runId) return;
       voicePreviewMuteUntilRef.current = Date.now() + 500;
       setPreviewingVoiceId("");
       setIsPreparingVoicePreview(false);
-      setStatusText("That voice preview could not play in this browser.");
+      resumeVoiceInputAfterPreview({ fallbackMessage: "That voice preview could not play in this browser." });
     };
 
     window.speechSynthesis.speak(utterance);
@@ -1081,6 +1378,7 @@ export function useLectureAssistant({
       }
       return;
     }
+    stopVoiceInterruptionRecognition();
     setIsSpeaking(false);
     voiceSpeechBufferRef.current = "";
     voiceSpeechQueueRef.current = [];
@@ -1113,6 +1411,8 @@ export function useLectureAssistant({
     utterance.pitch = Number(playbackProfile?.pitch) || 1;
     utterance.onstart = () => {
       if (voiceReplyRunRef.current !== runId) return;
+      appendSpokenReference(nextChunk);
+      startVoiceInterruptionRecognition(runId);
       setIsSpeaking(true);
       setIsVoiceReconnecting(false);
       setStatusText(isGenerating ? "Speaking while the answer keeps streaming..." : "Speaking the answer aloud...");
@@ -1132,6 +1432,7 @@ export function useLectureAssistant({
     };
     utterance.onerror = () => {
       if (voiceReplyRunRef.current !== runId) return;
+      stopVoiceInterruptionRecognition();
       voiceSpeechPlaybackActiveRef.current = false;
       setIsSpeaking(false);
       if (voiceModeEnabledRef.current) {
@@ -1204,6 +1505,7 @@ export function useLectureAssistant({
   const stopListening = () => {
     manualRecognitionStopRef.current = true;
     clearVoiceListeningTimer();
+    stopVoiceInterruptionRecognition();
     if (voiceInputModeRef.current === "whisper") {
       try {
         voiceStopCaptureRef.current?.("manual_stop");
@@ -1241,6 +1543,8 @@ export function useLectureAssistant({
     setVoiceTranscriptSource("idle");
     setVoiceListeningEngine("Hybrid English voice mode");
     applyVoiceModeEnabled(false);
+    clearPreviewResumeState();
+    voiceInterruptionSeedRef.current = "";
     stopListening();
     stopSpeaking();
     setStatusText(message);
@@ -1711,8 +2015,10 @@ export function useLectureAssistant({
     recognition.maxAlternatives = 1;
     recognitionRef.current = recognition;
 
-    let finalTranscript = "";
-    let latestTranscript = "";
+    const seededInterruptionTranscript = compactText(voiceInterruptionSeedRef.current);
+    voiceInterruptionSeedRef.current = "";
+    let finalTranscript = seededInterruptionTranscript ? `${seededInterruptionTranscript} ` : "";
+    let latestTranscript = seededInterruptionTranscript;
     const finishListeningTurn = (stopReason) => {
       recognitionStopReasonRef.current = stopReason;
       try {
@@ -1735,6 +2041,9 @@ export function useLectureAssistant({
     recognition.onstart = () => {
       setIsListening(true);
       setIsVoiceReconnecting(false);
+      if (seededInterruptionTranscript) {
+        setDraft(seededInterruptionTranscript);
+      }
       setStatusText(continueVoiceChat
         ? (hasLectureContext
           ? "Listening for your next question..."
@@ -1756,7 +2065,10 @@ export function useLectureAssistant({
         if (result.isFinal) finalTranscript += `${transcriptText} `;
         else interimTranscript += transcriptText;
       }
-      latestTranscript = `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim();
+      latestTranscript = mergeVoiceSeedTranscript(
+        seededInterruptionTranscript,
+        `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim(),
+      );
       resetVoiceRecoveryState();
       setVoiceTranscriptSource("browser");
       setVoiceTranscriptConfidence(estimateTranscriptConfidence(latestTranscript));
@@ -1845,7 +2157,7 @@ export function useLectureAssistant({
       }
       const stopReason = compactText(recognitionStopReasonRef.current).toLowerCase();
       recognitionStopReasonRef.current = "";
-      const spokenQuestion = compactText(finalTranscript, latestTranscript);
+      const spokenQuestion = compactText(mergeVoiceSeedTranscript(seededInterruptionTranscript, compactText(finalTranscript, latestTranscript)));
       if (manualRecognitionStopRef.current) {
         manualRecognitionStopRef.current = false;
         setIsVoiceReconnecting(false);
@@ -1857,11 +2169,31 @@ export function useLectureAssistant({
         return;
       }
       if (spokenQuestion) {
+        const intentAnalysis = analyzeVoiceIntent({
+          transcript: spokenQuestion,
+          transcriptConfidence: estimateTranscriptConfidence(spokenQuestion),
+        });
+        if (!intentAnalysis.shouldProcess) {
+          if (voiceModeEnabledRef.current && continueVoiceChat) {
+            scheduleVoiceListeningRestart({
+              delayMs: intentAnalysis.shouldRetry ? 280 : 420,
+              continueVoiceChat: true,
+              statusMessage: intentAnalysis.shouldRetry
+                ? "That sounded partial. Listening again..."
+                : "Background audio ignored. Listening again...",
+            });
+            return;
+          }
+          setStatusText(intentAnalysis.shouldRetry
+            ? "I only caught a partial voice turn. Try speaking a little more directly to the assistant."
+            : "That sounded like background audio, so I ignored it.");
+          return;
+        }
         setIsVoiceReconnecting(false);
         resetVoiceRecoveryState();
-        setDraft(spokenQuestion);
+        setDraft(intentAnalysis.cleaned);
         setStatusText("Sending your voice question...");
-        await sendMessage({ promptText: spokenQuestion, interactionMode: "voice" });
+        await sendMessage({ promptText: intentAnalysis.cleaned, interactionMode: "voice" });
         return;
       }
       if (speechRecognitionErrorRef.current) return;
@@ -2048,17 +2380,22 @@ export function useLectureAssistant({
     const captureId = voiceCaptureRunRef.current + 1;
     voiceCaptureRunRef.current = captureId;
     voiceInputModeRef.current = "whisper";
+    const seededInterruptionTranscript = compactText(voiceInterruptionSeedRef.current);
+    voiceInterruptionSeedRef.current = "";
     voiceRecorderChunksRef.current = [];
     voiceRecorderChunkCountRef.current = 0;
     voiceLastRequestedChunkCountRef.current = 0;
-    voiceWhisperTranscriptRef.current = "";
-    voicePreviewTranscriptRef.current = "";
+    voiceWhisperTranscriptRef.current = seededInterruptionTranscript;
+    voicePreviewTranscriptRef.current = seededInterruptionTranscript;
     voiceHasWhisperTranscriptRef.current = false;
     voiceCaptureFinalizingRef.current = false;
     voiceLastWhisperRequestAtRef.current = 0;
     setVoiceTranscriptConfidence(0);
     setVoiceTranscriptSource("idle");
     setVoiceListeningEngine("Groq Whisper + browser live preview");
+    if (seededInterruptionTranscript) {
+      setDraft(seededInterruptionTranscript);
+    }
 
     const schedulePartialWhisperTranscription = async ({ force = false } = {}) => {
       if (captureId !== voiceCaptureRunRef.current) return "";
@@ -2163,7 +2500,10 @@ export function useLectureAssistant({
               if (result.isFinal) previewFinalTranscript += `${transcriptText} `;
               else previewInterimTranscript = transcriptText;
             }
-            const previewText = normalizeVoiceTranscript(`${previewFinalTranscript} ${previewInterimTranscript}`);
+            const previewText = mergeVoiceSeedTranscript(
+              seededInterruptionTranscript,
+              `${previewFinalTranscript} ${previewInterimTranscript}`,
+            );
             voicePreviewTranscriptRef.current = previewText;
             if (!voiceHasWhisperTranscriptRef.current && previewText) {
               setVoiceTranscriptSource("browser");
@@ -2287,7 +2627,10 @@ export function useLectureAssistant({
           }
         }
 
-        finalTranscript = normalizeVoiceTranscript(compactText(finalTranscript, previewTranscript));
+        finalTranscript = mergeVoiceSeedTranscript(
+          seededInterruptionTranscript,
+          compactText(finalTranscript, previewTranscript),
+        );
         if (isVoicePreviewMuted()) {
           setStatusText("Voice preview finished. Tap the mic when you want to speak.");
           return;
@@ -2314,17 +2657,39 @@ export function useLectureAssistant({
           setStatusText("I only caught a weak partial voice turn. Try speaking a little longer or closer to the microphone.");
           return;
         }
+        const intentAnalysis = analyzeVoiceIntent({
+          transcript: finalTranscript,
+          previewTranscript,
+          transcriptConfidence,
+        });
+        if (!intentAnalysis.shouldProcess) {
+          if (voiceModeEnabledRef.current && continueVoiceChat) {
+            scheduleVoiceListeningRestart({
+              delayMs: intentAnalysis.shouldRetry ? 260 : 420,
+              continueVoiceChat: true,
+              reconnecting: false,
+              statusMessage: intentAnalysis.shouldRetry
+                ? "That sounded partial. Listening again..."
+                : "Background audio ignored. Listening again...",
+            });
+            return;
+          }
+          setStatusText(intentAnalysis.shouldRetry
+            ? "I only caught a partial voice turn. Try speaking a little more directly to the assistant."
+            : "That sounded like background audio, so I ignored it.");
+          return;
+        }
 
         resetVoiceRecoveryState();
-        setVoiceTranscriptConfidence(transcriptConfidence);
+        setVoiceTranscriptConfidence(intentAnalysis.confidence);
         setVoiceTranscriptSource(
           compactText(previewTranscript) && normalizeVoiceTranscript(previewTranscript) !== finalTranscript
             ? "hybrid"
             : "whisper",
         );
-        setDraft(finalTranscript);
-        setStatusText(transcriptConfidence < 0.55 ? "Sending your voice question with low-confidence transcription..." : "Sending your voice question...");
-        await sendMessage({ promptText: finalTranscript, interactionMode: "voice" });
+        setDraft(intentAnalysis.cleaned);
+        setStatusText(intentAnalysis.confidence < 0.55 ? "Sending your voice question with low-confidence transcription..." : "Sending your voice question...");
+        await sendMessage({ promptText: intentAnalysis.cleaned, interactionMode: "voice" });
       };
 
       recorder.start(520);
@@ -2526,6 +2891,7 @@ export function useLectureAssistant({
       return;
     }
     voiceInterruptionRequestedRef.current = true;
+    markVoiceInterrupted();
     stopSpeaking();
     stopGenerating({ preserveVoiceMode: true, restartListening: true });
   };
@@ -2639,6 +3005,9 @@ export function useLectureAssistant({
         regenerate_last_assistant: !appendUserMessage,
         user_message_id: nextUserMessage?.id || "",
         assistant_message_id: nextAssistantMessage.id,
+        voice_profile_id: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.id, "wave") : "",
+        voice_profile_label: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.name) : "",
+        voice_style_prompt: useVoiceInteraction ? buildVoicePersonalityPrompt(selectedVoiceProfileRef.current) : "",
       }, controller.signal);
 
       if (!response.ok) {
@@ -2903,6 +3272,31 @@ export function useLectureAssistant({
   }, [selectedVoiceProfile]);
 
   useEffect(() => {
+    const nextAudioState = (previewingVoiceId || isPreparingVoicePreview)
+      ? "previewing"
+      : isListening
+        ? "listening"
+        : isSpeaking
+          ? "speaking"
+          : isGenerating && voiceModeEnabled
+            ? "processing"
+            : voiceInterrupted
+              ? "interrupted"
+              : voiceModeEnabled
+                ? "ready"
+                : "idle";
+    setAssistantAudioState((current) => current === nextAudioState ? current : nextAudioState);
+  }, [
+    isGenerating,
+    isListening,
+    isPreparingVoicePreview,
+    isSpeaking,
+    previewingVoiceId,
+    voiceInterrupted,
+    voiceModeEnabled,
+  ]);
+
+  useEffect(() => {
     if (!voiceProfiles.length || selectedVoiceProfile) return;
     setSelectedVoiceProfileId(voiceProfiles[0].id);
   }, [selectedVoiceProfile, voiceProfiles]);
@@ -3002,7 +3396,9 @@ export function useLectureAssistant({
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
       window.clearTimeout(voiceReplyChunkTimerRef.current);
+      window.clearTimeout(voiceInterruptionResetTimerRef.current);
     }
+    clearPreviewResumeState();
     clearVoiceListeningTimer();
     stopListening();
     stopSpeaking();
@@ -3013,6 +3409,7 @@ export function useLectureAssistant({
     activeConversation,
     activeConversationId,
     activeProvider,
+    assistantAudioState,
     canSend: Boolean(compactText(draft)) && !isGenerating,
     canLoadMoreConversations,
     closePanel,
@@ -3100,6 +3497,7 @@ export function useLectureAssistant({
     totalConversationCount,
     ttsEnabled,
     voiceListeningEngine,
+    voiceInterrupted,
     voicePreviewDraft,
     voiceProfiles,
     voiceTranscriptConfidence,

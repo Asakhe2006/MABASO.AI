@@ -4,6 +4,7 @@ import {
   Archive,
   AudioLines,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -374,6 +375,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const {
     activeConversation,
     canLoadMoreConversations,
+    assistantAudioState,
     closePanel,
     copiedMessageId,
     composerRef,
@@ -458,29 +460,19 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const compactVoiceLabel = selectedVoiceProfile?.name || "Wave";
   const showVoiceOnboarding = voiceOnboardingReady && !voiceOnboardingComplete;
 
-  const voiceStateMode = isVoiceReconnecting
-    ? "reconnecting"
-    : isListening
-      ? "listening"
-      : isSpeaking
-        ? "speaking"
-        : isGenerating && voiceModeEnabled
-          ? "processing"
-          : voiceModeEnabled
-            ? "ready"
-            : "idle";
+  const voiceStateMode = isVoiceReconnecting ? "reconnecting" : assistantAudioState;
 
   const voiceStateLabel = isVoiceReconnecting
     ? "Reconnecting..."
-    : isListening
-      ? "Listening..."
-      : isSpeaking
-        ? "Speaking..."
-        : isGenerating && voiceModeEnabled
-          ? "Processing..."
-          : voiceModeEnabled
-            ? "Voice turn active"
-            : "Voice ready";
+    : ({
+      previewing: "Previewing...",
+      listening: "Listening...",
+      speaking: "Speaking...",
+      processing: "Processing...",
+      interrupted: "Interrupted",
+      ready: "Voice ready",
+      idle: "Voice ready",
+    }[assistantAudioState] || "Voice ready");
 
   const handleComposerKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -508,10 +500,6 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY, "true");
     }
-  };
-
-  const openVoiceSelector = () => {
-    setVoiceSelectorOpen(true);
   };
 
   const closeVoiceSelector = () => {
@@ -795,6 +783,39 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
           </div>
         </div>
 
+        <div className="pointer-events-none absolute right-3 top-[84px] z-20 sm:right-4">
+          <div className="pointer-events-auto relative">
+            <motion.button
+              type="button"
+              onClick={() => setVoiceSelectorOpen((current) => !current)}
+              whileHover={{ y: -2, scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              className={`group flex min-w-[168px] items-center justify-between gap-3 rounded-[24px] border px-3 py-3 shadow-[0_20px_45px_rgba(15,23,42,0.24)] backdrop-blur-2xl transition ${themed(theme, "border-white/12 bg-[linear-gradient(180deg,rgba(15,23,42,0.76),rgba(15,23,42,0.54))] text-white hover:bg-[linear-gradient(180deg,rgba(15,23,42,0.82),rgba(15,23,42,0.62))]", "border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,250,252,0.88))] text-slate-900 hover:bg-white")}`}
+              aria-expanded={voiceSelectorOpen}
+              aria-label="Open voice selector"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                  <AudioLines className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 text-left">
+                  <p className={`text-[10px] font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/72", "text-cyan-700")}`}>Voice Dock</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold">{compactVoiceLabel}</span>
+                    <VoiceWaveform theme={theme} active={!["idle", "ready"].includes(assistantAudioState)} />
+                  </div>
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className={`hidden rounded-full px-2 py-1 text-[10px] font-semibold sm:inline-flex ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-600")}`}>
+                  {voiceStateLabel}
+                </span>
+                <ChevronDown className={`h-4 w-4 transition ${voiceSelectorOpen ? "rotate-180" : ""}`} />
+              </div>
+            </motion.button>
+          </div>
+        </div>
+
         {isExpanded ? (
           <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
             <aside className={`hidden overflow-hidden rounded-[28px] border lg:block ${sidebarCollapsed ? "lg:w-[82px]" : ""} ${themed(theme, "border-white/10 bg-slate-950/45", "border-slate-200 bg-slate-50/70")}`}>
@@ -836,15 +857,10 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={openVoiceSelector}
-                      className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-                    >
+                    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "border border-white/10 bg-white/[0.06] text-white", "border border-slate-200 bg-white text-slate-700")}`}>
                       <AudioLines className="h-3.5 w-3.5" />
-                      Voice: {compactVoiceLabel}
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </button>
+                      Voice {compactVoiceLabel}
+                    </span>
                     <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
                       {providerLabel || "OpenAI text + voice routing ready"}
                     </span>
@@ -1098,25 +1114,24 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
       </div>
 
       <AnimatePresence>
-        {voiceSelectorOpen ? (
+        {voiceSelectorOpen && showVoiceOnboarding ? (
           <div className="fixed inset-0 z-40">
             <motion.button
               type="button"
-              aria-label="Close voice selector"
+              aria-label="Close voice setup"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={closeVoiceSelector}
               className="absolute inset-0 h-full w-full bg-slate-950/55 backdrop-blur-md"
             />
-
             <div className="absolute inset-0 flex items-end justify-center p-0 sm:items-center sm:p-6">
               <motion.div
                 initial={{ opacity: 0, y: 28, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.98 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
-                className={`relative flex max-h-[88vh] w-full touch-pan-y flex-col overflow-hidden overscroll-contain rounded-t-[32px] border shadow-[0_28px_80px_rgba(2,8,23,0.45)] ${showVoiceOnboarding ? "sm:max-w-[860px]" : "sm:max-w-[760px]"} sm:rounded-[32px] ${themed(theme, "border-white/12 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.13),transparent_34%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))]")}`}
+                className={`relative flex max-h-[88vh] w-full max-w-[860px] touch-pan-y flex-col overflow-hidden overscroll-contain rounded-t-[32px] border shadow-[0_28px_80px_rgba(2,8,23,0.45)] sm:rounded-[32px] ${themed(theme, "border-white/12 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.13),transparent_34%),linear-gradient(180deg,rgba(2,6,23,0.96),rgba(15,23,42,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.08),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))]")}`}
               >
                 <div className={`border-b px-5 py-4 sm:px-6 ${themed(theme, "border-white/10", "border-slate-200")}`}>
                   <div className="flex items-start justify-between gap-4">
@@ -1126,20 +1141,14 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                           <AudioLines className="h-5 w-5" />
                         </span>
                         <div>
-                          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/78", "text-cyan-700")}`}>
-                            {showVoiceOnboarding ? "Voice Setup" : "Voice Selector"}
-                          </p>
+                          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/78", "text-cyan-700")}`}>Voice Setup</p>
                           <h4 className={`mt-1 text-lg font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>
-                            {showVoiceOnboarding
-                              ? "Choose how Mabaso AI should sound"
-                              : `Current voice: ${compactVoiceLabel}`}
+                            Choose how Mabaso AI should sound
                           </h4>
                         </div>
                       </div>
                       <p className={`mt-4 max-w-3xl text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                        {showVoiceOnboarding
-                          ? "Pick a voice for your real-time conversations. You can preview each one now, then the assistant will remember your choice and keep the main chat clean."
-                          : "Switch voices, hear a quick sample, and keep more room for the actual conversation."}
+                        Pick a voice personality for live conversations. You can preview each voice now, then keep the chat clean with the floating dock later.
                       </p>
                     </div>
 
@@ -1166,99 +1175,48 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                 </div>
 
                 <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
-                  {showVoiceOnboarding ? (
-                    <div className="space-y-4">
-                      <div className={`rounded-[28px] border p-4 sm:p-5 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_30%),linear-gradient(180deg,rgba(15,23,42,0.9),rgba(2,6,23,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(240,253,250,0.98))]")}`}>
-                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-3">
-                              <div className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${themed(theme, "bg-emerald-300/14 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
-                                <AudioLines className="h-5 w-5" />
-                              </div>
-                              <div>
-                                <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-emerald-100/76", "text-emerald-700")}`}>Selected Voice</p>
-                                <h5 className={`mt-1 text-xl font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{compactVoiceLabel}</h5>
-                              </div>
+                  <div className="space-y-4">
+                    <div className={`rounded-[28px] border p-4 sm:p-5 ${themed(theme, "border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_30%),linear-gradient(180deg,rgba(15,23,42,0.9),rgba(2,6,23,0.96))]", "border-slate-200 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.99),rgba(240,253,250,0.98))]")}`}>
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
+                            <div className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${themed(theme, "bg-emerald-300/14 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                              <AudioLines className="h-5 w-5" />
                             </div>
-                            <p className={`mt-4 text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                              {selectedVoiceProfile?.personality}
-                            </p>
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              {[selectedVoiceProfile?.style, selectedVoiceProfile?.accent, `${selectedVoiceProfile?.energy || "Focused"} energy`].filter(Boolean).map((item) => (
-                                <span
-                                  key={item}
-                                  className={`rounded-full px-3 py-1.5 text-xs font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-white text-slate-700")}`}
-                                >
-                                  {item}
-                                </span>
-                              ))}
+                            <div>
+                              <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-emerald-100/76", "text-emerald-700")}`}>Selected Voice</p>
+                              <h5 className={`mt-1 text-xl font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{compactVoiceLabel}</h5>
                             </div>
                           </div>
-
-                          <div className="flex flex-col gap-3 lg:min-w-[220px]">
-                            <button
-                              type="button"
-                              onClick={previewSelectedVoiceWithDraft}
-                              className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
-                            >
-                              {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                              Preview {compactVoiceLabel}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                markVoiceOnboardingComplete();
-                                setVoiceSelectorOpen(false);
-                              }}
-                              className={`inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-white hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-                            >
-                              Continue with {compactVoiceLabel}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                        <div className="space-y-3">
-                          {voiceProfiles.map((profile) => (
-                            <VoiceListRow
-                              key={profile.id}
-                              theme={theme}
-                              profile={profile}
-                              selected={profile.id === selectedVoiceProfileId}
-                              previewing={previewingVoiceId === profile.id}
-                              preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
-                              onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false, completeOnboarding: false })}
-                              onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false, completeOnboarding: false })}
-                            />
-                          ))}
-                        </div>
-
-                        <div className={`rounded-[26px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
-                          <div className="flex items-center gap-2">
-                            <SlidersHorizontal className={`h-4 w-4 ${themed(theme, "text-cyan-100", "text-cyan-700")}`} />
-                            <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/75", "text-cyan-700")}`}>
-                              Quick Test
-                            </p>
-                          </div>
-                          <p className={`mt-3 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                            Try a custom line without leaving setup.
+                          <p className={`mt-4 text-sm leading-7 ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                            {selectedVoiceProfile?.personality}
                           </p>
-                          <textarea
-                            value={voicePreviewDraft}
-                            onChange={(event) => setVoicePreviewDraft(event.target.value)}
-                            rows={4}
-                            placeholder="Explain black holes simply."
-                            className={`mt-4 min-h-[132px] w-full resize-none rounded-2xl border bg-transparent px-4 py-3 text-sm leading-7 outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
-                          />
-                          <div className={`mt-4 rounded-2xl px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/10 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
-                            Saved on this device
-                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3 lg:min-w-[220px]">
+                          <button
+                            type="button"
+                            onClick={previewSelectedVoiceWithDraft}
+                            className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 py-3 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                          >
+                            {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                            Preview {compactVoiceLabel}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              markVoiceOnboardingComplete();
+                              setVoiceSelectorOpen(false);
+                            }}
+                            className={`inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-white hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                          >
+                            Continue with {compactVoiceLabel}
+                          </button>
                         </div>
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-4">
+
+                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
                       <div className="space-y-3">
                         {voiceProfiles.map((profile) => (
                           <VoiceListRow
@@ -1268,48 +1226,132 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                             selected={profile.id === selectedVoiceProfileId}
                             previewing={previewingVoiceId === profile.id}
                             preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
-                            onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: true })}
-                            onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false })}
+                            onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false, completeOnboarding: false })}
+                            onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false, completeOnboarding: false })}
                           />
                         ))}
                       </div>
 
                       <div className={`rounded-[26px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Quick test</p>
-                            <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                              Test the current voice with your own sentence.
-                            </p>
-                          </div>
-                          <div className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
-                            {compactVoiceLabel} selected
-                          </div>
+                        <div className="flex items-center gap-2">
+                          <SlidersHorizontal className={`h-4 w-4 ${themed(theme, "text-cyan-100", "text-cyan-700")}`} />
+                          <p className={`text-xs font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/75", "text-cyan-700")}`}>Quick Test</p>
                         </div>
-
-                        <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                          <input
-                            value={voicePreviewDraft}
-                            onChange={(event) => setVoicePreviewDraft(event.target.value)}
-                            placeholder="Explain black holes simply."
-                            className={`min-h-[52px] rounded-2xl border bg-transparent px-4 text-sm outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
-                          />
-                          <button
-                            type="button"
-                            onClick={previewSelectedVoiceWithDraft}
-                            className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
-                          >
-                            {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                            Preview
-                          </button>
+                        <p className={`mt-3 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                          Previews temporarily pause listening so the assistant does not transcribe itself.
+                        </p>
+                        <textarea
+                          value={voicePreviewDraft}
+                          onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                          rows={4}
+                          placeholder="Explain black holes simply."
+                          className={`mt-4 min-h-[132px] w-full resize-none rounded-2xl border bg-transparent px-4 py-3 text-sm leading-7 outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
+                        />
+                        <div className={`mt-4 rounded-2xl px-3 py-2 text-xs font-semibold ${themed(theme, "bg-emerald-300/10 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                          Saved on this device
                         </div>
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               </motion.div>
             </div>
           </div>
+        ) : null}
+
+        {voiceSelectorOpen && !showVoiceOnboarding ? (
+          <>
+            <motion.button
+              type="button"
+              aria-label="Close voice dock"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeVoiceSelector}
+              className="fixed inset-0 z-30 bg-transparent"
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className={`absolute left-3 right-3 top-[152px] z-40 overflow-hidden rounded-[28px] border shadow-[0_24px_70px_rgba(2,8,23,0.36)] backdrop-blur-2xl sm:left-auto sm:right-4 sm:w-[360px] ${themed(theme, "border-white/12 bg-[linear-gradient(180deg,rgba(2,6,23,0.94),rgba(15,23,42,0.92))]", "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))]")}`}
+            >
+              <div className={`border-b px-4 py-4 ${themed(theme, "border-white/10", "border-slate-200")}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/72", "text-cyan-700")}`}>Voice Dock</p>
+                    <h4 className={`mt-2 text-base font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{compactVoiceLabel}</h4>
+                    <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Compact voice switching with isolated preview playback.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeVoiceSelector}
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                    {voiceStateLabel}
+                  </span>
+                  <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                    {transcriptSourceLabel}
+                  </span>
+                </div>
+              </div>
+
+              <div className="max-h-[68vh] overflow-y-auto px-4 py-4">
+                <div className="space-y-3">
+                  {voiceProfiles.map((profile) => (
+                    <VoiceListRow
+                      key={profile.id}
+                      theme={theme}
+                      profile={profile}
+                      selected={profile.id === selectedVoiceProfileId}
+                      previewing={previewingVoiceId === profile.id}
+                      preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
+                      onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: true })}
+                      onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false })}
+                    />
+                  ))}
+                </div>
+
+                <div className={`mt-4 rounded-[24px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Quick test</p>
+                      <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                        Preview pauses listening and restores it after playback.
+                      </p>
+                    </div>
+                    <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                      {compactVoiceLabel} selected
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <input
+                      value={voicePreviewDraft}
+                      onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                      placeholder="Explain black holes simply."
+                      className={`min-h-[50px] rounded-2xl border bg-transparent px-4 text-sm outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={previewSelectedVoiceWithDraft}
+                      className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                    >
+                      {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                      Preview
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
         ) : null}
       </AnimatePresence>
 
