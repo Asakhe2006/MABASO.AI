@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useDragControls } from "framer-motion";
 import {
   Archive,
   AudioLines,
@@ -448,6 +448,8 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const [voiceSelectorOpen, setVoiceSelectorOpen] = useState(false);
   const [voiceOnboardingReady, setVoiceOnboardingReady] = useState(false);
   const [voiceOnboardingComplete, setVoiceOnboardingComplete] = useState(true);
+  const voiceDockViewportRef = useRef(null);
+  const voiceDockDragControls = useDragControls();
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
   const isExpanded = Boolean(isOpen || isGenerating || isListening || isSpeaking || voiceModeEnabled || String(draft || "").trim());
   const filteredConversations = useMemo(
@@ -1270,87 +1272,101 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               onClick={closeVoiceSelector}
               className="fixed inset-0 z-30 bg-transparent"
             />
-            <motion.div
-              initial={{ opacity: 0, y: -12, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className={`absolute left-3 right-3 top-[152px] z-40 overflow-hidden rounded-[28px] border shadow-[0_24px_70px_rgba(2,8,23,0.36)] backdrop-blur-2xl sm:left-auto sm:right-4 sm:w-[360px] ${themed(theme, "border-white/12 bg-[linear-gradient(180deg,rgba(2,6,23,0.94),rgba(15,23,42,0.92))]", "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))]")}`}
-            >
-              <div className={`border-b px-4 py-4 ${themed(theme, "border-white/10", "border-slate-200")}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/72", "text-cyan-700")}`}>Voice Dock</p>
-                    <h4 className={`mt-2 text-base font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{compactVoiceLabel}</h4>
-                    <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Compact voice switching with isolated preview playback.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closeVoiceSelector}
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
-                    {voiceStateLabel}
-                  </span>
-                  <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
-                    {transcriptSourceLabel}
-                  </span>
-                </div>
-              </div>
-
-              <div className="max-h-[68vh] overflow-y-auto px-4 py-4">
-                <div className="space-y-3">
-                  {voiceProfiles.map((profile) => (
-                    <VoiceListRow
-                      key={profile.id}
-                      theme={theme}
-                      profile={profile}
-                      selected={profile.id === selectedVoiceProfileId}
-                      previewing={previewingVoiceId === profile.id}
-                      preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
-                      onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: true })}
-                      onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false })}
-                    />
-                  ))}
-                </div>
-
-                <div className={`mt-4 rounded-[24px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Quick test</p>
-                      <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
-                        Preview pauses listening and restores it after playback.
-                      </p>
+            <div ref={voiceDockViewportRef} className="fixed inset-0 z-40 pointer-events-none">
+              <motion.div
+                drag
+                dragListener={false}
+                dragControls={voiceDockDragControls}
+                dragConstraints={voiceDockViewportRef}
+                dragElastic={0.08}
+                dragMomentum={false}
+                initial={{ opacity: 0, y: -12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className={`pointer-events-auto absolute left-3 right-3 top-[152px] overflow-hidden rounded-[28px] border shadow-[0_24px_70px_rgba(2,8,23,0.36)] backdrop-blur-2xl sm:left-auto sm:right-4 sm:w-[360px] ${themed(theme, "border-white/12 bg-[linear-gradient(180deg,rgba(2,6,23,0.94),rgba(15,23,42,0.92))]", "border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))]")}`}
+              >
+                <div className={`border-b px-4 py-4 ${themed(theme, "border-white/10", "border-slate-200")}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div
+                      onPointerDown={(event) => voiceDockDragControls.start(event)}
+                      className="min-w-0 flex-1 cursor-grab select-none touch-none active:cursor-grabbing"
+                    >
+                      <p className={`text-[11px] font-semibold uppercase tracking-[0.24em] ${themed(theme, "text-cyan-100/72", "text-cyan-700")}`}>Voice Dock</p>
+                      <h4 className={`mt-2 text-base font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>{compactVoiceLabel}</h4>
+                      <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>Drag this dock up or sideways whenever you need more room.</p>
                     </div>
-                    <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
-                      {compactVoiceLabel} selected
-                    </span>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <input
-                      value={voicePreviewDraft}
-                      onChange={(event) => setVoicePreviewDraft(event.target.value)}
-                      placeholder="Explain black holes simply."
-                      className={`min-h-[50px] rounded-2xl border bg-transparent px-4 text-sm outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
-                    />
                     <button
                       type="button"
-                      onClick={previewSelectedVoiceWithDraft}
-                      className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                      onClick={closeVoiceSelector}
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl transition ${themed(theme, "border border-white/10 bg-white/[0.05] text-slate-100 hover:bg-white/[0.1]", "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100")}`}
                     >
-                      {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                      Preview
+                      <X className="h-4 w-4" />
                     </button>
                   </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
+                      {voiceStateLabel}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      {transcriptSourceLabel}
+                    </span>
+                    <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-white/[0.08] text-slate-100", "bg-slate-100 text-slate-700")}`}>
+                      Drag me
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </motion.div>
+
+                <div className="max-h-[68vh] overflow-y-auto px-4 py-4">
+                  <div className="space-y-3">
+                    {voiceProfiles.map((profile) => (
+                      <VoiceListRow
+                        key={profile.id}
+                        theme={theme}
+                        profile={profile}
+                        selected={profile.id === selectedVoiceProfileId}
+                        previewing={previewingVoiceId === profile.id}
+                        preparing={isPreparingVoicePreview && previewingVoiceId === profile.id}
+                        onSelect={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: true })}
+                        onPreview={() => handleVoiceSelection(profile.id, { preview: true, closeAfter: false })}
+                      />
+                    ))}
+                  </div>
+
+                  <div className={`mt-4 rounded-[24px] border p-4 ${themed(theme, "border-white/10 bg-white/[0.04]", "border-slate-200 bg-white/92")}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className={`text-sm font-semibold ${themed(theme, "text-white", "text-slate-900")}`}>Quick test</p>
+                        <p className={`mt-1 text-sm ${themed(theme, "text-slate-300", "text-slate-600")}`}>
+                          Preview pauses listening and restores it after playback.
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-3 py-2 text-[11px] font-semibold ${themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")}`}>
+                        {compactVoiceLabel} selected
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <input
+                        value={voicePreviewDraft}
+                        onChange={(event) => setVoicePreviewDraft(event.target.value)}
+                        placeholder="Explain black holes simply."
+                        className={`min-h-[50px] rounded-2xl border bg-transparent px-4 text-sm outline-none ${themed(theme, "border-white/10 text-slate-100 placeholder:text-slate-500", "border-slate-200 text-slate-900 placeholder:text-slate-400")}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={previewSelectedVoiceWithDraft}
+                        className="inline-flex min-h-[50px] items-center justify-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#0891b2,#22c55e)] px-5 text-sm font-semibold text-white shadow-[0_18px_36px_rgba(8,145,178,0.24)] transition hover:translate-y-[-1px]"
+                      >
+                        {isPreparingVoicePreview ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                        Preview
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
           </>
         ) : null}
       </AnimatePresence>
