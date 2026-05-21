@@ -63,6 +63,14 @@ const VOICE_INTERRUPTION_INTENT_MIN_SCORE = 0.62;
 const VOICE_INTERRUPTION_MIN_WORDS = 2;
 const VOICE_ECHO_REJECTION_OVERLAP = 0.48;
 const VOICE_INTERRUPTION_COOLDOWN_MS = 900;
+const VOICE_INTERRUPTION_MIN_SPEECH_MS = 240;
+const VOICE_INTERRUPTION_FORCE_SPEECH_MS = 540;
+const VOICE_INTERRUPTION_MIN_ACTIVE_FRAMES = 3;
+const VOICE_INTERRUPTION_MIN_SILENCE_FRAMES = 4;
+const VOICE_INTERRUPTION_MIN_TRANSCRIPT_CHARS = 4;
+const VOICE_INTERRUPTION_MIN_ACTIVITY_CONFIDENCE = 0.48;
+const VOICE_INTERRUPTION_ACTIVITY_THRESHOLD = 0.02;
+const VOICE_INTERRUPTION_PEAK_THRESHOLD = 0.05;
 const RECORDING_MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
   "audio/webm",
@@ -301,6 +309,49 @@ function analyzeVoiceIntent({
     shouldProcess,
     shouldRetry,
     reason: echoOverlap >= VOICE_ECHO_REJECTION_OVERLAP ? "echo" : (shouldRetry ? "ambiguous" : "background"),
+  };
+}
+
+function analyzeVoiceInterruptionIntent({
+  transcript = "",
+  spokenReference = "",
+  transcriptConfidence = null,
+  speechDurationMs = 0,
+} = {}) {
+  const baseAnalysis = analyzeVoiceIntent({
+    transcript,
+    spokenReference,
+    transcriptConfidence,
+  });
+  const normalized = baseAnalysis.cleaned.toLowerCase();
+  const interruptionCommand = /^(wait|hold on|stop|pause|listen|actually|sorry|no|but)\b/i.test(baseAnalysis.cleaned);
+  const interruptionRedirect = /\b(i meant|what about|go back|start over|not that|one second|hang on|can you|could you|would you|explain|show me|tell me)\b/i.test(normalized);
+
+  let boostedScore = baseAnalysis.score;
+  if (interruptionCommand) boostedScore += 0.2;
+  if (interruptionRedirect) boostedScore += 0.14;
+  if (speechDurationMs >= VOICE_INTERRUPTION_MIN_SPEECH_MS) boostedScore += 0.05;
+  if (baseAnalysis.wordCount >= 3) boostedScore += 0.04;
+  boostedScore = clampNumber(boostedScore, 0, 1);
+
+  const shouldInterrupt = baseAnalysis.echoOverlap < VOICE_ECHO_REJECTION_OVERLAP
+    && (
+      interruptionCommand
+      || interruptionRedirect
+      || boostedScore >= VOICE_INTERRUPTION_INTENT_MIN_SCORE
+      || (
+        speechDurationMs >= VOICE_INTERRUPTION_FORCE_SPEECH_MS
+        && baseAnalysis.cleaned.length >= VOICE_INTERRUPTION_MIN_TRANSCRIPT_CHARS
+        && boostedScore >= VOICE_INTERRUPTION_MIN_ACTIVITY_CONFIDENCE
+      )
+    );
+
+  return {
+    ...baseAnalysis,
+    score: boostedScore,
+    interruptionCommand,
+    interruptionRedirect,
+    shouldInterrupt,
   };
 }
 
@@ -894,7 +945,15 @@ export function useLectureAssistant({
   const previewResumeStateRef = useRef({ shouldResumeListening: false, continueVoiceChat: false });
   const voiceSpeechReferenceRef = useRef("");
   const voiceInterruptionRecognitionRef = useRef(null);
+  const voiceInterruptionMonitorStreamRef = useRef(null);
+  const voiceInterruptionMonitorContextRef = useRef(null);
+  const voiceInterruptionMonitorAnalyserRef = useRef(null);
+  const voiceInterruptionMonitorFrameRef = useRef(0);
+  const voiceInterruptionMonitorRunRef = useRef(0);
+  const voiceInterruptionMonitorStartingRef = useRef(false);
   const voiceInterruptionSeedRef = useRef("");
+  const voiceInterruptionTranscriptRef = useRef("");
+  const voiceInterruptionSpeechStartedAtRef = useRef(0);
   const voiceInterruptionResetTimerRef = useRef(0);
   const voiceLastInterruptionAtRef = useRef(0);
 
@@ -970,12 +1029,41 @@ export function useLectureAssistant({
     voiceInterruptionRecognitionRef.current = null;
   };
 
+  const stopVoiceInterruptionMonitor = () => {
+    voiceInterruptionMonitorRunRef.current += 1;
+    voiceInterruptionMonitorStartingRef.current = false;
+    voiceInterruptionTranscriptRef.current = "";
+    voiceInterruptionSpeechStartedAtRef.current = 0;
+    if (typeof window !== "undefined") {
+      window.cancelAnimationFrame?.(voiceInterruptionMonitorFrameRef.current);
+      voiceInterruptionMonitorFrameRef.current = 0;
+    }
+    if (voiceInterruptionMonitorContextRef.current) {
+      try {
+        voiceInterruptionMonitorContextRef.current.close();
+      } catch {
+        // Ignore interruption-monitor audio-context shutdown failures.
+      }
+      voiceInterruptionMonitorContextRef.current = null;
+    }
+    if (voiceInterruptionMonitorStreamRef.current) {
+      try {
+        voiceInterruptionMonitorStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch {
+        // Ignore interruption-monitor stream shutdown failures.
+      }
+      voiceInterruptionMonitorStreamRef.current = null;
+    }
+    voiceInterruptionMonitorAnalyserRef.current = null;
+  };
+
   const stopSpeaking = () => {
     if (typeof window !== "undefined") {
       window.clearTimeout(speechRestartTimerRef.current);
       window.clearTimeout(voiceReplyChunkTimerRef.current);
     }
     stopVoiceInterruptionRecognition();
+    stopVoiceInterruptionMonitor();
     voiceReplyRunRef.current += 1;
     previewVoiceRunRef.current += 1;
     voiceSpeechQueueRef.current = [];
@@ -1152,6 +1240,34 @@ export function useLectureAssistant({
     setStatusText("Preview finished. Restoring listening...");
   };
 
+  const attemptVoiceInterruption = ({
+    transcript = voiceInterruptionTranscriptRef.current,
+    speechDurationMs = 0,
+  } = {}) => {
+    if (voiceInterruptionRequestedRef.current) return true;
+    const normalizedTranscript = normalizeVoiceTranscript(transcript);
+    if (!normalizedTranscript && speechDurationMs < VOICE_INTERRUPTION_FORCE_SPEECH_MS) return false;
+    const transcriptConfidence = normalizedTranscript
+      ? estimateTranscriptConfidence(normalizedTranscript)
+      : 0;
+    const analysis = analyzeVoiceInterruptionIntent({
+      transcript: normalizedTranscript,
+      spokenReference: voiceSpeechReferenceRef.current,
+      transcriptConfidence,
+      speechDurationMs,
+    });
+    if (!analysis.shouldInterrupt) return false;
+    if (
+      !analysis.interruptionCommand
+      && !analysis.interruptionRedirect
+      && analysis.cleaned.length < VOICE_INTERRUPTION_MIN_TRANSCRIPT_CHARS
+    ) {
+      return false;
+    }
+    triggerVoiceInterruption(analysis.cleaned);
+    return true;
+  };
+
   const triggerVoiceInterruption = (capturedTranscript = "") => {
     if (Date.now() - voiceLastInterruptionAtRef.current < VOICE_INTERRUPTION_COOLDOWN_MS) return;
     const normalizedSeed = normalizeVoiceTranscript(capturedTranscript);
@@ -1162,15 +1278,18 @@ export function useLectureAssistant({
     voiceInterruptionRequestedRef.current = true;
     markVoiceInterrupted();
     stopSpeaking();
+    if (typeof window !== "undefined") {
+      window.clearTimeout(speechRestartTimerRef.current);
+      speechRestartTimerRef.current = window.setTimeout(() => {
+        speechRestartTimerRef.current = 0;
+        startListening({ continueVoiceChat: true, allowInterruptionResume: true });
+      }, 40);
+    }
     if (isGenerating) {
-      stopGenerating({ preserveVoiceMode: true, restartListening: true });
+      stopGenerating({ preserveVoiceMode: true, restartListening: false });
       return;
     }
-    scheduleVoiceListeningRestart({
-      delayMs: 120,
-      continueVoiceChat: true,
-      statusMessage: normalizedSeed ? "Interrupted. Listening for the rest of your request..." : "Interrupted. Listening...",
-    });
+    setStatusText(normalizedSeed ? "Interrupted. Listening for the rest of your request..." : "Interrupted. Listening...");
   };
 
   const startVoiceInterruptionRecognition = (runId) => {
@@ -1199,21 +1318,14 @@ export function useLectureAssistant({
           if (!transcriptText) continue;
           heardText += `${transcriptText} `;
         }
-        const analysis = analyzeVoiceIntent({
-          transcript: heardText,
-          spokenReference: voiceSpeechReferenceRef.current,
+        voiceInterruptionTranscriptRef.current = normalizeVoiceTranscript(heardText);
+        const speechDurationMs = voiceInterruptionSpeechStartedAtRef.current
+          ? Date.now() - voiceInterruptionSpeechStartedAtRef.current
+          : 0;
+        void attemptVoiceInterruption({
+          transcript: voiceInterruptionTranscriptRef.current,
+          speechDurationMs,
         });
-        const interruptionCommand = /^(stop|wait|pause|hold on|listen)\b/i.test(analysis.cleaned);
-        if (
-          analysis.echoOverlap < VOICE_ECHO_REJECTION_OVERLAP
-          && (
-            analysis.score >= VOICE_INTERRUPTION_INTENT_MIN_SCORE
-            || (interruptionCommand && analysis.score >= 0.46)
-          )
-          && (analysis.wordCount >= VOICE_INTERRUPTION_MIN_WORDS || interruptionCommand)
-        ) {
-          triggerVoiceInterruption(analysis.cleaned);
-        }
       };
       recognition.onerror = () => {
         // Auto-interruption is best-effort. Button interruption still works even if this fails.
@@ -1234,6 +1346,158 @@ export function useLectureAssistant({
       recognition.start();
     } catch {
       voiceInterruptionRecognitionRef.current = null;
+    }
+  };
+
+  const startVoiceInterruptionMonitor = async (runId) => {
+    if (
+      typeof window === "undefined"
+      || typeof navigator === "undefined"
+      || !navigator.mediaDevices?.getUserMedia
+      || isVoicePreviewMuted()
+      || !voiceModeEnabledRef.current
+      || voiceInterruptionMonitorStreamRef.current
+      || voiceInterruptionMonitorStartingRef.current
+    ) {
+      return;
+    }
+
+    const monitorRunId = voiceInterruptionMonitorRunRef.current + 1;
+    voiceInterruptionMonitorRunRef.current = monitorRunId;
+    voiceInterruptionMonitorStartingRef.current = true;
+    voiceInterruptionTranscriptRef.current = "";
+    voiceInterruptionSpeechStartedAtRef.current = 0;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: { ideal: 1, max: 1 },
+          sampleRate: { ideal: 16000 },
+          latency: { ideal: 0.01 },
+        },
+      });
+      if (
+        monitorRunId !== voiceInterruptionMonitorRunRef.current
+        || runId !== voiceReplyRunRef.current
+        || isVoicePreviewMuted()
+        || !voiceModeEnabledRef.current
+      ) {
+        voiceInterruptionMonitorStartingRef.current = false;
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) {
+        voiceInterruptionMonitorStartingRef.current = false;
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const audioContext = new AudioContextCtor({ sampleRate: 16000 });
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      const sourceNode = audioContext.createMediaStreamSource(stream);
+      sourceNode.connect(analyser);
+
+      voiceInterruptionMonitorStartingRef.current = false;
+      voiceInterruptionMonitorStreamRef.current = stream;
+      voiceInterruptionMonitorContextRef.current = audioContext;
+      voiceInterruptionMonitorAnalyserRef.current = analyser;
+
+      const audioSampleBuffer = new Uint8Array(analyser.fftSize);
+      let noiseFloorRms = VOICE_VAD_MIN_NOISE_FLOOR;
+      let noiseFloorPeak = VOICE_INTERRUPTION_ACTIVITY_THRESHOLD;
+      let activeFrameCount = 0;
+      let silenceFrameCount = 0;
+      let speechDetected = false;
+
+      const monitorInterruption = () => {
+        if (
+          monitorRunId !== voiceInterruptionMonitorRunRef.current
+          || runId !== voiceReplyRunRef.current
+          || isVoicePreviewMuted()
+          || !voiceModeEnabledRef.current
+        ) {
+          return;
+        }
+
+        const activeAnalyser = voiceInterruptionMonitorAnalyserRef.current;
+        if (!activeAnalyser) return;
+
+        activeAnalyser.getByteTimeDomainData(audioSampleBuffer);
+        let sumSquares = 0;
+        let peak = 0;
+        for (let index = 0; index < audioSampleBuffer.length; index += 1) {
+          const normalized = (audioSampleBuffer[index] - 128) / 128;
+          const magnitude = Math.abs(normalized);
+          sumSquares += normalized * normalized;
+          if (magnitude > peak) peak = magnitude;
+        }
+
+        const rms = Math.sqrt(sumSquares / audioSampleBuffer.length);
+        const dynamicRmsThreshold = Math.max(
+          VOICE_INTERRUPTION_ACTIVITY_THRESHOLD,
+          VOICE_VAD_MIN_NOISE_FLOOR,
+          noiseFloorRms * VOICE_VAD_RMS_MULTIPLIER,
+        );
+        const dynamicPeakThreshold = Math.max(
+          VOICE_INTERRUPTION_PEAK_THRESHOLD,
+          noiseFloorPeak * VOICE_VAD_PEAK_MULTIPLIER,
+        );
+        const isSpeechFrame = rms >= dynamicRmsThreshold || peak >= dynamicPeakThreshold;
+
+        if (!isSpeechFrame) {
+          noiseFloorRms = clampNumber(
+            noiseFloorRms + (rms - noiseFloorRms) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+            VOICE_VAD_MIN_NOISE_FLOOR,
+            VOICE_INTERRUPTION_ACTIVITY_THRESHOLD,
+          );
+          noiseFloorPeak = clampNumber(
+            noiseFloorPeak + (peak - noiseFloorPeak) * VOICE_VAD_NOISE_FLOOR_SMOOTHING,
+            VOICE_INTERRUPTION_ACTIVITY_THRESHOLD,
+            VOICE_INTERRUPTION_PEAK_THRESHOLD,
+          );
+        }
+
+        if (isSpeechFrame) {
+          activeFrameCount += 1;
+          silenceFrameCount = 0;
+          if (activeFrameCount >= VOICE_INTERRUPTION_MIN_ACTIVE_FRAMES) {
+            if (!speechDetected) {
+              speechDetected = true;
+              voiceInterruptionSpeechStartedAtRef.current = Date.now();
+            }
+            const speechDurationMs = voiceInterruptionSpeechStartedAtRef.current
+              ? Date.now() - voiceInterruptionSpeechStartedAtRef.current
+              : 0;
+            void attemptVoiceInterruption({
+              transcript: voiceInterruptionTranscriptRef.current,
+              speechDurationMs,
+            });
+          }
+        } else {
+          activeFrameCount = 0;
+          if (speechDetected) {
+            silenceFrameCount += 1;
+            if (silenceFrameCount >= VOICE_INTERRUPTION_MIN_SILENCE_FRAMES) {
+              speechDetected = false;
+              silenceFrameCount = 0;
+              voiceInterruptionSpeechStartedAtRef.current = 0;
+              voiceInterruptionTranscriptRef.current = "";
+            }
+          }
+        }
+
+        voiceInterruptionMonitorFrameRef.current = window.requestAnimationFrame(monitorInterruption);
+      };
+
+      voiceInterruptionMonitorFrameRef.current = window.requestAnimationFrame(monitorInterruption);
+    } catch {
+      stopVoiceInterruptionMonitor();
     }
   };
 
@@ -1413,6 +1677,7 @@ export function useLectureAssistant({
       if (voiceReplyRunRef.current !== runId) return;
       appendSpokenReference(nextChunk);
       startVoiceInterruptionRecognition(runId);
+      void startVoiceInterruptionMonitor(runId);
       setIsSpeaking(true);
       setIsVoiceReconnecting(false);
       setStatusText(isGenerating ? "Speaking while the answer keeps streaming..." : "Speaking the answer aloud...");
@@ -1506,6 +1771,7 @@ export function useLectureAssistant({
     manualRecognitionStopRef.current = true;
     clearVoiceListeningTimer();
     stopVoiceInterruptionRecognition();
+    stopVoiceInterruptionMonitor();
     if (voiceInputModeRef.current === "whisper") {
       try {
         voiceStopCaptureRef.current?.("manual_stop");
@@ -1966,12 +2232,12 @@ export function useLectureAssistant({
     });
   };
 
-  const startBrowserListening = ({ continueVoiceChat = false } = {}) => {
-    if (isListening) {
+  const startBrowserListening = ({ continueVoiceChat = false, allowInterruptionResume = false } = {}) => {
+    if (isListening && !allowInterruptionResume) {
       stopVoiceChat({ message: "Voice conversation ended." });
       return;
     }
-    if (isSpeaking || isGenerating) {
+    if ((isSpeaking || isGenerating) && !allowInterruptionResume) {
       setStatusText("Tap the mic again to interrupt the reply and continue talking.");
       return;
     }
@@ -2330,12 +2596,12 @@ export function useLectureAssistant({
     }
   };
 
-  const startWhisperListening = async ({ continueVoiceChat = false } = {}) => {
-    if (isListening) {
+  const startWhisperListening = async ({ continueVoiceChat = false, allowInterruptionResume = false } = {}) => {
+    if (isListening && !allowInterruptionResume) {
       stopVoiceChat({ message: "Voice conversation ended." });
       return;
     }
-    if (isSpeaking || isGenerating) {
+    if ((isSpeaking || isGenerating) && !allowInterruptionResume) {
       setStatusText("Tap the mic again to interrupt the reply and continue talking.");
       return;
     }
@@ -2346,14 +2612,14 @@ export function useLectureAssistant({
       || typeof window.MediaRecorder === "undefined"
       || !navigator.mediaDevices?.getUserMedia
     ) {
-      startBrowserListening({ continueVoiceChat });
+      startBrowserListening({ continueVoiceChat, allowInterruptionResume });
       return;
     }
 
     const mimeType = getSupportedRecordingMimeType();
     if (!mimeType) {
       setStatusText("This browser cannot record mic audio here, so voice chat is falling back to browser speech recognition.");
-      startBrowserListening({ continueVoiceChat });
+      startBrowserListening({ continueVoiceChat, allowInterruptionResume });
       return;
     }
 
@@ -2844,11 +3110,11 @@ export function useLectureAssistant({
       setIsVoiceReconnecting(false);
       setVoiceListeningEngine("Browser SpeechRecognition fallback");
       setStatusText(`${getMicrophoneAccessErrorMessage(error)} Falling back to browser speech recognition if available.`);
-      startBrowserListening({ continueVoiceChat });
+      startBrowserListening({ continueVoiceChat, allowInterruptionResume });
     }
   };
 
-  const startListening = ({ continueVoiceChat = false } = {}) => {
+  const startListening = ({ continueVoiceChat = false, allowInterruptionResume = false } = {}) => {
     if (isVoicePreviewMuted()) {
       setStatusText("Voice preview is still finishing. Wait a moment, then start talking.");
       return;
@@ -2860,10 +3126,10 @@ export function useLectureAssistant({
       && typeof window.MediaRecorder !== "undefined"
       && navigator.mediaDevices?.getUserMedia
     ) {
-      void startWhisperListening({ continueVoiceChat });
+      void startWhisperListening({ continueVoiceChat, allowInterruptionResume });
       return;
     }
-    startBrowserListening({ continueVoiceChat });
+    startBrowserListening({ continueVoiceChat, allowInterruptionResume });
   };
 
   const stopGenerating = ({ preserveVoiceMode = false, restartListening = false } = {}) => {
@@ -2890,10 +3156,7 @@ export function useLectureAssistant({
       startListening();
       return;
     }
-    voiceInterruptionRequestedRef.current = true;
-    markVoiceInterrupted();
-    stopSpeaking();
-    stopGenerating({ preserveVoiceMode: true, restartListening: true });
+    triggerVoiceInterruption("");
   };
 
   const sendMessage = async ({
