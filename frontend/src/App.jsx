@@ -481,6 +481,7 @@ const tabs = [
   { id: "quiz", label: "Exam" },
   { id: "presentation", label: "PowerPoint Presentation" },
   { id: "podcast", label: "Podcast Generator" },
+  { id: "report", label: "Academic Report" },
   { id: "chat", label: "AI Notes" },
   { id: "collaboration", label: "Collaboration" },
 ];
@@ -3657,6 +3658,8 @@ export default function App() {
   const [selectedPresentationSlideIndex, setSelectedPresentationSlideIndex] = useState(0);
   const [presentationTemplateFile, setPresentationTemplateFile] = useState(null);
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportData, setReportData] = useState(() => ({ jobId: "", title: "", body: "", sections: [] }));
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -3962,6 +3965,32 @@ export default function App() {
     }
   };
 
+  const renderReportPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-[24px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(6,95,70,0.08),rgba(6,12,10,0.9))] p-5">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-100/80">Academic Report</p>
+            <h4 className="mt-2 text-3xl font-semibold text-white">Generate a structured academic report</h4>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Turn the lecture content into a formal report with sections, citations, and an executive summary.</p>
+          </div>
+          <div className="force-mobile-stack flex flex-wrap gap-3">
+            <button type="button" onClick={generateReport} disabled={loading || !hasStudyInputs || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Report..." : "Generate Report"}</button>
+            <button type="button" onClick={downloadActiveContent} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Download Report</button>
+          </div>
+        </div>
+      </div>
+
+      {reportData && reportData.body ? (
+        <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
+          <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{reportData.body}</div>
+        </div>
+      ) : (
+        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">No academic report generated yet. Click Generate Report to start.</div>
+      )}
+    </div>
+  );
+
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
     const normalizedPageId = normalizeAppPageId(pageId, "capture");
     if (!authToken) {
@@ -4231,7 +4260,7 @@ export default function App() {
     : slidesReadyForGuide
       ? "Slide read successful. You can now generate the study guide."
       : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
-  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script);
+  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script || (reportData && (reportData.body || (reportData.sections || []).length)));
   const selectedQuizQuestions = quizQuestions;
   const quizTotalMarks = getTotalQuizMarks(selectedQuizQuestions);
   const quizScore = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
@@ -11884,6 +11913,7 @@ export default function App() {
     if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
     if (activeTab === "presentation") return presentationToText(presentationData) || "No PowerPoint presentation generated yet.";
     if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
+    if (activeTab === "report") return reportData.body || "No academic report generated yet.";
     if (activeTab === "chat") return chatToText(lectureAssistantMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
   };
@@ -13414,6 +13444,59 @@ export default function App() {
       setStatus("Podcast generation failed.");
     } finally {
       setIsGeneratingPodcast(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const generateReport = async () => {
+    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Generate a study guide or add lecture material before creating the academic report.");
+    }
+
+    setIsGeneratingReport(true);
+    setError("");
+    setStatus("Writing the academic report...");
+    setProgress(0);
+    setCurrentJobType("report");
+
+    try {
+      const response = await authFetch("/generate-report/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Report generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "report",
+        savedAt: new Date().toISOString(),
+      });
+      const job = await pollJob(data.job_id, "report");
+      const nextReportData = {
+        jobId: data.job_id,
+        title: job.report_title || "",
+        body: job.report_body || "",
+        sections: job.report_sections || [],
+      };
+      setReportData(nextReportData);
+      revealWorkspacePage("report");
+      setProgress(100);
+      setStatus("Academic report ready.");
+      clearPendingJob();
+    } catch (err) {
+      clearPendingJob();
+      setError(err.message || "Report generation failed.");
+      setStatus("Report generation failed.");
+    } finally {
+      setIsGeneratingReport(false);
       setCurrentJobType("");
     }
   };
@@ -16033,7 +16116,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "report" ? "Generating report" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
             </aside>
         </section> : null}
 
@@ -16057,7 +16140,7 @@ export default function App() {
                   <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
                   <div className="relative">
                     <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
-                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}</div> : null}
+                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
                   </div>
                   {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
                   <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
@@ -16223,6 +16306,7 @@ export default function App() {
                 ) : null}
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
+                {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "chat" ? (<>
                   <LectureAssistantPanel assistant={lectureAssistant} />
                   <div className="hidden space-y-4">
