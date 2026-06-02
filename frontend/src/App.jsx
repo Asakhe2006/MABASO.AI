@@ -522,18 +522,6 @@ const reportFeatureToggles = [
   ["futurePredictions", "Future Predictions"],
 ];
 const mindMapDepthOptions = ["Basic", "Standard", "Advanced", "Research"];
-const mindMapNodeTypeColors = {
-  "main topic": "#111827",
-  concept: "#2563eb",
-  definition: "#059669",
-  formula: "#7c3aed",
-  process: "#d97706",
-  example: "#0891b2",
-  application: "#0f766e",
-  principle: "#4338ca",
-  warning: "#dc2626",
-  "key point": "#475569",
-};
 const fairSubscriptionPlans = [
   {
     name: "Free Study",
@@ -3848,6 +3836,7 @@ export default function App() {
   const [mindMapTopic, setMindMapTopic] = useState("");
   const [selectedMindMapNode, setSelectedMindMapNode] = useState(null);
   const mindMapExportRef = useRef(null);
+  const mindMapCanvasRef = useRef(null);
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -4385,7 +4374,9 @@ export default function App() {
                   <button type="button" onClick={downloadMindMapPdf} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PDF</button>
                 </div>
               </div>
-              <MindMapFlow root={mindMapData.root} onSelectNode={setSelectedMindMapNode} />
+              <div ref={mindMapCanvasRef}>
+                <MindMapFlow root={mindMapData.root} onSelectNode={setSelectedMindMapNode} />
+              </div>
             </div>
 
             <aside className="rounded-[28px] border border-white/10 bg-slate-950 p-5 text-white">
@@ -14084,42 +14075,40 @@ export default function App() {
     }
   };
 
-  const buildMindMapSvg = () => {
-    const root = mindMapData.root;
-    if (!root) return "";
-    const nodes = flattenMindMapNodes(root);
-    const width = 1400;
-    const height = Math.max(720, nodes.length * 90);
-    const positions = new Map();
-    const depthCounts = new Map();
-    nodes.forEach((node) => {
-      const depth = Number(node.depth || 0);
-      const index = depthCounts.get(depth) || 0;
-      depthCounts.set(depth, index + 1);
-      positions.set(node.id || node.title, {
-        x: 90 + depth * 300,
-        y: 80 + index * 120 + (depth % 2) * 24,
-      });
-    });
-    const escapeXml = (value) => String(value || "").replace(/[<>&"']/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;", "'": "&apos;" }[char]));
-    const edgeMarkup = nodes
-      .filter((node) => node.parent)
-      .map((node) => {
-        const start = positions.get(node.parent);
-        const end = positions.get(node.id || node.title);
-        if (!start || !end) return "";
-        const color = mindMapNodeTypeColors[String(node.type || "concept").toLowerCase()] || "#2563eb";
-        return `<path d="M ${start.x + 220} ${start.y + 28} C ${start.x + 270} ${start.y + 28}, ${end.x - 50} ${end.y + 28}, ${end.x} ${end.y + 28}" fill="none" stroke="${color}" stroke-width="2"/>`;
-      })
+  const inlineMindMapCloneStyles = (sourceNode, cloneNode) => {
+    if (!sourceNode || !cloneNode || typeof window === "undefined") return;
+    const computedStyle = window.getComputedStyle(sourceNode);
+    const inlineStyle = Array.from(computedStyle)
+      .map((property) => `${property}:${computedStyle.getPropertyValue(property)};`)
       .join("");
-    const nodeMarkup = nodes.map((node) => {
-      const position = positions.get(node.id || node.title);
-      const color = mindMapNodeTypeColors[String(node.type || "concept").toLowerCase()] || "#2563eb";
-      const label = escapeXml(node.title || node.label || "Node");
-      const type = escapeXml(node.type || "Concept");
-      return `<g><rect x="${position.x}" y="${position.y}" width="230" height="64" rx="16" fill="white" stroke="${color}" stroke-width="2"/><text x="${position.x + 14}" y="${position.y + 24}" font-family="Arial" font-size="10" font-weight="700" fill="${color}">${type}</text><text x="${position.x + 14}" y="${position.y + 46}" font-family="Arial" font-size="14" font-weight="700" fill="#111827">${label.slice(0, 28)}</text></g>`;
-    }).join("");
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#f8fafc"/>${edgeMarkup}${nodeMarkup}</svg>`;
+    cloneNode.setAttribute("style", inlineStyle);
+    Array.from(sourceNode.children || []).forEach((child, index) => {
+      inlineMindMapCloneStyles(child, cloneNode.children?.[index]);
+    });
+  };
+
+  const buildMindMapCaptureSvg = () => {
+    const target = mindMapCanvasRef.current;
+    if (!mindMapData.root || !target) return "";
+    const rect = target.getBoundingClientRect();
+    const width = Math.max(900, Math.ceil(rect.width || target.scrollWidth || 1200));
+    const height = Math.max(620, Math.ceil(rect.height || target.scrollHeight || 720));
+    const clone = target.cloneNode(true);
+    inlineMindMapCloneStyles(target, clone);
+    clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+    clone.style.width = `${width}px`;
+    clone.style.height = `${height}px`;
+    clone.style.margin = "0";
+    clone.style.background = "#ffffff";
+    const serialized = new XMLSerializer().serializeToString(clone);
+    return [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<rect width="100%" height="100%" fill="#ffffff"/>`,
+      `<foreignObject x="0" y="0" width="${width}" height="${height}">`,
+      serialized,
+      "</foreignObject>",
+      "</svg>",
+    ].join("");
   };
 
   const downloadMindMapJson = () => {
@@ -14137,7 +14126,7 @@ export default function App() {
   };
 
   const downloadMindMapSvg = () => {
-    const svg = buildMindMapSvg();
+    const svg = buildMindMapCaptureSvg();
     if (!svg) return setError("Generate the mind map before exporting SVG.");
     const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
     const url = window.URL.createObjectURL(blob);
@@ -14152,7 +14141,7 @@ export default function App() {
   };
 
   const downloadMindMapPng = async () => {
-    const svg = buildMindMapSvg();
+    const svg = buildMindMapCaptureSvg();
     if (!svg) return setError("Generate the mind map before exporting PNG.");
     try {
       const image = new Image();
@@ -14185,10 +14174,21 @@ export default function App() {
   };
 
   const downloadMindMapPdf = async () => {
-    if (!mindMapData.root) return setError("Generate the mind map before exporting PDF.");
+    const svg = buildMindMapCaptureSvg();
+    if (!svg) return setError("Generate the mind map before exporting PDF.");
     try {
-      await exportPdf(mindMapData.title || "Mind Map", [{ title: "Mind Map Knowledge Structure", content: mindMapToText(mindMapData.root) }]);
-      setStatus("Mind map PDF downloaded.");
+      const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+      const url = window.URL.createObjectURL(blob);
+      const printWindow = window.open("", "_blank", "width=1200,height=900");
+      if (!printWindow) {
+        window.URL.revokeObjectURL(url);
+        return setError("PDF export needs popups enabled. Use SVG or PNG if the print window is blocked.");
+      }
+      const title = sanitizeFileName(mindMapData.title || "mind-map");
+      printWindow.document.write(`<!doctype html><html><head><title>${title}</title><style>@page{size:landscape;margin:12mm}body{margin:0;background:#fff;font-family:Arial,sans-serif}.sheet{padding:12mm}.sheet img{display:block;width:100%;height:auto;border:1px solid #e5e7eb;border-radius:18px}</style></head><body><main class="sheet"><img src="${url}" alt="Mind map export"/></main><script>window.onload=function(){setTimeout(function(){window.print()},300)}</script></body></html>`);
+      printWindow.document.close();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 5000);
+      setStatus("Mind map PDF print view opened. Choose Save as PDF.");
     } catch (err) {
       setError(err.message || "Mind map PDF export failed.");
     }

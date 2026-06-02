@@ -45,10 +45,11 @@ def format_provider_name(provider: str) -> str:
 
 def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = False) -> list[dict[str, str]]:
     normalized_forced = compact_text(forced_provider).lower()
-    if normalized_forced in SUPPORTED_CHAT_PROVIDERS:
+    if normalized_forced in SUPPORTED_CHAT_PROVIDERS and _resolve_provider_api_key(normalized_forced):
         ordered_names = [normalized_forced]
     else:
         ordered_names = list(VOICE_CHAT_PROVIDER_ORDER if voice_mode else TEXT_CHAT_PROVIDER_ORDER)
+        ordered_names = [provider for provider in ordered_names if _resolve_provider_api_key(provider)]
 
     attempts: list[dict[str, str]] = []
     for provider in ordered_names:

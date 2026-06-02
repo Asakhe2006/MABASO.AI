@@ -174,9 +174,16 @@ export default function MindMapFlow({ root, onSelectNode }) {
           onEdgesChange={onEdgesChange}
           onNodeClick={(_, node) => onSelectNode?.(node.data?.node || null)}
           fitView
-          fitViewOptions={{ padding: 0.18 }}
-          minZoom={0.2}
-          maxZoom={1.8}
+          fitViewOptions={{ padding: 0.18, duration: 650 }}
+          minZoom={0.12}
+          maxZoom={2.4}
+          zoomOnScroll
+          zoomOnPinch
+          panOnDrag
+          panOnScroll
+          panOnScrollSpeed={0.85}
+          elevateNodesOnSelect
+          onlyRenderVisibleElements
           nodesDraggable
           proOptions={{ hideAttribution: true }}
           className="mind-map-flow"

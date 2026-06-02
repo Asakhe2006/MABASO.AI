@@ -64,6 +64,7 @@ export const footerLinkGroups = [
       { label: "Worked Examples", route: "/product/worked-examples" },
       { label: "Flashcards", route: "/product/flashcards" },
       { label: "AI Test Generator", route: "/product/ai-test-generator" },
+      { label: "Pricing", route: "/pricing" },
     ],
   },
   {
@@ -122,6 +123,56 @@ export const footerLinkGroups = [
 ];
 
 export const sitePages = [
+  page({
+    route: "/pricing",
+    aliases: ["/subscriptions", "/billing/plans"],
+    title: "Pricing",
+    category: "Product",
+    access: "public",
+    metadata: {
+      title: "Pricing | Mabaso AI",
+      description: "Transparent Mabaso AI subscription plans designed for students, researchers, teams, and institutions without hidden overage traps.",
+    },
+    hero: {
+      eyebrow: "Pricing / Subscriptions",
+      headline: "Fair study plans without surprise billing.",
+      description: "Mabaso AI pricing is designed around visible limits, no-card free access, usage warnings, cancellation clarity, and paid overages that stay disabled unless a user explicitly turns them on.",
+      ctas: [
+        primaryCta("Start Free", "open-app", "capture"),
+        secondaryCta("Contact Support", "navigate", "/support/contact-support"),
+      ],
+      preview: {
+        kicker: "Fair billing",
+        title: "Free, Student Plus, Pro Research, and Institution plans.",
+        subtitle: "Every paid plan should show included credits before payment and should never invent usage or billing values when backend metrics are missing.",
+      },
+    },
+    modules: [
+      { icon: "shield-check", title: "Free Study", description: "No card required, small monthly credits, and enough access to test study guides, chat, and basic exports." },
+      { icon: "graduation-cap", title: "Student Plus", description: "Affordable student plan with higher AI credits, reports, quizzes, mind maps, and PDF/DOCX exports." },
+      { icon: "brain", title: "Pro Research", description: "Higher document limits, advanced academic reports, presentations, priority queue access, and strict spend caps." },
+      { icon: "building-2", title: "Team / Institution", description: "Shared seats, pooled credits, admin controls, invoices, audit logs, and approval before extra billing." },
+    ],
+    workflow: [
+      "Show exact included credits before checkout",
+      "Warn users at 50%, 80%, and 100% usage",
+      "Keep paid overages off by default",
+      "Make cancellation and downgrade controls visible",
+      "Do not show fake billing metrics before backend billing is connected",
+    ],
+    emptyState: {
+      title: "Billing is transparent by design.",
+      description: "Payments should only go live after real usage tracking, invoices, cancellation, refunds, and overage controls are connected.",
+    },
+    designNotes: [
+      "Use calm pricing cards and strong anti-dark-pattern copy.",
+      "Do not make paid plans look active until real backend billing is connected.",
+    ],
+    footerCrossLinks: [
+      { label: "Terms", route: "/company/terms" },
+      { label: "Contact Support", route: "/support/contact-support" },
+    ],
+  }),
   page({
     route: "/product/study-workspace",
     title: "Study Workspace",
