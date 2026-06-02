@@ -17020,7 +17020,7 @@ export default function App() {
                           <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Modern Conversation</p>
                           <h3 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Your lecture chat now lives in the floating assistant.</h3>
                           <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
-                            It streams replies from the backend, remembers past messages in this browser, supports voice input, and falls back from Gemini to Groq to OpenRouter automatically.
+                            It streams replies from the backend, remembers past messages in this browser, supports voice input, and keeps one voice provider locked for each active voice session.
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -17050,7 +17050,7 @@ export default function App() {
 
                       <div className="mt-5 flex flex-wrap gap-2">
                         <span className="rounded-full bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50">Streaming replies</span>
-                        <span className="rounded-full bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100">{lectureAssistant.providerLabel || "Gemini → Groq → OpenRouter"}</span>
+                        <span className="rounded-full bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100">{lectureAssistant.providerLabel || "OpenAI text / locked voice provider"}</span>
                         <span className={`rounded-full px-3 py-2 text-xs font-semibold ${lectureAssistant.ttsEnabled ? "bg-fuchsia-400/10 text-fuchsia-100" : "bg-white/5 text-slate-300"}`}>
                           {lectureAssistant.ttsEnabled ? "Voice replies on" : "Voice replies off"}
                         </span>

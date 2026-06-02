@@ -406,6 +406,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     mobileSidebarOpen,
     openMobileSidebar,
     openPanel,
+    performanceMetrics,
     providerLabel,
     previewingVoiceId,
     previewSelectedVoiceWithDraft,
@@ -463,6 +464,15 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const showVoiceOnboarding = voiceOnboardingReady && !voiceOnboardingComplete;
 
   const voiceStateMode = isVoiceReconnecting ? "reconnecting" : assistantAudioState;
+  const latestPerformanceMetric = Array.isArray(performanceMetrics) ? performanceMetrics[0] : null;
+  const latencySummary = latestPerformanceMetric
+    ? [
+      latestPerformanceMetric.speechToTextMs ? `STT ${latestPerformanceMetric.speechToTextMs}ms` : "",
+      latestPerformanceMetric.aiFirstTokenMs ? `AI ${latestPerformanceMetric.aiFirstTokenMs}ms` : "",
+      latestPerformanceMetric.ttsStartMs ? `TTS ${latestPerformanceMetric.ttsStartMs}ms` : "",
+      latestPerformanceMetric.databaseSaveMs ? `DB ${latestPerformanceMetric.databaseSaveMs}ms` : "",
+    ].filter(Boolean).join(" • ")
+    : "";
 
   const voiceStateLabel = isVoiceReconnecting
     ? "Reconnecting..."
@@ -866,6 +876,11 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                     <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-cyan-400/12 text-cyan-100", "bg-cyan-50 text-cyan-700")}`}>
                       {providerLabel || "OpenAI text + voice routing ready"}
                     </span>
+                    {latencySummary ? (
+                      <span className={`rounded-full px-3 py-2 text-xs font-semibold ${themed(theme, "bg-violet-400/12 text-violet-100", "bg-violet-50 text-violet-700")}`}>
+                        {latencySummary}
+                      </span>
+                    ) : null}
                     <span className={`rounded-full px-3 py-2 text-xs font-semibold ${hasLectureContext
                       ? themed(theme, "bg-emerald-300/12 text-emerald-50", "bg-emerald-50 text-emerald-700")
                       : themed(theme, "bg-amber-400/12 text-amber-100", "bg-amber-50 text-amber-700")}`}

@@ -78,6 +78,14 @@ const VOICE_INTERRUPTION_FORCE_LISTEN_FRAMES = 6;
 const VOICE_TRANSCRIPT_QUEUE_RETRY_MS = 140;
 const VOICE_TRANSCRIPT_QUEUE_CLARIFY_DELAY_MS = 220;
 const VOICE_TRANSCRIPT_PROCESS_CONFIDENCE_THRESHOLD = 0.44;
+const ASSISTANT_TRACE_METRIC_LIMIT = 50;
+const ASSISTANT_DUPLICATE_REQUEST_WINDOW_MS = 8000;
+
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
 const VOICE_TRANSCRIPT_CLARIFY_CONFIDENCE_THRESHOLD = 0.34;
 const VOICE_TRANSCRIPT_MIN_CLARIFY_CHARS = 8;
 const RECORDING_MIME_CANDIDATES = [
@@ -640,6 +648,9 @@ function createConversationMessage(role, content = "", extra = {}) {
     model: compactText(extra.model),
     interactionMode: compactText(extra.interactionMode, role === "user" ? "text" : ""),
     status: compactText(extra.status, "complete"),
+    traceId: compactText(extra.traceId),
+    clientRequestId: compactText(extra.clientRequestId),
+    metrics: extra.metrics && typeof extra.metrics === "object" ? extra.metrics : {},
   };
 }
 
@@ -665,6 +676,9 @@ function normalizeConversationRecord(rawConversation, index = 0) {
         if (!["user", "assistant"].includes(role)) return null;
         const content = String(message.content || "");
         if (!content.trim()) return null;
+        const messageMetadata = message.metadata && typeof message.metadata === "object"
+          ? message.metadata
+          : {};
         return {
           id: compactText(message.id, `${id}-message-${messageIndex}`),
           role,
@@ -674,6 +688,9 @@ function normalizeConversationRecord(rawConversation, index = 0) {
           model: compactText(message.model),
           interactionMode: compactText(message.interactionMode, role === "user" ? "text" : ""),
           status: compactText(message.status, "complete"),
+          traceId: compactText(message.traceId || message.trace_id || message.clientRequestId || message.client_request_id || messageMetadata.client_request_id),
+          clientRequestId: compactText(message.clientRequestId || message.client_request_id || message.traceId || message.trace_id || messageMetadata.client_request_id),
+          metrics: message.metrics && typeof message.metrics === "object" ? message.metrics : {},
         };
       })
       .filter(Boolean)
@@ -733,7 +750,17 @@ function mergeConversationRecord(existingConversation, incomingConversation, { s
   const existingMessages = Array.isArray(existingConversation?.messages) ? existingConversation.messages : [];
   const incomingMessages = Array.isArray(normalizedIncoming.messages) ? normalizedIncoming.messages : [];
   const mergedMessages = (() => {
-    if (!incomingMessages.length) return existingMessages;
+    if (!incomingMessages.length) {
+      const incomingMetadata = normalizedIncoming.metadata && typeof normalizedIncoming.metadata === "object" ? normalizedIncoming.metadata : {};
+      const existingRequestIds = new Set(
+        existingMessages
+          .map((message) => compactText(message.clientRequestId || message.traceId))
+          .filter(Boolean),
+      );
+      const lastIncomingRequestId = compactText(incomingMetadata.last_client_request_id || incomingMetadata.lastClientRequestId);
+      if (lastIncomingRequestId && existingRequestIds.has(lastIncomingRequestId)) return existingMessages;
+      return existingMessages;
+    }
     if (!existingMessages.length) return incomingMessages;
     const incomingIds = new Set(incomingMessages.map((message) => compactText(message.id)).filter(Boolean));
     const preservedLocalMessages = existingMessages.filter((message) => {
@@ -925,6 +952,7 @@ export function useLectureAssistant({
   const [assistantAudioState, setAssistantAudioState] = useState("idle");
   const [voiceInterrupted, setVoiceInterrupted] = useState(false);
   const [isProcessingVoiceTurn, setIsProcessingVoiceTurn] = useState(false);
+  const [performanceMetrics, setPerformanceMetrics] = useState([]);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const remoteSyncAvailable = Boolean(
     compactText(authEmail)
@@ -1009,6 +1037,10 @@ export function useLectureAssistant({
   const voiceTranscriptQueueRef = useRef([]);
   const voiceTranscriptQueueTimerRef = useRef(0);
   const voiceTranscriptQueueBusyRef = useRef(false);
+  const voiceTranscriptionLatencyRef = useRef(0);
+  const voiceSessionProviderRef = useRef("");
+  const activeRequestFingerprintsRef = useRef(new Map());
+  const latestTraceByConversationRef = useRef({});
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0] || null,
@@ -1036,6 +1068,37 @@ export function useLectureAssistant({
     ].filter(Boolean).join(" "),
     [formulas, lectureLabel, lectureNotes, lectureSlides, summary, workedExamples],
   );
+
+  const pushPerformanceMetric = (metric = {}) => {
+    const normalizedMetric = {
+      traceId: compactText(metric.traceId),
+      conversationId: compactText(metric.conversationId),
+      interactionMode: compactText(metric.interactionMode, "text"),
+      provider: compactText(metric.provider),
+      speechToTextMs: Number(metric.speechToTextMs) || 0,
+      aiFirstTokenMs: Number(metric.aiFirstTokenMs) || 0,
+      aiGenerationMs: Number(metric.aiGenerationMs) || 0,
+      ttsStartMs: Number(metric.ttsStartMs) || 0,
+      databaseSaveMs: Number(metric.databaseSaveMs) || 0,
+      frontendRenderMs: Number(metric.frontendRenderMs) || 0,
+      duplicate: Boolean(metric.duplicate),
+      timestamp: nowIso(),
+    };
+    setPerformanceMetrics((current) => [normalizedMetric, ...current].slice(0, ASSISTANT_TRACE_METRIC_LIMIT));
+  };
+
+  const cleanupRequestFingerprints = () => {
+    const cutoff = Date.now() - ASSISTANT_DUPLICATE_REQUEST_WINDOW_MS;
+    activeRequestFingerprintsRef.current.forEach((value, key) => {
+      if (Number(value) < cutoff) activeRequestFingerprintsRef.current.delete(key);
+    });
+  };
+
+  const buildRequestFingerprint = ({ conversationId = "", question = "", interactionMode = "text" } = {}) => [
+    compactText(conversationId),
+    compactText(interactionMode, "text").toLowerCase(),
+    compactText(question).toLowerCase(),
+  ].join("|");
 
   const isVoicePreviewMuted = () => Date.now() < voicePreviewMuteUntilRef.current;
 
@@ -1896,6 +1959,7 @@ export function useLectureAssistant({
     applyVoiceModeEnabled(false);
     clearPreviewResumeState();
     voiceInterruptionSeedRef.current = "";
+    voiceSessionProviderRef.current = "";
     stopListening();
     stopSpeaking();
     setIsProcessingVoiceTurn(false);
@@ -2148,6 +2212,7 @@ export function useLectureAssistant({
       setDraft("");
       setStatusText("Fresh chat ready.");
       setActiveProvider("");
+      voiceSessionProviderRef.current = "";
       return existingEmptyConversation.id;
     }
     const nextConversation = createConversationRecord({
@@ -2162,6 +2227,7 @@ export function useLectureAssistant({
     setDraft("");
     setStatusText("Started a fresh lecture conversation.");
     setActiveProvider("");
+    voiceSessionProviderRef.current = "";
     return nextConversation.id;
   };
 
@@ -2823,6 +2889,7 @@ export function useLectureAssistant({
     const controller = new AbortController();
     voiceTranscriptionAbortRef.current = controller;
     voiceLastWhisperRequestAtRef.current = Date.now();
+    const transcriptionStartedAt = nowMs();
 
     const runTranscription = (async () => {
       const response = await requestTranscription(formData, controller.signal);
@@ -2830,6 +2897,7 @@ export function useLectureAssistant({
         throw new Error(await readErrorResponse(response));
       }
       const data = await response.json().catch(() => ({}));
+      voiceTranscriptionLatencyRef.current = Math.round(nowMs() - transcriptionStartedAt);
       const text = normalizeVoiceTranscript(data.text || data.transcript);
       if (text) {
         voiceWhisperTranscriptRef.current = text;
@@ -3446,13 +3514,49 @@ export function useLectureAssistant({
 
     const targetConversation = ensureActiveConversation();
     const targetConversationId = targetConversation.id;
+    cleanupRequestFingerprints();
+    const requestFingerprint = buildRequestFingerprint({
+      conversationId: targetConversationId,
+      question,
+      interactionMode: resolvedInteractionMode,
+    });
+    if (activeRequestFingerprintsRef.current.has(requestFingerprint)) {
+      pushPerformanceMetric({
+        traceId: compactText(latestTraceByConversationRef.current[targetConversationId]),
+        conversationId: targetConversationId,
+        interactionMode: resolvedInteractionMode,
+        duplicate: true,
+      });
+      setStatusText("Duplicate request ignored. The previous turn is already being processed.");
+      return false;
+    }
+    activeRequestFingerprintsRef.current.set(requestFingerprint, Date.now());
     const currentMessages = Array.isArray(baseMessages) ? baseMessages : targetConversation.messages;
+    const clientRequestId = createClientId("chat");
+    const traceId = clientRequestId;
+    latestTraceByConversationRef.current[targetConversationId] = traceId;
+    const requestStartedAt = nowMs();
+    const traceMetrics = {
+      traceId,
+      conversationId: targetConversationId,
+      interactionMode: resolvedInteractionMode,
+      provider: compactText(voiceSessionProviderRef.current),
+      speechToTextMs: Number(voiceTranscriptionLatencyRef.current) || 0,
+      aiFirstTokenMs: 0,
+      aiGenerationMs: 0,
+      ttsStartMs: 0,
+      databaseSaveMs: 0,
+      frontendRenderMs: 0,
+    };
     const nextUserMessage = appendUserMessage
-      ? createConversationMessage("user", question, { interactionMode: resolvedInteractionMode })
+      ? createConversationMessage("user", question, { interactionMode: resolvedInteractionMode, traceId, clientRequestId })
       : null;
     const nextAssistantMessage = createConversationMessage("assistant", "", {
       status: "streaming",
       interactionMode: resolvedInteractionMode,
+      traceId,
+      clientRequestId,
+      metrics: traceMetrics,
     });
     const baseContextMessages = [...currentMessages];
     if (!appendUserMessage && baseContextMessages.length) {
@@ -3517,12 +3621,13 @@ export function useLectureAssistant({
         conversation_id: targetConversationId,
         context_key: normalizedContextKey,
         lecture_label: compactText(lectureLabel),
-        client_request_id: createClientId("chat"),
+        client_request_id: clientRequestId,
         interaction_mode: resolvedInteractionMode,
         append_user_message: appendUserMessage,
         regenerate_last_assistant: !appendUserMessage,
         user_message_id: nextUserMessage?.id || "",
         assistant_message_id: nextAssistantMessage.id,
+        preferred_provider: useVoiceInteraction ? compactText(voiceSessionProviderRef.current) : "openai",
         voice_profile_id: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.id, "wave") : "",
         voice_profile_label: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.name) : "",
         voice_style_prompt: useVoiceInteraction ? buildVoicePersonalityPrompt(selectedVoiceProfileRef.current) : "",
@@ -3543,9 +3648,14 @@ export function useLectureAssistant({
         }
         if (event === "provider_selected") {
           setActiveProvider(compactText(data.provider));
+          if (useVoiceInteraction && !voiceSessionProviderRef.current) {
+            voiceSessionProviderRef.current = compactText(data.provider);
+          }
+          traceMetrics.provider = compactText(data.provider, traceMetrics.provider);
           patchMessage(targetConversationId, nextAssistantMessage.id, {
             provider: compactText(data.provider),
             model: compactText(data.model),
+            metrics: { ...traceMetrics },
           });
           setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} is replying in voice mode...`
@@ -3555,8 +3665,13 @@ export function useLectureAssistant({
         if (event === "delta") {
           const chunk = String(data.text || "");
           if (!chunk) return;
+          if (!traceMetrics.aiFirstTokenMs) {
+            traceMetrics.aiFirstTokenMs = Math.round(nowMs() - requestStartedAt);
+            traceMetrics.frontendRenderMs = traceMetrics.aiFirstTokenMs;
+          }
           streamedText += chunk;
           if (voiceSpeechStream) {
+            if (!traceMetrics.ttsStartMs) traceMetrics.ttsStartMs = Math.round(nowMs() - requestStartedAt);
             voiceSpeechStream.enqueueText(chunk);
           }
           patchMessage(targetConversationId, nextAssistantMessage.id, (message) => ({
@@ -3565,11 +3680,15 @@ export function useLectureAssistant({
             provider: compactText(data.provider, message.provider),
             model: compactText(data.model, message.model),
             status: "streaming",
+            metrics: { ...traceMetrics },
           }));
           return;
         }
         if (event === "done") {
           setActiveProvider(compactText(data.provider));
+          traceMetrics.provider = compactText(data.provider, traceMetrics.provider);
+          traceMetrics.aiGenerationMs = Number(data.generation_ms) || Math.round(nowMs() - requestStartedAt);
+          setIsSyncingConversation(false);
           if (voiceSpeechStream) {
             voiceSpeechStream.markDone();
           }
@@ -3578,6 +3697,7 @@ export function useLectureAssistant({
             provider: compactText(data.provider, message.provider),
             model: compactText(data.model, message.model),
             status: "complete",
+            metrics: { ...traceMetrics },
           }));
           setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} finished streaming. Voice reply may still be speaking...`
@@ -3586,12 +3706,19 @@ export function useLectureAssistant({
         }
         if (event === "conversation_saved") {
           if (data?.conversation?.id !== targetConversationId) return;
+          traceMetrics.databaseSaveMs = Number(data?.database_ms) || traceMetrics.databaseSaveMs;
           updateConversation(targetConversationId, (conversation) => mergeConversationRecord(conversation, {
             ...data.conversation,
             source: "server",
             isDraft: false,
           }, { source: "server" }));
           setIsSyncingConversation(false);
+          return;
+        }
+        if (event === "save_queued") {
+          if (compactText(data?.conversation_id) !== targetConversationId) return;
+          setIsSyncingConversation(false);
+          setStatusText("Reply shown. Conversation save is running in the background.");
           return;
         }
         if (event === "title_updated") {
@@ -3616,9 +3743,11 @@ export function useLectureAssistant({
       if (voiceSpeechStream) {
         voiceSpeechStream.markDone();
       } else if (useVoiceInteraction) {
+        if (!traceMetrics.ttsStartMs) traceMetrics.ttsStartMs = Math.round(nowMs() - requestStartedAt);
         speakReply(streamedText);
       }
       setIsSyncingConversation(false);
+      pushPerformanceMetric(traceMetrics);
       return true;
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -3643,10 +3772,12 @@ export function useLectureAssistant({
         applyVoiceModeEnabled(false);
       }
       setStatusText(compactText(error?.message, "The lecture assistant could not answer right now."));
+      pushPerformanceMetric(traceMetrics);
       return false;
     } finally {
       voiceInterruptionRequestedRef.current = false;
       abortControllerRef.current = null;
+      activeRequestFingerprintsRef.current.delete(requestFingerprint);
       setIsGenerating(false);
     }
   };
@@ -3980,6 +4111,7 @@ export function useLectureAssistant({
     mobileSidebarOpen,
     openPanel,
     openMobileSidebar: () => setMobileSidebarOpen(true),
+    performanceMetrics,
     providerLabel: formatProviderLabel(activeProvider || messages[messages.length - 1]?.provider),
     previewingVoiceId,
     previewSelectedVoiceWithDraft,

@@ -20,6 +20,7 @@ import sqlite3
 import secrets
 import ssl
 import subprocess
+import threading
 import tempfile
 import unicodedata
 import zipfile
@@ -219,6 +220,7 @@ LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOI
 LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS = int(
     os.getenv("LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS", "520")
 )
+LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES = max(0, int(os.getenv("LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES", "1")))
 LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS = int(
     os.getenv("LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS", "10000")
 )
@@ -936,6 +938,7 @@ class LectureAssistantRequest(BaseModel):
     regenerate_last_assistant: bool = False
     user_message_id: str = ""
     assistant_message_id: str = ""
+    preferred_provider: str = ""
     voice_profile_id: str = ""
     voice_profile_label: str = ""
     voice_style_prompt: str = ""
@@ -4201,6 +4204,17 @@ def build_lecture_assistant_messages(
     if question:
         history.append({"role": "user", "content": question[:2400]})
     return history
+
+
+def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_provider: str = "") -> list[dict[str, str]]:
+    provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
+    attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
+    if not bool(payload.voice_mode):
+        return attempts
+    if not attempts:
+        return []
+    locked_attempt = attempts[0]
+    return [dict(locked_attempt) for _ in range(LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES + 1)]
 
 
 def build_sse_event(event: str, data: dict[str, Any]) -> str:
@@ -16005,6 +16019,8 @@ async def ask_study_assistant(
 
 
 def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = normalize_chat_history_json(row.get("metadata_json"))
+    client_request_id = compact_text(metadata.get("client_request_id"))
     return {
         "id": compact_text(row.get("id")),
         "conversationId": compact_text(row.get("conversation_id")),
@@ -16014,7 +16030,9 @@ def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
         "interactionMode": compact_text(row.get("interaction_mode"), "text"),
         "provider": compact_text(row.get("provider")),
         "model": compact_text(row.get("model")),
-        "metadata": normalize_chat_history_json(row.get("metadata_json")),
+        "traceId": client_request_id,
+        "clientRequestId": client_request_id,
+        "metadata": metadata,
     }
 
 
@@ -16240,7 +16258,7 @@ def create_lecture_assistant_stream(
         persisted_recent_messages=persisted_recent_messages,
         memory_summary=persisted_memory_summary,
     )
-    attempts = resolve_provider_attempts(forced_provider, voice_mode=bool(payload.voice_mode))
+    attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 
@@ -16249,8 +16267,35 @@ def create_lecture_assistant_stream(
         emitted_characters = 0
         fallback_count = 0
         terminal_error = ""
-        terminal_provider = compact_text(forced_provider) or (attempts[0]["provider"] if attempts else "")
+        terminal_provider = compact_text(forced_provider, compact_text(payload.preferred_provider)) or (attempts[0]["provider"] if attempts else "")
         streamed_answer_parts: list[str] = []
+        generation_started_at = utc_now()
+        first_token_at: datetime | None = None
+
+        def persist_turn_in_background(assistant_text: str, attempt: dict[str, str]) -> None:
+            database_started_at = utc_now()
+            saved_conversation = persist_lecture_assistant_turn(
+                current_user=current_user,
+                payload=payload,
+                assistant_text=assistant_text,
+                selected_attempt=attempt,
+            )
+            record_audit_log(
+                action="lecture_assistant.persist",
+                email=current_user,
+                request=request,
+                resource_type="lecture_assistant",
+                resource_name=compact_text(attempt.get("model"), compact_text(attempt.get("provider"), "lecture-assistant")),
+                duration_ms=int((utc_now() - database_started_at).total_seconds() * 1000),
+                metadata={
+                    "provider": compact_text(attempt.get("provider")),
+                    "conversation_id": compact_text(payload.conversation_id),
+                    "session_id": compact_text(payload.session_id),
+                    "client_request_id": compact_text(payload.client_request_id),
+                    "saved": bool(saved_conversation),
+                    "background": True,
+                },
+            )
 
         try:
             yield build_sse_event(
@@ -16286,6 +16331,7 @@ def create_lecture_assistant_stream(
                     ):
                         if not token_started:
                             token_started = True
+                            first_token_at = utc_now()
                             selected_attempt = attempt
                             yield build_sse_event(
                                 "provider_selected",
@@ -16294,6 +16340,8 @@ def create_lecture_assistant_stream(
                                     "label": attempt["label"],
                                     "model": attempt["model"],
                                     "attempt": index,
+                                    "trace_id": compact_text(payload.client_request_id),
+                                    "first_token_ms": int((first_token_at - generation_started_at).total_seconds() * 1000),
                                 },
                             )
                         emitted_characters += len(delta)
@@ -16315,6 +16363,7 @@ def create_lecture_assistant_stream(
                         )
 
                     assistant_text = "".join(streamed_answer_parts).strip()
+                    generation_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
                     yield build_sse_event(
                         "done",
                         {
@@ -16323,27 +16372,24 @@ def create_lecture_assistant_stream(
                             "model": attempt["model"],
                             "fallback_count": fallback_count,
                             "characters": emitted_characters,
+                            "trace_id": compact_text(payload.client_request_id),
+                            "first_token_ms": int(((first_token_at or utc_now()) - generation_started_at).total_seconds() * 1000),
+                            "generation_ms": generation_ms,
                         },
                     )
-                    saved_conversation = persist_lecture_assistant_turn(
-                        current_user=current_user,
-                        payload=payload,
-                        assistant_text=assistant_text,
-                        selected_attempt=attempt,
+                    threading.Thread(
+                        target=persist_turn_in_background,
+                        args=(assistant_text, dict(attempt)),
+                        daemon=True,
+                    ).start()
+                    yield build_sse_event(
+                        "save_queued",
+                        {
+                            "conversation_id": compact_text(payload.conversation_id),
+                            "trace_id": compact_text(payload.client_request_id),
+                            "background": True,
+                        },
                     )
-                    if saved_conversation:
-                        formatted_conversation = format_chat_history_conversation(saved_conversation)
-                        yield build_sse_event("conversation_saved", {"conversation": formatted_conversation})
-                        saved_title = compact_text(saved_conversation.get("title"))
-                        previous_title = compact_text((persisted_conversation or {}).get("title"))
-                        if saved_title and saved_title != previous_title:
-                            yield build_sse_event(
-                                "title_updated",
-                                {
-                                    "conversation_id": formatted_conversation["id"],
-                                    "title": saved_title,
-                                },
-                            )
                     return
                 except ProviderStreamError as exc:
                     terminal_error = compact_text(exc.user_message, f"{attempt['label']} could not answer right now.")
@@ -16359,6 +16405,7 @@ def create_lecture_assistant_stream(
                     if not token_started and index < len(attempts):
                         fallback_count += 1
                         next_attempt = attempts[index]
+                        same_provider_retry = compact_text(next_attempt["provider"]) == compact_text(attempt["provider"])
                         yield build_sse_event(
                             "fallback",
                             {
@@ -16366,7 +16413,11 @@ def create_lecture_assistant_stream(
                                 "from_label": attempt["label"],
                                 "to": next_attempt["provider"],
                                 "to_label": next_attempt["label"],
-                                "message": f"{attempt['label']} could not answer right now. Switching to {next_attempt['label']}.",
+                                "message": (
+                                    f"{attempt['label']} could not answer right now. Retrying the same voice provider."
+                                    if same_provider_retry
+                                    else f"{attempt['label']} could not answer right now. Switching to {next_attempt['label']}."
+                                ),
                                 "reason": terminal_error,
                             },
                         )
@@ -16394,6 +16445,7 @@ def create_lecture_assistant_stream(
                     if not token_started and index < len(attempts):
                         fallback_count += 1
                         next_attempt = attempts[index]
+                        same_provider_retry = compact_text(next_attempt["provider"]) == compact_text(attempt["provider"])
                         yield build_sse_event(
                             "fallback",
                             {
@@ -16401,7 +16453,11 @@ def create_lecture_assistant_stream(
                                 "from_label": attempt["label"],
                                 "to": next_attempt["provider"],
                                 "to_label": next_attempt["label"],
-                                "message": f"{attempt['label']} had a connection problem. Switching to {next_attempt['label']}.",
+                                "message": (
+                                    f"{attempt['label']} had a connection problem. Retrying the same voice provider."
+                                    if same_provider_retry
+                                    else f"{attempt['label']} had a connection problem. Switching to {next_attempt['label']}."
+                                ),
                                 "reason": terminal_error,
                             },
                         )
