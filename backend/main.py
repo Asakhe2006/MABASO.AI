@@ -132,6 +132,7 @@ PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
+REPORT_MODEL = os.getenv("REPORT_MODEL", STUDY_GUIDE_MODEL)
 REALTIME_TUTOR_DEFAULT_MODEL = (
     os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
     or "gpt-realtime-mini"
@@ -176,6 +177,7 @@ TRANSCRIPTION_AUDIO_SAMPLE_RATE = os.getenv("TRANSCRIPTION_AUDIO_SAMPLE_RATE", "
 MAX_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_STUDY_GUIDE_INPUT_CHARS", "30000"))
 MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS", "45000"))
 STUDY_GUIDE_REQUEST_TIMEOUT = float(os.getenv("STUDY_GUIDE_REQUEST_TIMEOUT", "90"))
+REPORT_REQUEST_TIMEOUT = float(os.getenv("REPORT_REQUEST_TIMEOUT", "120"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
 TRANSCRIPTION_JOB_TIMEOUT = float(
@@ -756,6 +758,29 @@ class PresentationGenerationRequest(BaseModel):
     reference_images: list[str] = []
 
 
+class ReportGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
+    report_title: str = ""
+    academic_level: str = "Undergraduate"
+    report_type: str = "Academic Report"
+    word_count: str = "2000"
+    custom_word_count: str = ""
+    writing_style: str = "Formal Academic"
+    reference_style: str = "APA"
+    report_depth: str = "Advanced"
+    student_name: str = ""
+    institution: str = ""
+    course: str = ""
+    lecturer: str = ""
+    report_date: str = ""
+    features: dict[str, bool] = {}
+
+
 class QuizGenerationRequest(BaseModel):
     transcript: str = ""
     summary: str = ""
@@ -963,6 +988,11 @@ class PdfSection(BaseModel):
 class PdfExportRequest(BaseModel):
     title: str
     sections: list[PdfSection]
+
+
+class DocxExportRequest(BaseModel):
+    title: str
+    content: str = ""
 
 
 class CollaborationRoomCreateRequest(BaseModel):
@@ -3611,6 +3641,68 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     return buffer.getvalue()
 
 
+def strip_markdown_for_docx(text: str) -> list[str]:
+    cleaned = compact_text(text)
+    if not cleaned:
+        return []
+    cleaned = re.sub(r"```[\s\S]*?```", lambda match: match.group(0).replace("```", ""), cleaned)
+    lines: list[str] = []
+    for raw_line in cleaned.replace("\r\n", "\n").split("\n"):
+        line = raw_line.strip()
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^\s*[-*+]\s+", "- ", line)
+        line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
+        line = re.sub(r"__(.*?)__", r"\1", line)
+        line = re.sub(r"\*(.*?)\*", r"\1", line)
+        line = re.sub(r"`([^`]*)`", r"\1", line)
+        lines.append(line)
+    return lines
+
+
+def build_docx_document(title: str, content: str) -> bytes:
+    def paragraph_xml(text: str) -> str:
+        if not text:
+            return "<w:p/>"
+        escaped = html.escape(text, quote=True)
+        return (
+            "<w:p>"
+            "<w:pPr><w:spacing w:line=\"360\" w:lineRule=\"auto\"/></w:pPr>"
+            f"<w:r><w:rPr><w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/><w:sz w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">{escaped}</w:t></w:r>"
+            "</w:p>"
+        )
+
+    paragraphs = [paragraph_xml(compact_text(title, "Academic Report"))]
+    paragraphs.extend(paragraph_xml(line) for line in strip_markdown_for_docx(content))
+    document_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+        "<w:body>"
+        + "".join(paragraphs)
+        + "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/></w:sectPr>"
+        "</w:body></w:document>"
+    )
+    content_types_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+        "</Types>"
+    )
+    rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>"
+        "</Relationships>"
+    )
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
 init_db()
 
 
@@ -3644,6 +3736,10 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "presentation_design_id": "",
         "presentation_template_name": "",
         "presentation_slides": [],
+        "report_title": "",
+        "report_body": "",
+        "report_sections": [],
+        "report_configuration": {},
         "study_images": [],
         "_podcast_audio_files": [],
         "_podcast_download_file": "",
@@ -14129,6 +14225,299 @@ async def run_podcast_job(
         )
 
 
+REPORT_FEATURE_LABELS = {
+    "aiHumanizer": "AI Humanizer",
+    "criticalAnalysis": "Critical Analysis",
+    "smartTables": "Smart Tables",
+    "autoCharts": "Auto Charts",
+    "academicCitations": "Academic Citations",
+    "plagiarismSafeWriting": "Plagiarism Safe Writing",
+    "executiveSummary": "Executive Summary",
+    "recommendations": "Recommendations",
+    "realWorldExamples": "Real World Examples",
+    "caseStudies": "Case Studies",
+    "statisticalAnalysis": "Statistical Analysis",
+    "futurePredictions": "Future Predictions",
+}
+
+
+def normalize_report_word_count(word_count: str, custom_word_count: str = "") -> str:
+    selected = compact_text(word_count, "2000")
+    if selected.lower() == "custom":
+        custom = compact_text(custom_word_count)
+        return custom or "2000"
+    return selected
+
+
+def build_report_source_context(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+) -> str:
+    context_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURE NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+    ]
+    return "\n\n".join(block for block in context_blocks if block).strip()
+
+
+def build_report_fallback(
+    report_title: str,
+    academic_level: str,
+    report_type: str,
+    reference_style: str,
+    report_date: str,
+    source_context: str,
+) -> dict[str, Any]:
+    title = compact_text(report_title, "Academic Report")
+    source_excerpt = compact_text(source_context[:1800].rsplit(" ", 1)[0], "No lecture source text was available.")
+    body = f"""# COVER PAGE
+
+**Report Title:** {title}
+**Student Name:** Not specified
+**Institution:** Not specified
+**Course:** Not specified
+**Lecturer:** Not specified
+**Date:** {compact_text(report_date, utc_now().date().isoformat())}
+**Academic Level:** {compact_text(academic_level, "Undergraduate")}
+**Report Type:** {compact_text(report_type, "Academic Report")}
+
+# TABLE OF CONTENTS
+
+1. Abstract / Executive Summary
+2. Introduction
+3. Literature Review
+4. Main Discussion
+5. Analysis
+6. Case Studies and Examples
+7. Recommendations
+8. Conclusion
+9. References
+
+# ABSTRACT / EXECUTIVE SUMMARY
+
+This report examines {title} using the available lecture material and supporting academic reasoning. It identifies the key concepts, explains their importance, and presents a structured interpretation suitable for {compact_text(academic_level, "Undergraduate")} study.
+
+# INTRODUCTION
+
+The topic is important because it connects theoretical knowledge with practical academic and professional application. The report focuses on the background, problem context, objectives, scope, and significance of the subject.
+
+# LITERATURE REVIEW
+
+Existing academic perspectives indicate that the topic should be understood through definitions, major theories, current debates, and evidence-based interpretation. A complete review should compare multiple scholarly viewpoints and identify gaps for further research.
+
+# MAIN DISCUSSION
+
+The available study material highlights the following source basis:
+
+{source_excerpt}
+
+Key discussion areas include conceptual foundations, practical applications, limitations, and implications for learners or professionals.
+
+# ANALYSIS SECTION
+
+Critical analysis suggests that the topic should not be treated as isolated knowledge. It should be evaluated through impact, relevance, challenges, opportunities, and future trends. Strong academic work should explain not only what the concept means, but why it matters and how it changes decision-making.
+
+# CASE STUDIES
+
+Where applicable, case examples should connect the theory to real organizations, technical systems, scientific findings, historical events, or policy decisions.
+
+# RECOMMENDATIONS
+
+- Use multiple credible academic sources to strengthen evidence.
+- Connect theory to real-world examples and current developments.
+- Include tables, charts, or comparative summaries where they clarify complex points.
+- Review the final report against the required institutional rubric before submission.
+
+# CONCLUSION
+
+The report shows that {title} can be developed into a coherent academic argument by combining background, research perspectives, analysis, and recommendations. Future work should deepen the evidence base and refine the discussion with field-specific sources.
+
+# REFERENCES
+
+Format references using {compact_text(reference_style, "APA")} style according to your institution's requirements.
+"""
+    sections = [
+        {"number": "1", "title": "Abstract / Executive Summary"},
+        {"number": "2", "title": "Introduction"},
+        {"number": "3", "title": "Literature Review"},
+        {"number": "4", "title": "Main Discussion"},
+        {"number": "5", "title": "Analysis Section"},
+        {"number": "6", "title": "Case Studies"},
+        {"number": "7", "title": "Recommendations"},
+        {"number": "8", "title": "Conclusion"},
+        {"number": "9", "title": "References"},
+    ]
+    return {"report_title": title, "report_body": body, "report_sections": sections}
+
+
+async def generate_academic_report_package(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    payload: ReportGenerationRequest,
+    job_id: str,
+    output_language: str,
+) -> dict[str, Any]:
+    report_title = compact_text(payload.report_title, "Academic Report")
+    academic_level = compact_text(payload.academic_level, "Undergraduate")
+    report_type = compact_text(payload.report_type, "Academic Report")
+    word_count = normalize_report_word_count(payload.word_count, payload.custom_word_count)
+    writing_style = compact_text(payload.writing_style, "Formal Academic")
+    reference_style = compact_text(payload.reference_style, "APA")
+    report_depth = compact_text(payload.report_depth, "Advanced")
+    enabled_features = [
+        label
+        for key, label in REPORT_FEATURE_LABELS.items()
+        if bool((payload.features or {}).get(key))
+    ]
+    source_context = build_report_source_context(summary, transcript, lecture_notes, lecture_slides, past_question_papers)
+    fallback = build_report_fallback(report_title, academic_level, report_type, reference_style, payload.report_date, source_context)
+
+    system_prompt = (
+        "You are an elite academic report generation engine for university and professional students. "
+        "Create deeply structured, submission-ready reports from the provided lecture and study material. "
+        "Write naturally and academically, with clear reasoning, varied sentence structure, and strong transitions. "
+        "Do not fabricate exact statistics, URLs, DOIs, page numbers, or direct quotations. "
+        "When external references are needed, use credible field-standard sources and avoid unverifiable precision. "
+        "Return strict JSON only with keys: report_title, report_body, report_sections. "
+        "report_body must be complete Markdown and must include COVER PAGE, TABLE OF CONTENTS, ABSTRACT / EXECUTIVE SUMMARY, "
+        "INTRODUCTION, LITERATURE REVIEW, MAIN DISCUSSION, ANALYSIS SECTION, CASE STUDIES when applicable, "
+        "RECOMMENDATIONS, CONCLUSION, and REFERENCES. "
+        "report_sections must be an array of objects with number and title."
+    )
+    user_prompt = (
+        "Generate the complete academic report using this configuration.\n\n"
+        f"REPORT TITLE: {report_title}\n"
+        f"ACADEMIC LEVEL: {academic_level}\n"
+        f"REPORT TYPE: {report_type}\n"
+        f"TARGET WORD COUNT: {word_count}\n"
+        f"WRITING STYLE: {writing_style}\n"
+        f"REFERENCE STYLE: {reference_style}\n"
+        f"REPORT DEPTH: {report_depth}\n"
+        f"OUTPUT LANGUAGE: {output_language}\n"
+        f"STUDENT NAME: {compact_text(payload.student_name, 'Not specified')}\n"
+        f"INSTITUTION: {compact_text(payload.institution, 'Not specified')}\n"
+        f"COURSE: {compact_text(payload.course, 'Not specified')}\n"
+        f"LECTURER: {compact_text(payload.lecturer, 'Not specified')}\n"
+        f"DATE: {compact_text(payload.report_date, utc_now().date().isoformat())}\n"
+        f"ENABLED FEATURES: {', '.join(enabled_features) if enabled_features else 'None'}\n\n"
+        "Quality requirements:\n"
+        "- First detect the topic category and adapt sections for business, engineering, science, IT, humanities, or health topics.\n"
+        "- Include tables or chart-ready markdown tables when Smart Tables or Auto Charts are enabled.\n"
+        "- Include formulas for engineering, technical architecture for IT, financial analysis for business, and scientific explanation for science topics when relevant.\n"
+        "- Include critical evaluation, challenges, opportunities, impacts, trends, and future implications.\n"
+        "- Make references match the requested reference style.\n"
+        "- Write original academic prose based on the source material; do not copy large source fragments.\n\n"
+        "SOURCE MATERIAL:\n"
+        f"{source_context or 'No source material was provided beyond the report configuration.'}"
+    )
+
+    def _generate_report() -> dict[str, Any]:
+        response = client.with_options(timeout=REPORT_REQUEST_TIMEOUT).chat.completions.create(
+            model=REPORT_MODEL,
+            max_completion_tokens=MAX_COMPLETION_TOKENS,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    update_job(job_id, status="processing", stage="Researching report structure", progress=25)
+    try:
+        generated = await asyncio.to_thread(_generate_report)
+    except Exception as exc:
+        logger.warning("Academic report generation failed, using fallback report: %s", exc)
+        generated = {}
+
+    title = compact_text(generated.get("report_title"), fallback["report_title"])
+    body = compact_text(generated.get("report_body"), fallback["report_body"])
+    sections = generated.get("report_sections") if isinstance(generated.get("report_sections"), list) else fallback["report_sections"]
+    return {
+        "report_title": title,
+        "report_body": make_formulas_human_readable(body),
+        "report_sections": sections,
+        "report_configuration": {
+            "academic_level": academic_level,
+            "report_type": report_type,
+            "word_count": word_count,
+            "writing_style": writing_style,
+            "reference_style": reference_style,
+            "report_depth": report_depth,
+            "features": enabled_features,
+        },
+    }
+
+
+async def run_report_job(
+    job_id: str,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    payload: ReportGenerationRequest,
+    output_language: str,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting academic report", progress=8)
+        report_package = await generate_academic_report_package(
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            payload,
+            job_id,
+            output_language,
+        )
+        update_job(
+            job_id,
+            status="completed",
+            stage="Academic report ready",
+            progress=100,
+            **report_package,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="report.completed",
+            email=job.get("owner_email", ""),
+            resource_type="report",
+            resource_name=report_package.get("report_title", ""),
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language},
+        )
+    except Exception as exc:
+        logger.exception("Academic report generation failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Academic report generation failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="report.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="report",
+            resource_name=compact_text(payload.report_title, "Academic Report"),
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language, "error": format_job_error(exc)},
+        )
+
+
 async def run_presentation_job(
     job_id: str,
     summary: str,
@@ -14895,6 +15284,66 @@ async def create_podcast(
         request=request,
         resource_type="podcast",
         resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language},
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-report/")
+async def create_report(
+    payload: ReportGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(scope="generate_report", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers, payload.report_title.strip()]):
+        raise HTTPException(
+            status_code=400,
+            detail="Enter a report topic or add lecture material before creating the academic report.",
+        )
+
+    ensure_openai_key()
+    job_id = create_job("report", owner_email=current_user)
+    update_job(
+        job_id,
+        _output_language=output_language,
+        report_title=compact_text(payload.report_title, "Academic Report"),
+        report_configuration={
+            "academic_level": compact_text(payload.academic_level, "Undergraduate"),
+            "report_type": compact_text(payload.report_type, "Academic Report"),
+            "word_count": normalize_report_word_count(payload.word_count, payload.custom_word_count),
+            "writing_style": compact_text(payload.writing_style, "Formal Academic"),
+            "reference_style": compact_text(payload.reference_style, "APA"),
+            "report_depth": compact_text(payload.report_depth, "Advanced"),
+        },
+    )
+    asyncio.create_task(
+        run_report_job(
+            job_id,
+            summary,
+            transcript,
+            lecture_notes,
+            lecture_slides,
+            past_question_papers,
+            payload,
+            output_language,
+        )
+    )
+    record_audit_log(
+        action="report.request",
+        email=current_user,
+        request=request,
+        resource_type="report",
+        resource_name=compact_text(payload.report_title, "Academic Report"),
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         metadata={"job_id": job_id, "language": output_language},
     )
@@ -16266,6 +16715,21 @@ async def export_study_pack_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+    )
+
+
+@app.post("/export-report-docx/")
+async def export_report_docx(
+    payload: DocxExportRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    title = payload.title.strip() or "Academic Report"
+    docx_bytes = await asyncio.to_thread(build_docx_document, title, payload.content)
+    safe_name = sanitize_download_filename(title)
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
     )
 
 

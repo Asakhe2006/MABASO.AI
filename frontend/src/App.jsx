@@ -487,6 +487,57 @@ const tabs = [
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
 const APP_PAGE_IDS = ["capture", "workspace", "materials", "collaboration", "voice"];
+const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
+const reportTypes = [
+  "Academic Report",
+  "Research Paper",
+  "Technical Report",
+  "Laboratory Report",
+  "Case Study",
+  "Engineering Report",
+  "Business Report",
+  "Scientific Report",
+  "Literature Review",
+  "Dissertation Style",
+  "Project Report",
+];
+const reportWordCounts = ["500", "1000", "2000", "3000", "5000+", "Custom"];
+const reportWritingStyles = ["Formal Academic", "Professional", "Analytical", "Scientific", "Technical", "Simple Student Style", "Humanized Natural Style"];
+const reportReferenceStyles = ["APA", "Harvard", "IEEE", "MLA", "Chicago"];
+const reportDepths = ["Basic", "Standard", "Advanced", "Expert", "Research Intensive"];
+const reportFeatureToggles = [
+  ["aiHumanizer", "AI Humanizer"],
+  ["criticalAnalysis", "Critical Analysis"],
+  ["smartTables", "Smart Tables"],
+  ["autoCharts", "Auto Charts"],
+  ["academicCitations", "Academic Citations"],
+  ["plagiarismSafeWriting", "Plagiarism Safe Writing"],
+  ["executiveSummary", "Executive Summary"],
+  ["recommendations", "Recommendations"],
+  ["realWorldExamples", "Real World Examples"],
+  ["caseStudies", "Case Studies"],
+  ["statisticalAnalysis", "Statistical Analysis"],
+  ["futurePredictions", "Future Predictions"],
+];
+
+function createDefaultReportConfig() {
+  return {
+    reportTitle: "",
+    academicLevel: "Undergraduate",
+    reportType: "Academic Report",
+    wordCount: "2000",
+    customWordCount: "",
+    writingStyle: "Formal Academic",
+    referenceStyle: "APA",
+    reportDepth: "Advanced",
+    studentName: "",
+    institution: "",
+    course: "",
+    lecturer: "",
+    reportDate: new Date().toISOString().slice(0, 10),
+    features: reportFeatureToggles.reduce((acc, [key]) => ({ ...acc, [key]: true }), {}),
+  };
+}
 
 function normalizeWorkspaceTabId(tabId = "") {
   const normalized = String(tabId || "").trim().toLowerCase();
@@ -3660,6 +3711,10 @@ export default function App() {
   const [podcastData, setPodcastData] = useState(createEmptyPodcastData);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportData, setReportData] = useState(() => ({ jobId: "", title: "", body: "", sections: [] }));
+  const [reportConfig, setReportConfig] = useState(createDefaultReportConfig);
+  const [isReportConfigOpen, setIsReportConfigOpen] = useState(false);
+  const [isEditingReport, setIsEditingReport] = useState(false);
+  const [editableReportBody, setEditableReportBody] = useState("");
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -3965,31 +4020,179 @@ export default function App() {
     }
   };
 
-  const renderReportPanel = () => (
-    <div className="space-y-5">
-      <div className="rounded-[24px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(6,95,70,0.08),rgba(6,12,10,0.9))] p-5">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-100/80">Academic Report</p>
-            <h4 className="mt-2 text-3xl font-semibold text-white">Generate a structured academic report</h4>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Turn the lecture content into a formal report with sections, citations, and an executive summary.</p>
+  const updateReportConfigField = (field, value) => {
+    setReportConfig((current) => ({ ...current, [field]: value }));
+  };
+
+  const toggleReportFeature = (featureKey) => {
+    setReportConfig((current) => ({
+      ...current,
+      features: { ...current.features, [featureKey]: !current.features?.[featureKey] },
+    }));
+  };
+
+  const openReportConfiguration = () => {
+    if (!reportConfig.reportTitle.trim()) {
+      const suggestedTitle = extractHistoryTitle(summary || transcript || lectureNotes || lectureSlides || pastQuestionPapers, workspaceFileLabel || "Academic Report");
+      setReportConfig((current) => ({ ...current, reportTitle: suggestedTitle || "" }));
+    }
+    setIsReportConfigOpen(true);
+  };
+
+  const renderReportSelect = (label, field, options) => (
+    <label className="block">
+      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</span>
+      <select
+        value={reportConfig[field]}
+        onChange={(event) => updateReportConfigField(field, event.target.value)}
+        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-300/60"
+      >
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+
+  const renderReportInput = (label, field, placeholder = "") => (
+    <label className="block">
+      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</span>
+      <input
+        value={reportConfig[field]}
+        onChange={(event) => updateReportConfigField(field, event.target.value)}
+        placeholder={placeholder}
+        className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-emerald-300/60"
+      />
+    </label>
+  );
+
+  const renderReportConfigurationPanel = () => (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/85 px-4 py-6 backdrop-blur">
+      <div className="w-full max-w-6xl rounded-[28px] border border-emerald-300/20 bg-slate-900 p-5 shadow-[0_30px_80px_rgba(0,0,0,0.45)] sm:p-6">
+        <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/80">Report Configuration</p>
+            <h3 className="mt-2 text-2xl font-semibold text-white">Ultra advanced AI report generator</h3>
           </div>
-          <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generateReport} disabled={loading || !hasStudyInputs || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Report..." : "Generate Report"}</button>
-            <button type="button" onClick={downloadActiveContent} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Download Report</button>
+          <button type="button" onClick={() => setIsReportConfigOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Close</button>
+        </div>
+
+        <div className="mt-6 grid gap-4 lg:grid-cols-3">
+          <label className="block lg:col-span-3">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Report Title Input</span>
+            <input
+              value={reportConfig.reportTitle}
+              onChange={(event) => updateReportConfigField("reportTitle", event.target.value)}
+              placeholder="Enter report topic..."
+              className="mt-2 w-full rounded-2xl border border-emerald-300/20 bg-slate-950 px-4 py-4 text-base font-semibold text-white outline-none placeholder:text-slate-500 focus:border-emerald-300/70"
+            />
+          </label>
+          {renderReportSelect("Academic Level", "academicLevel", reportAcademicLevels)}
+          {renderReportSelect("Report Type", "reportType", reportTypes)}
+          {renderReportSelect("Word Count", "wordCount", reportWordCounts)}
+          {reportConfig.wordCount === "Custom" ? renderReportInput("Custom Word Count", "customWordCount", "e.g. 4200") : null}
+          {renderReportSelect("Writing Style", "writingStyle", reportWritingStyles)}
+          {renderReportSelect("Reference Style", "referenceStyle", reportReferenceStyles)}
+          {renderReportSelect("Report Depth", "reportDepth", reportDepths)}
+          {renderReportInput("Student Name", "studentName", "Optional")}
+          {renderReportInput("Institution", "institution", "Optional")}
+          {renderReportInput("Course", "course", "Optional")}
+          {renderReportInput("Lecturer", "lecturer", "Optional")}
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Date</span>
+            <input
+              type="date"
+              value={reportConfig.reportDate}
+              onChange={(event) => updateReportConfigField("reportDate", event.target.value)}
+              className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-300/60"
+            />
+          </label>
+        </div>
+
+        <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-950/70 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI Features Toggles</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {reportFeatureToggles.map(([featureKey, label]) => (
+              <label key={featureKey} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-100">
+                <input
+                  type="checkbox"
+                  checked={Boolean(reportConfig.features?.[featureKey])}
+                  onChange={() => toggleReportFeature(featureKey)}
+                  className="h-4 w-4 accent-emerald-400"
+                />
+                <span>{label}</span>
+              </label>
+            ))}
           </div>
+        </div>
+
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          <button type="button" onClick={() => setIsReportConfigOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white">Cancel</button>
+          <button type="button" onClick={() => generateReport({ closePanel: true })} disabled={loading || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Now..." : "Generate Now"}</button>
         </div>
       </div>
-
-      {reportData && reportData.body ? (
-        <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5">
-          <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{reportData.body}</div>
-        </div>
-      ) : (
-        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">No academic report generated yet. Click Generate Report to start.</div>
-      )}
     </div>
   );
+
+  const renderReportPanel = () => {
+    const hasReport = Boolean(reportData && (reportData.body || "").trim());
+    const reportActions = [
+      ["EDIT REPORT", () => { setEditableReportBody(reportData.body || ""); setIsEditingReport(true); }],
+      ["REGENERATE", () => generateReport()],
+      ["EXPORT PDF", downloadActiveContent],
+      ["EXPORT DOCX", downloadReportDoc],
+      ["EXPORT PPT", createPresentationFromReport],
+      ["COPY TEXT", copyActiveContent],
+      ["IMPROVE WRITING", () => refineReportWithPreset({ reportDepth: "Expert", writingStyle: "Analytical" })],
+      ["HUMANIZE", () => refineReportWithPreset({ writingStyle: "Humanized Natural Style", features: { aiHumanizer: true } })],
+      ["ADD REFERENCES", () => refineReportWithPreset({ features: { academicCitations: true } })],
+      ["EXPAND REPORT", () => refineReportWithPreset({ wordCount: "5000+", reportDepth: "Research Intensive" })],
+      ["SHORTEN REPORT", () => refineReportWithPreset({ wordCount: "1000", reportDepth: "Standard" })],
+      ["CREATE PRESENTATION", createPresentationFromReport],
+    ];
+
+    return (
+      <div className="space-y-5">
+        {isReportConfigOpen ? renderReportConfigurationPanel() : null}
+        <div className="rounded-[24px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(6,95,70,0.08),rgba(6,12,10,0.9))] p-5">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-100/80">Academic Report</p>
+              <h4 className="mt-2 text-3xl font-semibold text-white">Generate a structured academic report</h4>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Open the advanced panel first, then generate a complete academic report with cover page, contents, analysis, recommendations, and references.</p>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap gap-3">
+              <button type="button" onClick={openReportConfiguration} disabled={loading || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Report..." : "Generate Report"}</button>
+              <button type="button" onClick={downloadActiveContent} disabled={!hasReport} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Download Report</button>
+            </div>
+          </div>
+        </div>
+
+        {hasReport ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {reportActions.map(([label, handler]) => (
+                <button key={label} type="button" onClick={handler} disabled={isGeneratingReport && label !== "COPY TEXT"} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-white/10 disabled:opacity-50">{label}</button>
+              ))}
+            </div>
+            {isEditingReport ? (
+              <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-4">
+                <textarea value={editableReportBody} onChange={(event) => setEditableReportBody(event.target.value)} className="min-h-[520px] w-full rounded-2xl border border-white/10 bg-slate-900 p-4 text-sm leading-7 text-white outline-none focus:border-emerald-300/60" />
+                <div className="mt-3 flex flex-wrap justify-end gap-3">
+                  <button type="button" onClick={() => setIsEditingReport(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Cancel</button>
+                  <button type="button" onClick={() => { setReportData((current) => ({ ...current, body: editableReportBody })); setIsEditingReport(false); setStatus("Report edits applied."); }} className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-white">Apply Edits</button>
+                </div>
+              </div>
+            ) : (
+              <article className="report-viewer mx-auto max-w-5xl rounded-[12px] bg-white p-6 text-black shadow-[0_24px_70px_rgba(0,0,0,0.28)] sm:p-10">
+                <MobileFirstMarkdown>{reportData.body}</MobileFirstMarkdown>
+              </article>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">No academic report generated yet. Click Generate Report to open the configuration panel.</div>
+        )}
+      </div>
+    );
+  };
 
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
     const normalizedPageId = normalizeAppPageId(pageId, "capture");
@@ -13194,8 +13397,11 @@ export default function App() {
     }
   };
 
-  const generatePresentation = async () => {
-    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+  const generatePresentation = async ({ summaryOverride = "", transcriptOverride = "", lectureNotesOverride = "" } = {}) => {
+    const resolvedSummary = summaryOverride || summary;
+    const resolvedTranscript = transcriptOverride || transcript;
+    const resolvedLectureNotes = lectureNotesOverride || lectureNotes;
+    if (!(resolvedSummary.trim() || resolvedTranscript.trim() || resolvedLectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
     }
 
@@ -13215,9 +13421,9 @@ export default function App() {
         method: "POST",
         body: (() => {
           const formData = new FormData();
-          formData.append("transcript", transcript);
-          formData.append("summary", summary);
-          formData.append("lecture_notes", lectureNotes);
+          formData.append("transcript", resolvedTranscript);
+          formData.append("summary", resolvedSummary);
+          formData.append("lecture_notes", resolvedLectureNotes);
           formData.append("lecture_slides", lectureSlides);
           formData.append("past_question_papers", pastQuestionPapers);
           formData.append("design_id", selectedPresentationDesign);
@@ -13263,16 +13469,16 @@ export default function App() {
       });
       addHistoryItem({
         id: activeHistoryId || "",
-        title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
+        title: extractHistoryTitle(resolvedSummary || nextPresentationData.title || "", sourceLabel),
         fileName: sourceLabel,
-        summary,
-        transcript,
+        summary: resolvedSummary,
+        transcript: resolvedTranscript,
         formula,
         example,
         flashcards,
         quizQuestions,
         studyImages,
-        lectureNotes,
+        lectureNotes: resolvedLectureNotes,
         lectureNotesFileName,
         lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
         lectureNoteFileNames,
@@ -13448,9 +13654,33 @@ export default function App() {
     }
   };
 
-  const generateReport = async () => {
-    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
-      return setError("Generate a study guide or add lecture material before creating the academic report.");
+  const buildReportRequestPayload = (config = reportConfig) => ({
+    transcript,
+    summary,
+    lecture_notes: lectureNotes,
+    lecture_slides: lectureSlides,
+    past_question_papers: pastQuestionPapers,
+    language: outputLanguage,
+    report_title: config.reportTitle,
+    academic_level: config.academicLevel,
+    report_type: config.reportType,
+    word_count: config.wordCount,
+    custom_word_count: config.customWordCount,
+    writing_style: config.writingStyle,
+    reference_style: config.referenceStyle,
+    report_depth: config.reportDepth,
+    student_name: config.studentName,
+    institution: config.institution,
+    course: config.course,
+    lecturer: config.lecturer,
+    report_date: config.reportDate,
+    features: config.features,
+  });
+
+  const generateReport = async ({ closePanel = false, configOverride = null } = {}) => {
+    const activeConfig = configOverride ? { ...reportConfig, ...configOverride, features: { ...reportConfig.features, ...(configOverride.features || {}) } } : reportConfig;
+    if (!(activeConfig.reportTitle.trim() || summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+      return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
 
     setIsGeneratingReport(true);
@@ -13463,14 +13693,7 @@ export default function App() {
       const response = await authFetch("/generate-report/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
-          language: outputLanguage,
-        }),
+        body: JSON.stringify(buildReportRequestPayload(activeConfig)),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Report generation failed.");
@@ -13485,8 +13708,12 @@ export default function App() {
         title: job.report_title || "",
         body: job.report_body || "",
         sections: job.report_sections || [],
+        configuration: job.report_configuration || {},
       };
       setReportData(nextReportData);
+      if (closePanel) setIsReportConfigOpen(false);
+      setIsEditingReport(false);
+      setEditableReportBody("");
       revealWorkspacePage("report");
       setProgress(100);
       setStatus("Academic report ready.");
@@ -13499,6 +13726,53 @@ export default function App() {
       setIsGeneratingReport(false);
       setCurrentJobType("");
     }
+  };
+
+  const refineReportWithPreset = async (preset) => {
+    const nextConfig = {
+      ...reportConfig,
+      ...preset,
+      features: { ...reportConfig.features, ...(preset.features || {}) },
+    };
+    setReportConfig(nextConfig);
+    await generateReport({ configOverride: nextConfig });
+  };
+
+  const downloadReportDoc = async () => {
+    const content = (reportData.body || "").trim();
+    if (!content) return setError("Generate the report before exporting a Word document.");
+    try {
+      const title = reportData.title || reportConfig.reportTitle || "Academic Report";
+      const response = await authFetch("/export-report-docx/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, content }),
+      });
+      if (!response.ok) {
+        const data = await parseJsonSafe(response);
+        throw new Error(data.detail || "DOCX export failed.");
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${sanitizeFileName(title)}.docx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setStatus("Report DOCX downloaded.");
+    } catch (err) {
+      setError(err.message || "DOCX export failed.");
+    }
+  };
+
+  const createPresentationFromReport = async () => {
+    if (!reportData.body?.trim()) return setError("Generate the report before creating a presentation.");
+    await generatePresentation({
+      summaryOverride: reportData.body,
+      lectureNotesOverride: lectureNotes || `Academic report source:\n\n${reportData.body}`,
+    });
   };
 
   const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {

@@ -732,7 +732,18 @@ function mergeConversationRecord(existingConversation, incomingConversation, { s
 
   const existingMessages = Array.isArray(existingConversation?.messages) ? existingConversation.messages : [];
   const incomingMessages = Array.isArray(normalizedIncoming.messages) ? normalizedIncoming.messages : [];
-  const mergedMessages = incomingMessages.length ? incomingMessages : existingMessages;
+  const mergedMessages = (() => {
+    if (!incomingMessages.length) return existingMessages;
+    if (!existingMessages.length) return incomingMessages;
+    const incomingIds = new Set(incomingMessages.map((message) => compactText(message.id)).filter(Boolean));
+    const preservedLocalMessages = existingMessages.filter((message) => {
+      const messageId = compactText(message.id);
+      if (messageId && incomingIds.has(messageId)) return false;
+      return compactText(message.content);
+    });
+    return [...incomingMessages, ...preservedLocalMessages]
+      .sort((left, right) => new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime());
+  })();
   const mergedMetadata = {
     ...(existingConversation?.metadata && typeof existingConversation.metadata === "object" ? existingConversation.metadata : {}),
     ...(normalizedIncoming.metadata && typeof normalizedIncoming.metadata === "object" ? normalizedIncoming.metadata : {}),

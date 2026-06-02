@@ -80,6 +80,69 @@ iframe {
   overflow-x: hidden;
 }
 
+.report-viewer {
+  font-family: "Times New Roman", Arial, Calibri, sans-serif;
+  line-height: 1.5;
+  color: #000;
+}
+
+.report-viewer h1 {
+  margin: 1.5rem 0 1rem;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.report-viewer h2 {
+  margin: 1.35rem 0 0.85rem;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.report-viewer h3 {
+  margin: 1.2rem 0 0.75rem;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.report-viewer p,
+.report-viewer li,
+.report-viewer td,
+.report-viewer th {
+  font-size: 16px;
+}
+
+.report-viewer p,
+.report-viewer ul,
+.report-viewer ol,
+.report-viewer table {
+  margin: 0 0 1rem;
+}
+
+.report-viewer ul,
+.report-viewer ol {
+  padding-left: 1.5rem;
+}
+
+.report-viewer table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.report-viewer th,
+.report-viewer td {
+  border: 1px solid #d1d5db;
+  padding: 0.65rem;
+  vertical-align: top;
+}
+
+.report-viewer th {
+  background: #f3f4f6;
+  font-weight: 700;
+}
+
 .brand-mark {
   font-family: "Space Grotesk", sans-serif;
   font-size: 0.82rem;
