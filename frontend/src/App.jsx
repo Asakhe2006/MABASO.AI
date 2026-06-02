@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import LectureAssistantPanel from "./components/LectureAssistantPanel";
+import MindMapFlow from "./components/MindMapFlow";
 import { EnterpriseFooter, EnterpriseSiteShell, ProtectedWorkspacePreview } from "./EnterpriseSiteShell";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
@@ -482,6 +483,7 @@ const tabs = [
   { id: "presentation", label: "PowerPoint Presentation" },
   { id: "podcast", label: "Podcast Generator" },
   { id: "report", label: "Academic Report" },
+  { id: "mindmap", label: "Mind Map Generator" },
   { id: "chat", label: "AI Notes" },
   { id: "collaboration", label: "Collaboration" },
 ];
@@ -519,6 +521,19 @@ const reportFeatureToggles = [
   ["statisticalAnalysis", "Statistical Analysis"],
   ["futurePredictions", "Future Predictions"],
 ];
+const mindMapDepthOptions = ["Basic", "Standard", "Advanced", "Research"];
+const mindMapNodeTypeColors = {
+  "main topic": "#111827",
+  concept: "#2563eb",
+  definition: "#059669",
+  formula: "#7c3aed",
+  process: "#d97706",
+  example: "#0891b2",
+  application: "#0f766e",
+  principle: "#4338ca",
+  warning: "#dc2626",
+  "key point": "#475569",
+};
 
 function createDefaultReportConfig() {
   return {
@@ -537,6 +552,31 @@ function createDefaultReportConfig() {
     reportDate: new Date().toISOString().slice(0, 10),
     features: reportFeatureToggles.reduce((acc, [key]) => ({ ...acc, [key]: true }), {}),
   };
+}
+
+function flattenMindMapNodes(root) {
+  const items = [];
+  const visit = (node, depth = 0, parent = "") => {
+    if (!node || typeof node !== "object") return;
+    items.push({ ...node, depth, parent: node.parent || parent });
+    (Array.isArray(node.children) ? node.children : []).forEach((child) => visit(child, depth + 1, node.id || node.title || parent));
+  };
+  visit(root);
+  return items;
+}
+
+function mindMapToText(root) {
+  const lines = [];
+  const visit = (node, depth = 0) => {
+    if (!node || typeof node !== "object") return;
+    const prefix = depth === 0 ? "" : `${"  ".repeat(depth - 1)}- `;
+    lines.push(`${prefix}${node.title || node.label || "Node"}${node.type ? ` (${node.type})` : ""}${node.importance ? ` - ${node.importance}` : ""}`);
+    if (node.summary) lines.push(`${"  ".repeat(depth)}${node.summary}`);
+    if (node.source_location) lines.push(`${"  ".repeat(depth)}Source: ${node.source_location}`);
+    (Array.isArray(node.children) ? node.children : []).forEach((child) => visit(child, depth + 1));
+  };
+  visit(root);
+  return lines.join("\n");
 }
 
 function normalizeWorkspaceTabId(tabId = "") {
@@ -3715,6 +3755,12 @@ export default function App() {
   const [isReportConfigOpen, setIsReportConfigOpen] = useState(false);
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [editableReportBody, setEditableReportBody] = useState("");
+  const [isGeneratingMindMap, setIsGeneratingMindMap] = useState(false);
+  const [mindMapData, setMindMapData] = useState(() => ({ jobId: "", title: "", root: null, depth: "Advanced", nodeCount: 0 }));
+  const [mindMapDepth, setMindMapDepth] = useState("Advanced");
+  const [mindMapTopic, setMindMapTopic] = useState("");
+  const [selectedMindMapNode, setSelectedMindMapNode] = useState(null);
+  const mindMapExportRef = useRef(null);
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -4194,6 +4240,98 @@ export default function App() {
     );
   };
 
+  const renderMindMapPanel = () => {
+    const hasMindMap = Boolean(mindMapData.root);
+    const selectedNode = selectedMindMapNode || mindMapData.root;
+    const flattenedNodes = flattenMindMapNodes(mindMapData.root);
+    return (
+      <div className="space-y-5">
+        <div className="rounded-[24px] border border-white/10 bg-white p-5 text-slate-950 shadow-[0_22px_55px_rgba(15,23,42,0.14)]">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.28em] text-emerald-700">Mind Map Generator</p>
+              <h4 className="mt-2 text-3xl font-semibold text-slate-950">Build an interactive knowledge graph</h4>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">Detects concepts, hierarchy, relationships, definitions, formulas, examples, processes, and source locations from your study material.</p>
+            </div>
+            <div className="force-mobile-stack flex flex-wrap gap-3">
+              <button type="button" onClick={generateMindMap} disabled={loading || isGeneratingMindMap || !hasMindMapGenerationInputs} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-[0_12px_30px_rgba(15,23,42,0.16)] ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(15,23,42,0.22)] disabled:translate-y-0 disabled:opacity-50">{isGeneratingMindMap ? "Generating Mind Map..." : "Generate Mind Map"}</button>
+              <button type="button" onClick={downloadMindMapJson} disabled={!hasMindMap} className="rounded-full border border-slate-200 bg-slate-950 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Export JSON</button>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+            <label className="block">
+              <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Central topic hint</span>
+              <input value={mindMapTopic} onChange={(event) => setMindMapTopic(event.target.value)} placeholder="Optional topic, e.g. Signal Processing" className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500" />
+            </label>
+            <label className="block">
+              <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Depth level</span>
+              <select value={mindMapDepth} onChange={(event) => setMindMapDepth(event.target.value)} className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500">
+                {mindMapDepthOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+            {mindMapDepthOptions.map((option) => (
+              <button key={option} type="button" onClick={() => setMindMapDepth(option)} className={`rounded-full border px-3 py-2 ${mindMapDepth === option ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-600"}`}>{option}</button>
+            ))}
+          </div>
+        </div>
+
+        {hasMindMap ? (
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div ref={mindMapExportRef} className="min-w-0 rounded-[28px] border border-white/10 bg-slate-100 p-4">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-500">Interactive Graph</p>
+                  <h4 className="mt-1 text-xl font-semibold text-slate-950">{mindMapData.title || mindMapData.root?.title || "Mind Map"}</h4>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={openMindMapFullscreen} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">Fullscreen</button>
+                  <button type="button" onClick={downloadMindMapPng} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PNG</button>
+                  <button type="button" onClick={downloadMindMapSvg} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">SVG</button>
+                  <button type="button" onClick={downloadMindMapPdf} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PDF</button>
+                </div>
+              </div>
+              <MindMapFlow root={mindMapData.root} onSelectNode={setSelectedMindMapNode} />
+            </div>
+
+            <aside className="rounded-[28px] border border-white/10 bg-slate-950 p-5 text-white">
+              <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-200/80">Node Inspector</p>
+              {selectedNode ? (
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <h4 className="text-2xl font-semibold">{selectedNode.title || selectedNode.label}</h4>
+                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedNode.type || "Concept"}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Detailed Explanation</p>
+                    <p className="mt-2 text-sm leading-7 text-slate-200">{selectedNode.summary || "No explanation available yet."}</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Importance</p><p className="mt-2 text-lg font-semibold">{selectedNode.importance || selectedNode.importance_score || 0}/100</p></div>
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">Source Location</p><p className="mt-2 text-sm leading-6 text-slate-200">{selectedNode.source_location || "Source material"}</p></div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Connected Topics</p>
+                    <div className="mt-3 flex flex-wrap gap-2">{(selectedNode.connected_topics || []).length ? selectedNode.connected_topics.map((topic) => <span key={topic} className="rounded-full bg-white/10 px-3 py-1 text-xs text-slate-100">{topic}</span>) : <span className="text-sm text-slate-400">No explicit links listed.</span>}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Map Stats</p>
+                    <p className="mt-2 text-sm leading-7 text-slate-200">{mindMapData.nodeCount || flattenedNodes.length} nodes • {mindMapData.depth || mindMapDepth} depth</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 text-sm leading-7 text-slate-300">Click a node to inspect its explanation, source location, importance, and connected topics.</p>
+              )}
+            </aside>
+          </div>
+        ) : (
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">No mind map generated yet. Add material or enter a topic, then click Generate Mind Map.</div>
+        )}
+      </div>
+    );
+  };
+
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
     const normalizedPageId = normalizeAppPageId(pageId, "capture");
     if (!authToken) {
@@ -4456,6 +4594,15 @@ export default function App() {
   const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
+  const hasMindMapInputs = Boolean(
+    transcript.trim()
+    || summary.trim()
+    || lectureNotes.trim()
+    || lectureSlides.trim()
+    || pastQuestionPapers.trim()
+    || (reportData.body || "").trim()
+    || mindMapTopic.trim()
+  );
   const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
@@ -4463,7 +4610,7 @@ export default function App() {
     : slidesReadyForGuide
       ? "Slide read successful. You can now generate the study guide."
       : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
-  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script || (reportData && (reportData.body || (reportData.sections || []).length)));
+  const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script || (reportData && (reportData.body || (reportData.sections || []).length)) || mindMapData.root);
   const selectedQuizQuestions = quizQuestions;
   const quizTotalMarks = getTotalQuizMarks(selectedQuizQuestions);
   const quizScore = selectedQuizQuestions.reduce((total, item) => total + Number(quizResults[item.number]?.score || 0), 0);
@@ -10612,6 +10759,7 @@ export default function App() {
   });
   const lectureAssistantMessages = lectureAssistant.messages;
   const latestLectureAssistantReply = [...lectureAssistantMessages].reverse().find((message) => message.role === "assistant") || null;
+  const hasMindMapGenerationInputs = Boolean(hasMindMapInputs || chatToText(lectureAssistantMessages).trim());
 
   useEffect(() => {
     setIsAskingChat(lectureAssistant.isGenerating);
@@ -12117,6 +12265,7 @@ export default function App() {
     if (activeTab === "presentation") return presentationToText(presentationData) || "No PowerPoint presentation generated yet.";
     if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
     if (activeTab === "report") return reportData.body || "No academic report generated yet.";
+    if (activeTab === "mindmap") return mindMapToText(mindMapData.root) || "No mind map generated yet.";
     if (activeTab === "chat") return chatToText(lectureAssistantMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
   };
@@ -12131,6 +12280,7 @@ export default function App() {
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
     { title: "Podcast Debate Script", content: podcastData.script || "" },
+    { title: "Mind Map", content: mindMapToText(mindMapData.root) },
     { title: "Study Audio Session", content: teacherLessonToText(teacherLessonData) },
     { title: "Study Chat", content: chatToText(lectureAssistantMessages) },
   ].filter((section) => (section.content || "").trim());
@@ -13773,6 +13923,186 @@ export default function App() {
       summaryOverride: reportData.body,
       lectureNotesOverride: lectureNotes || `Academic report source:\n\n${reportData.body}`,
     });
+  };
+
+  const generateMindMap = async () => {
+    const chatContext = chatToText(lectureAssistantMessages);
+    if (!hasMindMapGenerationInputs) {
+      return setError("Add lecture material, generate a report, chat with AI, paste text, or enter a topic before creating the mind map.");
+    }
+
+    setIsGeneratingMindMap(true);
+    setSelectedMindMapNode(null);
+    setError("");
+    setStatus("Analyzing content for mind map...");
+    setProgress(0);
+    setCurrentJobType("mind_map");
+
+    try {
+      const response = await authFetch("/generate-mind-map/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          report_body: reportData.body || "",
+          chat_context: chatContext,
+          topic: mindMapTopic,
+          depth_level: mindMapDepth,
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Mind map generation failed.");
+      persistPendingJob({
+        jobId: data.job_id,
+        jobType: "mind_map",
+        savedAt: new Date().toISOString(),
+      });
+      const job = await pollJob(data.job_id, "mind_map");
+      const nextMindMapData = {
+        jobId: data.job_id,
+        title: job.mind_map_title || job.mind_map_root?.title || "Mind Map",
+        root: job.mind_map_root || null,
+        depth: job.mind_map_depth || mindMapDepth,
+        nodeCount: Number(job.mind_map_node_count || 0),
+      };
+      setMindMapData(nextMindMapData);
+      setSelectedMindMapNode(nextMindMapData.root);
+      revealWorkspacePage("mindmap");
+      setProgress(100);
+      setStatus("Mind map ready.");
+      clearPendingJob();
+    } catch (err) {
+      clearPendingJob();
+      setError(err.message || "Mind map generation failed.");
+      setStatus("Mind map generation failed.");
+    } finally {
+      setIsGeneratingMindMap(false);
+      setCurrentJobType("");
+    }
+  };
+
+  const buildMindMapSvg = () => {
+    const root = mindMapData.root;
+    if (!root) return "";
+    const nodes = flattenMindMapNodes(root);
+    const width = 1400;
+    const height = Math.max(720, nodes.length * 90);
+    const positions = new Map();
+    const depthCounts = new Map();
+    nodes.forEach((node) => {
+      const depth = Number(node.depth || 0);
+      const index = depthCounts.get(depth) || 0;
+      depthCounts.set(depth, index + 1);
+      positions.set(node.id || node.title, {
+        x: 90 + depth * 300,
+        y: 80 + index * 120 + (depth % 2) * 24,
+      });
+    });
+    const escapeXml = (value) => String(value || "").replace(/[<>&"']/g, (char) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;", "'": "&apos;" }[char]));
+    const edgeMarkup = nodes
+      .filter((node) => node.parent)
+      .map((node) => {
+        const start = positions.get(node.parent);
+        const end = positions.get(node.id || node.title);
+        if (!start || !end) return "";
+        const color = mindMapNodeTypeColors[String(node.type || "concept").toLowerCase()] || "#2563eb";
+        return `<path d="M ${start.x + 220} ${start.y + 28} C ${start.x + 270} ${start.y + 28}, ${end.x - 50} ${end.y + 28}, ${end.x} ${end.y + 28}" fill="none" stroke="${color}" stroke-width="2"/>`;
+      })
+      .join("");
+    const nodeMarkup = nodes.map((node) => {
+      const position = positions.get(node.id || node.title);
+      const color = mindMapNodeTypeColors[String(node.type || "concept").toLowerCase()] || "#2563eb";
+      const label = escapeXml(node.title || node.label || "Node");
+      const type = escapeXml(node.type || "Concept");
+      return `<g><rect x="${position.x}" y="${position.y}" width="230" height="64" rx="16" fill="white" stroke="${color}" stroke-width="2"/><text x="${position.x + 14}" y="${position.y + 24}" font-family="Arial" font-size="10" font-weight="700" fill="${color}">${type}</text><text x="${position.x + 14}" y="${position.y + 46}" font-family="Arial" font-size="14" font-weight="700" fill="#111827">${label.slice(0, 28)}</text></g>`;
+    }).join("");
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#f8fafc"/>${edgeMarkup}${nodeMarkup}</svg>`;
+  };
+
+  const downloadMindMapJson = () => {
+    if (!mindMapData.root) return setError("Generate the mind map before exporting JSON.");
+    const blob = new Blob([JSON.stringify({ root: mindMapData.root }, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${sanitizeFileName(mindMapData.title || "mind-map")}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    setStatus("Mind map JSON downloaded.");
+  };
+
+  const downloadMindMapSvg = () => {
+    const svg = buildMindMapSvg();
+    if (!svg) return setError("Generate the mind map before exporting SVG.");
+    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${sanitizeFileName(mindMapData.title || "mind-map")}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    setStatus("Mind map SVG downloaded.");
+  };
+
+  const downloadMindMapPng = async () => {
+    const svg = buildMindMapSvg();
+    if (!svg) return setError("Generate the mind map before exporting PNG.");
+    try {
+      const image = new Image();
+      const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+      const url = window.URL.createObjectURL(svgBlob);
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+        image.src = url;
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+      window.URL.revokeObjectURL(url);
+      const pngUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      link.href = pngUrl;
+      link.download = `${sanitizeFileName(mindMapData.title || "mind-map")}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setStatus("Mind map PNG downloaded.");
+    } catch (err) {
+      setError("PNG export failed in this browser.");
+    }
+  };
+
+  const downloadMindMapPdf = async () => {
+    if (!mindMapData.root) return setError("Generate the mind map before exporting PDF.");
+    try {
+      await exportPdf(mindMapData.title || "Mind Map", [{ title: "Mind Map Knowledge Structure", content: mindMapToText(mindMapData.root) }]);
+      setStatus("Mind map PDF downloaded.");
+    } catch (err) {
+      setError(err.message || "Mind map PDF export failed.");
+    }
+  };
+
+  const openMindMapFullscreen = () => {
+    const target = mindMapExportRef.current;
+    if (!target || typeof target.requestFullscreen !== "function") {
+      setError("Fullscreen is not available in this browser.");
+      return;
+    }
+    target.requestFullscreen().catch(() => setError("Fullscreen could not open."));
   };
 
   const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {
@@ -16390,7 +16720,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "report" ? "Generating report" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "report" ? "Generating report" : currentJobType === "mind_map" ? "Generating mind map" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
             </aside>
         </section> : null}
 
@@ -16581,6 +16911,7 @@ export default function App() {
                 {activeTab === "presentation" ? renderPresentationPanel() : null}
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "report" ? renderReportPanel() : null}
+                {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "chat" ? (<>
                   <LectureAssistantPanel assistant={lectureAssistant} />
                   <div className="hidden space-y-4">

@@ -143,6 +143,27 @@ iframe {
   font-weight: 700;
 }
 
+.mind-map-flow .react-flow__pane {
+  cursor: grab;
+}
+
+.mind-map-flow .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.mind-map-node {
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.mind-map-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.18);
+}
+
+:fullscreen .mind-map-flow {
+  background: #ffffff;
+}
+
 .brand-mark {
   font-family: "Space Grotesk", sans-serif;
   font-size: 0.82rem;

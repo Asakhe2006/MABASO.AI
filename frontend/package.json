@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ricky0123/vad-web": "^0.0.30",
+    "@xyflow/react": "^12.11.0",
     "framer-motion": "^12.38.0",
     "katex": "^0.16.47",
     "lucide-react": "^1.14.0",

@@ -133,6 +133,7 @@ PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
 TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
 PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
 REPORT_MODEL = os.getenv("REPORT_MODEL", STUDY_GUIDE_MODEL)
+MIND_MAP_MODEL = os.getenv("MIND_MAP_MODEL", STUDY_GUIDE_MODEL)
 REALTIME_TUTOR_DEFAULT_MODEL = (
     os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
     or "gpt-realtime-mini"
@@ -178,6 +179,7 @@ MAX_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_STUDY_GUIDE_INPUT_CHARS", "3000
 MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS = int(os.getenv("MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS", "45000"))
 STUDY_GUIDE_REQUEST_TIMEOUT = float(os.getenv("STUDY_GUIDE_REQUEST_TIMEOUT", "90"))
 REPORT_REQUEST_TIMEOUT = float(os.getenv("REPORT_REQUEST_TIMEOUT", "120"))
+MIND_MAP_REQUEST_TIMEOUT = float(os.getenv("MIND_MAP_REQUEST_TIMEOUT", "90"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
 TRANSCRIPTION_JOB_TIMEOUT = float(
@@ -779,6 +781,19 @@ class ReportGenerationRequest(BaseModel):
     lecturer: str = ""
     report_date: str = ""
     features: dict[str, bool] = {}
+
+
+class MindMapGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    report_body: str = ""
+    chat_context: str = ""
+    topic: str = ""
+    depth_level: str = "Advanced"
+    language: str = "English"
 
 
 class QuizGenerationRequest(BaseModel):
@@ -3740,6 +3755,10 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "report_body": "",
         "report_sections": [],
         "report_configuration": {},
+        "mind_map_title": "",
+        "mind_map_root": {},
+        "mind_map_depth": "",
+        "mind_map_node_count": 0,
         "study_images": [],
         "_podcast_audio_files": [],
         "_podcast_download_file": "",
@@ -14518,6 +14537,320 @@ async def run_report_job(
         )
 
 
+MIND_MAP_NODE_TYPES = {
+    "main topic",
+    "concept",
+    "definition",
+    "formula",
+    "process",
+    "example",
+    "application",
+    "principle",
+    "warning",
+    "key point",
+}
+MIND_MAP_DEPTH_LIMITS = {
+    "basic": 1,
+    "standard": 2,
+    "advanced": 3,
+    "research": 7,
+}
+
+
+def normalize_mind_map_depth(value: str = "") -> str:
+    normalized = compact_text(value, "Advanced").strip().lower()
+    return {
+        "basic": "Basic",
+        "standard": "Standard",
+        "advanced": "Advanced",
+        "research": "Research",
+    }.get(normalized, "Advanced")
+
+
+def get_mind_map_depth_limit(depth_level: str = "") -> int:
+    return MIND_MAP_DEPTH_LIMITS.get(normalize_mind_map_depth(depth_level).lower(), 3)
+
+
+def build_mind_map_source_context(payload: MindMapGenerationRequest) -> str:
+    section_limit = MAX_STUDY_GUIDE_INPUT_CHARS // 2
+    blocks = [
+        trimmed_context_block("TOPIC HINT", payload.topic, 1200),
+        trimmed_context_block("GENERATED REPORT", payload.report_body, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("STUDY GUIDE SUMMARY", payload.summary, section_limit),
+        trimmed_context_block("LECTURE NOTES", payload.lecture_notes, section_limit),
+        trimmed_context_block("LECTURE SLIDES", payload.lecture_slides, section_limit),
+        trimmed_context_block("PAST QUESTION PAPERS", payload.past_question_papers, section_limit),
+        trimmed_context_block("CHAT CONTEXT", payload.chat_context, 6000),
+        trimmed_context_block("LECTURE TRANSCRIPT", payload.transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+    ]
+    return "\n\n".join(block for block in blocks if block).strip()
+
+
+def sanitize_mind_map_id(value: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", compact_text(value).lower()).strip("-")
+    return cleaned[:80] or fallback
+
+
+def normalize_mind_map_node(
+    raw_node: Any,
+    *,
+    fallback_title: str,
+    parent_id: str = "",
+    depth: int = 0,
+    max_depth: int = 3,
+    sibling_index: int = 0,
+) -> dict[str, Any]:
+    node = raw_node if isinstance(raw_node, dict) else {}
+    title = compact_text(node.get("title") or node.get("label"), fallback_title)
+    node_id = sanitize_mind_map_id(node.get("id") or title, f"node-{depth}-{sibling_index}")
+    node_type = compact_text(node.get("type") or node.get("node_type"), "Main Topic" if depth <= 1 else "Concept")
+    if node_type.lower() not in MIND_MAP_NODE_TYPES:
+        node_type = "Concept" if depth else "Main Topic"
+    importance = node.get("importance", node.get("importance_score", 100 if depth == 0 else max(35, 95 - depth * 15)))
+    try:
+        importance = int(float(importance))
+    except (TypeError, ValueError):
+        importance = 100 if depth == 0 else max(35, 95 - depth * 15)
+    importance = max(1, min(100, importance))
+    if depth == 0:
+        importance = 100
+
+    children = []
+    if depth < max_depth:
+        raw_children = node.get("children") if isinstance(node.get("children"), list) else []
+        seen_titles: set[str] = set()
+        for index, child in enumerate(raw_children[:10]):
+            child_title = compact_text((child or {}).get("title") or (child or {}).get("label") if isinstance(child, dict) else "")
+            normalized_title = child_title.lower()
+            if normalized_title and normalized_title in seen_titles:
+                continue
+            if normalized_title:
+                seen_titles.add(normalized_title)
+            children.append(
+                normalize_mind_map_node(
+                    child,
+                    fallback_title=child_title or f"Concept {index + 1}",
+                    parent_id=node_id,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    sibling_index=index,
+                )
+            )
+
+    return {
+        "id": "root" if depth == 0 else node_id,
+        "title": title,
+        "label": title,
+        "type": node_type,
+        "importance": importance,
+        "importance_score": importance,
+        "summary": compact_text(node.get("summary"), "Key concept extracted from the study material."),
+        "parent": parent_id,
+        "source_location": compact_text(node.get("source_location") or node.get("source"), "Source material"),
+        "connected_topics": [
+            compact_text(item)
+            for item in (node.get("connected_topics") if isinstance(node.get("connected_topics"), list) else [])
+            if compact_text(item)
+        ][:8],
+        "children": children,
+    }
+
+
+def count_mind_map_nodes(node: dict[str, Any]) -> int:
+    return 1 + sum(count_mind_map_nodes(child) for child in node.get("children", []) if isinstance(child, dict))
+
+
+def build_mind_map_fallback(topic: str, source_context: str, depth_level: str) -> dict[str, Any]:
+    source_title = ""
+    for candidate in re.split(r"\n+|(?<=[.!?])\s+", source_context):
+        cleaned_candidate = re.sub(r"^[-*#\d.\s]+", "", compact_text(candidate)).strip()
+        if len(cleaned_candidate) > 8:
+            source_title = cleaned_candidate[:80].rsplit(" ", 1)[0].strip() or cleaned_candidate[:80]
+            break
+    title = compact_text(topic, source_title or "Study Mind Map")
+    source_lines = [
+        compact_text(line)
+        for line in re.split(r"\n+|(?<=[.!?])\s+", source_context)
+        if len(compact_text(line)) > 28
+    ][:12]
+    main_titles = []
+    for line in source_lines:
+        candidate = re.sub(r"^[-*#\d.\s]+", "", line).strip()
+        candidate = candidate[:72].rsplit(" ", 1)[0].strip() or candidate[:72]
+        if candidate and candidate.lower() not in {item.lower() for item in main_titles}:
+            main_titles.append(candidate)
+        if len(main_titles) >= 4:
+            break
+    if not main_titles:
+        main_titles = ["Core Concepts", "Definitions", "Processes", "Applications"]
+    children = [
+        {
+            "id": f"topic-{index}",
+            "title": main_title,
+            "label": main_title,
+            "type": "Main Topic",
+            "importance": max(70, 98 - index * 4),
+            "importance_score": max(70, 98 - index * 4),
+            "summary": "Major knowledge area identified from the available study material.",
+            "parent": "root",
+            "source_location": "Source material",
+            "connected_topics": [],
+            "children": [
+                {
+                    "id": f"topic-{index}-definition",
+                    "title": "Definition or Key Meaning",
+                    "label": "Definition or Key Meaning",
+                    "type": "Definition",
+                    "importance": 68,
+                    "importance_score": 68,
+                    "summary": "Clarifies the academic meaning and boundaries of this concept.",
+                    "parent": f"topic-{index}",
+                    "source_location": "Source material",
+                    "connected_topics": [],
+                    "children": [],
+                },
+                {
+                    "id": f"topic-{index}-application",
+                    "title": "Application",
+                    "label": "Application",
+                    "type": "Application",
+                    "importance": 55,
+                    "importance_score": 55,
+                    "summary": "Shows how this concept is used in practical or assessment contexts.",
+                    "parent": f"topic-{index}",
+                    "source_location": "Source material",
+                    "connected_topics": [],
+                    "children": [],
+                },
+            ],
+        }
+        for index, main_title in enumerate(main_titles, start=1)
+    ]
+    max_depth = get_mind_map_depth_limit(depth_level)
+    root = normalize_mind_map_node(
+        {"id": "root", "title": title, "type": "Main Topic", "importance": 100, "summary": "Central subject of the generated mind map.", "children": children},
+        fallback_title=title,
+        max_depth=max_depth,
+    )
+    return {"root": root}
+
+
+async def generate_mind_map_package(
+    payload: MindMapGenerationRequest,
+    job_id: str,
+    output_language: str,
+) -> dict[str, Any]:
+    depth_level = normalize_mind_map_depth(payload.depth_level)
+    max_depth = get_mind_map_depth_limit(depth_level)
+    source_context = build_mind_map_source_context(payload)
+    fallback = build_mind_map_fallback(payload.topic, source_context, depth_level)
+    depth_instruction = {
+        "Basic": "Use only root plus major topics.",
+        "Standard": "Use root, major topics, and subtopics.",
+        "Advanced": "Use root, major topics, subtopics, and supporting concepts.",
+        "Research": "Use the richest hierarchy needed, but keep it non-repetitive and usable.",
+    }[depth_level]
+
+    system_prompt = (
+        "You are MABASO.AI Mind Map Intelligence Engine. "
+        "Transform educational content into a highly accurate hierarchical mind map. "
+        "Do not summarize. Create a knowledge structure. "
+        "Identify the true central topic, major concepts, sub-concepts, relationships, definitions, formulas, processes, examples, applications, principles, warnings, and key points. "
+        "Preserve academic terminology, formulas, scientific laws, and important definitions. "
+        "Rank concepts by importance. "
+        "Allowed node types: Main Topic, Concept, Definition, Formula, Process, Example, Application, Principle, Warning, Key Point. "
+        "Return only valid JSON with shape {\"root\":{\"id\":\"root\",\"title\":\"\",\"label\":\"\",\"type\":\"Main Topic\",\"importance\":100,\"importance_score\":100,\"summary\":\"\",\"source_location\":\"\",\"connected_topics\":[],\"children\":[]}}. "
+        "Every child must include id, title, label, type, importance, importance_score, summary, source_location, connected_topics, and children. "
+        "Do not add markdown or explanation outside JSON."
+    )
+    user_prompt = (
+        f"Generate an academic mind map in {output_language}.\n"
+        f"Depth level: {depth_level}. {depth_instruction}\n"
+        f"Maximum hierarchy depth after root: {max_depth}.\n"
+        "Importance scoring: root=100, major topics=90-99, subtopics=70-89, supporting concepts=50-69, examples=30-49.\n"
+        "Hierarchy rules: Root Topic -> Major Topics -> Subtopics -> Supporting Concepts -> Examples. Do not place examples above concepts.\n"
+        "If Engineering, Mathematics, Science, Business, Law, or Medicine is detected, create dedicated branches for equations, laws, definitions, processes, principles, methods, examples, and applications.\n"
+        "Store source locations as page, section, heading, slide, report section, or source material when exact location is unavailable.\n\n"
+        "SOURCE MATERIAL:\n"
+        f"{source_context}"
+    )
+
+    def _generate_mind_map() -> dict[str, Any]:
+        response = client.with_options(timeout=MIND_MAP_REQUEST_TIMEOUT).chat.completions.create(
+            model=MIND_MAP_MODEL,
+            max_completion_tokens=MAX_COMPLETION_TOKENS,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    update_job(job_id, status="processing", stage="Extracting knowledge graph", progress=25)
+    try:
+        generated = await asyncio.to_thread(_generate_mind_map)
+    except Exception as exc:
+        logger.warning("Mind map generation failed, using fallback mind map: %s", exc)
+        generated = {}
+
+    raw_root = generated.get("root") if isinstance(generated.get("root"), dict) else fallback["root"]
+    title_hint = compact_text(payload.topic, fallback["root"]["title"])
+    root = normalize_mind_map_node(raw_root, fallback_title=title_hint, max_depth=max_depth)
+    return {
+        "mind_map_title": root["title"],
+        "mind_map_root": root,
+        "mind_map_depth": depth_level,
+        "mind_map_node_count": count_mind_map_nodes(root),
+    }
+
+
+async def run_mind_map_job(
+    job_id: str,
+    payload: MindMapGenerationRequest,
+    output_language: str,
+):
+    try:
+        update_job(job_id, status="processing", stage="Starting mind map analysis", progress=8)
+        mind_map_package = await generate_mind_map_package(payload, job_id, output_language)
+        update_job(
+            job_id,
+            status="completed",
+            stage="Mind map ready",
+            progress=100,
+            **mind_map_package,
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="mind_map.completed",
+            email=job.get("owner_email", ""),
+            resource_type="mind_map",
+            resource_name=mind_map_package.get("mind_map_title", ""),
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language, "depth": mind_map_package.get("mind_map_depth", "")},
+        )
+    except Exception as exc:
+        logger.exception("Mind map generation failed")
+        update_job(
+            job_id,
+            status="failed",
+            stage="Mind map generation failed",
+            progress=100,
+            error=format_job_error(exc),
+        )
+        job = jobs.get(job_id, {})
+        started_at = parse_history_datetime(job.get("created_at"), utc_now())
+        record_audit_log(
+            action="mind_map.completed",
+            status="failed",
+            email=job.get("owner_email", ""),
+            resource_type="mind_map",
+            resource_name=compact_text(payload.topic, "Mind Map"),
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={"job_id": job_id, "language": output_language, "error": format_job_error(exc)},
+        )
+
+
 async def run_presentation_job(
     job_id: str,
     summary: str,
@@ -15346,6 +15679,45 @@ async def create_report(
         resource_name=compact_text(payload.report_title, "Academic Report"),
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         metadata={"job_id": job_id, "language": output_language},
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/generate-mind-map/")
+async def create_mind_map(
+    payload: MindMapGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(scope="generate_mind_map", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
+    output_language = normalize_output_language(payload.language)
+    source_context = build_mind_map_source_context(payload)
+
+    if not source_context:
+        raise HTTPException(
+            status_code=400,
+            detail="Add lecture material, paste text, generate a report, or enter a topic before creating the mind map.",
+        )
+
+    ensure_openai_key()
+    depth_level = normalize_mind_map_depth(payload.depth_level)
+    job_id = create_job("mind_map", owner_email=current_user)
+    update_job(
+        job_id,
+        _output_language=output_language,
+        mind_map_title=compact_text(payload.topic, "Mind Map"),
+        mind_map_depth=depth_level,
+    )
+    asyncio.create_task(run_mind_map_job(job_id, payload, output_language))
+    record_audit_log(
+        action="mind_map.request",
+        email=current_user,
+        request=request,
+        resource_type="mind_map",
+        resource_name=compact_text(payload.topic, depth_level),
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"job_id": job_id, "language": output_language, "depth": depth_level},
     )
     return {"job_id": job_id}
 
