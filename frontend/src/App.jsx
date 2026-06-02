@@ -4180,6 +4180,11 @@ export default function App() {
 
   const renderReportPanel = () => {
     const hasReport = Boolean(reportData && (reportData.body || "").trim());
+    const getReportActionClassName = (label) => (
+      label === "EXPAND REPORT"
+        ? "rounded-full border border-emerald-300/35 bg-emerald-500 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white shadow-[0_10px_24px_rgba(16,185,129,0.24)] transition hover:bg-emerald-400 disabled:opacity-50"
+        : "rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-white/10 disabled:opacity-50"
+    );
     const reportActions = [
       ["EDIT REPORT", () => { setEditableReportBody(reportData.body || ""); setIsEditingReport(true); }],
       ["REGENERATE", () => generateReport()],
@@ -4216,7 +4221,7 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex flex-wrap gap-2">
               {reportActions.map(([label, handler]) => (
-                <button key={label} type="button" onClick={handler} disabled={isGeneratingReport && label !== "COPY TEXT"} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:bg-white/10 disabled:opacity-50">{label}</button>
+                <button key={label} type="button" onClick={handler} disabled={isGeneratingReport && label !== "COPY TEXT"} className={getReportActionClassName(label)}>{label}</button>
               ))}
             </div>
             {isEditingReport ? (

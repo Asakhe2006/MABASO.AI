@@ -14292,19 +14292,30 @@ def build_report_fallback(
     reference_style: str,
     report_date: str,
     source_context: str,
+    student_name: str = "",
+    institution: str = "",
+    course: str = "",
+    lecturer: str = "",
 ) -> dict[str, Any]:
     title = compact_text(report_title, "Academic Report")
     source_excerpt = compact_text(source_context[:1800].rsplit(" ", 1)[0], "No lecture source text was available.")
+    cover_lines = [f"**Report Title:** {title}"]
+    for label, value in [
+        ("Student Name", student_name),
+        ("Institution", institution),
+        ("Course", course),
+        ("Lecturer", lecturer),
+        ("Date", report_date),
+    ]:
+        if compact_text(value):
+            cover_lines.append(f"**{label}:** {compact_text(value)}")
+    cover_lines.extend([
+        f"**Academic Level:** {compact_text(academic_level, 'Undergraduate')}",
+        f"**Report Type:** {compact_text(report_type, 'Academic Report')}",
+    ])
     body = f"""# COVER PAGE
 
-**Report Title:** {title}
-**Student Name:** Not specified
-**Institution:** Not specified
-**Course:** Not specified
-**Lecturer:** Not specified
-**Date:** {compact_text(report_date, utc_now().date().isoformat())}
-**Academic Level:** {compact_text(academic_level, "Undergraduate")}
-**Report Type:** {compact_text(report_type, "Academic Report")}
+{chr(10).join(cover_lines)}
 
 # TABLE OF CONTENTS
 
@@ -14375,6 +14386,55 @@ Format references using {compact_text(reference_style, "APA")} style according t
     return {"report_title": title, "report_body": body, "report_sections": sections}
 
 
+def build_report_metadata_lines(payload: ReportGenerationRequest) -> list[tuple[str, str]]:
+    fields = [
+        ("Student Name", payload.student_name),
+        ("Institution", payload.institution),
+        ("Course", payload.course),
+        ("Lecturer", payload.lecturer),
+        ("Date", payload.report_date),
+    ]
+    return [(label, compact_text(value)) for label, value in fields if compact_text(value)]
+
+
+def enforce_report_cover_metadata(body: str, payload: ReportGenerationRequest) -> str:
+    metadata_lines = build_report_metadata_lines(payload)
+    cleaned_lines = []
+    placeholder_pattern = re.compile(
+        r"^\s*(?:\*\*)?(Student Name|Institution|Course|Lecturer|Date)(?:\*\*)?\s*:\s*(?:not specified|unspecified|n/a|none|null|unknown)\s*$",
+        re.IGNORECASE,
+    )
+    supplied_labels = {label.lower() for label, _ in metadata_lines}
+    supplied_line_pattern = re.compile(r"^\s*(?:\*\*)?(Student Name|Institution|Course|Lecturer|Date)(?:\*\*)?\s*:", re.IGNORECASE)
+
+    for line in (body or "").replace("\r\n", "\n").split("\n"):
+        if placeholder_pattern.match(line):
+            continue
+        supplied_match = supplied_line_pattern.match(line)
+        if supplied_match and supplied_match.group(1).lower() in supplied_labels:
+            continue
+        cleaned_lines.append(line)
+
+    cleaned_body = "\n".join(cleaned_lines).strip()
+    if not metadata_lines:
+        return cleaned_body
+
+    insertion = "\n".join(f"**{label}:** {value}" for label, value in metadata_lines)
+    report_title_pattern = re.compile(r"(^\s*\*\*Report Title:\*\*.*$)", re.IGNORECASE | re.MULTILINE)
+    title_match = report_title_pattern.search(cleaned_body)
+    if title_match:
+        insert_at = title_match.end()
+        return f"{cleaned_body[:insert_at]}\n{insertion}{cleaned_body[insert_at:]}".strip()
+
+    cover_pattern = re.compile(r"(^\s*#\s*COVER PAGE\s*$)", re.IGNORECASE | re.MULTILINE)
+    cover_match = cover_pattern.search(cleaned_body)
+    if cover_match:
+        insert_at = cover_match.end()
+        return f"{cleaned_body[:insert_at]}\n\n{insertion}{cleaned_body[insert_at:]}".strip()
+
+    return f"# COVER PAGE\n\n{insertion}\n\n{cleaned_body}".strip()
+
+
 async def generate_academic_report_package(
     summary: str,
     transcript: str,
@@ -14398,7 +14458,18 @@ async def generate_academic_report_package(
         if bool((payload.features or {}).get(key))
     ]
     source_context = build_report_source_context(summary, transcript, lecture_notes, lecture_slides, past_question_papers)
-    fallback = build_report_fallback(report_title, academic_level, report_type, reference_style, payload.report_date, source_context)
+    fallback = build_report_fallback(
+        report_title,
+        academic_level,
+        report_type,
+        reference_style,
+        payload.report_date,
+        source_context,
+        student_name=payload.student_name,
+        institution=payload.institution,
+        course=payload.course,
+        lecturer=payload.lecturer,
+    )
 
     system_prompt = (
         "You are an elite academic report generation engine for university and professional students. "
@@ -14412,6 +14483,8 @@ async def generate_academic_report_package(
         "RECOMMENDATIONS, CONCLUSION, and REFERENCES. "
         "report_sections must be an array of objects with number and title."
     )
+    supplied_metadata = build_report_metadata_lines(payload)
+    supplied_metadata_text = "\n".join(f"{label.upper()}: {value}" for label, value in supplied_metadata)
     user_prompt = (
         "Generate the complete academic report using this configuration.\n\n"
         f"REPORT TITLE: {report_title}\n"
@@ -14422,13 +14495,11 @@ async def generate_academic_report_package(
         f"REFERENCE STYLE: {reference_style}\n"
         f"REPORT DEPTH: {report_depth}\n"
         f"OUTPUT LANGUAGE: {output_language}\n"
-        f"STUDENT NAME: {compact_text(payload.student_name, 'Not specified')}\n"
-        f"INSTITUTION: {compact_text(payload.institution, 'Not specified')}\n"
-        f"COURSE: {compact_text(payload.course, 'Not specified')}\n"
-        f"LECTURER: {compact_text(payload.lecturer, 'Not specified')}\n"
-        f"DATE: {compact_text(payload.report_date, utc_now().date().isoformat())}\n"
+        f"SUPPLIED COVER PAGE DETAILS:\n{supplied_metadata_text if supplied_metadata_text else 'No optional cover-page details were supplied.'}\n"
         f"ENABLED FEATURES: {', '.join(enabled_features) if enabled_features else 'None'}\n\n"
         "Quality requirements:\n"
+        "- In the COVER PAGE, include every supplied cover-page detail exactly as provided.\n"
+        "- If a cover-page detail was not supplied, omit that row entirely. Never write 'Not specified', 'N/A', 'Unknown', or guessed values.\n"
         "- First detect the topic category and adapt sections for business, engineering, science, IT, humanities, or health topics.\n"
         "- Include tables or chart-ready markdown tables when Smart Tables or Auto Charts are enabled.\n"
         "- Include formulas for engineering, technical architecture for IT, financial analysis for business, and scientific explanation for science topics when relevant.\n"
@@ -14458,7 +14529,7 @@ async def generate_academic_report_package(
         generated = {}
 
     title = compact_text(generated.get("report_title"), fallback["report_title"])
-    body = compact_text(generated.get("report_body"), fallback["report_body"])
+    body = enforce_report_cover_metadata(compact_text(generated.get("report_body"), fallback["report_body"]), payload)
     sections = generated.get("report_sections") if isinstance(generated.get("report_sections"), list) else fallback["report_sections"]
     return {
         "report_title": title,
