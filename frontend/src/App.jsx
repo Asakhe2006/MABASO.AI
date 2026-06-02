@@ -534,6 +534,44 @@ const mindMapNodeTypeColors = {
   warning: "#dc2626",
   "key point": "#475569",
 };
+const fairSubscriptionPlans = [
+  {
+    name: "Free Study",
+    price: "R0",
+    audience: "Trial users and light study",
+    limits: "Small monthly credits, limited exports, community support",
+    safeguards: ["No card required", "No surprise renewals", "Clear usage meter"],
+  },
+  {
+    name: "Student Plus",
+    price: "Low monthly student price",
+    audience: "Students who generate weekly study packs",
+    limits: "Higher AI credits, PDF/DOCX exports, reports, quizzes, mind maps",
+    safeguards: ["Cancel anytime", "Overages off by default", "Renewal reminders"],
+  },
+  {
+    name: "Pro Research",
+    price: "Fair premium price",
+    audience: "Heavy academic and professional users",
+    limits: "Large documents, research reports, presentations, priority queue",
+    safeguards: ["Hard spend cap", "Usage alerts", "Plan downgrade kept easy"],
+  },
+  {
+    name: "Team / Institution",
+    price: "Custom quote",
+    audience: "Classes, tutors, departments, and schools",
+    limits: "Shared seats, admin controls, pooled credits, audit logs",
+    safeguards: ["Seat-level controls", "Invoice approval", "No hidden per-seat add-ons"],
+  },
+];
+const fairBillingGuardrails = [
+  "Show exact included credits before payment.",
+  "Block paid overages unless the user explicitly enables them.",
+  "Warn at 50%, 80%, and 100% usage.",
+  "Keep free cancellation visible from account settings.",
+  "Never fabricate usage or billing values when backend metrics are missing.",
+  "Provide a refund/grace policy for accidental renewals.",
+];
 
 function createDefaultReportConfig() {
   return {
@@ -3654,6 +3692,55 @@ function getTeacherEstimatedMinutes(lesson) {
   return "15";
 }
 
+function renderFairBillingPlan(theme = "light") {
+  const isDark = theme === "dark";
+  const cardClass = isDark
+    ? "rounded-[24px] border border-white/10 bg-white/[0.04] p-4"
+    : "rounded-[24px] border border-slate-200 bg-slate-50 p-4";
+  const titleClass = isDark ? "text-white" : "text-slate-950";
+  const bodyClass = isDark ? "text-slate-300" : "text-slate-600";
+  const chipClass = isDark
+    ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+
+  return (
+    <div className="mt-5 space-y-5">
+      <div className={`rounded-[24px] border px-5 py-4 ${isDark ? "border-emerald-300/15 bg-emerald-300/[0.08]" : "border-emerald-200 bg-emerald-50"}`}>
+        <p className={`text-sm leading-7 ${isDark ? "text-emerald-50" : "text-emerald-800"}`}>
+          This plan is designed to be transparent: users see limits before paying, paid overages stay disabled by default, and the app must not show fake billing numbers when no backend billing data exists.
+        </p>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {fairSubscriptionPlans.map((plan) => (
+          <article key={plan.name} className={cardClass}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className={`text-lg font-semibold ${titleClass}`}>{plan.name}</h3>
+                <p className={`mt-2 text-sm ${bodyClass}`}>{plan.audience}</p>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${chipClass}`}>{plan.price}</span>
+            </div>
+            <p className={`mt-4 text-sm leading-7 ${bodyClass}`}>{plan.limits}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {plan.safeguards.map((item) => (
+                <span key={`${plan.name}-${item}`} className={`rounded-full border px-3 py-1 text-xs ${isDark ? "border-white/10 bg-slate-950/70 text-slate-200" : "border-slate-200 bg-white text-slate-600"}`}>{item}</span>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className={cardClass}>
+        <h3 className={`text-lg font-semibold ${titleClass}`}>Anti-Ripoff Billing Rules</h3>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {fairBillingGuardrails.map((rule) => (
+            <div key={rule} className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? "border-white/10 bg-slate-950/70 text-slate-200" : "border-slate-200 bg-white text-slate-700"}`}>{rule}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function truncatePreviewText(value, limit = 1200) {
   const text = (value || "").trim();
   if (!text) return "";
@@ -3875,6 +3962,7 @@ export default function App() {
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const answerSyncTimersRef = useRef({});
+  const markQuizRef = useRef(null);
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
   const skipNextHistorySyncRef = useRef(false);
@@ -5290,9 +5378,13 @@ export default function App() {
 
   useEffect(() => {
     if (!teacherTranscriptEntries.length) return;
-    teacherTranscriptScrollRef.current?.scrollTo?.({
-      top: teacherTranscriptScrollRef.current.scrollHeight,
-      behavior: "smooth",
+    const scrollNode = teacherTranscriptScrollRef.current;
+    if (!scrollNode?.scrollTo) return;
+    const distanceFromBottom = scrollNode.scrollHeight - scrollNode.scrollTop - scrollNode.clientHeight;
+    if (distanceFromBottom > 180) return;
+    scrollNode.scrollTo({
+      top: scrollNode.scrollHeight,
+      behavior: "auto",
     });
   }, [teacherTranscriptEntries.length]);
 
@@ -8219,9 +8311,7 @@ export default function App() {
           <article className={sectionCardClass}>
             <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing</p>
             <h2 className="mt-2 text-2xl font-semibold text-slate-950">Subscription and revenue view</h2>
-            <div className="mt-5 rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-sm leading-7 text-slate-500">
-              Billing metrics are still intentionally empty right now, so the dashboard keeps the structure ready without showing fake numbers.
-            </div>
+            {renderFairBillingPlan("light")}
           </article>
         );
       }
@@ -9476,7 +9566,7 @@ export default function App() {
 
               {adminSidebarTab === "security" ? <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Failed logins</p><div className="mt-4 space-y-3">{(dashboard.security?.failed_logins || []).length ? (dashboard.security?.failed_logins || []).map((item, index) => <div key={`${item.timestamp}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div><p className="text-sm font-semibold text-white">{item.email}</p><p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{item.ip_address || "No IP"} • {item.status}</p></div><p className="text-sm text-slate-300">{new Date(item.timestamp).toLocaleString()}</p></div><p className="mt-3 text-sm leading-7 text-slate-200">{item.reason}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No recent failed logins.</div>}</div></div><div className="space-y-5"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Suspicious activity</p><div className="mt-4 space-y-3">{(dashboard.security?.suspicious_activity || []).length ? (dashboard.security?.suspicious_activity || []).map((item, index) => <div key={`${item.email}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><p className="text-sm font-semibold text-white">{item.email}</p><p className="mt-2 text-sm leading-7 text-slate-200">{item.reason}</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No suspicious activity rules are currently triggered.</div>}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">IP tracking</p><div className="mt-4 space-y-3">{(dashboard.security?.ip_tracking || []).slice(0, 8).map((item) => <div key={item.ip_address} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><p className="text-sm font-semibold text-white">{item.ip_address}</p><p className="mt-2 text-sm text-slate-300">{item.actions} actions • {(item.users || []).join(", ") || "No mapped user"}</p></div>)}</div></div></div></div> : null}
 
-              {adminSidebarTab === "billing" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Billing</p><div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300">Subscriptions and billing metrics are intentionally left empty for now, as requested.</div></div> : null}
+              {adminSidebarTab === "billing" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Billing</p><h2 className="mt-2 text-2xl font-semibold text-white">Fair subscription plan</h2>{renderFairBillingPlan("dark")}</div> : null}
 
               {adminSidebarTab === "settings" ? <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Languages</p><div className="mt-4 flex flex-wrap gap-2">{(dashboard.settings?.available_languages || outputLanguageOptions.map((item) => item.value)).map((language) => <span key={language} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white">{language}</span>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Feature flags</p><div className="mt-4 space-y-3">{Object.entries(dashboard.settings?.feature_flags || {}).map(([key, value]) => <div key={key} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{key}</span><span className={`rounded-full px-3 py-1 text-xs ${value ? "bg-emerald-300/10 text-emerald-50" : "bg-slate-900 text-slate-400"}`}>{value ? "Enabled" : "Disabled"}</span></div>)}</div></div></div> : null}
             </section>
@@ -9885,6 +9975,7 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const handleFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       refreshSessionIfNeeded().catch(() => {
         // Leave the current UI state alone until the next authenticated request surfaces the problem.
       });
@@ -12109,24 +12200,26 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    if (!authToken) return undefined;
+    const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+    if (!authToken || !isCollaborationVisible) return undefined;
     const interval = window.setInterval(() => {
       refreshCollaborationRooms(true);
     }, ROOM_REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
-  }, [activeTab, authEmail, authEmailInput, authToken, currentPage]);
+  }, [activeTab, authToken, currentPage]);
 
   useEffect(() => {
-    if (!authToken || !activeRoomId) return undefined;
+    const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+    if (!authToken || !activeRoomId || !isCollaborationVisible) return undefined;
     const interval = window.setInterval(() => {
       loadCollaborationRoom(activeRoomId, { silent: true });
     }, ROOM_REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
-  }, [activeRoomId, activeTab, authEmail, authEmailInput, authToken, currentPage]);
+  }, [activeRoomId, activeTab, authToken, currentPage]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return undefined;
@@ -16153,26 +16246,27 @@ export default function App() {
       setIsMarkingQuiz(false);
     }
   };
+  markQuizRef.current = markQuiz;
 
   useEffect(() => {
     if (quizSessionStage !== "active" || !quizDeadlineAtMs) return undefined;
 
     const updateRemaining = () => {
       const remainingSeconds = Math.max(0, Math.ceil((quizDeadlineAtMs - Date.now()) / 1000));
-      setQuizTimeRemainingSeconds(remainingSeconds);
+      setQuizTimeRemainingSeconds((current) => (current === remainingSeconds ? current : remainingSeconds));
       if (remainingSeconds <= 0 && !quizAutoSubmitTriggeredRef.current) {
         quizAutoSubmitTriggeredRef.current = true;
         setQuizSessionStage("expired");
         setQuizDeadlineAtMs(0);
         setStatus("Time finished. Submitting your test for marking...");
-        markQuiz({ autoSubmit: true });
+        markQuizRef.current?.({ autoSubmit: true });
       }
     };
 
     updateRemaining();
     const timerId = window.setInterval(updateRemaining, 250);
     return () => window.clearInterval(timerId);
-  }, [markQuiz, quizDeadlineAtMs, quizSessionStage]);
+  }, [quizDeadlineAtMs, quizSessionStage]);
 
   const clearRoomQuestionResult = (questionNumber) => {
     setRoomQuizSubmitted(false);
@@ -16735,7 +16829,7 @@ export default function App() {
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
-            <div className="overflow-x-auto pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
+            <div className="stable-horizontal-scroll pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
           </div>
 
           <div className="mt-6 space-y-5">
