@@ -3804,6 +3804,7 @@ export default function App() {
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -3835,6 +3836,7 @@ export default function App() {
   const [mindMapDepth, setMindMapDepth] = useState("Advanced");
   const [mindMapTopic, setMindMapTopic] = useState("");
   const [selectedMindMapNode, setSelectedMindMapNode] = useState(null);
+  const [isMindMapFullscreen, setIsMindMapFullscreen] = useState(false);
   const mindMapExportRef = useRef(null);
   const mindMapCanvasRef = useRef(null);
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
@@ -4322,6 +4324,47 @@ export default function App() {
     );
   };
 
+  const renderUpgradeModal = () => (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur">
+      <div className="w-full max-w-5xl rounded-[30px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.16),transparent_34%),linear-gradient(180deg,#0f172a,#020617)] p-5 text-white shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:p-6">
+        <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Upgrade to Pro</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. Payments should only continue after real usage tracking, cancellation, refunds, and overage controls are connected.</p>
+          </div>
+          <button type="button" onClick={() => setIsUpgradeModalOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
+        </div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {fairSubscriptionPlans.map((plan) => (
+            <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Student Plus" || plan.name === "Pro Research" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-xl font-semibold text-white">{plan.name}</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">{plan.audience}</p>
+                </div>
+                <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-50">{plan.price}</span>
+              </div>
+              <p className="mt-4 text-sm leading-7 text-slate-200">{plan.limits}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
+              </div>
+              <button type="button" onClick={() => { setIsUpgradeModalOpen(false); navigateToPath("/pricing"); }} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50">
+                {plan.name === "Free Study" ? "Start Free" : plan.name === "Team / Institution" ? "Request Quote" : "Continue to Payment"}
+              </button>
+            </article>
+          ))}
+        </div>
+        <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+          <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Billing protection</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {fairBillingGuardrails.map((rule) => <div key={rule} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">{rule}</div>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderMindMapPanel = () => {
     const hasMindMap = Boolean(mindMapData.root);
     const selectedNode = selectedMindMapNode || mindMapData.root;
@@ -4369,6 +4412,7 @@ export default function App() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={openMindMapFullscreen} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">Fullscreen</button>
+                  {isMindMapFullscreen ? <button type="button" onClick={closeMindMapFullscreen} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Minimize</button> : null}
                   <button type="button" onClick={downloadMindMapPng} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PNG</button>
                   <button type="button" onClick={downloadMindMapSvg} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">SVG</button>
                   <button type="button" onClick={downloadMindMapPdf} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PDF</button>
@@ -14203,6 +14247,23 @@ export default function App() {
     target.requestFullscreen().catch(() => setError("Fullscreen could not open."));
   };
 
+  const closeMindMapFullscreen = () => {
+    if (typeof document === "undefined" || !document.fullscreenElement) {
+      setIsMindMapFullscreen(false);
+      return;
+    }
+    document.exitFullscreen?.().catch(() => setError("Fullscreen could not close."));
+  };
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const handleFullscreenChange = () => {
+      setIsMindMapFullscreen(Boolean(document.fullscreenElement && document.fullscreenElement === mindMapExportRef.current));
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
   const playTeacherLesson = (lesson = teacherLessonData, { startIndex = 0, startChunkIndex = 0 } = {}) => {
     const normalizedLesson = normalizeTeacherLessonData(lesson);
     if (!normalizedLesson.segments.length) {
@@ -16669,6 +16730,7 @@ export default function App() {
         <div className="hero-glow hero-glow-right" />
         <div className="hero-grid" />
       </div>
+      {isUpgradeModalOpen ? renderUpgradeModal() : null}
       <main className="relative mx-auto max-w-7xl overflow-x-clip px-3 py-6 sm:px-6 lg:px-8">
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div>
@@ -16678,6 +16740,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+              <button type="button" onClick={() => setIsUpgradeModalOpen(true)} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
@@ -16697,6 +16760,7 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
+          <button type="button" onClick={() => setIsUpgradeModalOpen(true)} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
         {collaborationInvitePrompt}
