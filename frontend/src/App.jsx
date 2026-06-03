@@ -4195,12 +4195,17 @@ export default function App() {
 
   const navigateToPath = (path, { replace = false } = {}) => {
     const normalized = normalizeRoutePath(path);
-    if (typeof window !== "undefined" && window.location.pathname !== normalized) {
+    const currentPath = typeof window !== "undefined" ? window.location.pathname : browserPath;
+    const pathChanged = currentPath !== normalized;
+    if (typeof window !== "undefined" && pathChanged) {
       window.history[replace ? "replaceState" : "pushState"]({}, "", normalized);
     }
-    setBrowserPath(normalized);
-    setPublicPage(normalized === PUBLIC_TERMS_PATH ? "terms" : "auth");
-    if (typeof window !== "undefined") {
+    setBrowserPath((current) => (current === normalized ? current : normalized));
+    setPublicPage((current) => {
+      const nextPublicPage = normalized === PUBLIC_TERMS_PATH ? "terms" : "auth";
+      return current === nextPublicPage ? current : nextPublicPage;
+    });
+    if (pathChanged && typeof window !== "undefined") {
       window.requestAnimationFrame(() => {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       });
@@ -5698,10 +5703,10 @@ export default function App() {
     if (teacherViewportSyncRef.current === viewportKey) return undefined;
     const frameId = window.requestAnimationFrame(() => {
       if (targetKey) {
-        teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+        teacherSectionRefs.current[targetKey]?.scrollIntoView?.({ behavior: "auto", block: "center", inline: "nearest" });
         teacherViewportSyncRef.current = viewportKey;
       } else {
-        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        teacherExamplesPanelRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
         teacherViewportSyncRef.current = viewportKey;
       }
     });
@@ -5746,7 +5751,7 @@ export default function App() {
     setPresentationView("viewer");
     setSelectedPresentationSlideIndex(0);
     window.requestAnimationFrame(() => {
-      presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      presentationViewerRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
     });
   };
 
@@ -12409,7 +12414,10 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load collaboration rooms.");
       handleCollaborationRoomActivity(data.rooms || []);
-      setCollaborationRooms(data.rooms || []);
+      const nextRooms = data.rooms || [];
+      setCollaborationRooms((current) => (
+        JSON.stringify(current) === JSON.stringify(nextRooms) ? current : nextRooms
+      ));
     } catch (err) {
       if (!silent) setError(err.message || "Could not load collaboration rooms.");
     }
@@ -12435,8 +12443,11 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
-      setActiveRoomId(roomId);
-      setActiveRoom(data.room || null);
+      setActiveRoomId((current) => (current === roomId ? current : roomId));
+      const nextRoom = data.room || null;
+      setActiveRoom((current) => (
+        JSON.stringify(current) === JSON.stringify(nextRoom) ? current : nextRoom
+      ));
       syncRoomNotesDraftFromRoom(data.room, { force: resetNotesDraft });
       if (!silent) setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
     } catch (err) {
@@ -15133,8 +15144,9 @@ export default function App() {
     setError("");
     setStatus("MABASO is answering your study question...");
     setIsAskingChat(true);
-    const userMessage = { role: "user", content: question };
-    const pendingAssistantMessage = { role: "assistant", content: "Thinking..." };
+    const chatTurnId = `study-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question };
+    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
@@ -15149,10 +15161,10 @@ export default function App() {
         const next = [...current];
         const lastIndex = next.length - 1;
         if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
-          next[lastIndex] = { role: "assistant", content: answer };
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
           return next;
         }
-        return [...next, { role: "assistant", content: answer }];
+        return [...next, { id: `${chatTurnId}-assistant-complete`, role: "assistant", content: answer }];
       });
       setStatus("Study chat answer ready.");
     } catch (err) {
@@ -15160,7 +15172,7 @@ export default function App() {
         const next = [...current];
         const lastIndex = next.length - 1;
         if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
-          next[lastIndex] = { role: "assistant", content: err.message || "Study chat could not answer right now." };
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: err.message || "Study chat could not answer right now." };
           return next;
         }
         return next;
@@ -15273,8 +15285,8 @@ export default function App() {
       });
       setChatMessages((current) => [
         ...current,
-        { role: "user", content: `[Tutor question] ${question}` },
-        { role: "assistant", content: answer },
+        { id: `tutor-question-${requestRunId}-user`, role: "user", content: `[Tutor question] ${question}` },
+        { id: `tutor-question-${requestRunId}-assistant`, role: "assistant", content: answer },
       ]);
       setIsTeacherQuestionLoading(false);
       speakTeacherQuestionAnswer(answer, {
@@ -16611,7 +16623,7 @@ export default function App() {
     };
 
     updateRemaining();
-    const timerId = window.setInterval(updateRemaining, 250);
+    const timerId = window.setInterval(updateRemaining, 1000);
     return () => window.clearInterval(timerId);
   }, [quizDeadlineAtMs, quizSessionStage]);
 
@@ -17441,7 +17453,7 @@ export default function App() {
                         {chatMessages.length ? (
                           <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
                             {chatMessages.slice(-6).map((message, index) => (
-                              <div key={`${message.role}-${index}-${message.content.slice(0, 18)}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+                              <div key={message.id || `${message.role}-${index}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
                                 <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
                                 <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
                               </div>

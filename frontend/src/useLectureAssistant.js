@@ -992,6 +992,7 @@ export function useLectureAssistant({
   const remoteSyncEnabledRef = useRef(false);
   const remoteHydratedRef = useRef(false);
   const searchTimerRef = useRef(0);
+  const localStoragePersistTimerRef = useRef(0);
   const abortControllerRef = useRef(null);
   const recognitionRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -3883,11 +3884,18 @@ export function useLectureAssistant({
 
   useEffect(() => {
     if (!hasLoadedStorageRef.current || typeof window === "undefined") return;
-    window.localStorage.setItem(storageKey, JSON.stringify(sortConversations(conversations)));
-    if (activeConversationId) {
-      window.localStorage.setItem(`${storageKey}:active`, activeConversationId);
-    }
-  }, [activeConversationId, conversations, storageKey]);
+    window.clearTimeout(localStoragePersistTimerRef.current);
+    localStoragePersistTimerRef.current = window.setTimeout(() => {
+      window.localStorage.setItem(storageKey, JSON.stringify(sortConversations(conversations)));
+      if (activeConversationId) {
+        window.localStorage.setItem(`${storageKey}:active`, activeConversationId);
+      }
+    }, isGenerating ? 500 : 120);
+    return () => {
+      window.clearTimeout(localStoragePersistTimerRef.current);
+      localStoragePersistTimerRef.current = 0;
+    };
+  }, [activeConversationId, conversations, isGenerating, storageKey]);
 
   useEffect(() => {
     remoteSyncEnabledRef.current = remoteSyncAvailable;
@@ -4081,7 +4089,7 @@ export function useLectureAssistant({
   useEffect(() => {
     if (!isOpen || typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+      messagesEndRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
     });
   }, [isGenerating, isOpen, messages.length]);
 
@@ -4092,12 +4100,14 @@ export function useLectureAssistant({
       window.clearTimeout(voiceReplyChunkTimerRef.current);
       window.clearTimeout(voiceInterruptionResetTimerRef.current);
       window.clearTimeout(voiceTranscriptQueueTimerRef.current);
+      window.clearTimeout(localStoragePersistTimerRef.current);
     }
     clearPreviewResumeState();
     clearVoiceListeningTimer();
     stopListening();
     stopSpeaking();
     window.clearTimeout(copyResetTimerRef.current);
+    window.clearTimeout(searchTimerRef.current);
   }, []);
 
   return {
