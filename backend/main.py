@@ -467,6 +467,38 @@ AI_FEATURE_COST_ESTIMATE_ZAR = {
     "source_upload": get_float_env("AI_COST_ESTIMATE_SOURCE_UPLOAD_ZAR", 0.10),
 }
 HOSTING_COST_ESTIMATE_ZAR_PER_MONTH = get_float_env("HOSTING_COST_ESTIMATE_ZAR_PER_MONTH", 500)
+PLAN_ENTITLEMENTS = {
+    "free": {
+        "label": "Free",
+        "mind_map_depths": {"basic", "standard"},
+        "report_word_counts": {"500", "1000"},
+        "report_custom_max": 1000,
+        "report_depths": {"basic", "standard"},
+        "report_academic_levels": {"high school", "college", "undergraduate"},
+        "report_features": {"smartTables", "plagiarismSafeWriting", "executiveSummary", "recommendations"},
+        "presentation_template_limit": 3,
+    },
+    "pro_student": {
+        "label": "Pro",
+        "mind_map_depths": {"basic", "standard", "advanced"},
+        "report_word_counts": {"500", "1000", "2000", "3000"},
+        "report_custom_max": 3000,
+        "report_depths": {"basic", "standard", "advanced", "expert"},
+        "report_academic_levels": {"high school", "college", "undergraduate", "honours", "masters"},
+        "report_features": {"aiHumanizer", "criticalAnalysis", "smartTables", "autoCharts", "academicCitations", "plagiarismSafeWriting", "executiveSummary", "recommendations", "realWorldExamples", "caseStudies"},
+        "presentation_template_limit": 9,
+    },
+    "premium_student": {
+        "label": "Premium",
+        "mind_map_depths": {"basic", "standard", "advanced", "research"},
+        "report_word_counts": {"500", "1000", "2000", "3000", "5000+", "custom"},
+        "report_custom_max": 8000,
+        "report_depths": {"basic", "standard", "advanced", "expert", "research intensive"},
+        "report_academic_levels": {"high school", "college", "undergraduate", "honours", "masters", "phd", "professional research"},
+        "report_features": {"aiHumanizer", "criticalAnalysis", "smartTables", "autoCharts", "academicCitations", "plagiarismSafeWriting", "executiveSummary", "recommendations", "realWorldExamples", "caseStudies", "statisticalAnalysis", "futurePredictions"},
+        "presentation_template_limit": 10_000,
+    },
+}
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 APPLE_IDENTITY_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
@@ -2611,6 +2643,57 @@ def send_verification_email(email: str, code: str):
         )
     )
     send_smtp_message(message)
+
+
+def send_collaboration_invite_email(invited_email: str, owner_email: str, room_title: str, room_id: str):
+    smtp_settings = get_smtp_settings()
+    room_url = f"{APP_PUBLIC_URL}/app/collaboration?room={quote(room_id)}"
+    message = EmailMessage()
+    message["Subject"] = f"You were invited to a MABASO.AI study room"
+    message["From"] = smtp_settings["from_email"]
+    message["To"] = invited_email
+    message.set_content(
+        (
+            f"{owner_email} invited you to join a MABASO.AI collaboration room.\n\n"
+            f"Room: {room_title}\n"
+            f"Join link: {room_url}\n\n"
+            "Sign in with this email address to see the room prompt inside MABASO.AI."
+        )
+    )
+    send_smtp_message(message)
+
+
+async def deliver_collaboration_invite_emails(invited_emails: list[str], owner_email: str, room_title: str, room_id: str):
+    for invited_email in invited_emails:
+        try:
+            await asyncio.to_thread(send_collaboration_invite_email, invited_email, owner_email, room_title, room_id)
+            record_audit_log(
+                action="collaboration.invite.email",
+                email=owner_email,
+                resource_type="collaboration",
+                resource_name=room_id,
+                metadata={"invited_email": invited_email, "delivery_status": "sent"},
+            )
+        except HTTPException as exc:
+            logger.warning("Collaboration invite email failed for %s: %s", invited_email, exc.detail)
+            record_audit_log(
+                action="collaboration.invite.email",
+                status="error",
+                email=owner_email,
+                resource_type="collaboration",
+                resource_name=room_id,
+                metadata={"invited_email": invited_email, "delivery_status": "failed", "error": str(exc.detail)},
+            )
+        except Exception as exc:
+            logger.exception("Unexpected collaboration invite email failure for %s", invited_email)
+            record_audit_log(
+                action="collaboration.invite.email",
+                status="error",
+                email=owner_email,
+                resource_type="collaboration",
+                resource_name=room_id,
+                metadata={"invited_email": invited_email, "delivery_status": "failed", "error": str(exc)},
+            )
 
 
 def normalize_support_context_value(value: str, max_chars: int = MAX_SUPPORT_CONTEXT_CHARS) -> str:
@@ -5059,6 +5142,22 @@ def get_effective_plan_id(email: str) -> str:
         return "free"
     plan_id = normalize_billing_plan_id(row["plan_id"])
     return get_billing_quota_plan_id(plan_id)
+
+
+def get_plan_entitlements_for_email(email: str) -> tuple[str, dict[str, Any]]:
+    plan_id = get_effective_plan_id(email)
+    if plan_id.startswith("premium"):
+        return "premium_student", PLAN_ENTITLEMENTS["premium_student"]
+    if plan_id.startswith("pro"):
+        return "pro_student", PLAN_ENTITLEMENTS["pro_student"]
+    return "free", PLAN_ENTITLEMENTS["free"]
+
+
+def raise_plan_locked(detail: str, entitlements: dict[str, Any]):
+    raise HTTPException(
+        status_code=402,
+        detail=f"{detail} is locked on the {entitlements.get('label', 'current')} plan. Upgrade to continue.",
+    )
 
 
 def get_usage_period_key(now: datetime | None = None) -> str:
@@ -13597,6 +13696,17 @@ def normalize_presentation_design_id(value: str) -> str:
     return design_id if design_id in PRESENTATION_THEMES else "quantum-black"
 
 
+def validate_presentation_design_for_user(email: str, design_id: str):
+    normalized_design_id = normalize_presentation_design_id(design_id)
+    _plan_id, entitlements = get_plan_entitlements_for_email(email)
+    allowed_count = int(entitlements.get("presentation_template_limit") or 0)
+    design_ids = list(PRESENTATION_THEMES.keys())
+    design_index = design_ids.index(normalized_design_id) if normalized_design_id in design_ids else 0
+    if design_index >= allowed_count:
+        theme = PRESENTATION_THEMES.get(normalized_design_id) or {}
+        raise_plan_locked(f"PowerPoint template {compact_text(theme.get('name'), normalized_design_id)}", entitlements)
+
+
 def infer_presentation_visual_type(title: str, bullets: list[str]) -> str:
     combined = " ".join([title, *bullets]).lower()
     if any(marker in combined for marker in ["table", "tabulate", "rows", "columns", "summary table"]):
@@ -15947,6 +16057,37 @@ def normalize_report_word_count(word_count: str, custom_word_count: str = "") ->
     return selected
 
 
+def parse_report_word_count_number(value: str) -> int:
+    match = re.search(r"\d+", compact_text(value))
+    return int(match.group(0)) if match else 0
+
+
+def validate_report_options_for_user(email: str, payload: ReportGenerationRequest):
+    _plan_id, entitlements = get_plan_entitlements_for_email(email)
+    selected_word_count = compact_text(payload.word_count, "2000")
+    normalized_word_count = selected_word_count.lower()
+    if normalized_word_count not in entitlements["report_word_counts"]:
+        raise_plan_locked(f"Report word count {selected_word_count}", entitlements)
+    if normalized_word_count == "custom":
+        custom_count = parse_report_word_count_number(payload.custom_word_count)
+        if custom_count <= 0 or custom_count > int(entitlements["report_custom_max"]):
+            raise_plan_locked(f"Custom report word count up to {custom_count or 'empty'}", entitlements)
+    report_depth = compact_text(payload.report_depth, "Advanced").lower()
+    if report_depth not in entitlements["report_depths"]:
+        raise_plan_locked(f"Report depth {payload.report_depth}", entitlements)
+    academic_level = compact_text(payload.academic_level, "Undergraduate").lower()
+    if academic_level not in entitlements["report_academic_levels"]:
+        raise_plan_locked(f"Academic level {payload.academic_level}", entitlements)
+    enabled_features = [
+        compact_text(key)
+        for key, enabled in (payload.features or {}).items()
+        if enabled and compact_text(key)
+    ]
+    locked_features = [feature for feature in enabled_features if feature not in entitlements["report_features"]]
+    if locked_features:
+        raise_plan_locked(f"Report feature {locked_features[0]}", entitlements)
+
+
 def build_report_source_context(
     summary: str,
     transcript: str,
@@ -16319,6 +16460,13 @@ def normalize_mind_map_depth(value: str = "") -> str:
 
 def get_mind_map_depth_limit(depth_level: str = "") -> int:
     return MIND_MAP_DEPTH_LIMITS.get(normalize_mind_map_depth(depth_level).lower(), 3)
+
+
+def validate_mind_map_depth_for_user(email: str, depth_level: str):
+    _plan_id, entitlements = get_plan_entitlements_for_email(email)
+    normalized_depth = normalize_mind_map_depth(depth_level).lower()
+    if normalized_depth not in entitlements["mind_map_depths"]:
+        raise_plan_locked(f"Mind map {normalize_mind_map_depth(depth_level)} depth", entitlements)
 
 
 def build_mind_map_source_context(payload: MindMapGenerationRequest) -> str:
@@ -17459,6 +17607,7 @@ async def create_report(
             detail="Enter a report topic or add lecture material before creating the academic report.",
         )
 
+    validate_report_options_for_user(current_user, payload)
     consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     ensure_openai_key()
     job_id = create_job("report", owner_email=current_user)
@@ -17516,6 +17665,7 @@ async def create_mind_map(
             detail="Add lecture material, paste text, generate a report, or enter a topic before creating the mind map.",
         )
 
+    validate_mind_map_depth_for_user(current_user, payload.depth_level)
     consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     ensure_openai_key()
     depth_level = normalize_mind_map_depth(payload.depth_level)
@@ -17595,6 +17745,7 @@ async def create_presentation(
             detail="Generate a study guide or add lecture material before creating the PowerPoint presentation.",
         )
 
+    validate_presentation_design_for_user(current_user, payload.design_id)
     consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     ensure_openai_key()
     ensure_presentation_support()
@@ -18637,7 +18788,9 @@ async def create_collaboration_room(
             )
 
     room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(room, current_user)}
+    if invited_emails:
+        asyncio.create_task(deliver_collaboration_invite_emails(invited_emails, current_user, title, room_id))
+    return {"room": serialize_collaboration_room(room, current_user), "invited_emails": invited_emails}
 
 
 @app.get("/collaboration/rooms/{room_id}")
@@ -18724,22 +18877,27 @@ async def add_collaboration_room_members(
         raise HTTPException(status_code=400, detail="Add at least one member email first.")
 
     now_iso = utc_now().isoformat()
+    newly_invited_emails: list[str] = []
     with get_db_connection() as connection:
         for email in invited_emails:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO collaboration_room_members (room_id, email, role, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
                 (room["id"], email, "member", now_iso),
             )
+            if cursor.rowcount:
+                newly_invited_emails.append(email)
         connection.execute(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
         )
 
     updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user)}
+    if newly_invited_emails:
+        asyncio.create_task(deliver_collaboration_invite_emails(newly_invited_emails, current_user, room["title"], room["id"]))
+    return {"room": serialize_collaboration_room(updated_room, current_user), "invited_emails": newly_invited_emails}
 
 
 @app.post("/collaboration/rooms/{room_id}/notes")

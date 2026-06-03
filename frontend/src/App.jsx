@@ -522,6 +522,38 @@ const reportFeatureToggles = [
   ["futurePredictions", "Future Predictions"],
 ];
 const mindMapDepthOptions = ["Basic", "Standard", "Advanced", "Research"];
+const planEntitlements = {
+  free: {
+    label: "Free",
+    mindMapDepths: ["Basic", "Standard"],
+    reportWordCounts: ["500", "1000"],
+    reportCustomMax: 1000,
+    reportDepths: ["Basic", "Standard"],
+    reportAcademicLevels: ["High School", "College", "Undergraduate"],
+    reportFeatures: ["smartTables", "plagiarismSafeWriting", "executiveSummary", "recommendations"],
+    presentationTemplateLimit: 3,
+  },
+  pro: {
+    label: "Pro",
+    mindMapDepths: ["Basic", "Standard", "Advanced"],
+    reportWordCounts: ["500", "1000", "2000", "3000"],
+    reportCustomMax: 3000,
+    reportDepths: ["Basic", "Standard", "Advanced", "Expert"],
+    reportAcademicLevels: ["High School", "College", "Undergraduate", "Honours", "Masters"],
+    reportFeatures: ["aiHumanizer", "criticalAnalysis", "smartTables", "autoCharts", "academicCitations", "plagiarismSafeWriting", "executiveSummary", "recommendations", "realWorldExamples", "caseStudies"],
+    presentationTemplateLimit: 9,
+  },
+  premium: {
+    label: "Premium",
+    mindMapDepths: mindMapDepthOptions,
+    reportWordCounts,
+    reportCustomMax: 8000,
+    reportDepths,
+    reportAcademicLevels,
+    reportFeatures: reportFeatureToggles.map(([key]) => key),
+    presentationTemplateLimit: Number.POSITIVE_INFINITY,
+  },
+};
 const fairSubscriptionPlans = [
   {
     id: "free",
@@ -4247,10 +4279,34 @@ export default function App() {
       <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{label}</span>
       <select
         value={reportConfig[field]}
-        onChange={(event) => updateReportConfigField(field, event.target.value)}
+        onChange={(event) => {
+          const nextValue = event.target.value;
+          const allowed = field === "wordCount"
+            ? isReportWordCountAllowed(nextValue, reportConfig.customWordCount)
+            : field === "reportDepth"
+              ? isReportDepthAllowed(nextValue)
+              : field === "academicLevel"
+                ? isReportAcademicLevelAllowed(nextValue)
+                : true;
+          if (!allowed) {
+            event.target.value = reportConfig[field];
+            blockLockedPlanOption(`${label} ${nextValue}`, "a higher report plan");
+            return;
+          }
+          updateReportConfigField(field, nextValue);
+        }}
         className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-300/60"
       >
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+        {options.map((option) => {
+          const allowed = field === "wordCount"
+            ? getCurrentPlanEntitlements().reportWordCounts.includes(option)
+            : field === "reportDepth"
+              ? isReportDepthAllowed(option)
+              : field === "academicLevel"
+                ? isReportAcademicLevelAllowed(option)
+                : true;
+          return <option key={option} value={option} disabled={!allowed}>{allowed ? option : `🔒 ${option}`}</option>;
+        })}
       </select>
     </label>
   );
@@ -4313,17 +4369,25 @@ export default function App() {
         <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-950/70 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">AI Features Toggles</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {reportFeatureToggles.map(([featureKey, label]) => (
-              <label key={featureKey} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-slate-100">
+            {reportFeatureToggles.map(([featureKey, label]) => {
+              const allowed = isReportFeatureAllowed(featureKey);
+              return (
+              <label key={featureKey} onClick={(event) => {
+                if (allowed) return;
+                event.preventDefault();
+                blockLockedPlanOption(label, "a higher report plan");
+              }} className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm ${allowed ? "border-white/10 bg-white/[0.03] text-slate-100" : "cursor-pointer border-amber-300/20 bg-slate-950/80 text-slate-500"}`}>
                 <input
                   type="checkbox"
                   checked={Boolean(reportConfig.features?.[featureKey])}
-                  onChange={() => toggleReportFeature(featureKey)}
+                  disabled={!allowed}
+                  onChange={() => (allowed ? toggleReportFeature(featureKey) : blockLockedPlanOption(label, "a higher report plan"))}
                   className="h-4 w-4 accent-emerald-400"
                 />
-                <span>{label}</span>
+                <span>{allowed ? label : `🔒 ${label}`}</span>
               </label>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -4532,15 +4596,29 @@ export default function App() {
             </label>
             <label className="block">
               <span className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Depth level</span>
-              <select value={mindMapDepth} onChange={(event) => setMindMapDepth(event.target.value)} className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500">
-                {mindMapDepthOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+              <select value={mindMapDepth} onChange={(event) => {
+                const nextDepth = event.target.value;
+                if (!isMindMapDepthAllowed(nextDepth)) {
+                  event.target.value = mindMapDepth;
+                  blockLockedPlanOption(`Mind map ${nextDepth} depth`, nextDepth === "Research" ? "Premium" : "Pro");
+                  return;
+                }
+                setMindMapDepth(nextDepth);
+              }} className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500">
+                {mindMapDepthOptions.map((option) => {
+                  const allowed = isMindMapDepthAllowed(option);
+                  return <option key={option} value={option} disabled={!allowed}>{allowed ? option : `🔒 ${option}`}</option>;
+                })}
               </select>
             </label>
           </div>
           <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
-            {mindMapDepthOptions.map((option) => (
-              <button key={option} type="button" onClick={() => setMindMapDepth(option)} className={`rounded-full border px-3 py-2 ${mindMapDepth === option ? "border-emerald-600 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-600"}`}>{option}</button>
-            ))}
+            {mindMapDepthOptions.map((option) => {
+              const allowed = isMindMapDepthAllowed(option);
+              return (
+                <button key={option} type="button" onClick={() => (allowed ? setMindMapDepth(option) : blockLockedPlanOption(`Mind map ${option} depth`, option === "Research" ? "Premium" : "Pro"))} className={`rounded-full border px-3 py-2 ${mindMapDepth === option ? "border-emerald-600 bg-emerald-50 text-emerald-800" : allowed ? "border-slate-200 bg-white text-slate-600" : "border-amber-200 bg-slate-100 text-slate-400"}`}>{allowed ? option : `🔒 ${option}`}</button>
+              );
+            })}
           </div>
         </div>
 
@@ -7392,13 +7470,15 @@ export default function App() {
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {presentationDesigns.map((design) => {
               const isSelected = selectedPresentationDesign === design.id;
+              const isAllowed = isPresentationTemplateAllowed(design.id);
               return (
                 <button
                   key={design.id}
                   type="button"
-                  onClick={() => setSelectedPresentationDesign(design.id)}
-                  className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10"}`}
+                  onClick={() => (isAllowed ? setSelectedPresentationDesign(design.id) : blockLockedPlanOption(`${design.name} PowerPoint template`, "a higher presentation plan"))}
+                  className={`relative rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : isAllowed ? "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10" : "border-amber-300/20 bg-slate-950/45 opacity-75"}`}
                 >
+                  {!isAllowed ? <span className="absolute right-3 top-3 z-10 rounded-full border border-amber-200/30 bg-black/70 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-100">🔒 Locked</span> : null}
                   <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName} ${design.previewDecorationClassName}`}>
                     <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent,rgba(15,23,42,0.06))]" />
                     <div className="relative flex h-full flex-col justify-between p-4">
@@ -7413,7 +7493,7 @@ export default function App() {
                     </div>
                   </div>
                   <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
-                  <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-300">{isAllowed ? design.description : "Upgrade to unlock this presentation template."}</p>
                 </button>
               );
             })}
@@ -7553,13 +7633,15 @@ export default function App() {
               <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {presentationDesigns.map((design) => {
                   const isSelected = selectedPresentationDesign === design.id;
+                  const isAllowed = isPresentationTemplateAllowed(design.id);
                   return (
                     <button
                       key={design.id}
                       type="button"
-                      onClick={() => setSelectedPresentationDesign(design.id)}
-                      className={`rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10"}`}
+                      onClick={() => (isAllowed ? setSelectedPresentationDesign(design.id) : blockLockedPlanOption(`${design.name} PowerPoint template`, "a higher presentation plan"))}
+                      className={`relative rounded-[26px] border p-4 text-left transition ${isSelected ? "border-sky-300/45 bg-sky-300/10 shadow-[0_16px_45px_rgba(14,165,233,0.14)]" : isAllowed ? "border-white/10 bg-slate-950/70 hover:border-white/20 hover:bg-white/10" : "border-amber-300/20 bg-slate-950/45 opacity-75"}`}
                     >
+                      {!isAllowed ? <span className="absolute right-3 top-3 z-10 rounded-full border border-amber-200/30 bg-black/70 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-100">🔒 Locked</span> : null}
                       <div className={`relative h-32 overflow-hidden rounded-[22px] border border-white/10 ${design.previewClassName}`}>
                         <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent,rgba(15,23,42,0.06))]" />
                         <div
@@ -7579,7 +7661,7 @@ export default function App() {
                         </div>
                       </div>
                       <p className="mt-4 text-sm font-semibold text-white">{design.name}</p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">{design.description}</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">{isAllowed ? design.description : "Upgrade to unlock this presentation template."}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {design.layoutFeatures.slice(0, 2).map((feature) => (
                           <span key={`${design.id}-${feature}`} className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-slate-200">
@@ -11197,6 +11279,96 @@ export default function App() {
     return true;
   };
 
+  const getCurrentPlanTier = () => {
+    const planId = String(billingUsage?.plan_id || billingSubscription?.plan_id || "free").toLowerCase();
+    if (planId.includes("premium")) return "premium";
+    if (planId.includes("pro")) return "pro";
+    return "free";
+  };
+
+  const getCurrentPlanEntitlements = () => planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
+
+  const buildPlanLockedMessage = (itemLabel, requiredPlan = "a higher plan") => (
+    `${itemLabel} is locked on your current ${getCurrentPlanEntitlements().label} plan. Upgrade to ${requiredPlan} to use it.`
+  );
+
+  const blockLockedPlanOption = (itemLabel, requiredPlan = "a higher plan") => {
+    const message = buildPlanLockedMessage(itemLabel, requiredPlan);
+    setError(message);
+    setStatus(message);
+    setIsUpgradeModalOpen(true);
+    return false;
+  };
+
+  const isMindMapDepthAllowed = (depth = mindMapDepth) => (
+    getCurrentPlanEntitlements().mindMapDepths.includes(depth)
+  );
+
+  const isReportWordCountAllowed = (wordCount = reportConfig.wordCount, customWordCount = reportConfig.customWordCount) => {
+    const entitlements = getCurrentPlanEntitlements();
+    if (!entitlements.reportWordCounts.includes(wordCount)) return false;
+    if (wordCount === "Custom") {
+      const customValue = Number(String(customWordCount || "").replace(/[^0-9]/g, ""));
+      return Number.isFinite(customValue) && customValue > 0 && customValue <= entitlements.reportCustomMax;
+    }
+    return true;
+  };
+
+  const isReportDepthAllowed = (depth = reportConfig.reportDepth) => getCurrentPlanEntitlements().reportDepths.includes(depth);
+  const isReportAcademicLevelAllowed = (level = reportConfig.academicLevel) => getCurrentPlanEntitlements().reportAcademicLevels.includes(level);
+  const isReportFeatureAllowed = (featureKey) => getCurrentPlanEntitlements().reportFeatures.includes(featureKey);
+  const getPresentationTemplateLimit = () => getCurrentPlanEntitlements().presentationTemplateLimit;
+  const isPresentationTemplateAllowed = (designId = selectedPresentationDesign) => {
+    const index = presentationDesigns.findIndex((design) => design.id === designId);
+    return index >= 0 && index < getPresentationTemplateLimit();
+  };
+
+  const validateReportPlanAccess = (config = reportConfig) => {
+    if (!isReportWordCountAllowed(config.wordCount, config.customWordCount)) {
+      return blockLockedPlanOption(`Report word count ${config.wordCount === "Custom" ? `Custom (${config.customWordCount || "empty"})` : config.wordCount}`, "a higher report plan");
+    }
+    if (!isReportDepthAllowed(config.reportDepth)) {
+      return blockLockedPlanOption(`Report depth ${config.reportDepth}`, "a higher report plan");
+    }
+    if (!isReportAcademicLevelAllowed(config.academicLevel)) {
+      return blockLockedPlanOption(`Academic level ${config.academicLevel}`, "a higher report plan");
+    }
+    const lockedFeature = Object.entries(config.features || {}).find(([featureKey, enabled]) => enabled && !isReportFeatureAllowed(featureKey));
+    if (lockedFeature) {
+      const label = reportFeatureToggles.find(([key]) => key === lockedFeature[0])?.[1] || "This report feature";
+      return blockLockedPlanOption(label, "a higher report plan");
+    }
+    return true;
+  };
+
+  useEffect(() => {
+    const entitlements = getCurrentPlanEntitlements();
+    setMindMapDepth((current) => (entitlements.mindMapDepths.includes(current) ? current : entitlements.mindMapDepths[0] || "Basic"));
+    setSelectedPresentationDesign((current) => {
+      const currentIndex = presentationDesigns.findIndex((design) => design.id === current);
+      if (currentIndex >= 0 && currentIndex < entitlements.presentationTemplateLimit) return current;
+      return presentationDesigns[0]?.id || current;
+    });
+    setReportConfig((current) => {
+      const nextWordCount = entitlements.reportWordCounts.includes(current.wordCount) ? current.wordCount : entitlements.reportWordCounts[0] || "500";
+      const nextCustomWordCount = nextWordCount === "Custom"
+        ? String(Math.min(Number(current.customWordCount || entitlements.reportCustomMax) || entitlements.reportCustomMax, entitlements.reportCustomMax))
+        : current.customWordCount;
+      const nextFeatures = Object.entries(current.features || {}).reduce((accumulator, [featureKey, enabled]) => ({
+        ...accumulator,
+        [featureKey]: enabled && entitlements.reportFeatures.includes(featureKey),
+      }), {});
+      return {
+        ...current,
+        wordCount: nextWordCount,
+        customWordCount: nextCustomWordCount,
+        reportDepth: entitlements.reportDepths.includes(current.reportDepth) ? current.reportDepth : entitlements.reportDepths[0] || "Basic",
+        academicLevel: entitlements.reportAcademicLevels.includes(current.academicLevel) ? current.academicLevel : entitlements.reportAcademicLevels[0] || "Undergraduate",
+        features: nextFeatures,
+      };
+    });
+  }, [billingSubscription?.plan_id, billingUsage?.plan_id]);
+
   const getFlashcardCountBounds = () => {
     const planId = String(billingUsage?.plan_id || billingSubscription?.plan_id || "free").toLowerCase();
     if (planId.includes("premium")) return { min: 5, max: 30 };
@@ -14295,6 +14467,10 @@ export default function App() {
     if (!(resolvedSummary.trim() || resolvedTranscript.trim() || resolvedLectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
     }
+    if (!isPresentationTemplateAllowed(selectedPresentationDesign)) {
+      const selectedDesign = presentationDesigns.find((design) => design.id === selectedPresentationDesign);
+      return blockLockedPlanOption(`${selectedDesign?.name || "This"} PowerPoint template`, "a higher presentation plan");
+    }
     if (!(await ensurePremiumFeatureAvailable("presentation", "Presentations"))) return false;
 
     setIsGeneratingPresentation(true);
@@ -14575,6 +14751,7 @@ export default function App() {
     if (!(activeConfig.reportTitle.trim() || summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
+    if (!validateReportPlanAccess(activeConfig)) return false;
     if (!(await ensurePremiumFeatureAvailable("report", "Reports"))) return false;
 
     setIsGeneratingReport(true);
@@ -14673,6 +14850,9 @@ export default function App() {
     const chatContext = chatToText(lectureAssistantMessages);
     if (!hasMindMapGenerationInputs) {
       return setError("Add lecture material, generate a report, chat with AI, paste text, or enter a topic before creating the mind map.");
+    }
+    if (!isMindMapDepthAllowed(mindMapDepth)) {
+      return blockLockedPlanOption(`Mind map ${mindMapDepth} depth`, mindMapDepth === "Research" ? "Premium" : "Pro");
     }
     if (!(await ensurePremiumFeatureAvailable("mind_map", "Mind maps"))) return false;
 
@@ -16129,7 +16309,12 @@ export default function App() {
       openCollaborationPage({ refresh: false });
       if (data.room?.active_tab) setActiveTab(data.room.active_tab);
       refreshCollaborationRooms(true);
-      setStatus(`Collaboration room "${resolvedTitle}" is ready.`);
+      const invitedCount = Array.isArray(data.invited_emails) ? data.invited_emails.length : parseInviteEmails(roomInviteInput).length;
+      setStatus(
+        invitedCount
+          ? `Collaboration room "${resolvedTitle}" is ready. ${invitedCount} invite notification${invitedCount === 1 ? "" : "s"} queued in-app and by email.`
+          : `Collaboration room "${resolvedTitle}" is ready.`,
+      );
     } catch (err) {
       setError(err.message || "Could not create the collaboration room.");
     } finally {
@@ -16155,10 +16340,11 @@ export default function App() {
       setActiveRoom(data.room || null);
       setRoomMembersInput("");
       await refreshCollaborationRooms(true);
+      const invitedCount = Array.isArray(data.invited_emails) ? data.invited_emails.length : emails.length;
       setStatus(
-        emails.length === 1
-          ? "1 member added to the room."
-          : `${emails.length} members added to the room.`,
+        invitedCount === 1
+          ? "1 new member added. In-app and email invite notifications were queued."
+          : `${invitedCount} new members added. In-app and email invite notifications were queued.`,
       );
     } catch (err) {
       setError(err.message || "Could not add members to this room.");
