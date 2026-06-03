@@ -3815,6 +3815,8 @@ export default function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
+  const [billingUsage, setBillingUsage] = useState(null);
+  const [billingSubscription, setBillingSubscription] = useState(null);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -4376,6 +4378,33 @@ export default function App() {
             {fairBillingGuardrails.map((rule) => <div key={rule} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">{rule}</div>)}
           </div>
         </div>
+        {billingUsage?.features?.length ? (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Remaining attempts</p>
+                <p className="mt-2 text-sm text-slate-300">
+                  Current plan: {(billingUsage.plan_id || billingSubscription?.plan_id || "free").replaceAll("_", " ")} · Period: {billingUsage.period_key || "current month"}
+                </p>
+              </div>
+              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10">Refresh Usage</button>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {billingUsage.features.map((feature) => (
+                <div key={feature.feature} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-semibold text-white">{feature.label}</span>
+                    <span className="text-emerald-100">{feature.unlimited ? "Unlimited" : `${feature.remaining} left`}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full rounded-full bg-emerald-400" style={{ width: `${feature.unlimited ? 100 : Math.min(100, Math.round((Number(feature.used || 0) / Math.max(1, Number(feature.limit || 1))) * 100))}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">{feature.unlimited ? `${feature.used || 0} used` : `${feature.used || 0}/${feature.limit || 0} used`}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -10799,6 +10828,18 @@ export default function App() {
     form.submit();
   };
 
+  const refreshBillingStatus = async () => {
+    if (!authToken) {
+      setBillingUsage(null);
+      setBillingSubscription(null);
+      return null;
+    }
+    const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
+    setBillingUsage(data.usage || null);
+    setBillingSubscription(data.subscription || null);
+    return data;
+  };
+
   const startBillingCheckout = async (plan) => {
     if (!plan) return;
     if (plan.paymentType === "free") {
@@ -10830,6 +10871,26 @@ export default function App() {
       setBillingCheckoutPlanId("");
     }
   };
+
+  useEffect(() => {
+    if (!authToken) {
+      setBillingUsage(null);
+      setBillingSubscription(null);
+      return undefined;
+    }
+    let cancelled = false;
+    refreshBillingStatus().catch((err) => {
+      if (!cancelled) setBillingCheckoutMessage((current) => current || getReadableRequestError(err));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken || !isUpgradeModalOpen) return;
+    refreshBillingStatus().catch((err) => setBillingCheckoutMessage((current) => current || getReadableRequestError(err)));
+  }, [authToken, isUpgradeModalOpen]);
 
   const requestLectureAssistantStream = (payload, signal) => authFetch("/api/chat/stream", {
     method: "POST",

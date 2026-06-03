@@ -325,6 +325,65 @@ BILLING_PLAN_CONFIG = {
         "description": "Monthly research plan for large documents, research reports, presentations, and priority generation.",
     },
 }
+BILLING_FEATURE_LABELS = {
+    "study_guide": "Study guides",
+    "quiz": "Quizzes",
+    "report": "Reports",
+    "mind_map": "Mind maps",
+    "presentation": "Presentations",
+    "podcast": "Podcasts",
+    "teacher_lesson": "AI teacher lessons",
+    "study_chat": "Study chat messages",
+    "voice_transcription": "Voice messages",
+    "source_upload": "Document/audio source processing",
+}
+
+
+def get_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+BILLING_PLAN_QUOTAS = {
+    "free": {
+        "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_MONTH", 5),
+        "quiz": get_int_env("FREE_PLAN_QUIZZES_PER_MONTH", 5),
+        "report": get_int_env("FREE_PLAN_REPORTS_PER_MONTH", 2),
+        "mind_map": get_int_env("FREE_PLAN_MIND_MAPS_PER_MONTH", 5),
+        "presentation": get_int_env("FREE_PLAN_PRESENTATIONS_PER_MONTH", 2),
+        "podcast": get_int_env("FREE_PLAN_PODCASTS_PER_MONTH", 2),
+        "teacher_lesson": get_int_env("FREE_PLAN_TEACHER_LESSONS_PER_MONTH", 2),
+        "study_chat": get_int_env("FREE_PLAN_STUDY_CHAT_MESSAGES_PER_MONTH", 50),
+        "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_MONTH", 20),
+        "source_upload": get_int_env("FREE_PLAN_SOURCE_PROCESSING_PER_MONTH", 20),
+    },
+    "student_plus": {
+        "study_guide": get_int_env("STUDENT_PLUS_STUDY_GUIDES_PER_MONTH", 80),
+        "quiz": get_int_env("STUDENT_PLUS_QUIZZES_PER_MONTH", 80),
+        "report": get_int_env("STUDENT_PLUS_REPORTS_PER_MONTH", 25),
+        "mind_map": get_int_env("STUDENT_PLUS_MIND_MAPS_PER_MONTH", 80),
+        "presentation": get_int_env("STUDENT_PLUS_PRESENTATIONS_PER_MONTH", 20),
+        "podcast": get_int_env("STUDENT_PLUS_PODCASTS_PER_MONTH", 20),
+        "teacher_lesson": get_int_env("STUDENT_PLUS_TEACHER_LESSONS_PER_MONTH", 30),
+        "study_chat": get_int_env("STUDENT_PLUS_STUDY_CHAT_MESSAGES_PER_MONTH", 1000),
+        "voice_transcription": get_int_env("STUDENT_PLUS_VOICE_MESSAGES_PER_MONTH", 400),
+        "source_upload": get_int_env("STUDENT_PLUS_SOURCE_PROCESSING_PER_MONTH", 200),
+    },
+    "pro_research": {
+        "study_guide": get_int_env("PRO_RESEARCH_STUDY_GUIDES_PER_MONTH", 300),
+        "quiz": get_int_env("PRO_RESEARCH_QUIZZES_PER_MONTH", 300),
+        "report": get_int_env("PRO_RESEARCH_REPORTS_PER_MONTH", 120),
+        "mind_map": get_int_env("PRO_RESEARCH_MIND_MAPS_PER_MONTH", 300),
+        "presentation": get_int_env("PRO_RESEARCH_PRESENTATIONS_PER_MONTH", 80),
+        "podcast": get_int_env("PRO_RESEARCH_PODCASTS_PER_MONTH", 80),
+        "teacher_lesson": get_int_env("PRO_RESEARCH_TEACHER_LESSONS_PER_MONTH", 120),
+        "study_chat": get_int_env("PRO_RESEARCH_STUDY_CHAT_MESSAGES_PER_MONTH", 5000),
+        "voice_transcription": get_int_env("PRO_RESEARCH_VOICE_MESSAGES_PER_MONTH", 1500),
+        "source_upload": get_int_env("PRO_RESEARCH_SOURCE_PROCESSING_PER_MONTH", 1000),
+    },
+}
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 APPLE_IDENTITY_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
@@ -1470,6 +1529,26 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_billing_events_email_created_at
             ON billing_events (email, created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_usage_events (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_billing_usage_email_period_feature
+            ON billing_usage_events (email, period_key, feature)
             """
         )
 
@@ -4599,6 +4678,170 @@ def get_user_subscription(email: str) -> dict[str, Any]:
     return serialize_subscription_row(row)
 
 
+def get_active_subscription_row(email: str) -> sqlite3.Row | None:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
+                   amount_zar, current_period_start, current_period_end, cancel_at,
+                   raw_event_json, created_at, updated_at
+            FROM billing_subscriptions
+            WHERE email = ?
+            """,
+            (normalized_email,),
+        ).fetchone()
+    if not row:
+        return None
+    if compact_text(row["status"]).lower() != "active":
+        return None
+    period_end_raw = compact_text(row["current_period_end"])
+    try:
+        period_end = datetime.fromisoformat(period_end_raw)
+    except ValueError:
+        return None
+    if period_end < utc_now():
+        return None
+    return row
+
+
+def get_effective_plan_id(email: str) -> str:
+    row = get_active_subscription_row(email)
+    if not row:
+        return "free"
+    plan_id = normalize_billing_plan_id(row["plan_id"])
+    return plan_id if plan_id in BILLING_PLAN_QUOTAS else "free"
+
+
+def get_usage_period_key(now: datetime | None = None) -> str:
+    current = now or utc_now()
+    return current.strftime("%Y-%m")
+
+
+def get_plan_quota(plan_id: str, feature: str) -> int:
+    normalized_plan_id = normalize_billing_plan_id(plan_id) or "free"
+    normalized_feature = normalize_billing_plan_id(feature)
+    plan_quotas = BILLING_PLAN_QUOTAS.get(normalized_plan_id) or BILLING_PLAN_QUOTAS["free"]
+    return int(plan_quotas.get(normalized_feature, BILLING_PLAN_QUOTAS["free"].get(normalized_feature, 0)))
+
+
+def get_usage_count(email: str, feature: str, period_key: str) -> int:
+    normalized_email = normalize_email(email)
+    normalized_feature = normalize_billing_plan_id(feature)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND feature = ? AND period_key = ?
+            """,
+            (normalized_email, normalized_feature, period_key),
+        ).fetchone()
+    return int((row or {}).get("total_quantity", 0) if isinstance(row, dict) else row["total_quantity"] or 0)
+
+
+def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: str) -> dict[str, Any]:
+    limit = get_plan_quota(plan_id, feature)
+    used = get_usage_count(email, feature, period_key)
+    remaining = None if limit < 0 else max(0, limit - used)
+    return {
+        "feature": feature,
+        "label": BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title()),
+        "used": used,
+        "limit": limit,
+        "remaining": remaining,
+        "unlimited": limit < 0,
+    }
+
+
+def get_billing_usage_summary(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    period_key = get_usage_period_key()
+    plan_id = get_effective_plan_id(normalized_email)
+    features = [
+        serialize_usage_feature(normalized_email, plan_id, feature, period_key)
+        for feature in BILLING_FEATURE_LABELS
+    ]
+    return {
+        "plan_id": plan_id,
+        "period_key": period_key,
+        "features": features,
+    }
+
+
+def consume_plan_quota(
+    *,
+    email: str,
+    feature: str,
+    request: Request | None = None,
+    quantity: int = 1,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    normalized_feature = normalize_billing_plan_id(feature)
+    safe_quantity = max(1, int(quantity or 1))
+    period_key = get_usage_period_key()
+    now_iso = utc_now().isoformat()
+    plan_id = get_effective_plan_id(normalized_email)
+    limit = get_plan_quota(plan_id, normalized_feature)
+    label = BILLING_FEATURE_LABELS.get(normalized_feature, normalized_feature.replace("_", " ").title())
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND feature = ? AND period_key = ?
+            """,
+            (normalized_email, normalized_feature, period_key),
+        ).fetchone()
+        used = int(row["total_quantity"] or 0)
+        if limit >= 0 and used + safe_quantity > limit:
+            remaining = max(0, limit - used)
+            record_audit_log(
+                action="billing.quota.block",
+                status="blocked",
+                email=normalized_email,
+                request=request,
+                resource_type="billing_usage",
+                resource_name=normalized_feature,
+                metadata={"plan_id": plan_id, "used": used, "limit": limit, "remaining": remaining},
+            )
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"You have reached your {label} limit for the {plan_id.replace('_', ' ').title()} plan. "
+                    f"Remaining attempts: {remaining}. Upgrade to continue."
+                ),
+            )
+        connection.execute(
+            """
+            INSERT INTO billing_usage_events (
+                id, email, plan_id, feature, period_key, quantity, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalized_email,
+                plan_id,
+                normalized_feature,
+                period_key,
+                safe_quantity,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now_iso,
+            ),
+        )
+    return {
+        "plan_id": plan_id,
+        "feature": normalized_feature,
+        "used": used + safe_quantity,
+        "limit": limit,
+        "remaining": None if limit < 0 else max(0, limit - used - safe_quantity),
+        "period_key": period_key,
+    }
+
+
 def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqlite3.Row) -> str:
     payment_status = compact_text(payload.get("payment_status")).upper()
     checkout_id = session["id"]
@@ -7213,7 +7456,9 @@ async def list_billing_plans():
 
 @app.get("/api/billing/subscription")
 async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
-    return {"subscription": get_user_subscription(current_user)}
+    subscription = get_user_subscription(current_user)
+    usage = get_billing_usage_summary(current_user)
+    return {"subscription": subscription, "usage": usage}
 
 
 @app.post("/api/billing/checkout")
@@ -15484,6 +15729,7 @@ async def upload_audio(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
     enforce_rate_limit(scope="upload_audio", request=request, limit=18, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
     ensure_allowed_audio_video_upload(file.filename, file.content_type)
 
     job_id = create_job("transcription", owner_email=current_user)
@@ -15528,6 +15774,7 @@ async def transcribe_video_url(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="transcribe_video_url", request=request, limit=12, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
     try:
         video_url = normalize_video_url(payload.video_url)
     except ValueError as exc:
@@ -15562,6 +15809,7 @@ async def extract_slide_text(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No study source file selected.")
     enforce_rate_limit(scope="extract_slide_text", request=request, limit=40, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "extract_slide_text"})
     ensure_allowed_study_source_upload(file.filename, file.content_type)
 
     ensure_openai_key()
@@ -15651,6 +15899,7 @@ async def create_study_guide(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_study_guide", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
     transcript = payload.transcript.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
@@ -15697,6 +15946,7 @@ async def create_quiz(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_quiz", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="quiz", request=request, metadata={"route": "generate_quiz"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -15744,6 +15994,7 @@ async def create_teacher_lesson(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_teacher_lesson", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="teacher_lesson", request=request, metadata={"route": "generate_teacher_lesson"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     formulas = payload.formulas.strip()
@@ -16136,6 +16387,7 @@ async def create_podcast(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_podcast", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -16187,6 +16439,7 @@ async def create_report(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_report", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -16247,6 +16500,7 @@ async def create_mind_map(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_mind_map", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     output_language = normalize_output_language(payload.language)
     source_context = build_mind_map_source_context(payload)
 
@@ -16285,6 +16539,7 @@ async def create_presentation(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_presentation", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     template_file_bytes: bytes | None = None
     template_file_name = ""
     content_type = (request.headers.get("content-type") or "").lower()
@@ -16470,6 +16725,7 @@ async def ask_study_assistant(
     current_user: str = Depends(require_authenticated_user),
 ):
     enforce_rate_limit(scope="study_chat", request=request, limit=60, window_seconds=10 * 60, identity=current_user)
+    consume_plan_quota(email=current_user, feature="study_chat", request=request, metadata={"route": "ask_study_assistant"})
     ensure_openai_key()
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="A question is required.")
@@ -16709,6 +16965,12 @@ def create_lecture_assistant_stream(
         limit=60,
         window_seconds=10 * 60,
         identity=current_user,
+    )
+    consume_plan_quota(
+        email=current_user,
+        feature="study_chat",
+        request=request,
+        metadata={"route": "lecture_assistant_stream", "voice_mode": bool(payload.voice_mode)},
     )
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
@@ -17243,6 +17505,12 @@ async def transcribe_lecture_assistant_voice(
         limit=360,
         window_seconds=10 * 60,
         identity=current_user,
+    )
+    consume_plan_quota(
+        email=current_user,
+        feature="voice_transcription",
+        request=request,
+        metadata={"route": "lecture_assistant_voice_transcribe"},
     )
 
     filename = compact_text(file.filename, "voice-turn.webm")
