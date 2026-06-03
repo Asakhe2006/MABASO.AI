@@ -4584,9 +4584,9 @@ def build_payfast_checkout_fields(
     fields = {
         "merchant_id": PAYFAST_MERCHANT_ID,
         "merchant_key": PAYFAST_MERCHANT_KEY,
-        "return_url": f"{app_base_url}/pricing?billing=success&session_id={quote(checkout_id)}",
+        "return_url": f"{app_base_url}/payment-success?session_id={quote(checkout_id)}",
         "cancel_url": f"{app_base_url}/pricing?billing=cancelled&session_id={quote(checkout_id)}",
-        "notify_url": f"{api_base_url}/api/billing/payfast/itn",
+        "notify_url": f"{api_base_url}/api/payfast/webhook",
         "name_first": email.split("@", 1)[0][:100],
         "email_address": email[:100],
         "m_payment_id": checkout_id,
@@ -7518,7 +7518,9 @@ async def create_billing_checkout(
     }
 
 
+@app.post("/api/payfast/webhook")
 @app.post("/api/billing/payfast/itn")
+@app.post("/api/billing/payfast/webhook")
 async def payfast_itn(request: Request):
     started_at = utc_now()
     verify_payfast_source(request)

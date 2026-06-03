@@ -174,6 +174,46 @@ export const sitePages = [
     ],
   }),
   page({
+    route: "/payment-success",
+    aliases: ["/billing/success", "/checkout/success"],
+    title: "Payment Success",
+    category: "Product",
+    access: "public",
+    metadata: {
+      title: "Payment Success | Mabaso AI",
+      description: "Your Mabaso AI payment was received and your subscription will activate after PayFast confirms the transaction.",
+    },
+    hero: {
+      eyebrow: "Billing / Payment",
+      headline: "Payment received. Activation is being confirmed.",
+      description: "PayFast has returned you to Mabaso AI. Your plan becomes active only after the secure PayFast notification reaches the backend, which protects users from fake or guessed billing states.",
+      ctas: [
+        primaryCta("Open Workspace", "open-app", "capture"),
+        secondaryCta("View Pricing", "navigate", "/pricing"),
+      ],
+      preview: {
+        kicker: "Secure checkout",
+        title: "We never store card or bank details.",
+        subtitle: "If your plan does not appear immediately, wait a short moment and refresh your usage from the Upgrade modal.",
+      },
+    },
+    modules: [
+      { icon: "shield-check", title: "PayFast confirmation", description: "The backend waits for PayFast's signed notification before marking a subscription active." },
+      { icon: "clock", title: "Short processing delay", description: "Payment redirects can arrive before the webhook, so activation may take a moment." },
+      { icon: "life-buoy", title: "Support ready", description: "If payment completed but access does not update, contact support with your PayFast payment reference." },
+    ],
+    workflow: [
+      "PayFast redirects the user back to this page",
+      "PayFast sends the signed backend notification",
+      "Mabaso AI verifies the signature and amount",
+      "The subscription is marked active only after verification",
+    ],
+    footerCrossLinks: [
+      { label: "Pricing", route: "/pricing" },
+      { label: "Contact Support", route: "/support/contact-support" },
+    ],
+  }),
+  page({
     route: "/product/study-workspace",
     title: "Study Workspace",
     category: "Product",
