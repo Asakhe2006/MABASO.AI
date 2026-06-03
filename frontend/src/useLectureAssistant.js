@@ -2204,16 +2204,31 @@ export function useLectureAssistant({
     }));
   };
 
-  const patchMessage = (conversationId, messageId, patch) => {
-    updateConversation(conversationId, (conversation) => ({
-      ...conversation,
-      messages: conversation.messages.map((message) => (
-        message.id === messageId
-          ? { ...message, ...(typeof patch === "function" ? patch(message) : patch) }
-          : message
-      )),
-      updatedAt: nowIso(),
-    }));
+  const patchMessage = (conversationId, messageId, patch, fallbackMessage = null) => {
+    updateConversation(conversationId, (conversation) => {
+      let foundMessage = false;
+      const applyPatch = (message) => ({
+        ...message,
+        ...(typeof patch === "function" ? patch(message) : patch),
+      });
+      const messages = conversation.messages.map((message) => {
+        if (message.id !== messageId) return message;
+        foundMessage = true;
+        return applyPatch(message);
+      });
+      if (!foundMessage && fallbackMessage) {
+        messages.push(applyPatch({
+          ...fallbackMessage,
+          id: messageId,
+          timestamp: compactText(fallbackMessage.timestamp, nowIso()),
+        }));
+      }
+      return {
+        ...conversation,
+        messages,
+        updatedAt: nowIso(),
+      };
+    });
   };
 
   const ensureActiveConversation = () => {
@@ -3684,7 +3699,7 @@ export function useLectureAssistant({
             provider: compactText(data.provider),
             model: compactText(data.model),
             metrics: { ...traceMetrics },
-          });
+          }, nextAssistantMessage);
           setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} is replying in voice mode...`
             : `${data.label || formatProviderLabel(data.provider)} is replying...`);
@@ -3709,7 +3724,7 @@ export function useLectureAssistant({
             model: compactText(data.model, message.model),
             status: "streaming",
             metrics: { ...traceMetrics },
-          }));
+          }), nextAssistantMessage);
           return;
         }
         if (event === "done") {
@@ -3722,11 +3737,15 @@ export function useLectureAssistant({
           }
           patchMessage(targetConversationId, nextAssistantMessage.id, (message) => ({
             ...message,
+            content: compactText(message.content, streamedText),
             provider: compactText(data.provider, message.provider),
             model: compactText(data.model, message.model),
             status: "complete",
             metrics: { ...traceMetrics },
-          }));
+          }), {
+            ...nextAssistantMessage,
+            content: streamedText,
+          });
           setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} finished streaming. Voice reply may still be speaking...`
             : `${data.label || formatProviderLabel(data.provider)} finished the reply.`);
@@ -3780,7 +3799,10 @@ export function useLectureAssistant({
     } catch (error) {
       if (error?.name === "AbortError") {
         if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
-        else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+        else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete", content: streamedText }, {
+          ...nextAssistantMessage,
+          content: streamedText,
+        });
         setIsSyncingConversation(false);
         if (voiceInterruptionRequestedRef.current) {
           voiceInterruptionRequestedRef.current = false;
@@ -3793,7 +3815,10 @@ export function useLectureAssistant({
         return false;
       }
       if (!compactText(streamedText)) removeMessageById(targetConversationId, nextAssistantMessage.id);
-      else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete" });
+      else patchMessage(targetConversationId, nextAssistantMessage.id, { status: "complete", content: streamedText }, {
+        ...nextAssistantMessage,
+        content: streamedText,
+      });
       stopSpeaking();
       setIsSyncingConversation(false);
       if (useVoiceInteraction && voiceModeEnabledRef.current) {
