@@ -389,6 +389,13 @@ def get_int_env(name: str, default: int) -> int:
         return default
 
 
+def get_float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 BILLING_PLAN_QUOTAS = {
     "free": {
         "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 10),
@@ -442,6 +449,24 @@ BILLING_PLAN_QUOTAS = {
         "source_upload": -1,
     },
 }
+AI_FEATURE_COST_ESTIMATE_ZAR = {
+    "ai_chat": get_float_env("AI_COST_ESTIMATE_CHAT_ZAR", 0.05),
+    "study_chat": get_float_env("AI_COST_ESTIMATE_STUDY_CHAT_ZAR", 0.06),
+    "study_guide": get_float_env("AI_COST_ESTIMATE_STUDY_GUIDE_ZAR", 0.45),
+    "worked_examples": get_float_env("AI_COST_ESTIMATE_WORKED_EXAMPLES_ZAR", 0.22),
+    "formula_solver": get_float_env("AI_COST_ESTIMATE_FORMULA_SOLVER_ZAR", 0.18),
+    "flashcards": get_float_env("AI_COST_ESTIMATE_FLASHCARDS_ZAR", 0.12),
+    "quiz": get_float_env("AI_COST_ESTIMATE_QUIZ_ZAR", 0.20),
+    "report": get_float_env("AI_COST_ESTIMATE_REPORT_ZAR", 0.85),
+    "mind_map": get_float_env("AI_COST_ESTIMATE_MIND_MAP_ZAR", 0.16),
+    "presentation": get_float_env("AI_COST_ESTIMATE_PRESENTATION_ZAR", 0.55),
+    "podcast": get_float_env("AI_COST_ESTIMATE_PODCAST_ZAR", 0.42),
+    "ai_notes": get_float_env("AI_COST_ESTIMATE_AI_NOTES_ZAR", 0.18),
+    "teacher_lesson": get_float_env("AI_COST_ESTIMATE_TEACHER_LESSON_ZAR", 0.35),
+    "voice_transcription": get_float_env("AI_COST_ESTIMATE_VOICE_TRANSCRIPTION_ZAR", 0.04),
+    "source_upload": get_float_env("AI_COST_ESTIMATE_SOURCE_UPLOAD_ZAR", 0.10),
+}
+HOSTING_COST_ESTIMATE_ZAR_PER_MONTH = get_float_env("HOSTING_COST_ESTIMATE_ZAR_PER_MONTH", 500)
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 APPLE_IDENTITY_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
@@ -6444,6 +6469,234 @@ def compute_session_analytics(
     }
 
 
+def parse_zar_amount(value: Any) -> float:
+    try:
+        cleaned = re.sub(r"[^0-9.\-]+", "", str(value or ""))
+        return round(float(cleaned), 2) if cleaned else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_int_amount(value: Any) -> int:
+    try:
+        return max(0, int(float(str(value or "0").strip() or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_paid_payment_status(status: str) -> bool:
+    normalized = compact_text(status).upper()
+    return normalized in {"COMPLETE", "COMPLETE_PAYMENT", "PAID", "SUCCESS", "ACTIVE"}
+
+
+def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[str, Any]:
+    current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    with get_db_connection() as connection:
+        payment_rows = connection.execute(
+            """
+            SELECT p.id, p.email, p.checkout_session_id, p.plan_id, p.provider,
+                   p.provider_payment_id, p.amount_zar, p.payment_status,
+                   p.paid_at, p.created_at, p.updated_at,
+                   s.current_period_end, s.status AS subscription_status, s.cancel_at
+            FROM billing_payments p
+            LEFT JOIN billing_subscriptions s ON s.email = p.email
+            ORDER BY p.paid_at DESC, p.created_at DESC
+            LIMIT 500
+            """
+        ).fetchall()
+        subscription_rows = connection.execute(
+            """
+            SELECT email, plan_id, status, provider, provider_payment_id, amount_zar,
+                   current_period_start, current_period_end, cancel_at, created_at, updated_at
+            FROM billing_subscriptions
+            ORDER BY updated_at DESC
+            LIMIT 500
+            """
+        ).fetchall()
+        usage_rows = connection.execute(
+            """
+            SELECT email, plan_id, feature, quantity, metadata_json, created_at
+            FROM billing_usage_events
+            WHERE created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT 2000
+            """,
+            (range_start.isoformat(),),
+        ).fetchall()
+
+    payment_records: list[dict[str, Any]] = []
+    revenue_by_plan: dict[str, float] = {}
+    revenue_by_user: dict[str, float] = {}
+    total_revenue = 0.0
+    revenue_in_range = 0.0
+    monthly_revenue = 0.0
+    failed_payments = 0
+
+    for row in payment_rows:
+        email = normalize_email(row["email"])
+        plan_id = normalize_billing_plan_id(row["plan_id"])
+        amount = parse_zar_amount(row["amount_zar"])
+        paid_at = parse_billing_datetime(row["paid_at"]) or parse_billing_datetime(row["created_at"]) or now
+        paid = is_paid_payment_status(row["payment_status"])
+        if paid:
+            total_revenue += amount
+            revenue_by_plan[plan_id] = revenue_by_plan.get(plan_id, 0.0) + amount
+            revenue_by_user[email] = revenue_by_user.get(email, 0.0) + amount
+            if paid_at >= range_start:
+                revenue_in_range += amount
+            if paid_at >= current_month_start:
+                monthly_revenue += amount
+        else:
+            failed_payments += 1
+        payment_records.append(
+            {
+                "transaction_id": row["provider_payment_id"] or row["id"],
+                "checkout_session_id": row["checkout_session_id"],
+                "user": email,
+                "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id.replace("_", " ").title(),
+                "plan_id": plan_id,
+                "amount": amount,
+                "amount_label": f"R{amount:,.2f}",
+                "payment_method": "PayFast" if row["provider"] == "payfast" else compact_text(row["provider"], "Payment provider").replace("_", " ").title(),
+                "status": compact_text(row["payment_status"], "unknown").title(),
+                "date": paid_at.isoformat(),
+                "renewal_date": row["current_period_end"] or "",
+                "subscription_status": compact_text(row["subscription_status"], "unknown").title(),
+                "currency": "ZAR",
+            }
+        )
+
+    active_subscribers = 0
+    cancelled_subscribers = 0
+    subscriber_records: list[dict[str, Any]] = []
+    for row in subscription_rows:
+        period_end = parse_billing_datetime(row["current_period_end"])
+        status = compact_text(row["status"]).lower()
+        is_active = status == "active" and (period_end is None or period_end > now)
+        if is_active:
+            active_subscribers += 1
+        if status in {"cancelled", "canceled", "expired"} or compact_text(row["cancel_at"]):
+            cancelled_subscribers += 1
+        plan_id = normalize_billing_plan_id(row["plan_id"])
+        subscriber_records.append(
+            {
+                "user": normalize_email(row["email"]),
+                "plan_id": plan_id,
+                "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id.replace("_", " ").title(),
+                "status": status or "unknown",
+                "provider": row["provider"],
+                "amount": parse_zar_amount(row["amount_zar"]),
+                "start_date": row["current_period_start"],
+                "end_date": row["current_period_end"],
+                "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("active" if is_active else "expired"),
+                "payment_reference": row["provider_payment_id"],
+            }
+        )
+
+    ai_usage_records: list[dict[str, Any]] = []
+    cost_by_feature: dict[str, float] = {}
+    cost_by_user: dict[str, float] = {}
+    token_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    for row in usage_rows:
+        metadata: dict[str, Any] = {}
+        try:
+            parsed = json.loads(row["metadata_json"] or "{}")
+            metadata = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            metadata = {}
+        feature = normalize_billing_plan_id(row["feature"])
+        quantity = max(1, int(row["quantity"] or 1))
+        input_tokens = parse_int_amount(metadata.get("input_tokens") or metadata.get("prompt_tokens"))
+        output_tokens = parse_int_amount(metadata.get("output_tokens") or metadata.get("completion_tokens"))
+        total_tokens = parse_int_amount(metadata.get("total_tokens")) or input_tokens + output_tokens
+        estimated_cost = parse_zar_amount(metadata.get("estimated_cost_zar") or metadata.get("estimated_cost") or 0)
+        if estimated_cost <= 0:
+            estimated_cost = round(quantity * AI_FEATURE_COST_ESTIMATE_ZAR.get(feature, 0.10), 2)
+        email = normalize_email(row["email"])
+        label = BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title())
+        cost_by_feature[label] = round(cost_by_feature.get(label, 0.0) + estimated_cost, 2)
+        cost_by_user[email] = round(cost_by_user.get(email, 0.0) + estimated_cost, 2)
+        token_totals["input_tokens"] += input_tokens
+        token_totals["output_tokens"] += output_tokens
+        token_totals["total_tokens"] += total_tokens
+        ai_usage_records.append(
+            {
+                "user": email,
+                "tool": label,
+                "feature": feature,
+                "model": compact_text(metadata.get("model"), "tracked-by-feature"),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "estimated_cost": estimated_cost,
+                "estimated_cost_label": f"R{estimated_cost:,.2f}",
+                "quantity": quantity,
+                "timestamp": row["created_at"],
+            }
+        )
+
+    total_ai_cost = round(sum(cost_by_feature.values()), 2)
+    prorated_hosting_cost = round(HOSTING_COST_ESTIMATE_ZAR_PER_MONTH * max(1, (now - range_start).days) / 30, 2)
+    profitability_records = []
+    all_profit_emails = sorted(set(revenue_by_user) | set(cost_by_user))
+    for email in all_profit_emails:
+        revenue = round(revenue_by_user.get(email, 0.0), 2)
+        ai_cost = round(cost_by_user.get(email, 0.0), 2)
+        profitability_records.append(
+            {
+                "user": email,
+                "revenue": revenue,
+                "ai_cost": ai_cost,
+                "profit": round(revenue - ai_cost, 2),
+                "revenue_label": f"R{revenue:,.2f}",
+                "ai_cost_label": f"R{ai_cost:,.2f}",
+                "profit_label": f"R{revenue - ai_cost:,.2f}",
+            }
+        )
+    profitability_records.sort(key=lambda item: item["profit"])
+
+    alerts: list[dict[str, str]] = []
+    for email, cost in sorted(cost_by_user.items(), key=lambda item: item[1], reverse=True)[:8]:
+        if cost >= 50:
+            alerts.append({"level": "warning", "message": f"{email} generated more than R50 in estimated AI costs for this period."})
+    if monthly_revenue and total_ai_cost / max(monthly_revenue, 1) >= 0.5:
+        alerts.append({"level": "warning", "message": "Estimated AI spend is above 50% of monthly revenue."})
+    if failed_payments:
+        alerts.append({"level": "info", "message": f"{failed_payments} failed or pending payment record(s) need review."})
+
+    return {
+        "overview": {
+            "total_revenue": round(total_revenue, 2),
+            "revenue_in_range": round(revenue_in_range, 2),
+            "monthly_revenue": round(monthly_revenue, 2),
+            "active_subscribers": active_subscribers,
+            "cancelled_subscribers": cancelled_subscribers,
+            "failed_payments": failed_payments,
+            "openai_cost": total_ai_cost,
+            "hosting_cost": prorated_hosting_cost,
+            "profit": round(revenue_in_range - total_ai_cost - prorated_hosting_cost, 2),
+            "currency": "ZAR",
+        },
+        "payments": payment_records[:120],
+        "subscriptions": subscriber_records[:120],
+        "revenue_per_plan": [
+            {"plan_id": plan_id, "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id, "amount": round(amount, 2)}
+            for plan_id, amount in sorted(revenue_by_plan.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "ai_costs": {
+            "records": ai_usage_records[:200],
+            "by_feature": [
+                {"feature": feature, "cost": round(cost, 2)}
+                for feature, cost in sorted(cost_by_feature.items(), key=lambda item: item[1], reverse=True)
+            ],
+            "token_totals": token_totals,
+            "total_cost": total_ai_cost,
+        },
+        "profitability": profitability_records[:100],
+        "alerts": alerts,
+    }
+
+
 def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, Any]:
     now = utc_now()
     time_window = build_dashboard_time_window(now, range_key)
@@ -6957,6 +7210,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         device = (log["user_agent"] or "Unknown device")[:120]
         device_activity[device] = device_activity.get(device, 0) + 1
 
+    billing_snapshot = build_admin_billing_snapshot(range_start, now)
+
     return {
         "overview": {
             "kpis": {
@@ -7130,11 +7385,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "unread_count_in_range": unread_support_count_in_range,
             "latest_message_at": support_messages_all[0]["created_at"] if support_messages_all else "",
         },
-        "billing": {
-            "subscriptions": [],
-            "usage": [],
-            "revenue": [],
-        },
+        "billing": billing_snapshot,
         "settings": {
             "available_languages": sorted(set(SUPPORTED_OUTPUT_LANGUAGES.values())),
             "admin_email_count": len(get_admin_email_set()),

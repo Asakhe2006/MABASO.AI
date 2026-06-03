@@ -2386,6 +2386,11 @@ const adminIntegerFormatter = new Intl.NumberFormat("en-US", {
 const adminDecimalFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
 });
+const adminCurrencyFormatter = new Intl.NumberFormat("en-ZA", {
+  style: "currency",
+  currency: "ZAR",
+  maximumFractionDigits: 2,
+});
 const ADMIN_CHART_COLORS = ["#4f46e5", "#06b6d4", "#22c55e", "#f59e0b", "#ec4899", "#8b5cf6"];
 
 function toFiniteNumber(value, fallback = 0) {
@@ -2403,6 +2408,10 @@ function formatAdminInteger(value) {
 
 function formatAdminDecimal(value) {
   return adminDecimalFormatter.format(toFiniteNumber(value));
+}
+
+function formatAdminCurrency(value) {
+  return adminCurrencyFormatter.format(toFiniteNumber(value));
 }
 
 function formatAdminPercent(value) {
@@ -8672,6 +8681,12 @@ export default function App() {
     const systemHealth = dashboard.system_health || {};
     const transcriptionQueue = systemHealth.transcription_queue || {};
     const security = dashboard.security || {};
+    const billing = dashboard.billing || {};
+    const billingOverview = billing.overview || {};
+    const billingPayments = billing.payments || [];
+    const billingAiCosts = billing.ai_costs || {};
+    const billingProfitability = billing.profitability || [];
+    const billingAlerts = billing.alerts || [];
     const users = dashboard.users || [];
     const activityLogs = dashboard.activity_logs || [];
     const failedJobs = aiGeneration.failed_jobs || [];
@@ -9498,13 +9513,168 @@ export default function App() {
 
       if (adminSidebarTab === "billing") {
         return (
-          <article className={sectionCardClass}>
-            <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-950">Subscription and revenue view</h2>
-            <div className="mt-5 rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-5 py-10 text-sm leading-7 text-slate-500">
-              Billing metrics are still intentionally empty right now, so the dashboard keeps the structure ready without showing fake numbers.
+          <div className="space-y-5">
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing Overview</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Revenue, AI cost, and subscription health</h2>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">{billingOverview.currency || "ZAR"}</span>
+              </div>
+              <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {[
+                  ["Total Revenue", formatAdminCurrency(billingOverview.total_revenue)],
+                  ["Monthly Revenue", formatAdminCurrency(billingOverview.monthly_revenue)],
+                  ["Active Subscribers", formatAdminInteger(billingOverview.active_subscribers)],
+                  ["Failed Payments", formatAdminInteger(billingOverview.failed_payments)],
+                  ["AI Cost", formatAdminCurrency(billingOverview.openai_cost)],
+                  ["Hosting Cost", formatAdminCurrency(billingOverview.hosting_cost)],
+                  ["Profit This Range", formatAdminCurrency(billingOverview.profit)],
+                  ["Cancelled Subscribers", formatAdminInteger(billingOverview.cancelled_subscribers)],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">{value}</p>
+                  </div>
+                ))}
+              </div>
+              {billingAlerts.length ? (
+                <div className="mt-5 grid gap-3">
+                  {billingAlerts.map((alert, index) => (
+                    <div key={`${alert.message}-${index}`} className="rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">{alert.message}</div>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+
+            <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Payment History</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">PayFast transactions and renewal status</h3>
+                <div className="mt-5 overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                      <tr>
+                        {["Transaction", "User", "Plan", "Amount", "Method", "Status", "Date", "Renewal"].map((heading) => (
+                          <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {billingPayments.length ? billingPayments.slice(0, 25).map((payment) => (
+                        <tr key={`${payment.transaction_id}-${payment.date}`} className="border-b border-slate-100">
+                          <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{payment.transaction_id || "Pending"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.user || "Unknown"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.plan || payment.plan_id || "Plan"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatAdminCurrency(payment.amount)}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.payment_method || "PayFast"}</td>
+                          <td className="whitespace-nowrap px-3 py-3"><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{payment.status || "Unknown"}</span></td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.date ? formatAdminDateTime(payment.date) : "Unknown"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.renewal_date ? formatAdminDate(payment.renewal_date) : "None"}</td>
+                        </tr>
+                      )) : (
+                        <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">No payment records have been stored yet.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Revenue Per Plan</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Which plans bring money in</h3>
+                <div className="mt-5 space-y-3">
+                  {(billing.revenue_per_plan || []).length ? (billing.revenue_per_plan || []).map((item) => (
+                    <div key={item.plan_id || item.plan} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-semibold text-slate-900">{item.plan || item.plan_id}</span>
+                        <span className="text-sm font-bold text-emerald-700">{formatAdminCurrency(item.amount)}</span>
+                      </div>
+                    </div>
+                  )) : emptyPanel("Revenue per plan appears after successful PayFast notifications are stored.")}
+                </div>
+              </article>
             </div>
-          </article>
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">AI Cost Dashboard</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Estimated OpenAI spend by feature</h3>
+                <div className="mt-5 space-y-3">
+                  {(billingAiCosts.by_feature || []).length ? (billingAiCosts.by_feature || []).map((item) => (
+                    <div key={item.feature} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-semibold text-slate-900">{item.feature}</span>
+                        <span className="text-sm font-bold text-slate-950">{formatAdminCurrency(item.cost)}</span>
+                      </div>
+                    </div>
+                  )) : emptyPanel("AI cost estimates appear after usage events are recorded.")}
+                </div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  {[
+                    ["Input Tokens", billingAiCosts.token_totals?.input_tokens],
+                    ["Output Tokens", billingAiCosts.token_totals?.output_tokens],
+                    ["Total Tokens", billingAiCosts.token_totals?.total_tokens],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-[20px] border border-slate-200 bg-white px-4 py-3">
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                      <p className="mt-2 text-lg font-semibold text-slate-950">{formatAdminInteger(value)}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Profitability</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Revenue minus estimated AI cost</h3>
+                <div className="mt-5 space-y-3">
+                  {billingProfitability.length ? billingProfitability.slice(0, 12).map((item) => (
+                    <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                      <p className="text-sm font-semibold text-slate-900">{item.user}</p>
+                      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+                        <span>Revenue: <strong className="text-slate-900">{formatAdminCurrency(item.revenue)}</strong></span>
+                        <span>AI Cost: <strong className="text-slate-900">{formatAdminCurrency(item.ai_cost)}</strong></span>
+                        <span>Profit: <strong className={toFiniteNumber(item.profit) < 0 ? "text-rose-700" : "text-emerald-700"}>{formatAdminCurrency(item.profit)}</strong></span>
+                      </div>
+                    </div>
+                  )) : emptyPanel("User profitability appears once both payments and usage events exist.")}
+                </div>
+              </article>
+            </div>
+
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Per-Generation Cost Records</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">Recent AI usage events</h3>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    <tr>
+                      {["User", "Tool", "Model", "Input", "Output", "Total", "Cost", "Time"].map((heading) => (
+                        <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(billingAiCosts.records || []).length ? (billingAiCosts.records || []).slice(0, 30).map((record, index) => (
+                      <tr key={`${record.user}-${record.feature}-${record.timestamp}-${index}`} className="border-b border-slate-100">
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.user || "Unknown"}</td>
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{record.tool}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.model}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.input_tokens)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.output_tokens)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.total_tokens)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{formatAdminCurrency(record.estimated_cost)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.timestamp ? formatAdminDateTime(record.timestamp) : "Unknown"}</td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">No AI usage records are available yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </div>
         );
       }
 
@@ -10793,6 +10963,9 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authToken) return;
     const targetRoute = resolveAppRouteForPage(currentPage, authSessionMode);
+    const routedPage = resolveCurrentPageFromRoute(browserPath);
+    if (routedPage && routedPage !== "admin" && routedPage !== currentPage) return;
+    if (routedPage === "admin" && authSessionMode === "admin" && currentPage !== "admin") return;
     const routeShouldMirrorApp = browserPath === "/"
       || browserPath.startsWith("/app/")
       || (browserPath === "/admin/dashboard" && currentPage === "admin" && authSessionMode === "admin");
