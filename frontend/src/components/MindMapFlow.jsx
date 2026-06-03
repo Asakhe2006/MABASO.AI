@@ -75,14 +75,26 @@ function normalizeTree(node, parentId = "", index = 0, depth = 0) {
   return { ...node, id, children };
 }
 
-function createMoreNode(parentId, children, depth) {
+function createMoreNode(parentId, children, depth, expandedIds, options) {
+  const moreId = `${parentId}-more-${depth}`;
+  const isExpanded = expandedIds.has(moreId);
+  const visibleChildren = isExpanded
+    ? children
+        .slice(0, options.childLimit)
+        .map((child) => buildVisibleTree(child, expandedIds, options, depth + 1))
+        .filter(Boolean)
+    : [];
+  const remainingCount = Math.max(0, children.length - visibleChildren.length);
   return {
-    id: `${parentId}-more-${depth}`,
+    id: moreId,
     title: `More Details (${children.length})`,
     type: "Key Point",
     importance: 49,
-    summary: "Additional lower-priority concepts are grouped here to keep the visible map readable.",
-    children,
+    summary: isExpanded
+      ? "Expanded lower-priority concepts. Collapse this group to return to study mode."
+      : "Additional lower-priority concepts are hidden to keep the visible map readable.",
+    children: visibleChildren,
+    hiddenChildCount: isExpanded ? remainingCount : children.length,
     isSyntheticMoreNode: true,
   };
 }
@@ -111,7 +123,7 @@ function buildVisibleTree(node, expandedIds, options, depth = 0) {
     .filter(Boolean);
 
   if (hiddenChildren.length && depth < maxDepth) {
-    mappedChildren.push(createMoreNode(node.id, hiddenChildren, depth + 1));
+    mappedChildren.push(createMoreNode(node.id, hiddenChildren, depth + 1, expandedIds, options));
   }
 
   return { ...node, children: mappedChildren, hiddenChildCount: hiddenChildren.length };
