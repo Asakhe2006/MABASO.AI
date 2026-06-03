@@ -12819,11 +12819,18 @@ export default function App() {
         const remoteItems = await loadHistoryFromServer();
         if (cancelled) return;
         const serverItems = normalizeHistoryItems(remoteItems);
+        const localItems = loadHistoryItems(authEmail);
+        const shouldImportLocalItems = serverItems.length === 0 && localItems.length > 0;
+        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : serverItems;
+        if (cancelled) return;
         skipNextHistorySyncRef.current = true;
-        setHistoryItems(serverItems);
-        setActiveHistoryId((current) => (serverItems.some((item) => item.id === current) ? current : ""));
+        setHistoryItems(accountItems);
+        setActiveHistoryId((current) => (accountItems.some((item) => item.id === current) ? current : ""));
+        if (shouldImportLocalItems) {
+          setAuthMessage((current) => current || "Your saved materials were imported to your account.");
+        }
         try {
-          window.localStorage.setItem(getHistoryStorageKey(authEmail), JSON.stringify(sanitizeHistoryItemsForStorage(serverItems)));
+          window.localStorage.setItem(getHistoryStorageKey(authEmail), JSON.stringify(sanitizeHistoryItemsForStorage(accountItems)));
         } catch {
           // Ignore cache write errors; server history remains authoritative.
         }
