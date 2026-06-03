@@ -50,10 +50,10 @@ function getImportance(node) {
 }
 
 function getNodeSize(importance, isRoot = false) {
-  if (isRoot) return { width: 320, className: "min-w-[270px] max-w-[340px] px-5 py-4", titleClass: "text-lg" };
-  if (importance >= 90) return { width: 290, className: "min-w-[250px] max-w-[310px] px-4 py-3.5", titleClass: "text-base" };
-  if (importance >= 70) return { width: 250, className: "min-w-[220px] max-w-[280px] px-4 py-3", titleClass: "text-sm" };
-  return { width: 220, className: "min-w-[190px] max-w-[240px] px-3.5 py-2.5", titleClass: "text-xs" };
+  if (isRoot) return { width: 390, className: "min-w-[320px] max-w-[420px] px-6 py-5", titleClass: "text-xl" };
+  if (importance >= 90) return { width: 360, className: "min-w-[300px] max-w-[390px] px-5 py-4", titleClass: "text-lg" };
+  if (importance >= 70) return { width: 320, className: "min-w-[270px] max-w-[350px] px-5 py-4", titleClass: "text-base" };
+  return { width: 290, className: "min-w-[245px] max-w-[320px] px-4 py-3.5", titleClass: "text-sm" };
 }
 
 function countNodes(node) {
@@ -112,21 +112,21 @@ function createMoreNode(parentId, children, depth, expandedIds, options) {
   const isExpanded = expandedIds.has(moreId);
   const visibleChildren = isExpanded
     ? children
-        .slice(0, options.childLimit)
+        .slice(0, options.expandAll ? children.length : options.childLimit)
         .map((child) => buildVisibleTree(child, expandedIds, options, depth + 1))
         .filter(Boolean)
     : [];
   const remainingCount = Math.max(0, children.length - visibleChildren.length);
   return {
     id: moreId,
-    title: `More Details (${children.length})`,
+    title: isExpanded ? "Show less" : `See more (${children.length})`,
     type: "Key Point",
     importance: 49,
     summary: isExpanded
-      ? "Expanded lower-priority concepts. Collapse this group to return to study mode."
-      : "Additional lower-priority concepts are hidden to keep the visible map readable.",
+      ? "Tap minus to collapse these extra concepts again."
+      : `Tap plus to reveal ${children.length} additional concept${children.length === 1 ? "" : "s"} in this branch.`,
     children: visibleChildren,
-    hiddenChildCount: isExpanded ? remainingCount : children.length,
+    hiddenChildCount: isExpanded ? remainingCount : 0,
     isSyntheticMoreNode: true,
   };
 }
@@ -301,13 +301,14 @@ function buildClusteredPositions(root) {
 
 function getProgressiveOptions(mode) {
   const researchMode = mode === "research";
+  const exportMode = mode === "export";
   return {
-    rootBranchLimit: researchMode ? 8 : 8,
-    childLimit: researchMode ? 8 : 6,
-    maxVisibleDepth: researchMode ? 4 : 3,
-    lowPriorityThreshold: researchMode ? 35 : 50,
-    showLowPriority: researchMode,
-    expandAll: false,
+    rootBranchLimit: exportMode ? 999 : researchMode ? 8 : 8,
+    childLimit: exportMode ? 999 : researchMode ? 8 : 6,
+    maxVisibleDepth: exportMode ? 999 : researchMode ? 4 : 3,
+    lowPriorityThreshold: exportMode ? 0 : researchMode ? 35 : 50,
+    showLowPriority: exportMode || researchMode,
+    expandAll: exportMode,
   };
 }
 
@@ -319,7 +320,9 @@ function buildFlowElements(root, expandedIds, onToggle, requestedLayoutMode) {
   const progressiveOptions = getProgressiveOptions(requestedLayoutMode);
   const visibleRoot = buildVisibleTree(balancedRoot, expandedIds, progressiveOptions);
   const { flatNodes, flatEdges } = flattenVisibleTree(visibleRoot);
-  const layoutMode = chooseLayoutMode(requestedLayoutMode, totalCount, flatNodes.length);
+  const layoutMode = requestedLayoutMode === "export"
+    ? chooseLayoutMode("research", totalCount, flatNodes.length)
+    : chooseLayoutMode(requestedLayoutMode, totalCount, flatNodes.length);
   const positions = layoutMode === "radial"
     ? buildRadialPositions(visibleRoot)
     : layoutMode === "horizontal"
@@ -397,10 +400,9 @@ function MindMapNode({ data }) {
           </button>
         ) : null}
       </div>
-      {node.summary ? <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-700">{node.summary}</p> : null}
+      {node.summary ? <p className="mt-3 text-xs leading-5 text-slate-700">{node.summary}</p> : null}
       <div className="mt-3 flex items-center justify-between gap-3">
         <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-700">Score {importance}</span>
-        {node.hiddenChildCount ? <span className="text-[10px] font-semibold text-slate-500">+{node.hiddenChildCount} hidden</span> : null}
         {node.source_location ? <span className="truncate text-[10px] font-semibold text-slate-500">{node.source_location}</span> : null}
       </div>
       <Handle type="source" position={sourcePosition} className="!h-3 !w-3 !border-2 !bg-white" style={{ borderColor: theme.border }} />
@@ -408,7 +410,7 @@ function MindMapNode({ data }) {
   );
 }
 
-export default function MindMapFlow({ root, onSelectNode }) {
+export default function MindMapFlow({ root, onSelectNode, exportMode = false }) {
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const [layoutMode, setLayoutMode] = useState("auto");
 
@@ -427,8 +429,8 @@ export default function MindMapFlow({ root, onSelectNode }) {
   }, []);
 
   const flowElements = useMemo(
-    () => buildFlowElements(root, expandedIds, handleToggle, layoutMode),
-    [root, expandedIds, handleToggle, layoutMode],
+    () => buildFlowElements(root, expandedIds, handleToggle, exportMode ? "export" : layoutMode),
+    [root, expandedIds, handleToggle, layoutMode, exportMode],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState(flowElements.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowElements.edges);
@@ -448,22 +450,21 @@ export default function MindMapFlow({ root, onSelectNode }) {
 
   return (
     <ReactFlowProvider>
-      <div className="relative h-[680px] min-h-[560px] overflow-hidden rounded-[24px] border border-slate-200 bg-white">
-        <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-2 rounded-full border border-slate-200 bg-white/92 px-3 py-2 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur">
-          {layoutOptions.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setLayoutMode(value)}
-              className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition ${layoutMode === value ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-            >
-              {label}
-            </button>
-          ))}
-          <span className="px-2 text-[11px] font-semibold text-slate-500">
-            {flowElements.visibleCount}/{flowElements.totalCount} visible · {flowElements.layoutMode}
-          </span>
-        </div>
+      <div className={`relative ${exportMode ? "h-[1800px] min-h-[1800px]" : "h-[760px] min-h-[620px]"} overflow-hidden rounded-[24px] border border-slate-200 bg-white`}>
+        {!exportMode ? (
+          <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-2 rounded-full border border-slate-200 bg-white/92 px-3 py-2 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+            {layoutOptions.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setLayoutMode(value)}
+                className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition ${layoutMode === value ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <ReactFlow
           key={`${flowElements.layoutMode}-${nodes.length}-${edges.length}`}
           nodes={nodes}
@@ -473,8 +474,8 @@ export default function MindMapFlow({ root, onSelectNode }) {
           onEdgesChange={onEdgesChange}
           onNodeClick={(_, node) => onSelectNode?.(node.data?.node || null)}
           fitView
-          fitViewOptions={{ padding: 0.28, duration: 800, includeHiddenNodes: false }}
-          minZoom={0.08}
+          fitViewOptions={{ padding: exportMode ? 0.08 : 0.22, duration: exportMode ? 0 : 800, includeHiddenNodes: false }}
+          minZoom={0.05}
           maxZoom={2.8}
           zoomOnScroll
           zoomOnPinch
@@ -482,19 +483,23 @@ export default function MindMapFlow({ root, onSelectNode }) {
           panOnScroll
           panOnScrollSpeed={0.75}
           elevateNodesOnSelect
-          onlyRenderVisibleElements
+          onlyRenderVisibleElements={!exportMode}
           nodesDraggable
           proOptions={{ hideAttribution: true }}
           className="mind-map-flow"
         >
           <Background color="#d1d5db" gap={24} />
-          <Controls showInteractive />
-          <MiniMap
-            nodeColor={(node) => getNodeTheme(node.data?.node?.type).border}
-            maskColor="rgba(15,23,42,0.08)"
-            pannable
-            zoomable
-          />
+          {!exportMode ? (
+            <>
+              <Controls showInteractive />
+              <MiniMap
+                nodeColor={(node) => getNodeTheme(node.data?.node?.type).border}
+                maskColor="rgba(15,23,42,0.08)"
+                pannable
+                zoomable
+              />
+            </>
+          ) : null}
         </ReactFlow>
       </div>
     </ReactFlowProvider>

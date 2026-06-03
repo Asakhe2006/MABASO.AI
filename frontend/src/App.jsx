@@ -3900,6 +3900,7 @@ export default function App() {
   const [isMindMapFullscreen, setIsMindMapFullscreen] = useState(false);
   const mindMapExportRef = useRef(null);
   const mindMapCanvasRef = useRef(null);
+  const mindMapFullExportRef = useRef(null);
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
@@ -4545,6 +4546,13 @@ export default function App() {
               </div>
               <div ref={mindMapCanvasRef}>
                 <MindMapFlow root={mindMapData.root} onSelectNode={setSelectedMindMapNode} />
+              </div>
+              <div
+                ref={mindMapFullExportRef}
+                aria-hidden="true"
+                className="pointer-events-none fixed -left-[10000px] top-0 w-[2400px] bg-white p-4"
+              >
+                <MindMapFlow root={mindMapData.root} exportMode />
               </div>
             </div>
 
@@ -14362,11 +14370,11 @@ export default function App() {
   };
 
   const buildMindMapCaptureSvg = () => {
-    const target = mindMapCanvasRef.current;
+    const target = mindMapFullExportRef.current || mindMapCanvasRef.current;
     if (!mindMapData.root || !target) return "";
     const rect = target.getBoundingClientRect();
-    const width = Math.max(900, Math.ceil(rect.width || target.scrollWidth || 1200));
-    const height = Math.max(620, Math.ceil(rect.height || target.scrollHeight || 720));
+    const width = Math.max(1600, Math.ceil(rect.width || target.scrollWidth || 2200));
+    const height = Math.max(1100, Math.ceil(rect.height || target.scrollHeight || 1800));
     const clone = target.cloneNode(true);
     inlineMindMapCloneStyles(target, clone);
     clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
