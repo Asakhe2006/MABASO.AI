@@ -316,6 +316,13 @@ PAYFAST_ALLOWED_REFERER_HOSTS = {
     "sandbox.payfast.co.za",
 }
 BILLING_PLAN_CONFIG = {
+    "pro_student_weekly": {
+        "name": "Pro Student Weekly",
+        "amount_zar": os.getenv("BILLING_PRO_STUDENT_WEEKLY_AMOUNT_ZAR", "15.00").strip(),
+        "frequency": "2",
+        "cycles": "0",
+        "description": "Seven-day Pro Student access with higher daily attempts, faster generation, exports, and stronger study tools.",
+    },
     "pro_student": {
         "name": "Pro Student",
         "amount_zar": os.getenv("BILLING_PRO_STUDENT_AMOUNT_ZAR", "50.00").strip(),
@@ -336,6 +343,13 @@ BILLING_PLAN_CONFIG = {
         "frequency": "3",
         "cycles": "0",
         "description": "One-year Pro Student access with three times the Free daily attempts and annual savings.",
+    },
+    "premium_student_weekly": {
+        "name": "Premium Student Weekly",
+        "amount_zar": os.getenv("BILLING_PREMIUM_STUDENT_WEEKLY_AMOUNT_ZAR", "45.00").strip(),
+        "frequency": "2",
+        "cycles": "0",
+        "description": "Seven-day Premium Student access with unlimited usage, priority speed, premium quality, and deep research tools.",
     },
     "premium_student": {
         "name": "Premium Student",
@@ -4800,11 +4814,24 @@ def get_billing_quota_plan_id(plan_id: str) -> str:
 
 def get_billing_plan_duration_days(plan_id: str) -> int:
     normalized_plan_id = normalize_billing_plan_id(plan_id)
+    if normalized_plan_id.endswith("_weekly"):
+        return 7
     if normalized_plan_id.endswith("_annual"):
         return 365
     if normalized_plan_id.endswith("_semester"):
         return 183
-    return 31
+    return 30
+
+
+def get_billing_plan_interval_label(plan_id: str) -> str:
+    normalized_plan_id = normalize_billing_plan_id(plan_id)
+    if normalized_plan_id.endswith("_weekly"):
+        return "weekly"
+    if normalized_plan_id.endswith("_annual"):
+        return "annual"
+    if normalized_plan_id.endswith("_semester"):
+        return "semester"
+    return "monthly"
 
 
 USAGE_TIMEZONE = timezone(
@@ -4846,7 +4873,7 @@ def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
         "name": plan["name"],
         "amount_zar": plan["amount_zar"],
         "currency": "ZAR",
-        "billing_interval": "monthly",
+        "billing_interval": get_billing_plan_interval_label(plan["id"]),
         "description": plan["description"],
         "provider": "payfast",
         "checkout_enabled": checkout_enabled,
@@ -5517,8 +5544,18 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     now_iso = utc_now().isoformat()
     period_end = (utc_now() + timedelta(days=get_billing_plan_duration_days(plan_id))).isoformat()
     next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
+    payment_id = provider_payment_id or checkout_id
 
     with get_db_connection() as connection:
+        existing_payment = connection.execute(
+            "SELECT payment_status FROM billing_payments WHERE id = ?",
+            (payment_id,),
+        ).fetchone()
+        is_duplicate_paid_payment = bool(
+            existing_payment
+            and next_status == "active"
+            and is_paid_payment_status(existing_payment["payment_status"])
+        )
         connection.execute(
             """
             UPDATE billing_checkout_sessions
@@ -5535,9 +5572,18 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (uuid4().hex, email, checkout_id, "payfast", payment_status or "UNKNOWN", raw_event_json, now_iso),
+            (
+                uuid4().hex,
+                email,
+                checkout_id,
+                "payfast",
+                "DUPLICATE_" + (payment_status or "UNKNOWN") if is_duplicate_paid_payment else payment_status or "UNKNOWN",
+                raw_event_json,
+                now_iso,
+            ),
         )
-        payment_id = provider_payment_id or checkout_id
+        if is_duplicate_paid_payment:
+            return "duplicate_active"
         connection.execute(
             """
             INSERT INTO billing_payments (

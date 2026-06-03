@@ -584,6 +584,7 @@ const fairSubscriptionPlans = [
     price: "R50 / month",
     priceOptions: "R270 / semester · R480 / year",
     billingOptions: [
+      { id: "pro_student_weekly", label: "Weekly", price: "R15" },
       { id: "pro_student", label: "Monthly", price: "R50" },
       { id: "pro_student_semester", label: "Semester", price: "R270" },
       { id: "pro_student_annual", label: "Annual", price: "R480" },
@@ -614,6 +615,7 @@ const fairSubscriptionPlans = [
     price: "R150 / month",
     priceOptions: "R765 / semester · R1350 / year",
     billingOptions: [
+      { id: "premium_student_weekly", label: "Weekly", price: "R45" },
       { id: "premium_student", label: "Monthly", price: "R150" },
       { id: "premium_student_semester", label: "Semester", price: "R765" },
       { id: "premium_student_annual", label: "Annual", price: "R1350" },
