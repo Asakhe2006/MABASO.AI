@@ -8,7 +8,7 @@ Mabaso AI is a study workspace for lecture capture, transcripts, study guides, t
 
 - Frontend: React + Vite + Tailwind-style utility classes
 - Backend: FastAPI
-- Database: SQLite
+- Database: SQLite with a Render persistent disk in production
 - Deployment: Render
 
 ## Lecture Assistant
@@ -69,9 +69,17 @@ Important assistant variables:
 - `OPENROUTER_CHAT_MODEL`
 - `LECTURE_ASSISTANT_SYSTEM_PROMPT`
 
+Production persistence variables:
+
+- `SQLITE_DB_PATH=/data/mabaso_ai.db`
+- `REQUIRE_PERSISTENT_DB=true`
+- Mount a Render persistent disk at `/data` for the backend service.
+
+The backend refuses unsafe temporary SQLite storage on Render when `REQUIRE_PERSISTENT_DB=true`. This keeps users, subscriptions, usage attempts, payment records, and saved materials tied to the account after restarts and across devices.
+
 ## Notes
 
-- The floating lecture assistant stores conversation history in browser `localStorage` per signed-in user.
+- Account materials and billing usage are stored by signed-in email on the backend; browser storage is only a cache.
 - Voice input uses the browser speech recognition API.
 - Optional voice reply playback uses browser text-to-speech.
 - Admin dashboard range controls support `1 day`, `7 days`, `1 month`, and `1 year`.

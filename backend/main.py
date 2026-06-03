@@ -602,11 +602,24 @@ ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
 
 def resolve_database_path() -> Path:
     configured = os.getenv("SQLITE_DB_PATH", "").strip()
-    if os.getenv("RENDER", "").strip().lower() == "true" and not configured:
-        logger.warning(
-            "SQLITE_DB_PATH is not set on Render. Configure a persistent disk path such as /data/mabaso_ai.db or migrate critical data to PostgreSQL/Supabase."
+    is_render = os.getenv("RENDER", "").strip().lower() == "true"
+    requires_persistent_db = os.getenv("REQUIRE_PERSISTENT_DB", "").strip().lower() in {"1", "true", "yes", "on"}
+    allow_ephemeral_sqlite = os.getenv("ALLOW_EPHEMERAL_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if is_render and not configured:
+        message = (
+            "SQLITE_DB_PATH is not set on Render. Configure a persistent disk path such as "
+            "/data/mabaso_ai.db so users, subscriptions, usage attempts, payments, and materials "
+            "remain tied to the account after restarts."
         )
+        if requires_persistent_db and not allow_ephemeral_sqlite:
+            raise RuntimeError(message)
+        logger.warning("%s", message)
     db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
+    if is_render and configured and not str(db_path).startswith("/data/"):
+        logger.warning(
+            "SQLITE_DB_PATH=%s is not under /data. Ensure this path is mounted as a Render persistent disk; otherwise account usage and subscriptions may reset.",
+            db_path,
+        )
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path
 
