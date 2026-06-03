@@ -234,6 +234,30 @@ function normalizeVoiceTranscript(value = "", { preserveCase = true } = {}) {
   return cleaned;
 }
 
+function isVoiceTranscriptionPromptLeak(value = "") {
+  const normalized = normalizeVoiceTranscript(value, { preserveCase: false }).replace(/[^a-z0-9]+/g, " ").trim();
+  if (!normalized) return false;
+  const markers = [
+    "english only transcription",
+    "lecture question in english",
+    "student is asking a lecture question",
+    "do not auto detect",
+    "do not translate or answer",
+    "transcribe the student",
+  ];
+  if (markers.some((marker) => normalized.includes(marker))) return true;
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length < 8) return false;
+  const promptWords = new Set(["english", "transcription", "lecture", "question", "detect", "student"]);
+  const promptWordCount = words.filter((word) => promptWords.has(word)).length;
+  return promptWordCount / Math.max(1, words.length) >= 0.55;
+}
+
+function normalizeUsableVoiceTranscript(value = "") {
+  const cleaned = normalizeVoiceTranscript(value);
+  return isVoiceTranscriptionPromptLeak(cleaned) ? "" : cleaned;
+}
+
 function buildMessagePreview(content = "", fallback = "Ready for your first question") {
   const text = String(content || "").replace(/\s+/g, " ").trim();
   if (!text) return fallback;
@@ -2009,7 +2033,7 @@ export function useLectureAssistant({
     continueVoiceChat = true,
     reason = "",
   } = {}) => {
-    const cleanedTranscript = normalizeVoiceTranscript(transcript);
+    const cleanedTranscript = normalizeUsableVoiceTranscript(transcript);
     const shouldClarify = Boolean(
       cleanedTranscript
       && (
@@ -2708,14 +2732,19 @@ export function useLectureAssistant({
       let interimTranscript = "";
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
-        const transcriptText = result?.[0]?.transcript || "";
+        const transcriptText = normalizeUsableVoiceTranscript(result?.[0]?.transcript || "");
+        if (!transcriptText) continue;
         if (result.isFinal) finalTranscript += `${transcriptText} `;
         else interimTranscript += transcriptText;
       }
-      latestTranscript = mergeVoiceSeedTranscript(
+      latestTranscript = normalizeUsableVoiceTranscript(mergeVoiceSeedTranscript(
         seededInterruptionTranscript,
         `${finalTranscript}${interimTranscript}`.replace(/\s+/g, " ").trim(),
-      );
+      ));
+      if (!latestTranscript) {
+        setDraft("");
+        return;
+      }
       resetVoiceRecoveryState();
       setVoiceTranscriptSource("browser");
       setVoiceTranscriptConfidence(estimateTranscriptConfidence(latestTranscript));
@@ -2804,7 +2833,7 @@ export function useLectureAssistant({
       }
       const stopReason = compactText(recognitionStopReasonRef.current).toLowerCase();
       recognitionStopReasonRef.current = "";
-      const spokenQuestion = compactText(mergeVoiceSeedTranscript(seededInterruptionTranscript, compactText(finalTranscript, latestTranscript)));
+      const spokenQuestion = normalizeUsableVoiceTranscript(mergeVoiceSeedTranscript(seededInterruptionTranscript, compactText(finalTranscript, latestTranscript)));
       if (manualRecognitionStopRef.current) {
         manualRecognitionStopRef.current = false;
         setIsVoiceReconnecting(false);
@@ -2941,7 +2970,7 @@ export function useLectureAssistant({
       }
       const data = await response.json().catch(() => ({}));
       voiceTranscriptionLatencyRef.current = Math.round(nowMs() - transcriptionStartedAt);
-      const text = normalizeVoiceTranscript(data.text || data.transcript);
+      const text = normalizeUsableVoiceTranscript(data.text || data.transcript);
       if (text) {
         voiceWhisperTranscriptRef.current = text;
         voiceHasWhisperTranscriptRef.current = true;
@@ -2958,6 +2987,8 @@ export function useLectureAssistant({
             setStatusText("Listening in English with Groq Whisper...");
           }
         }
+      } else if (captureId === voiceCaptureRunRef.current && final) {
+        setDraft("");
       }
       return text;
     })();
@@ -3130,15 +3161,15 @@ export function useLectureAssistant({
             if (isVoicePreviewMuted()) return;
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
               const result = event.results[index];
-              const transcriptText = compactText(result?.[0]?.transcript);
-              if (!transcriptText) continue;
+            const transcriptText = normalizeUsableVoiceTranscript(result?.[0]?.transcript);
+            if (!transcriptText) continue;
               if (result.isFinal) previewFinalTranscript += `${transcriptText} `;
               else previewInterimTranscript = transcriptText;
             }
-            const previewText = mergeVoiceSeedTranscript(
+            const previewText = normalizeUsableVoiceTranscript(mergeVoiceSeedTranscript(
               seededInterruptionTranscript,
               `${previewFinalTranscript} ${previewInterimTranscript}`,
-            );
+            ));
             voicePreviewTranscriptRef.current = previewText;
             if (!voiceHasWhisperTranscriptRef.current && previewText) {
               setVoiceTranscriptSource("browser");
@@ -3272,9 +3303,11 @@ export function useLectureAssistant({
         }
         const transcriptConfidence = estimateTranscriptConfidence(finalTranscript, previewTranscript);
         if (transcriptConfidence < 0.4 && compactText(previewTranscript).length > finalTranscript.length) {
-          finalTranscript = normalizeVoiceTranscript(previewTranscript);
+          finalTranscript = normalizeUsableVoiceTranscript(previewTranscript);
         }
+        finalTranscript = normalizeUsableVoiceTranscript(finalTranscript);
         if (!finalTranscript) {
+          setDraft("");
           if (voiceModeEnabledRef.current && continueVoiceChat && voiceNoSpeechRetryCountRef.current < VOICE_CHAT_MAX_NO_SPEECH_RETRIES) {
             voiceNoSpeechRetryCountRef.current += 1;
             scheduleVoiceListeningRestart({

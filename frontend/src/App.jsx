@@ -529,7 +529,7 @@ const fairSubscriptionPlans = [
     price: "R0",
     paymentType: "free",
     audience: "Light study and trial users",
-    limits: "Daily limits reset every 24 hours. No card required.",
+    limits: "Daily limits reset every 24 hours. Standard speed and entry-level study quality. No card required.",
     howItWorks: "Free users can generate within the daily attempts below. When a tool reaches 0 attempts, that tool is blocked until the next daily reset or the user upgrades.",
     attempts: [
       "10 AI chat questions/day",
@@ -544,7 +544,7 @@ const fairSubscriptionPlans = [
       "1 upload or source processing/day",
       "1 AI notes generation/day",
     ],
-    safeguards: ["No card required", "No surprise renewals", "Clear usage meter"],
+    safeguards: ["No card required", "Standard accuracy", "Clear usage meter"],
   },
   {
     id: "pro_student",
@@ -558,8 +558,8 @@ const fairSubscriptionPlans = [
     ],
     paymentType: "checkout",
     audience: "Active students who generate weekly study packs",
-    limits: "Higher daily limits, faster generation queue, exports, stronger study tools.",
-    howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
+    limits: "Higher daily limits, faster generation queue, better academic structure, exports, and stronger study tools.",
+    howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets, faster responses, and more polished study output. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
       "20 AI chat questions/day",
       "6 reports/day",
@@ -574,7 +574,7 @@ const fairSubscriptionPlans = [
       "3 uploads or source processing jobs/day",
       "3 AI notes generations/day",
     ],
-    safeguards: ["Cancel anytime", "Overages off by default", "Renewal reminders"],
+    safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
   },
   {
     id: "premium_student",
@@ -588,8 +588,8 @@ const fairSubscriptionPlans = [
     ],
     paymentType: "checkout",
     audience: "Heavy academic users and research students",
-    limits: "Unlimited usage, premium models, deep research mode, large file processing.",
-    howItWorks: "Premium Student removes daily generation limits. Admin accounts are treated as Premium automatically and must never be restricted.",
+    limits: "Unlimited usage, best available quality settings, priority speed, deep research mode, and large-file processing.",
+    howItWorks: "Premium Student removes daily generation limits and gives the strongest quality profile, best speed tier, and highest-depth outputs. Admin accounts are treated as Premium automatically and must never be restricted.",
     attempts: [
       "Unlimited chat",
       "Unlimited reports and expansions",
@@ -604,7 +604,7 @@ const fairSubscriptionPlans = [
       "Unlimited transcription and slide analysis",
       "Unlimited AI notes and research tools",
     ],
-    safeguards: ["Unlimited access", "Highest priority", "Premium features included"],
+    safeguards: ["Best quality tier", "Highest priority", "Premium features included"],
   },
 ];
 const fairBillingGuardrails = [
@@ -14623,13 +14623,11 @@ export default function App() {
     setStatus("Mind map SVG downloaded.");
   };
 
-  const downloadMindMapPng = async () => {
-    const svg = buildMindMapCaptureSvg();
-    if (!svg) return setError("Generate the mind map before exporting PNG.");
+  const renderMindMapPngDataUrl = async (svg) => {
+    const image = new Image();
+    const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const url = window.URL.createObjectURL(svgBlob);
     try {
-      const image = new Image();
-      const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-      const url = window.URL.createObjectURL(svgBlob);
       await new Promise((resolve, reject) => {
         image.onload = resolve;
         image.onerror = reject;
@@ -14642,8 +14640,17 @@ export default function App() {
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0);
+      return canvas.toDataURL("image/png");
+    } finally {
       window.URL.revokeObjectURL(url);
-      const pngUrl = canvas.toDataURL("image/png");
+    }
+  };
+
+  const downloadMindMapPng = async () => {
+    const svg = buildMindMapCaptureSvg();
+    if (!svg) return setError("Generate the mind map before exporting PNG.");
+    try {
+      const pngUrl = await renderMindMapPngDataUrl(svg);
       const link = document.createElement("a");
       link.href = pngUrl;
       link.download = `${sanitizeFileName(mindMapData.title || "mind-map")}.png`;
@@ -14660,17 +14667,14 @@ export default function App() {
     const svg = buildMindMapCaptureSvg();
     if (!svg) return setError("Generate the mind map before exporting PDF.");
     try {
-      const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-      const url = window.URL.createObjectURL(blob);
+      const pngUrl = await renderMindMapPngDataUrl(svg);
       const printWindow = window.open("", "_blank", "width=1200,height=900");
       if (!printWindow) {
-        window.URL.revokeObjectURL(url);
         return setError("PDF export needs popups enabled. Use SVG or PNG if the print window is blocked.");
       }
       const title = sanitizeFileName(mindMapData.title || "mind-map");
-      printWindow.document.write(`<!doctype html><html><head><title>${title}</title><style>@page{size:landscape;margin:12mm}body{margin:0;background:#fff;font-family:Arial,sans-serif}.sheet{padding:12mm}.sheet img{display:block;width:100%;height:auto;border:1px solid #e5e7eb;border-radius:18px}</style></head><body><main class="sheet"><img src="${url}" alt="Mind map export"/></main><script>window.onload=function(){setTimeout(function(){window.print()},300)}</script></body></html>`);
+      printWindow.document.write(`<!doctype html><html><head><title>${title}</title><style>@page{size:landscape;margin:8mm}html,body{margin:0;background:#fff;font-family:Arial,sans-serif}.sheet{box-sizing:border-box;min-height:100vh;padding:8mm}.sheet img{display:block;width:100%;height:auto;border:1px solid #e5e7eb;border-radius:18px;page-break-inside:avoid}</style></head><body><main class="sheet"><img id="mind-map-export" src="${pngUrl}" alt="Mind map export"/></main><script>var image=document.getElementById('mind-map-export');function printReady(){setTimeout(function(){window.focus();window.print()},250)}if(image.complete){printReady()}else{image.onload=printReady;image.onerror=printReady}</script></body></html>`);
       printWindow.document.close();
-      window.setTimeout(() => window.URL.revokeObjectURL(url), 5000);
       setStatus("Mind map PDF print view opened. Choose Save as PDF.");
     } catch (err) {
       setError(err.message || "Mind map PDF export failed.");

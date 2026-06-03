@@ -5715,12 +5715,39 @@ def transcribe_audio_with_groq_whisper(
         raise HTTPException(status_code=502, detail="Groq Whisper returned an unreadable transcription response.") from exc
 
     transcript_text = compact_text(payload.get("text"))
+    if is_voice_transcription_prompt_leak(transcript_text):
+        transcript_text = ""
     return {
         "text": transcript_text,
+        "no_speech": not bool(transcript_text),
         "provider": "groq_whisper",
         "model": GROQ_SPEECH_MODEL,
         "request_id": compact_text((payload.get("x_groq") or {}).get("id")),
     }
+
+
+def is_voice_transcription_prompt_leak(text: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", compact_text(text).lower()).strip()
+    if not normalized:
+        return False
+    prompt_markers = [
+        "english only transcription",
+        "lecture question in english",
+        "student is asking a lecture question",
+        "do not auto detect",
+        "do not translate or answer",
+        "transcribe the student",
+    ]
+    marker_hits = sum(1 for marker in prompt_markers if marker in normalized)
+    if marker_hits >= 1 and len(normalized) < 260:
+        return True
+    words = normalized.split()
+    if len(words) >= 8:
+        repeated_prompt_words = {"english", "transcription", "lecture", "question", "detect", "student"}
+        prompt_word_count = sum(1 for word in words if word in repeated_prompt_words)
+        if prompt_word_count / max(1, len(words)) >= 0.55:
+            return True
+    return False
 
 
 def trimmed_context_block(label: str, value: str, limit: int) -> str:
