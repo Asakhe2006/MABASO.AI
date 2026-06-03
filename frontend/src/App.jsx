@@ -10030,6 +10030,11 @@ export default function App() {
     setShowLandingAuthOptions(false);
     setHistoryItems([]);
     setActiveHistoryId("");
+    setBillingUsage(null);
+    setBillingSubscription(null);
+    setBillingCheckoutMessage("");
+    setBillingCheckoutPlanId("");
+    setIsUpgradeModalOpen(false);
     setCurrentPage("capture");
     setSupportMessageDraft("");
     setSupportFeedback("");
@@ -10135,11 +10140,10 @@ export default function App() {
 
   useEffect(() => {
     if (!authChecked || !authEmail) return;
-    const cachedHistory = loadHistoryItems(authEmail);
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     skipNextHistorySyncRef.current = true;
-    setHistoryItems(cachedHistory);
-    setActiveHistoryId((current) => (cachedHistory.some((item) => item.id === current) ? current : ""));
+    setHistoryItems([]);
+    setActiveHistoryId("");
   }, [authChecked, authEmail]);
 
   useEffect(() => {
@@ -10427,8 +10431,8 @@ export default function App() {
     const account = data?.account && typeof data.account === "object" ? data.account : {};
     const nextSubscription = data?.subscription || account.subscription || null;
     const nextUsage = data?.usage || account.usage || null;
-    if (nextSubscription) setBillingSubscription(nextSubscription);
-    if (nextUsage) setBillingUsage(nextUsage);
+    setBillingSubscription(nextSubscription);
+    setBillingUsage(nextUsage);
   };
 
   const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
@@ -11258,17 +11262,34 @@ export default function App() {
   };
 
   const ensurePremiumFeatureAvailable = async (featureId, fallbackLabel = "this feature") => {
-    let usage = billingUsage;
-    if (!usage && authToken) {
-      try {
-        const data = await refreshBillingStatus();
-        usage = data?.usage || null;
-      } catch {
-        usage = null;
-      }
+    if (!authToken) {
+      const message = "Please sign in so your usage limits can be checked before using this feature.";
+      setError(message);
+      setStatus(message);
+      return false;
     }
-    const subscriptionMessage = billingSubscription?.message || "";
+
+    let usage = null;
+    let subscription = billingSubscription;
+    try {
+      const data = await refreshBillingStatus();
+      usage = data?.usage || null;
+      subscription = data?.subscription || data?.account?.subscription || subscription || null;
+    } catch (err) {
+      const message = err?.message || "Could not verify your remaining attempts. Try again when the server reconnects.";
+      setError(message);
+      setStatus(message);
+      return false;
+    }
+
+    const subscriptionMessage = subscription?.message || "";
     const featureState = getUsageFeatureState(usage, featureId);
+    if (!usage || !featureState) {
+      const message = `Could not verify remaining attempts for ${fallbackLabel}. This action was blocked so your limits cannot be bypassed.`;
+      setError(message);
+      setStatus(message);
+      return false;
+    }
     if (featureState && !featureState.unlimited && Number(featureState.remaining) <= 0) {
       const message = `${subscriptionMessage ? `${subscriptionMessage} ` : ""}${buildUsageBlockedMessage(featureState, usage, fallbackLabel)}`;
       setError(message);
@@ -12797,14 +12818,14 @@ export default function App() {
       try {
         const remoteItems = await loadHistoryFromServer();
         if (cancelled) return;
-        const mergedItems = mergeHistoryItems(loadHistoryItems(authEmail), remoteItems);
+        const serverItems = normalizeHistoryItems(remoteItems);
         skipNextHistorySyncRef.current = true;
-        setHistoryItems(mergedItems);
-        setActiveHistoryId((current) => (mergedItems.some((item) => item.id === current) ? current : ""));
-
-        const mergedChanged = JSON.stringify(mergedItems) !== JSON.stringify(remoteItems);
-        if (mergedChanged) {
-          await pushHistoryToServer(mergedItems);
+        setHistoryItems(serverItems);
+        setActiveHistoryId((current) => (serverItems.some((item) => item.id === current) ? current : ""));
+        try {
+          window.localStorage.setItem(getHistoryStorageKey(authEmail), JSON.stringify(sanitizeHistoryItemsForStorage(serverItems)));
+        } catch {
+          // Ignore cache write errors; server history remains authoritative.
         }
       } catch (err) {
         if (!cancelled) {
