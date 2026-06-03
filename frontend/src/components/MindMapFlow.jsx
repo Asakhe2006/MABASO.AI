@@ -450,9 +450,9 @@ export default function MindMapFlow({ root, onSelectNode, exportMode = false }) 
 
   return (
     <ReactFlowProvider>
-      <div className={`relative ${exportMode ? "h-[1800px] min-h-[1800px]" : "h-[760px] min-h-[620px]"} overflow-hidden rounded-[24px] border border-slate-200 bg-white`}>
+      <div className={`mind-map-flow-shell relative ${exportMode ? "h-[1800px] min-h-[1800px]" : "h-[760px] min-h-[620px]"} overflow-hidden rounded-[24px] border border-slate-200 bg-white`}>
         {!exportMode ? (
-          <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-2 rounded-full border border-slate-200 bg-white/92 px-3 py-2 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur">
+          <div className="mind-map-layout-toolbar absolute left-4 top-4 z-10 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-2 rounded-full border border-slate-200 bg-white/92 px-3 py-2 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur">
             {layoutOptions.map(([value, label]) => (
               <button
                 key={value}

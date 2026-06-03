@@ -620,6 +620,208 @@ iframe {
   }
 }
 
+@media (max-width: 640px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    font-size: 14px;
+  }
+
+  main {
+    width: 100%;
+    max-width: 100vw;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  img,
+  video,
+  canvas,
+  iframe {
+    max-width: 100%;
+    height: auto;
+  }
+
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+  }
+
+  button:not(.react-flow__controls-button) {
+    min-height: 44px;
+  }
+
+  .content-panel {
+    min-height: 360px;
+    border-radius: 18px;
+    padding: 0.75rem !important;
+  }
+
+  .stable-horizontal-scroll {
+    margin-inline: -0.25rem;
+    padding-inline: 0.25rem;
+    scrollbar-width: thin;
+  }
+
+  .stable-horizontal-scroll > * {
+    min-width: max-content;
+  }
+
+  .phone-safe-copy,
+  .notes-markdown,
+  .notes-markdown * {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .notes-markdown p,
+  .notes-markdown li,
+  .study-guide-markdown p,
+  .study-guide-markdown li {
+    font-size: 0.94rem;
+    line-height: 1.72;
+  }
+
+  .notes-markdown h1,
+  .notes-markdown h2 {
+    font-size: 1.28rem;
+    line-height: 1.25;
+  }
+
+  .notes-markdown h3,
+  .notes-markdown h4 {
+    font-size: 1.08rem;
+    line-height: 1.3;
+  }
+
+  .notes-markdown table,
+  .study-guide-markdown table,
+  .report-viewer table {
+    display: block;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .notes-markdown th,
+  .notes-markdown td,
+  .study-guide-markdown th,
+  .study-guide-markdown td,
+  .report-viewer th,
+  .report-viewer td {
+    min-width: 9rem;
+    padding: 0.55rem;
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .report-viewer {
+    padding: 1rem !important;
+    line-height: 1.45;
+  }
+
+  .report-viewer h1 {
+    font-size: 24px;
+  }
+
+  .report-viewer h2 {
+    font-size: 20px;
+  }
+
+  .report-viewer h3 {
+    font-size: 18px;
+  }
+
+  .report-viewer p,
+  .report-viewer li {
+    font-size: 14px;
+  }
+
+  .mind-map-flow-shell {
+    height: min(72vh, 620px) !important;
+    min-height: 460px !important;
+    border-radius: 18px;
+  }
+
+  .mind-map-layout-toolbar {
+    left: 0.5rem !important;
+    right: 0.5rem !important;
+    top: 0.5rem !important;
+    max-width: calc(100% - 1rem) !important;
+    max-height: 8.5rem;
+    overflow-y: auto;
+    border-radius: 18px !important;
+    align-items: stretch;
+  }
+
+  .mind-map-layout-toolbar button {
+    flex: 1 1 auto;
+    min-height: 36px !important;
+    padding: 0.45rem 0.65rem;
+  }
+
+  .mind-map-node {
+    max-width: 280px !important;
+    font-size: 12px;
+  }
+
+  .mind-map-node p {
+    overflow-wrap: anywhere;
+  }
+
+  .mind-map-flow .react-flow__minimap {
+    display: none;
+  }
+
+  .mind-map-flow .react-flow__controls {
+    transform: scale(0.9);
+    transform-origin: bottom left;
+  }
+}
+
+@media (max-width: 480px) {
+  .brand-mark {
+    letter-spacing: 0.28em;
+    font-size: 0.72rem;
+  }
+
+  .content-panel {
+    padding: 0.65rem !important;
+  }
+
+  .study-guide-title-card,
+  .study-guide-section-card {
+    border-radius: 18px;
+    padding: 1rem !important;
+  }
+
+  .study-guide-topic {
+    font-size: 24px;
+    line-height: 1.12;
+  }
+
+  .study-guide-section-heading,
+  .study-guide-markdown h2 {
+    font-size: 19px;
+  }
+
+  .mind-map-flow-shell {
+    min-height: 430px !important;
+  }
+}
+
 @keyframes shimmer {
   0% {
     background-position: 0% 50%;
