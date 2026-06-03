@@ -584,13 +584,12 @@ const fairSubscriptionPlans = [
     price: "R50 / month",
     priceOptions: "R270 / semester · R480 / year",
     billingOptions: [
-      { id: "pro_student_weekly", label: "Weekly", price: "R15" },
       { id: "pro_student", label: "Monthly", price: "R50" },
       { id: "pro_student_semester", label: "Semester", price: "R270" },
       { id: "pro_student_annual", label: "Annual", price: "R480" },
     ],
     paymentType: "checkout",
-    audience: "Active students who generate weekly study packs",
+    audience: "Active students who generate regular study packs",
     limits: "Higher daily limits, faster generation queue, better academic structure, exports, and stronger study tools.",
     howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets, faster responses, and more polished study output. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
@@ -615,7 +614,6 @@ const fairSubscriptionPlans = [
     price: "R150 / month",
     priceOptions: "R765 / semester · R1350 / year",
     billingOptions: [
-      { id: "premium_student_weekly", label: "Weekly", price: "R45" },
       { id: "premium_student", label: "Monthly", price: "R150" },
       { id: "premium_student_semester", label: "Semester", price: "R765" },
       { id: "premium_student_annual", label: "Annual", price: "R1350" },
@@ -10314,7 +10312,6 @@ export default function App() {
         }
         if (data.session_mode) setAuthSessionMode(data.session_mode);
         if (Array.isArray(data.available_modes)) setAuthAvailableModes(data.available_modes);
-        applyServerAccountState(data);
       }).catch(() => {
         // Keep the saved session locally if the server is temporarily unavailable.
       });
@@ -10429,7 +10426,8 @@ export default function App() {
     setIsDownloadMenuOpen(false);
   }, [activeTab, currentPage]);
 
-  const applyServerAccountState = (data = {}) => {
+  const applyServerAccountState = (data = {}, { includeBilling = true } = {}) => {
+    if (!includeBilling) return;
     const account = data?.account && typeof data.account === "object" ? data.account : {};
     const nextSubscription = data?.subscription || account.subscription || null;
     const nextUsage = data?.usage || account.usage || null;
@@ -10487,7 +10485,7 @@ export default function App() {
         setAuthEmail(data.email || authEmail || "");
         setAuthSessionMode(data.session_mode || authSessionMode || "user");
         setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes);
-        applyServerAccountState(data);
+        applyServerAccountState(data, { includeBilling: false });
         return nextToken;
       } catch (err) {
         const message = String(err?.message || "");

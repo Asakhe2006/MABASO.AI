@@ -316,13 +316,6 @@ PAYFAST_ALLOWED_REFERER_HOSTS = {
     "sandbox.payfast.co.za",
 }
 BILLING_PLAN_CONFIG = {
-    "pro_student_weekly": {
-        "name": "Pro Student Weekly",
-        "amount_zar": os.getenv("BILLING_PRO_STUDENT_WEEKLY_AMOUNT_ZAR", "15.00").strip(),
-        "frequency": "2",
-        "cycles": "0",
-        "description": "Seven-day Pro Student access with higher daily attempts, faster generation, exports, and stronger study tools.",
-    },
     "pro_student": {
         "name": "Pro Student",
         "amount_zar": os.getenv("BILLING_PRO_STUDENT_AMOUNT_ZAR", "50.00").strip(),
@@ -343,13 +336,6 @@ BILLING_PLAN_CONFIG = {
         "frequency": "3",
         "cycles": "0",
         "description": "One-year Pro Student access with three times the Free daily attempts and annual savings.",
-    },
-    "premium_student_weekly": {
-        "name": "Premium Student Weekly",
-        "amount_zar": os.getenv("BILLING_PREMIUM_STUDENT_WEEKLY_AMOUNT_ZAR", "45.00").strip(),
-        "frequency": "2",
-        "cycles": "0",
-        "description": "Seven-day Premium Student access with unlimited usage, priority speed, premium quality, and deep research tools.",
     },
     "premium_student": {
         "name": "Premium Student",
@@ -617,18 +603,26 @@ ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
 def resolve_database_path() -> Path:
     configured = os.getenv("SQLITE_DB_PATH", "").strip()
     is_render = os.getenv("RENDER", "").strip().lower() == "true"
-    requires_persistent_db = os.getenv("REQUIRE_PERSISTENT_DB", "").strip().lower() in {"1", "true", "yes", "on"}
     allow_ephemeral_sqlite = os.getenv("ALLOW_EPHEMERAL_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
-    if is_render and not configured:
+    if is_render and configured:
+        db_path = Path(configured).expanduser()
+    elif is_render:
         message = (
             "SQLITE_DB_PATH is not set on Render. Configure a persistent disk path such as "
             "/data/mabaso_ai.db so users, subscriptions, usage attempts, payments, and materials "
             "remain tied to the account after restarts."
         )
-        if requires_persistent_db and not allow_ephemeral_sqlite:
+        render_disk_path = Path("/data/mabaso_ai.db")
+        if render_disk_path.parent.exists():
+            logger.warning("%s Using /data/mabaso_ai.db because the Render persistent disk mount exists.", message)
+            db_path = render_disk_path
+        elif not allow_ephemeral_sqlite:
             raise RuntimeError(message)
-        logger.warning("%s", message)
-    db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
+        else:
+            logger.warning("%s ALLOW_EPHEMERAL_SQLITE is enabled, so account usage may reset after restarts.", message)
+            db_path = Path(__file__).with_name("mabaso_ai.db")
+    else:
+        db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
     if is_render and configured and not str(db_path).startswith("/data/"):
         logger.warning(
             "SQLITE_DB_PATH=%s is not under /data. Ensure this path is mounted as a Render persistent disk; otherwise account usage and subscriptions may reset.",
