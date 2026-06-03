@@ -15060,7 +15060,19 @@ export default function App() {
       setChatReferenceImages([]);
       setStatus("The new lecture assistant sent your text question without image attachments.");
     }
-    if (!lectureAssistant.hasLectureContext) {
+    const hasStudyChatContext = Boolean(
+      String(transcript || "").trim()
+      || String(summary || "").trim()
+      || String(formattedFormula || "").trim()
+      || String(formula || "").trim()
+      || String(formattedExample || "").trim()
+      || String(example || "").trim()
+      || String(lectureNotes || "").trim()
+      || String(lectureSlides || "").trim()
+      || String(pastQuestionPapers || "").trim()
+      || lectureAssistant.hasLectureContext,
+    );
+    if (!hasStudyChatContext) {
       setError("Generate a transcript or study guide first.");
       return;
     }
@@ -15069,12 +15081,13 @@ export default function App() {
     setIsAskingChat(true);
     const userMessage = { role: "user", content: question };
     const pendingAssistantMessage = { role: "assistant", content: "Thinking..." };
-    setChatMessages((current) => [...current, userMessage, pendingAssistantMessage]);
+    const updatedHistory = [...chatMessages, userMessage];
+    setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
     try {
       const answer = await requestStudyAssistantAnswer({
         question,
-        history: chatMessages.slice(-6),
+        history: updatedHistory.slice(-6),
         deliveryMode: "chat",
         currentSection: activeTab,
       });
@@ -17296,7 +17309,7 @@ export default function App() {
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "chat" ? (<>
                   <LectureAssistantPanel assistant={lectureAssistant} />
-                  <div className="hidden space-y-4">
+                  <div className="space-y-4">
                     <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(15,23,42,0.82))] p-5 sm:p-6">
                       <div className="force-mobile-stack flex items-start justify-between gap-4">
                         <div className="min-w-0">

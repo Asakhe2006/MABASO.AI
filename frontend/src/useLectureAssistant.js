@@ -763,12 +763,39 @@ function mergeConversationRecord(existingConversation, incomingConversation, { s
     }
     if (!existingMessages.length) return incomingMessages;
     const incomingIds = new Set(incomingMessages.map((message) => compactText(message.id)).filter(Boolean));
+    const existingById = new Map(
+      existingMessages
+        .map((message) => [compactText(message.id), message])
+        .filter(([messageId]) => Boolean(messageId)),
+    );
+    const mergedIncomingMessages = incomingMessages.map((incomingMessage) => {
+      const messageId = compactText(incomingMessage.id);
+      const existingMessage = messageId ? existingById.get(messageId) : null;
+      if (!existingMessage) return incomingMessage;
+
+      const incomingContent = compactText(incomingMessage.content);
+      const existingContent = compactText(existingMessage.content);
+      const shouldKeepExistingContent = existingContent
+        && (!incomingContent || existingContent.length > incomingContent.length);
+      return {
+        ...existingMessage,
+        ...incomingMessage,
+        content: shouldKeepExistingContent ? existingMessage.content : incomingMessage.content,
+        status: compactText(incomingMessage.status, compactText(existingMessage.status)),
+        provider: compactText(incomingMessage.provider, compactText(existingMessage.provider)),
+        model: compactText(incomingMessage.model, compactText(existingMessage.model)),
+        metrics: {
+          ...(existingMessage.metrics && typeof existingMessage.metrics === "object" ? existingMessage.metrics : {}),
+          ...(incomingMessage.metrics && typeof incomingMessage.metrics === "object" ? incomingMessage.metrics : {}),
+        },
+      };
+    });
     const preservedLocalMessages = existingMessages.filter((message) => {
       const messageId = compactText(message.id);
       if (messageId && incomingIds.has(messageId)) return false;
       return compactText(message.content);
     });
-    return [...incomingMessages, ...preservedLocalMessages]
+    return [...mergedIncomingMessages, ...preservedLocalMessages]
       .sort((left, right) => new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime());
   })();
   const mergedMetadata = {
