@@ -163,7 +163,7 @@ REALTIME_TUTOR_IDLE_TIMEOUT_MS = min(
     30000,
     max(5000, int(os.getenv("REALTIME_TUTOR_IDLE_TIMEOUT_MS", "8000"))),
 )
-REALTIME_TUTOR_CONTEXT_CHARS = max(5000, int(os.getenv("REALTIME_TUTOR_CONTEXT_CHARS", "12000")))
+REALTIME_TUTOR_CONTEXT_CHARS = max(5000, int(os.getenv("REALTIME_TUTOR_CONTEXT_CHARS", "8000")))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
 APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "").strip()
@@ -227,7 +227,7 @@ LECTURE_ASSISTANT_VOICE_CONTEXT_CHARS = int(
 )
 LECTURE_ASSISTANT_VOICE_HISTORY_TURNS = max(
     4,
-    int(os.getenv("LECTURE_ASSISTANT_VOICE_HISTORY_TURNS", "8")),
+    int(os.getenv("LECTURE_ASSISTANT_VOICE_HISTORY_TURNS", "5")),
 )
 LECTURE_ASSISTANT_VOICE_RECENT_HISTORY_TURNS = max(
     2,
@@ -289,7 +289,12 @@ PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
 PODCAST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 PRESENTATION_OUTPUT_DIR = UPLOAD_DIR / "presentations"
 PRESENTATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
+APP_SECRET = os.getenv("APP_SECRET", "").strip()
+if not APP_SECRET:
+    APP_SECRET = secrets.token_urlsafe(48)
+    logger.warning(
+        "APP_SECRET is not set. Generated a temporary per-process secret; set APP_SECRET in production so sessions remain stable across restarts."
+    )
 SESSION_TOKEN_PREFIX = "mabaso.v1"
 APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", os.getenv("FRONTEND_PUBLIC_URL", "https://mabaso-ai-web.onrender.com")).strip().rstrip("/")
 API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", os.getenv("BACKEND_PUBLIC_URL", "")).strip().rstrip("/")
@@ -488,6 +493,10 @@ ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
 
 def resolve_database_path() -> Path:
     configured = os.getenv("SQLITE_DB_PATH", "").strip()
+    if os.getenv("RENDER", "").strip().lower() == "true" and not configured:
+        logger.warning(
+            "SQLITE_DB_PATH is not set on Render. Configure a persistent disk path such as /data/mabaso_ai.db or migrate critical data to PostgreSQL/Supabase."
+        )
     db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return db_path

@@ -11080,10 +11080,6 @@ export default function App() {
   const latestLectureAssistantReply = [...lectureAssistantMessages].reverse().find((message) => message.role === "assistant") || null;
   const hasMindMapGenerationInputs = Boolean(hasMindMapInputs || chatToText(lectureAssistantMessages).trim());
 
-  useEffect(() => {
-    setIsAskingChat(lectureAssistant.isGenerating);
-  }, [lectureAssistant.isGenerating]);
-
   const buildTeacherRealtimeRequestPayload = () => ({
     summary,
     transcript,
@@ -15056,7 +15052,6 @@ export default function App() {
 
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
-    lectureAssistant.openPanel();
     if (!question) {
       setError("Ask a question first.");
       return;
@@ -15070,7 +15065,43 @@ export default function App() {
       return;
     }
     setError("");
-    await lectureAssistant.sendMessage({ promptText: question });
+    setStatus("MABASO is answering your study question...");
+    setIsAskingChat(true);
+    const userMessage = { role: "user", content: question };
+    const pendingAssistantMessage = { role: "assistant", content: "Thinking..." };
+    setChatMessages((current) => [...current, userMessage, pendingAssistantMessage]);
+    setChatQuestion("");
+    try {
+      const answer = await requestStudyAssistantAnswer({
+        question,
+        history: chatMessages.slice(-6),
+        deliveryMode: "chat",
+        currentSection: activeTab,
+      });
+      setChatMessages((current) => {
+        const next = [...current];
+        const lastIndex = next.length - 1;
+        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+          next[lastIndex] = { role: "assistant", content: answer };
+          return next;
+        }
+        return [...next, { role: "assistant", content: answer }];
+      });
+      setStatus("Study chat answer ready.");
+    } catch (err) {
+      setChatMessages((current) => {
+        const next = [...current];
+        const lastIndex = next.length - 1;
+        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+          next[lastIndex] = { role: "assistant", content: err.message || "Study chat could not answer right now." };
+          return next;
+        }
+        return next;
+      });
+      setError(err.message || "Study chat failed.");
+    } finally {
+      setIsAskingChat(false);
+    }
   };
 
   const speakTeacherQuestionAnswer = (answerText = "", { onComplete } = {}) => {
@@ -17340,7 +17371,16 @@ export default function App() {
 
                       <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
                         <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest reply</p>
-                        {latestLectureAssistantReply ? (
+                        {chatMessages.length ? (
+                          <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
+                            {chatMessages.slice(-6).map((message, index) => (
+                              <div key={`${message.role}-${index}-${message.content.slice(0, 18)}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+                                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : latestLectureAssistantReply ? (
                           <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{latestLectureAssistantReply.content}</p>
                         ) : (
                           <p className="mt-4 text-sm leading-7 text-slate-300">Open the assistant and ask your first follow-up question. Your saved chats stay in this browser for the current signed-in user.</p>

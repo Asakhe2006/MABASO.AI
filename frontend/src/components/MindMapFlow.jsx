@@ -75,6 +75,38 @@ function normalizeTree(node, parentId = "", index = 0, depth = 0) {
   return { ...node, id, children };
 }
 
+function getPromotableBranchRoot(root) {
+  let current = root;
+  let safety = 0;
+  while (
+    current
+    && Array.isArray(current.children)
+    && current.children.length === 1
+    && Array.isArray(current.children[0]?.children)
+    && current.children[0].children.length
+    && safety < 5
+  ) {
+    current = current.children[0];
+    safety += 1;
+  }
+  return current || root;
+}
+
+function rebalanceRootBranches(root) {
+  if (!root || !Array.isArray(root.children)) return root;
+  const directChildren = root.children;
+  if (directChildren.length >= 3) return root;
+  const branchRoot = getPromotableBranchRoot(root);
+  const promotedChildren = Array.isArray(branchRoot.children) ? branchRoot.children : [];
+  if (promotedChildren.length < 3) return root;
+  return {
+    ...root,
+    summary: compactText(root.summary, branchRoot.summary),
+    children: sortByImportance(promotedChildren),
+    originalChainRoot: branchRoot.title || branchRoot.label || "",
+  };
+}
+
 function createMoreNode(parentId, children, depth, expandedIds, options) {
   const moreId = `${parentId}-more-${depth}`;
   const isExpanded = expandedIds.has(moreId);
@@ -156,6 +188,7 @@ function chooseLayoutMode(requestedMode, totalNodeCount, visibleNodeCount) {
   if (requestedMode === "study") return "radial";
   if (requestedMode === "research") return totalNodeCount > 80 ? "clustered" : "horizontal";
   if (totalNodeCount < 25 && visibleNodeCount <= 35) return "radial";
+  if (visibleNodeCount <= 45) return "radial";
   if (totalNodeCount <= 80) return "horizontal";
   return "clustered";
 }
@@ -281,9 +314,10 @@ function getProgressiveOptions(mode) {
 function buildFlowElements(root, expandedIds, onToggle, requestedLayoutMode) {
   const normalizedRoot = normalizeTree(root);
   if (!normalizedRoot) return { nodes: [], edges: [], layoutMode: "radial", visibleCount: 0, totalCount: 0 };
+  const balancedRoot = rebalanceRootBranches(normalizedRoot);
   const totalCount = countNodes(normalizedRoot);
   const progressiveOptions = getProgressiveOptions(requestedLayoutMode);
-  const visibleRoot = buildVisibleTree(normalizedRoot, expandedIds, progressiveOptions);
+  const visibleRoot = buildVisibleTree(balancedRoot, expandedIds, progressiveOptions);
   const { flatNodes, flatEdges } = flattenVisibleTree(visibleRoot);
   const layoutMode = chooseLayoutMode(requestedLayoutMode, totalCount, flatNodes.length);
   const positions = layoutMode === "radial"
