@@ -1266,6 +1266,31 @@ def init_db():
             )
             """
         )
+        user_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(users)").fetchall()
+        }
+        user_column_defaults = {
+            "user_id": "TEXT NOT NULL DEFAULT ''",
+            "current_plan_id": "TEXT NOT NULL DEFAULT 'free'",
+            "subscription_status": "TEXT NOT NULL DEFAULT 'free'",
+            "subscription_start_at": "TEXT NOT NULL DEFAULT ''",
+            "subscription_end_at": "TEXT NOT NULL DEFAULT ''",
+            "usage_reset_at": "TEXT NOT NULL DEFAULT ''",
+            "feature_permissions_json": "TEXT NOT NULL DEFAULT '{}'",
+            "last_login_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in user_column_defaults.items():
+            if column_name not in user_columns:
+                connection.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}")
+        existing_user_rows = connection.execute("SELECT email, user_id FROM users").fetchall()
+        for row in existing_user_rows:
+            if not str(row["user_id"] or "").strip():
+                connection.execute(
+                    "UPDATE users SET user_id = ?, updated_at = COALESCE(NULLIF(updated_at, ''), ?) WHERE email = ?",
+                    (uuid4().hex, utc_now().isoformat(), row["email"]),
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS login_codes (
@@ -1592,6 +1617,79 @@ def init_db():
             ON billing_events (email, created_at DESC)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_payments (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                checkout_session_id TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_payment_id TEXT NOT NULL,
+                amount_zar TEXT NOT NULL,
+                payment_status TEXT NOT NULL,
+                raw_event_json TEXT NOT NULL DEFAULT '{}',
+                paid_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_billing_payments_email_paid_at
+            ON billing_payments (email, paid_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_plan_features (
+                plan_id TEXT NOT NULL,
+                feature TEXT NOT NULL,
+                daily_limit INTEGER NOT NULL,
+                min_count INTEGER NOT NULL DEFAULT 0,
+                max_count INTEGER NOT NULL DEFAULT 0,
+                permission_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (plan_id, feature)
+            )
+            """
+        )
+        feature_seed_time = utc_now().isoformat()
+        for plan_id, feature_quotas in BILLING_PLAN_QUOTAS.items():
+            for feature, daily_limit in feature_quotas.items():
+                min_count = 0
+                max_count = 0
+                if feature == "flashcards":
+                    if plan_id == "premium_student":
+                        min_count, max_count = 5, 30
+                    elif plan_id == "pro_student":
+                        min_count, max_count = 5, 20
+                    else:
+                        min_count, max_count = 5, 10
+                connection.execute(
+                    """
+                    INSERT INTO billing_plan_features (
+                        plan_id, feature, daily_limit, min_count, max_count, permission_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(plan_id, feature) DO UPDATE SET
+                        daily_limit = excluded.daily_limit,
+                        min_count = excluded.min_count,
+                        max_count = excluded.max_count,
+                        permission_json = excluded.permission_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        plan_id,
+                        feature,
+                        int(daily_limit),
+                        min_count,
+                        max_count,
+                        json.dumps({"enabled": True, "source": "server_plan_config"}, ensure_ascii=False),
+                        feature_seed_time,
+                    ),
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS billing_usage_events (
@@ -3354,6 +3452,7 @@ def require_authenticated_user(authorization: str | None = Header(None)) -> str:
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+    expire_subscription_if_needed(context["email"])
     return context["email"]
 
 
@@ -3538,12 +3637,19 @@ def build_auth_response(email: str, token: str) -> dict[str, Any]:
     available_modes = get_available_auth_modes(email)
     payload = decode_signed_session_token(token) or {}
     session_mode = normalize_session_mode(str(payload.get("mode") or "user"), email)
+    account = sync_user_account_snapshot(email, mark_login=True)
     return {
         "token": token,
         "email": email,
         "session_mode": session_mode,
         "available_modes": available_modes,
         "is_admin": "admin" in available_modes,
+        "account": account,
+        "subscription": account.get("subscription"),
+        "usage": account.get("usage"),
+        "monthly_usage": account.get("monthly_usage"),
+        "payment_history": account.get("payment_history"),
+        "feature_permissions": account.get("feature_permissions"),
     }
 
 
@@ -5017,6 +5123,155 @@ def get_billing_usage_summary(email: str) -> dict[str, Any]:
     }
 
 
+def get_monthly_usage_count(email: str, feature: str, month_key: str) -> int:
+    normalized_email = normalize_email(email)
+    normalized_feature = normalize_billing_plan_id(feature)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND feature = ? AND substr(created_at, 1, 7) = ?
+            """,
+            (normalized_email, normalized_feature, month_key),
+        ).fetchone()
+    return int(row["total_quantity"] or 0)
+
+
+def get_monthly_usage_summary(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    month_key = utc_now().strftime("%Y-%m")
+    return {
+        "month_key": month_key,
+        "features": [
+            {
+                "feature": feature,
+                "label": BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title()),
+                "used": get_monthly_usage_count(normalized_email, feature, month_key),
+            }
+            for feature in BILLING_FEATURE_LABELS
+        ],
+    }
+
+
+def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any]]:
+    normalized_email = normalize_email(email)
+    safe_limit = max(1, min(int(limit or 12), 50))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, checkout_session_id, plan_id, provider, provider_payment_id,
+                   amount_zar, payment_status, paid_at, created_at, updated_at
+            FROM billing_payments
+            WHERE email = ?
+            ORDER BY paid_at DESC
+            LIMIT ?
+            """,
+            (normalized_email, safe_limit),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "checkout_session_id": row["checkout_session_id"],
+            "plan_id": normalize_billing_plan_id(row["plan_id"]),
+            "provider": row["provider"],
+            "provider_payment_id": row["provider_payment_id"],
+            "amount_zar": row["amount_zar"],
+            "payment_status": row["payment_status"],
+            "paid_at": row["paid_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def build_feature_permissions(usage: dict[str, Any]) -> dict[str, Any]:
+    permissions: dict[str, Any] = {}
+    for feature in usage.get("features", []):
+        feature_id = compact_text(feature.get("feature"))
+        if not feature_id:
+            continue
+        feature_limit = int(feature.get("limit") or 0)
+        permissions[feature_id] = {
+            "enabled": bool(feature.get("unlimited") or feature_limit != 0),
+            "used": int(feature.get("used") or 0),
+            "limit": feature_limit,
+            "remaining": feature.get("remaining"),
+            "unlimited": bool(feature.get("unlimited")),
+            "period_type": feature.get("period_type", "daily"),
+            "reset_at": feature.get("reset_at", usage.get("reset_at", "")),
+        }
+    return permissions
+
+
+def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    now_iso = utc_now().isoformat()
+    subscription = get_user_subscription(normalized_email)
+    usage = get_billing_usage_summary(normalized_email)
+    monthly_usage = get_monthly_usage_summary(normalized_email)
+    payment_history = list_user_payment_history(normalized_email)
+    feature_permissions = build_feature_permissions(usage)
+    user_id = ""
+    created_at = now_iso
+
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+            (normalized_email, now_iso, uuid4().hex, now_iso),
+        )
+        row = connection.execute(
+            "SELECT user_id, created_at FROM users WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+        user_id = compact_text(row["user_id"]) if row else ""
+        created_at = compact_text(row["created_at"], now_iso) if row else now_iso
+        if not user_id:
+            user_id = uuid4().hex
+        connection.execute(
+            """
+            UPDATE users
+            SET user_id = ?,
+                current_plan_id = ?,
+                subscription_status = ?,
+                subscription_start_at = ?,
+                subscription_end_at = ?,
+                usage_reset_at = ?,
+                feature_permissions_json = ?,
+                last_login_at = CASE WHEN ? THEN ? ELSE last_login_at END,
+                updated_at = ?
+            WHERE email = ?
+            """,
+            (
+                user_id,
+                compact_text(usage.get("plan_id"), "free"),
+                compact_text(subscription.get("status"), "free"),
+                compact_text(subscription.get("current_period_start")),
+                compact_text(subscription.get("current_period_end")),
+                compact_text(usage.get("reset_at")),
+                json.dumps(feature_permissions, ensure_ascii=False),
+                1 if mark_login else 0,
+                now_iso,
+                now_iso,
+                normalized_email,
+            ),
+        )
+
+    return {
+        "user_id": user_id,
+        "email": normalized_email,
+        "created_at": created_at,
+        "current_plan": compact_text(usage.get("plan_id"), "free"),
+        "subscription": subscription,
+        "usage": usage,
+        "monthly_usage": monthly_usage,
+        "payment_history": payment_history,
+        "feature_permissions": feature_permissions,
+        "last_synced_at": now_iso,
+    }
+
+
 def consume_plan_quota(
     *,
     email: str,
@@ -5092,6 +5347,7 @@ def consume_plan_quota(
                 now_iso,
             ),
         )
+    account_snapshot = sync_user_account_snapshot(normalized_email)
     return {
         "plan_id": plan_id,
         "feature": normalized_feature,
@@ -5102,6 +5358,7 @@ def consume_plan_quota(
         "period_type": "daily",
         "reset_at": reset_at,
         "reset_label": reset_label,
+        "account": account_snapshot,
     }
 
 
@@ -5143,6 +5400,41 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             """,
             (uuid4().hex, email, checkout_id, "payfast", payment_status or "UNKNOWN", raw_event_json, now_iso),
         )
+        payment_id = provider_payment_id or checkout_id
+        connection.execute(
+            """
+            INSERT INTO billing_payments (
+                id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                amount_zar, payment_status, raw_event_json, paid_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                email = excluded.email,
+                checkout_session_id = excluded.checkout_session_id,
+                plan_id = excluded.plan_id,
+                provider = excluded.provider,
+                provider_payment_id = excluded.provider_payment_id,
+                amount_zar = excluded.amount_zar,
+                payment_status = excluded.payment_status,
+                raw_event_json = excluded.raw_event_json,
+                paid_at = excluded.paid_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                payment_id,
+                email,
+                checkout_id,
+                plan_id,
+                "payfast",
+                provider_payment_id,
+                expected_amount,
+                next_status,
+                raw_event_json,
+                now_iso,
+                now_iso,
+                now_iso,
+            ),
+        )
         if next_status == "active":
             connection.execute(
                 """
@@ -5181,6 +5473,7 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                     now_iso,
                 ),
             )
+    sync_user_account_snapshot(email)
     return next_status
 
 
@@ -7719,11 +8012,22 @@ async def list_billing_plans():
     }
 
 
+@app.get("/api/account/status")
+async def get_account_status(current_user: str = Depends(require_authenticated_user)):
+    return {"account": sync_user_account_snapshot(current_user)}
+
+
 @app.get("/api/billing/subscription")
 async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
-    subscription = get_user_subscription(current_user)
-    usage = get_billing_usage_summary(current_user)
-    return {"subscription": subscription, "usage": usage}
+    account = sync_user_account_snapshot(current_user)
+    return {
+        "account": account,
+        "subscription": account["subscription"],
+        "usage": account["usage"],
+        "monthly_usage": account["monthly_usage"],
+        "payment_history": account["payment_history"],
+        "feature_permissions": account["feature_permissions"],
+    }
 
 
 @app.post("/api/billing/checkout")

@@ -9826,6 +9826,7 @@ export default function App() {
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
       setAuthSessionMode(data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user");
       setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : []);
+      applyServerAccountState(data);
       if ((data.session_mode || "") === "admin") {
         setCurrentPage("admin");
       }
@@ -10055,6 +10056,7 @@ export default function App() {
         }
         if (data.session_mode) setAuthSessionMode(data.session_mode);
         if (Array.isArray(data.available_modes)) setAuthAvailableModes(data.available_modes);
+        applyServerAccountState(data);
       }).catch(() => {
         // Keep the saved session locally if the server is temporarily unavailable.
       });
@@ -10169,11 +10171,20 @@ export default function App() {
     setIsDownloadMenuOpen(false);
   }, [activeTab, currentPage]);
 
+  const applyServerAccountState = (data = {}) => {
+    const account = data?.account && typeof data.account === "object" ? data.account : {};
+    const nextSubscription = data?.subscription || account.subscription || null;
+    const nextUsage = data?.usage || account.usage || null;
+    if (nextSubscription) setBillingSubscription(nextSubscription);
+    if (nextUsage) setBillingUsage(nextUsage);
+  };
+
   const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
     const nextToken = data?.token || "";
     const nextEmail = data?.email || fallbackEmail || "";
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
+    applyServerAccountState(data);
     setAuthToken(nextToken);
     setAuthEmail(nextEmail);
     setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
@@ -10218,6 +10229,7 @@ export default function App() {
         setAuthEmail(data.email || authEmail || "");
         setAuthSessionMode(data.session_mode || authSessionMode || "user");
         setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes);
+        applyServerAccountState(data);
         return nextToken;
       } catch (err) {
         const message = String(err?.message || "");
