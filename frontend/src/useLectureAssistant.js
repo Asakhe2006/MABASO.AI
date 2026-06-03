@@ -4068,6 +4068,17 @@ export function useLectureAssistant({
     if (previousContextKey === normalizedContextKey) return;
     lastContextKeyRef.current = normalizedContextKey;
 
+    const existingContextConversation = conversations.find((conversation) => (
+      conversation.contextKey === normalizedContextKey
+      && !conversation.isArchived
+      && conversation.messages.length
+    ));
+    if (existingContextConversation) {
+      setActiveConversationId(existingContextConversation.id);
+      setStatusText("Restored the chat history for this study guide.");
+      return;
+    }
+
     if (!activeConversation) {
       const nextConversation = createConversationRecord({ contextKey: normalizedContextKey, lectureLabel });
       setConversations((current) => sortConversations([nextConversation, ...current]));
@@ -4089,7 +4100,7 @@ export function useLectureAssistant({
     setConversations((current) => sortConversations([nextConversation, ...current]));
     setActiveConversationId(nextConversation.id);
     setStatusText("Started a fresh chat for the current lecture.");
-  }, [activeConversation, lectureLabel, normalizedContextKey]);
+  }, [activeConversation, conversations, lectureLabel, normalizedContextKey]);
 
   useEffect(() => {
     if (!conversations.length) return;

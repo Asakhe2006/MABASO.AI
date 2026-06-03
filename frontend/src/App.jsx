@@ -532,15 +532,15 @@ const fairSubscriptionPlans = [
     limits: "Daily limits reset every 24 hours. No card required.",
     howItWorks: "Free users can generate within the daily attempts below. When a tool reaches 0 attempts, that tool is blocked until the next daily reset or the user upgrades.",
     attempts: [
-      "15 AI chat messages/day",
-      "2 reports/day",
-      "2 study guides/day",
+      "10 AI chat questions/day",
+      "1 report/day",
+      "1 study guide/day",
       "2 formula solver uses/day",
-      "2 flashcard generations/day",
+      "1 flashcard generation/day, choose 5-10 cards",
       "1 PowerPoint/day",
-      "2 exams/tests/day",
+      "1 exam/test/day",
       "1 podcast/day",
-      "2 mind maps/day",
+      "1 mind map/day",
       "1 upload or source processing/day",
       "1 AI notes generation/day",
     ],
@@ -558,15 +558,15 @@ const fairSubscriptionPlans = [
     ],
     paymentType: "checkout",
     audience: "Active students who generate weekly study packs",
-    limits: "3× Free daily limits, faster generation queue, exports, stronger study tools.",
-    howItWorks: "Pro Student gives three times the Free daily attempts. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
+    limits: "Higher daily limits, faster generation queue, exports, stronger study tools.",
+    howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
-      "45 AI chat messages/day",
+      "20 AI chat questions/day",
       "6 reports/day",
       "6 study guides/day",
       "6 worked examples/day",
       "6 formula solver uses/day",
-      "6 flashcard generations/day",
+      "6 flashcard generations/day, choose 5-20 cards",
       "3 PowerPoints/day",
       "6 exams/tests/day",
       "3 podcasts/day",
@@ -594,6 +594,7 @@ const fairSubscriptionPlans = [
       "Unlimited chat",
       "Unlimited reports and expansions",
       "Unlimited study guides",
+      "Unlimited flashcard generations, choose 5-30 cards",
       "Unlimited worked examples",
       "Unlimited formula solver",
       "Unlimited exams and quizzes",
@@ -3167,7 +3168,6 @@ const GUIDE_SECTION_HEADINGS = [
   "VISUAL AIDS",
   "REAL-WORLD EXAMPLES",
   "PRACTICE QUESTIONS AND ANSWERS",
-  "FLASHCARDS",
   "EXAM TIPS",
 ];
 const GUIDE_SECTION_ALIAS_ENTRIES = [
@@ -3875,6 +3875,8 @@ export default function App() {
   const [formula, setFormula] = useState("");
   const [example, setExample] = useState("");
   const [flashcards, setFlashcards] = useState([]);
+  const [flashcardCount, setFlashcardCount] = useState(5);
+  const [isGeneratingFlashcards, setIsGeneratingFlashcards] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [studyImages, setStudyImages] = useState([]);
   const [lectureNoteSources, setLectureNoteSources] = useState([]);
@@ -5380,11 +5382,13 @@ export default function App() {
 
   const upsertWorkspaceHistoryItem = (item) => {
     const timestamp = new Date().toISOString();
-    const existingId = item?.id || activeHistoryId || "";
+    const forceNew = Boolean(item?.forceNew);
+    const { forceNew: _forceNew, ...safeItem } = item || {};
+    const existingId = forceNew ? "" : item?.id || activeHistoryId || "";
     const existingItem = existingId ? historyItems.find((entry) => entry.id === existingId) : null;
     const nextItem = {
       ...(existingItem || {}),
-      ...(item || {}),
+      ...safeItem,
       id: existingId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: existingItem?.createdAt || item?.createdAt || timestamp,
       updatedAt: timestamp,
@@ -6372,7 +6376,7 @@ export default function App() {
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Optional Test</p>
               <h4 className="mt-2 text-2xl font-semibold text-white">Generate the test only when you need it.</h4>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Your study guide, formulas, worked examples, and flashcards are already saved. Press the button below only when you want MABASO to spend tokens building a full test.</p>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Your study guide, formulas, and worked examples are already saved. Generate flashcards or a full test only when you need those separate study tools.</p>
             </div>
             <button type="button" onClick={generateQuiz} disabled={isGeneratingQuiz || !hasQuizGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
               {isGeneratingQuiz ? "Generating Test..." : "Generate Test"}
@@ -10883,6 +10887,7 @@ export default function App() {
         "/transcribe-video-url/",
         "/extract-slide-text/",
         "/generate-study-guide/",
+        "/generate-flashcards/",
         "/generate-quiz/",
         "/generate-teacher-lesson/",
         "/generate-podcast/",
@@ -10958,6 +10963,69 @@ export default function App() {
     return data;
   };
 
+  const getUsageFeatureState = (usage, featureId) => {
+    const normalizedFeatureId = String(featureId || "").trim().toLowerCase();
+    return (usage?.features || []).find((feature) => String(feature?.feature || "").trim().toLowerCase() === normalizedFeatureId) || null;
+  };
+
+  const formatUsageResetWait = (resetAt = "") => {
+    const resetTime = new Date(resetAt).getTime();
+    if (!Number.isFinite(resetTime)) return "";
+    const remainingMs = Math.max(0, resetTime - Date.now());
+    const hours = Math.floor(remainingMs / (1000 * 60 * 60));
+    const minutes = Math.ceil((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours && minutes) return `${hours} hour${hours === 1 ? "" : "s"} ${minutes} minute${minutes === 1 ? "" : "s"}`;
+    if (hours) return `${hours} hour${hours === 1 ? "" : "s"}`;
+    return `${Math.max(1, minutes)} minute${minutes === 1 ? "" : "s"}`;
+  };
+
+  const buildUsageBlockedMessage = (featureState, usage, fallbackLabel = "this feature") => {
+    const label = featureState?.label || fallbackLabel;
+    const resetWait = formatUsageResetWait(featureState?.reset_at || usage?.reset_at);
+    const resetLabel = featureState?.reset_label || usage?.reset_label || "the next daily reset";
+    const planId = String(usage?.plan_id || billingSubscription?.plan_id || "free").replaceAll("_", " ");
+    const prefix = planId === "free"
+      ? `You have used all free attempts for today for ${label}.`
+      : `You have used all ${planId} attempts for today for ${label}.`;
+    return `${prefix} ${resetWait ? `Your usage will reset in ${resetWait}` : "Your usage will reset"} at ${resetLabel}. Upgrade to continue using premium features.`;
+  };
+
+  const ensurePremiumFeatureAvailable = async (featureId, fallbackLabel = "this feature") => {
+    let usage = billingUsage;
+    if (!usage && authToken) {
+      try {
+        const data = await refreshBillingStatus();
+        usage = data?.usage || null;
+      } catch {
+        usage = null;
+      }
+    }
+    const subscriptionMessage = billingSubscription?.message || "";
+    const featureState = getUsageFeatureState(usage, featureId);
+    if (featureState && !featureState.unlimited && Number(featureState.remaining) <= 0) {
+      const message = `${subscriptionMessage ? `${subscriptionMessage} ` : ""}${buildUsageBlockedMessage(featureState, usage, fallbackLabel)}`;
+      setError(message);
+      setStatus(message);
+      setIsUpgradeModalOpen(true);
+      return false;
+    }
+    return true;
+  };
+
+  const getFlashcardCountBounds = () => {
+    const planId = String(billingUsage?.plan_id || billingSubscription?.plan_id || "free").toLowerCase();
+    if (planId.includes("premium")) return { min: 5, max: 30 };
+    if (planId.includes("pro")) return { min: 5, max: 20 };
+    return { min: 5, max: 10 };
+  };
+
+  const clampFlashcardCountForPlan = (value) => {
+    const { min, max } = getFlashcardCountBounds();
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return min;
+    return Math.max(min, Math.min(max, Math.round(numericValue)));
+  };
+
   const startBillingCheckout = async (plan) => {
     if (!plan) return;
     if (plan.paymentType === "free") {
@@ -11010,20 +11078,34 @@ export default function App() {
     refreshBillingStatus().catch((err) => setBillingCheckoutMessage((current) => current || getReadableRequestError(err)));
   }, [authToken, isUpgradeModalOpen]);
 
-  const requestLectureAssistantStream = (payload, signal) => authFetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    timeoutMs: 95000,
-    signal,
-  });
+  useEffect(() => {
+    setFlashcardCount((current) => clampFlashcardCountForPlan(current));
+  }, [billingUsage?.plan_id, billingSubscription?.plan_id]);
 
-  const requestLectureAssistantTranscription = (formData, signal) => authFetch("/api/voice/transcribe", {
-    method: "POST",
-    body: formData,
-    timeoutMs: 45000,
-    signal,
-  });
+  const requestLectureAssistantStream = async (payload, signal) => {
+    if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
+      throw new Error("You have used all free attempts for today.");
+    }
+    return authFetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      timeoutMs: 95000,
+      signal,
+    });
+  };
+
+  const requestLectureAssistantTranscription = async (formData, signal) => {
+    if (!(await ensurePremiumFeatureAvailable("voice_transcription", "Voice messages"))) {
+      throw new Error("You have used all free voice attempts for today.");
+    }
+    return authFetch("/api/voice/transcribe", {
+      method: "POST",
+      body: formData,
+      timeoutMs: 45000,
+      signal,
+    });
+  };
 
   const requestLectureAssistantConversationList = async ({
     search = "",
@@ -13039,6 +13121,13 @@ export default function App() {
   const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus }) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return { extractedEntries: [], addedNames: [], skippedNames: [] };
+    const requiresServerExtraction = files.some((selectedFile) => {
+      const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
+      return !isTextFile;
+    });
+    if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
+      throw new Error("You have used all free source-processing attempts for today.");
+    }
 
     const extractedEntries = [];
     const addedNames = [];
@@ -13175,6 +13264,9 @@ export default function App() {
 
     if (!selectedFile) {
       throw new Error("Upload or record a lecture first.");
+    }
+    if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
+      throw new Error("You have used all free source-processing attempts for today.");
     }
 
     setIsTranscribing(true);
@@ -13712,6 +13804,7 @@ export default function App() {
     if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
+    if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
     setIsGeneratingSummary(true);
     setError("");
     setUsedFallbackSummary(false);
@@ -13797,7 +13890,8 @@ export default function App() {
         setIsTeacherPlaying(false);
         setIsTeacherPaused(false);
         addHistoryItem({
-          id: activeHistoryId || "",
+          forceNew: true,
+          id: "",
           title: extractHistoryTitle(job.summary || "", sourceLabel),
           fileName: sourceLabel,
           summary: job.summary || "",
@@ -13840,10 +13934,90 @@ export default function App() {
     }
   };
 
+  const generateFlashcards = async () => {
+    if (!hasQuizGenerationInputs) {
+      return setError("Generate a study guide or add lecture material before creating flashcards.");
+    }
+    const requestedCount = clampFlashcardCountForPlan(flashcardCount);
+    if (!(await ensurePremiumFeatureAvailable("flashcards", "Flashcards"))) return false;
+
+    setIsGeneratingFlashcards(true);
+    setError("");
+    setCurrentPage("workspace");
+    setActiveTab("flashcards");
+    setStatus(`Generating ${requestedCount} flashcards...`);
+    setProgress(15);
+    setCurrentJobType("flashcards");
+
+    try {
+      const response = await authFetch("/generate-flashcards/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript,
+          summary,
+          lecture_notes: lectureNotes,
+          lecture_slides: lectureSlides,
+          past_question_papers: pastQuestionPapers,
+          language: outputLanguage,
+          count: requestedCount,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Flashcard generation failed.");
+      const nextFlashcards = Array.isArray(data.flashcards) ? data.flashcards : [];
+      setFlashcards(nextFlashcards);
+      setFlashcardCount(clampFlashcardCountForPlan(data.requested_count || requestedCount));
+      const sourceLabel = getPrimarySourceLabel({
+        fileName: file?.name || "",
+        videoUrl,
+        lectureNotesFileName,
+        lectureSlideFileNames,
+        pastQuestionPaperFileNames,
+      });
+      addHistoryItem({
+        id: activeHistoryId || "",
+        title: extractHistoryTitle(summary || "", sourceLabel),
+        fileName: sourceLabel,
+        summary,
+        transcript,
+        formula,
+        example,
+        flashcards: nextFlashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+      });
+      setProgress(100);
+      setStatus(`${nextFlashcards.length} flashcard${nextFlashcards.length === 1 ? "" : "s"} ready.`);
+    } catch (err) {
+      setError(err.message || "Flashcard generation failed.");
+      setStatus("Flashcard generation failed.");
+    } finally {
+      setIsGeneratingFlashcards(false);
+      setCurrentJobType("");
+      setProgress(0);
+    }
+  };
+
   const generateQuiz = async () => {
     if (!hasQuizGenerationInputs) {
       return setError("Generate a study guide or add lecture material before creating the test.");
     }
+    if (!(await ensurePremiumFeatureAvailable("quiz", "Quizzes"))) return false;
 
     setIsGeneratingQuiz(true);
     setError("");
@@ -13936,6 +14110,7 @@ export default function App() {
     if (!(resolvedSummary.trim() || resolvedTranscript.trim() || resolvedLectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
     }
+    if (!(await ensurePremiumFeatureAvailable("presentation", "Presentations"))) return false;
 
     setIsGeneratingPresentation(true);
     setError("");
@@ -14095,6 +14270,7 @@ export default function App() {
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the podcast debate.");
     }
+    if (!(await ensurePremiumFeatureAvailable("podcast", "Podcasts"))) return false;
 
     setIsGeneratingPodcast(true);
     setError("");
@@ -14214,6 +14390,7 @@ export default function App() {
     if (!(activeConfig.reportTitle.trim() || summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
+    if (!(await ensurePremiumFeatureAvailable("report", "Reports"))) return false;
 
     setIsGeneratingReport(true);
     setError("");
@@ -14312,6 +14489,7 @@ export default function App() {
     if (!hasMindMapGenerationInputs) {
       return setError("Add lecture material, generate a report, chat with AI, paste text, or enter a topic before creating the mind map.");
     }
+    if (!(await ensurePremiumFeatureAvailable("mind_map", "Mind maps"))) return false;
 
     setIsGeneratingMindMap(true);
     setSelectedMindMapNode(null);
@@ -14765,6 +14943,7 @@ export default function App() {
 
   const transcribeVideoLink = async () => {
     if (!videoUrl.trim()) return setError("Paste a video link first.");
+    if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) return false;
     setIsTranscribingVideo(true);
     setError("");
     setStatus("Submitting video link for transcription...");
@@ -15085,6 +15264,9 @@ export default function App() {
     deliveryMode = "chat",
     currentSection = "",
   } = {}) => {
+    if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
+      throw new Error("You have used all free study chat attempts for today.");
+    }
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -17337,10 +17519,42 @@ export default function App() {
                   />
                 ) : null}
                 {activeTab === "flashcards" ? (
-                  <StudyToolFlashcardsPanel
-                    cards={flashcards}
-                    emptyMessage="Flashcards will appear here after study guide generation."
-                  />
+                  <div className="space-y-5">
+                    <div className="rounded-[26px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(34,197,94,0.12),rgba(15,23,42,0.78))] p-5">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Flashcard Generator</p>
+                          <h4 className="mt-2 text-2xl font-semibold text-white">Choose how many cards you want.</h4>
+                          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">
+                            Flashcards are no longer generated automatically with the study guide. Pick a count, then generate only when you need active recall practice.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-end gap-3">
+                          <label className="block">
+                            <span className="block text-xs uppercase tracking-[0.2em] text-slate-400">
+                              Cards ({getFlashcardCountBounds().min}-{getFlashcardCountBounds().max})
+                            </span>
+                            <input
+                              type="number"
+                              min={getFlashcardCountBounds().min}
+                              max={getFlashcardCountBounds().max}
+                              value={flashcardCount}
+                              onChange={(event) => setFlashcardCount(clampFlashcardCountForPlan(event.target.value))}
+                              className="mt-2 w-28 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-white outline-none"
+                            />
+                          </label>
+                          <button type="button" onClick={generateFlashcards} disabled={isGeneratingFlashcards || !hasQuizGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+                            {isGeneratingFlashcards ? "Generating..." : "Generate Flashcards"}
+                          </button>
+                        </div>
+                      </div>
+                      {isGeneratingFlashcards ? <p className="mt-4 text-sm leading-7 text-slate-200">{status || "Generating flashcards..."}</p> : null}
+                    </div>
+                    <StudyToolFlashcardsPanel
+                      cards={flashcards}
+                      emptyMessage="No flashcards generated yet. Choose a count and press Generate Flashcards."
+                    />
+                  </div>
                 ) : null}
                 {activeTab === "quiz" ? (
                   selectedQuizQuestions.length

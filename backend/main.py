@@ -391,15 +391,15 @@ def get_int_env(name: str, default: int) -> int:
 
 BILLING_PLAN_QUOTAS = {
     "free": {
-        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15),
-        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15),
-        "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_DAY", 2),
+        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 10),
+        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 10),
+        "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_DAY", 1),
         "worked_examples": get_int_env("FREE_PLAN_WORKED_EXAMPLES_PER_DAY", 2),
         "formula_solver": get_int_env("FREE_PLAN_FORMULA_SOLVER_PER_DAY", 2),
-        "flashcards": get_int_env("FREE_PLAN_FLASHCARDS_PER_DAY", 2),
-        "quiz": get_int_env("FREE_PLAN_EXAMS_PER_DAY", 2),
-        "report": get_int_env("FREE_PLAN_REPORTS_PER_DAY", 2),
-        "mind_map": get_int_env("FREE_PLAN_MIND_MAPS_PER_DAY", 2),
+        "flashcards": get_int_env("FREE_PLAN_FLASHCARDS_PER_DAY", 1),
+        "quiz": get_int_env("FREE_PLAN_EXAMS_PER_DAY", 1),
+        "report": get_int_env("FREE_PLAN_REPORTS_PER_DAY", 1),
+        "mind_map": get_int_env("FREE_PLAN_MIND_MAPS_PER_DAY", 1),
         "presentation": get_int_env("FREE_PLAN_POWERPOINTS_PER_DAY", 1),
         "podcast": get_int_env("FREE_PLAN_PODCASTS_PER_DAY", 1),
         "ai_notes": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
@@ -408,8 +408,8 @@ BILLING_PLAN_QUOTAS = {
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
     },
     "pro_student": {
-        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 45),
-        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 45),
+        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
         "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 6),
         "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 6),
         "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 6),
@@ -588,7 +588,6 @@ Return clean Markdown with these sections:
 - VISUAL AIDS
 - REAL-WORLD EXAMPLES
 - PRACTICE QUESTIONS AND ANSWERS
-- FLASHCARDS
 - EXAM TIPS
 
 Rules:
@@ -627,12 +626,7 @@ Rules:
 - Only include a bar graph, line graph, axis sketch, or trend diagram when the lecture discusses data, change over time, or relationships between variables. Do not invent fake numerical data.
 - Use simple text layouts that students can read easily in plain Markdown.
 - In PRACTICE QUESTIONS AND ANSWERS, include 4 to 8 short exam-style revision questions with brief model answers.
-- Keep PRACTICE QUESTIONS AND ANSWERS clearly separate from FLASHCARDS.
-- In FLASHCARDS, use this exact style for every card:
-  Q: ...
-
-  A: ...
-- Leave a blank line between Q and A, and a blank line between flashcards so they are easy to read.
+- Do not include a FLASHCARDS section. Flashcards are generated separately only when the user presses Generate Flashcards.
 - If lecture notes or lecture slides are provided together with the transcript, use all sources together. Prefer explicit formulas, worked examples, definitions, and likely assessment points from the slides or notes when they improve clarity.
 - Prefer well-structured notes, slides, and past-paper references over messy transcript wording when they explain the topic more clearly.
 - Ignore clearly corrupted OCR, random fragments, duplicate scraps, broken symbols, or unrelated extraction noise instead of mixing them into the final notes.
@@ -735,21 +729,16 @@ MOBILE-FIRST READABILITY RULES
 - Prioritize readability, mobile responsiveness, visual clarity, professional academic structure, and simple scanning over compactness.
 
 MANDATORY COMPATIBILITY RULES
-- Because the app builds formulas, worked-example, flashcard, quiz, tutor-session, and presentation assets from the guide, keep these exact headings whenever the content supports them:
+- Because the app builds formulas, worked-example, quiz, tutor-session, and presentation assets from the guide, keep these exact headings whenever the content supports them:
   - ## IMPORTANT FORMULAS
   - ## WORKED EXAMPLES
   - ## STEP-BY-STEP EXPLANATIONS
   - ## PRACTICE QUESTIONS AND ANSWERS
-  - ## FLASHCARDS
 - If the topic includes formulas, always include ## IMPORTANT FORMULAS.
 - If the topic includes calculations, derivations, worked procedures, or problem-solving, always include ## WORKED EXAMPLES.
 - Always include ## STEP-BY-STEP EXPLANATIONS with 3 to 6 clear sequenced steps or step-labeled bullets that teach the learner how to move through the method, process, argument, or reasoning. This section is mandatory and is never optional.
 - Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
-- Always include ## FLASHCARDS and use this exact card format for every card:
-  Q: ...
-
-  A: ...
-- Leave a blank line between Q and A, and a blank line between flashcards.
+- Do not include a FLASHCARDS section in the study guide. Flashcards are generated separately only when the user presses Generate Flashcards.
 
 FORMATTING AND DEPTH RULES
 - Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
@@ -961,6 +950,16 @@ class QuizGenerationRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     language: str = "English"
+
+
+class FlashcardGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
+    count: int = 5
 
 
 class TeacherLessonRequest(BaseModel):
@@ -4749,17 +4748,119 @@ def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
 
 def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
     if not row:
-        return {"status": "free", "plan_id": "free", "provider": "", "amount_zar": "0.00"}
+        return {
+            "status": "free",
+            "plan_id": "free",
+            "provider": "",
+            "amount_zar": "0.00",
+            "current_period_start": "",
+            "current_period_end": "",
+            "cancel_at": "",
+            "updated_at": "",
+            "active": False,
+            "renewal_status": "free",
+        }
+    normalized_status = compact_text(row["status"]).lower()
+    normalized_plan_id = normalize_billing_plan_id(row["plan_id"])
     return {
-        "status": row["status"],
-        "plan_id": normalize_billing_plan_id(row["plan_id"]),
+        "status": normalized_status,
+        "plan_id": normalized_plan_id if normalized_status == "active" else "free",
+        "paid_plan_id": normalized_plan_id,
         "provider": row["provider"],
         "amount_zar": row["amount_zar"],
         "current_period_start": row["current_period_start"],
         "current_period_end": row["current_period_end"],
         "cancel_at": row["cancel_at"],
         "updated_at": row["updated_at"],
+        "active": normalized_status == "active",
+        "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("renews" if normalized_status == "active" else normalized_status),
+        "message": (
+            "Your subscription has expired and your account has been returned to the Free Plan."
+            if normalized_status == "expired"
+            else ""
+        ),
     }
+
+
+def parse_billing_datetime(value: Any) -> datetime | None:
+    text = compact_text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def expire_subscription_if_needed(email: str, row: sqlite3.Row | None = None) -> sqlite3.Row | None:
+    normalized_email = normalize_email(email)
+    if is_admin_email(normalized_email):
+        return row
+    current_row = row
+    if current_row is None:
+        with get_db_connection() as connection:
+            current_row = connection.execute(
+                """
+                SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
+                       amount_zar, current_period_start, current_period_end, cancel_at,
+                       raw_event_json, created_at, updated_at
+                FROM billing_subscriptions
+                WHERE email = ?
+                """,
+                (normalized_email,),
+            ).fetchone()
+    if not current_row or compact_text(current_row["status"]).lower() != "active":
+        return current_row
+    period_end = parse_billing_datetime(current_row["current_period_end"])
+    if not period_end or period_end >= utc_now():
+        return current_row
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE billing_subscriptions
+            SET status = 'expired', updated_at = ?
+            WHERE email = ? AND status = 'active'
+            """,
+            (now_iso, normalized_email),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_events (
+                id, email, checkout_session_id, provider, event_type, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalized_email,
+                "",
+                compact_text(current_row["provider"], "system"),
+                "SUBSCRIPTION_EXPIRED",
+                json.dumps(
+                    {
+                        "plan_id": normalize_billing_plan_id(current_row["plan_id"]),
+                        "current_period_end": current_row["current_period_end"],
+                        "downgraded_to": "free",
+                    },
+                    ensure_ascii=False,
+                ),
+                now_iso,
+            ),
+        )
+        return connection.execute(
+            """
+            SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
+                   amount_zar, current_period_start, current_period_end, cancel_at,
+                   raw_event_json, created_at, updated_at
+            FROM billing_subscriptions
+            WHERE email = ?
+            """,
+            (normalized_email,),
+        ).fetchone()
 
 
 def get_user_subscription(email: str) -> dict[str, Any]:
@@ -4775,6 +4876,8 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             "current_period_end": "",
             "cancel_at": "",
             "updated_at": now_iso,
+            "active": True,
+            "renewal_status": "admin",
         }
     with get_db_connection() as connection:
         row = connection.execute(
@@ -4787,6 +4890,7 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             """,
             (normalized_email,),
         ).fetchone()
+    row = expire_subscription_if_needed(normalized_email, row)
     return serialize_subscription_row(row)
 
 
@@ -4803,14 +4907,13 @@ def get_active_subscription_row(email: str) -> sqlite3.Row | None:
             """,
             (normalized_email,),
         ).fetchone()
+    row = expire_subscription_if_needed(normalized_email, row)
     if not row:
         return None
     if compact_text(row["status"]).lower() != "active":
         return None
-    period_end_raw = compact_text(row["current_period_end"])
-    try:
-        period_end = datetime.fromisoformat(period_end_raw)
-    except ValueError:
+    period_end = parse_billing_datetime(row["current_period_end"])
+    if not period_end:
         return None
     if period_end < utc_now():
         return None
@@ -4841,6 +4944,19 @@ def get_next_usage_reset(now: datetime | None = None) -> datetime:
 def format_usage_reset_time(now: datetime | None = None) -> str:
     reset_at = get_next_usage_reset(now)
     return reset_at.strftime("%H:%M %Z on %d %B %Y")
+
+
+def format_usage_reset_wait(now: datetime | None = None) -> str:
+    current = (now or utc_now()).astimezone(USAGE_TIMEZONE)
+    reset_at = get_next_usage_reset(current)
+    remaining_seconds = max(0, int((reset_at - current).total_seconds()))
+    hours = remaining_seconds // 3600
+    minutes = (remaining_seconds % 3600) // 60
+    if hours and minutes:
+        return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+    if hours:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    return f"{max(1, minutes)} minute{'s' if minutes != 1 else ''}"
 
 
 def get_plan_quota(plan_id: str, feature: str) -> int:
@@ -4918,9 +5034,11 @@ def consume_plan_quota(
     limit = get_plan_quota(plan_id, normalized_feature)
     label = BILLING_FEATURE_LABELS.get(normalized_feature, normalized_feature.replace("_", " ").title())
     reset_label = format_usage_reset_time()
+    reset_wait = format_usage_reset_wait()
     reset_at = get_next_usage_reset().isoformat()
 
     with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             """
             SELECT COALESCE(SUM(quantity), 0) AS total_quantity
@@ -4933,7 +5051,7 @@ def consume_plan_quota(
         if limit >= 0 and used + safe_quantity > limit:
             remaining = max(0, limit - used)
             base_limit_message = (
-                "Today's free limit has been reached. Upgrade to Pro Student for more attempts."
+                f"You have used all free attempts for today for {label}. Upgrade to continue using premium features."
                 if plan_id == "free"
                 else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
             )
@@ -4952,7 +5070,7 @@ def consume_plan_quota(
                 detail=(
                     f"{base_limit_message} "
                     f"Attempts remaining today: {remaining}/{limit}. "
-                    f"You can generate again at {reset_label} for {normalized_email}."
+                    f"Your usage will reset in {reset_wait} at {reset_label} for {normalized_email}."
                     f"{upgrade_hint}"
                 ),
             )
@@ -14172,7 +14290,7 @@ def normalize_answer_points(value: Any, fallback_answer: str, marks: int) -> lis
     return items[: max(minimum_points, 1)]
 
 
-def normalize_flashcards(raw_cards: Any, fallback_cards: list[dict[str, str]]) -> list[dict[str, str]]:
+def normalize_flashcards(raw_cards: Any, fallback_cards: list[dict[str, str]], limit: int = 12) -> list[dict[str, str]]:
     cards: list[dict[str, str]] = []
     if isinstance(raw_cards, list):
         for entry in raw_cards:
@@ -14183,8 +14301,8 @@ def normalize_flashcards(raw_cards: Any, fallback_cards: list[dict[str, str]]) -
             if question and answer:
                 cards.append({"question": question, "answer": answer})
     if cards:
-        return cards[:12]
-    return fallback_cards[:12]
+        return cards[:limit]
+    return fallback_cards[:limit]
 
 
 def make_short_answer_question(
@@ -14386,7 +14504,7 @@ async def generate_structured_study_assets(
                     "role": "system",
                     "content": (
                         "You build structured study assets for a university revision app. "
-                        "Return only valid JSON with the keys formula, worked_example, and flashcards.\n\n"
+                        "Return only valid JSON with the keys formula and worked_example.\n\n"
                         "Rules:\n"
                         "- Do not mention how a student should feel.\n"
                         "- Use plain readable formulas, never LaTeX.\n"
@@ -14396,7 +14514,6 @@ async def generate_structured_study_assets(
                         "- If the supplied material contains a derivation, rearrangement, or formula build-up, include that derivation clearly inside `worked_example`.\n"
                         "- `worked_example` must explain why each step happens, why the formula fits, and how the result is checked.\n"
                         "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"
-                        "- `flashcards` should contain 10 to 12 items, each with `question` and `answer`.\n"
                         "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
                         f"- Write every returned field in {output_language}.\n"
                         "- Return JSON only, with no markdown code fence.\n\n"
@@ -14425,8 +14542,103 @@ async def generate_structured_study_assets(
             transcript=transcript,
             past_question_papers=past_question_papers,
         ),
-        "flashcards": normalize_flashcards(generated_assets.get("flashcards"), fallback_assets["flashcards"]),
+        "flashcards": [],
     }
+
+
+def get_flashcard_count_bounds(plan_id: str) -> tuple[int, int]:
+    quota_plan_id = get_billing_quota_plan_id(plan_id)
+    if quota_plan_id == "premium_student":
+        return 5, 30
+    if quota_plan_id == "pro_student":
+        return 5, 20
+    return 5, 10
+
+
+def validate_flashcard_count_for_user(email: str, requested_count: int) -> tuple[int, str, int, int]:
+    plan_id = get_effective_plan_id(email)
+    minimum_count, maximum_count = get_flashcard_count_bounds(plan_id)
+    try:
+        count = int(requested_count)
+    except (TypeError, ValueError):
+        count = minimum_count
+    if count < minimum_count or count > maximum_count:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Choose between {minimum_count} and {maximum_count} flashcards for your current plan. "
+                "Upgrade for larger flashcard sets."
+            ),
+        )
+    return count, plan_id, minimum_count, maximum_count
+
+
+async def generate_flashcards_package(
+    *,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    output_language: str,
+    count: int,
+) -> list[dict[str, str]]:
+    fallback_assets = extract_study_assets(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
+    source_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+    ]
+    combined_source = "\n\n".join(block for block in source_blocks if block)
+    fallback_cards = normalize_flashcards([], fallback_assets["flashcards"], limit=count)
+
+    def _generate_flashcards() -> dict[str, Any]:
+        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 2600),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create active-recall flashcards for students. "
+                        "Return only valid JSON with one key: flashcards.\n\n"
+                        "Rules:\n"
+                        f"- Create exactly {count} flashcards.\n"
+                        "- Each item must have question and answer.\n"
+                        "- Questions must test definitions, formulas, steps, comparisons, causes/effects, and examples from the supplied material.\n"
+                        "- Avoid duplicate questions and vague prompts.\n"
+                        "- Keep answers concise but complete enough for revision.\n"
+                        f"- Write all cards in {output_language}.\n"
+                        "- Return JSON only, with no markdown code fence."
+                    ),
+                },
+                {"role": "user", "content": combined_source},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    try:
+        generated = await asyncio.to_thread(_generate_flashcards)
+    except Exception as exc:
+        logger.warning("Flashcard generation failed, using fallback cards: %s", exc)
+        generated = {}
+    cards = normalize_flashcards(generated.get("flashcards"), fallback_cards, limit=count)
+    if len(cards) < count:
+        extra_cards = build_flashcard_fallbacks(combined_source)
+        for card in extra_cards:
+            if len(cards) >= count:
+                break
+            if not any(card["question"].lower() == existing["question"].lower() for existing in cards):
+                cards.append(card)
+    return cards[:count]
 
 
 def build_quiz_generation_source_text(
@@ -15884,7 +16096,6 @@ async def upload_audio(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
     enforce_rate_limit(scope="upload_audio", request=request, limit=18, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
     ensure_allowed_audio_video_upload(file.filename, file.content_type)
 
     job_id = create_job("transcription", owner_email=current_user)
@@ -15906,6 +16117,13 @@ async def upload_audio(
                 ),
             )
 
+        try:
+            consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
+        except HTTPException:
+            if file_path.exists():
+                file_path.unlink()
+            jobs.pop(job_id, None)
+            raise
         asyncio.create_task(run_transcription_job(job_id, file_path))
         record_audit_log(
             action="lecture.upload.request",
@@ -15929,7 +16147,6 @@ async def transcribe_video_url(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="transcribe_video_url", request=request, limit=12, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
     try:
         video_url = normalize_video_url(payload.video_url)
     except ValueError as exc:
@@ -15939,6 +16156,7 @@ async def transcribe_video_url(
     if not can_process_video_url(video_url):
         raise HTTPException(status_code=500, detail="Video-link transcription is not configured on the backend yet.")
 
+    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
     job_id = create_job("video_transcription", owner_email=current_user)
     update_job(job_id, status="processing", stage="Preparing video link", progress=1)
     asyncio.create_task(run_video_transcription_job(job_id, video_url))
@@ -15964,7 +16182,6 @@ async def extract_slide_text(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No study source file selected.")
     enforce_rate_limit(scope="extract_slide_text", request=request, limit=40, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "extract_slide_text"})
     ensure_allowed_study_source_upload(file.filename, file.content_type)
 
     ensure_openai_key()
@@ -15986,6 +16203,7 @@ async def extract_slide_text(
                 ),
             )
 
+        consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "extract_slide_text"})
         if is_text_upload(file.filename, content_type):
             text = file_bytes.decode("utf-8", errors="ignore").strip()
             if not text:
@@ -16054,7 +16272,6 @@ async def create_study_guide(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_study_guide", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
     transcript = payload.transcript.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
@@ -16067,6 +16284,7 @@ async def create_study_guide(
             detail="Upload a transcript, notes, slides, or past question paper before generating a study guide.",
         )
 
+    consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
     ensure_openai_key()
     job_id = create_job("study_guide", owner_email=current_user)
     update_job(job_id, _output_language=output_language)
@@ -16101,7 +16319,6 @@ async def create_quiz(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_quiz", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="quiz", request=request, metadata={"route": "generate_quiz"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -16115,6 +16332,7 @@ async def create_quiz(
             detail="Generate a study guide or add lecture material before creating the test.",
         )
 
+    consume_plan_quota(email=current_user, feature="quiz", request=request, metadata={"route": "generate_quiz"})
     ensure_openai_key()
     job_id = create_job("quiz", owner_email=current_user)
     update_job(job_id, _output_language=output_language)
@@ -16141,6 +16359,58 @@ async def create_quiz(
     return {"job_id": job_id}
 
 
+@app.post("/generate-flashcards/")
+async def create_flashcards(
+    payload: FlashcardGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(scope="generate_flashcards", request=request, limit=24, window_seconds=60 * 60, identity=current_user)
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
+
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(
+            status_code=400,
+            detail="Generate a study guide or add lecture material before creating flashcards.",
+        )
+
+    count, plan_id, minimum_count, maximum_count = validate_flashcard_count_for_user(current_user, payload.count)
+    consume_plan_quota(email=current_user, feature="flashcards", request=request, metadata={"route": "generate_flashcards", "count": count})
+    ensure_openai_key()
+    cards = await generate_flashcards_package(
+        summary=summary,
+        transcript=transcript,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        past_question_papers=past_question_papers,
+        output_language=output_language,
+        count=count,
+    )
+    record_audit_log(
+        action="flashcards.request",
+        email=current_user,
+        request=request,
+        resource_type="flashcards",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"count": count, "plan_id": plan_id, "min": minimum_count, "max": maximum_count},
+    )
+    return {
+        "flashcards": cards,
+        "count": len(cards),
+        "requested_count": count,
+        "plan_id": plan_id,
+        "min_count": minimum_count,
+        "max_count": maximum_count,
+    }
+
+
 @app.post("/generate-teacher-lesson/")
 async def create_teacher_lesson(
     payload: TeacherLessonRequest,
@@ -16149,7 +16419,6 @@ async def create_teacher_lesson(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_teacher_lesson", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="teacher_lesson", request=request, metadata={"route": "generate_teacher_lesson"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     formulas = payload.formulas.strip()
@@ -16171,6 +16440,7 @@ async def create_teacher_lesson(
             detail="Generate a study guide or add lecture material before starting Mabaso AI Tutor.",
         )
 
+    consume_plan_quota(email=current_user, feature="teacher_lesson", request=request, metadata={"route": "generate_teacher_lesson"})
     ensure_openai_key()
     job_id = create_job("teacher_lesson", owner_email=current_user)
     update_job(job_id, _output_language=output_language)
@@ -16542,7 +16812,6 @@ async def create_podcast(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_podcast", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -16556,6 +16825,7 @@ async def create_podcast(
             detail="Generate a study guide or add lecture material before creating the podcast debate.",
         )
 
+    consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     ensure_openai_key()
     speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
     target_minutes = clamp_podcast_target_minutes(payload.target_minutes)
@@ -16594,7 +16864,6 @@ async def create_report(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_report", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     transcript = payload.transcript.strip()
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
@@ -16608,6 +16877,7 @@ async def create_report(
             detail="Enter a report topic or add lecture material before creating the academic report.",
         )
 
+    consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     ensure_openai_key()
     job_id = create_job("report", owner_email=current_user)
     update_job(
@@ -16655,7 +16925,6 @@ async def create_mind_map(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_mind_map", request=request, limit=20, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     output_language = normalize_output_language(payload.language)
     source_context = build_mind_map_source_context(payload)
 
@@ -16665,6 +16934,7 @@ async def create_mind_map(
             detail="Add lecture material, paste text, generate a report, or enter a topic before creating the mind map.",
         )
 
+    consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     ensure_openai_key()
     depth_level = normalize_mind_map_depth(payload.depth_level)
     job_id = create_job("mind_map", owner_email=current_user)
@@ -16694,7 +16964,6 @@ async def create_presentation(
 ):
     started_at = utc_now()
     enforce_rate_limit(scope="generate_presentation", request=request, limit=16, window_seconds=60 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     template_file_bytes: bytes | None = None
     template_file_name = ""
     content_type = (request.headers.get("content-type") or "").lower()
@@ -16744,6 +17013,7 @@ async def create_presentation(
             detail="Generate a study guide or add lecture material before creating the PowerPoint presentation.",
         )
 
+    consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     ensure_openai_key()
     ensure_presentation_support()
     design_id = normalize_presentation_design_id(payload.design_id)
@@ -16880,10 +17150,10 @@ async def ask_study_assistant(
     current_user: str = Depends(require_authenticated_user),
 ):
     enforce_rate_limit(scope="study_chat", request=request, limit=60, window_seconds=10 * 60, identity=current_user)
-    consume_plan_quota(email=current_user, feature="study_chat", request=request, metadata={"route": "ask_study_assistant"})
-    ensure_openai_key()
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="A question is required.")
+    consume_plan_quota(email=current_user, feature="study_chat", request=request, metadata={"route": "ask_study_assistant"})
+    ensure_openai_key()
     reference_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
 
     def _ask() -> str:
@@ -17121,14 +17391,14 @@ def create_lecture_assistant_stream(
         window_seconds=10 * 60,
         identity=current_user,
     )
+    if not compact_text(payload.question):
+        raise HTTPException(status_code=400, detail="A question is required.")
     consume_plan_quota(
         email=current_user,
         feature="study_chat",
         request=request,
         metadata={"route": "lecture_assistant_stream", "voice_mode": bool(payload.voice_mode)},
     )
-    if not compact_text(payload.question):
-        raise HTTPException(status_code=400, detail="A question is required.")
 
     started_at = utc_now()
     persisted_conversation, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
