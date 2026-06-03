@@ -144,29 +144,29 @@ export const sitePages = [
       preview: {
         kicker: "Fair billing",
         title: "Free, Student Plus, Pro Research, and Institution plans.",
-        subtitle: "Every paid plan should show included credits before payment and should never invent usage or billing values when backend metrics are missing.",
+        subtitle: "Paid plans currently use PayFast secure checkout: Student Plus is R49/month and Pro Research is R149/month.",
       },
     },
     modules: [
       { icon: "shield-check", title: "Free Study", description: "No card required, small monthly credits, and enough access to test study guides, chat, and basic exports." },
-      { icon: "graduation-cap", title: "Student Plus", description: "Affordable student plan with higher AI credits, reports, quizzes, mind maps, and PDF/DOCX exports." },
-      { icon: "brain", title: "Pro Research", description: "Higher document limits, advanced academic reports, presentations, priority queue access, and strict spend caps." },
+      { icon: "graduation-cap", title: "Student Plus", description: "R49/month with higher AI credits, reports, quizzes, mind maps, and PDF/DOCX exports." },
+      { icon: "brain", title: "Pro Research", description: "R149/month with higher document limits, advanced academic reports, presentations, priority queue access, and strict spend caps." },
       { icon: "building-2", title: "Team / Institution", description: "Shared seats, pooled credits, admin controls, invoices, audit logs, and approval before extra billing." },
     ],
     workflow: [
-      "Show exact included credits before checkout",
+      "Show exact monthly prices before checkout",
       "Warn users at 50%, 80%, and 100% usage",
       "Keep paid overages off by default",
       "Make cancellation and downgrade controls visible",
-      "Do not show fake billing metrics before backend billing is connected",
+      "Do not show fake usage or billing metrics when backend data is missing",
     ],
     emptyState: {
       title: "Billing is transparent by design.",
-      description: "Payments should only go live after real usage tracking, invoices, cancellation, refunds, and overage controls are connected.",
+      description: "Payments use PayFast secure checkout. MABASO.AI does not store customer card or bank details.",
     },
     designNotes: [
       "Use calm pricing cards and strong anti-dark-pattern copy.",
-      "Do not make paid plans look active until real backend billing is connected.",
+      "Do not make a paid plan active until the PayFast notification confirms payment.",
     ],
     footerCrossLinks: [
       { label: "Terms", route: "/company/terms" },

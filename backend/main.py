@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 import html
 import hashlib
@@ -26,7 +27,7 @@ import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -290,6 +291,40 @@ PRESENTATION_OUTPUT_DIR = UPLOAD_DIR / "presentations"
 PRESENTATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 APP_SECRET = os.getenv("APP_SECRET", os.getenv("OPENAI_API_KEY", "mabaso-dev-secret"))
 SESSION_TOKEN_PREFIX = "mabaso.v1"
+APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", os.getenv("FRONTEND_PUBLIC_URL", "https://mabaso-ai-web.onrender.com")).strip().rstrip("/")
+API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", os.getenv("BACKEND_PUBLIC_URL", "")).strip().rstrip("/")
+PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
+PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
+PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
+PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "true").strip().lower() not in {"0", "false", "no", "off"}
+PAYFAST_PROCESS_URL = (
+    "https://sandbox.payfast.co.za/eng/process"
+    if PAYFAST_SANDBOX
+    else "https://www.payfast.co.za/eng/process"
+)
+PAYFAST_REQUIRE_SOURCE_CHECK = os.getenv("PAYFAST_REQUIRE_SOURCE_CHECK", "false").strip().lower() in {"1", "true", "yes", "on"}
+PAYFAST_ALLOWED_REFERER_HOSTS = {
+    "www.payfast.co.za",
+    "w1w.payfast.co.za",
+    "w2w.payfast.co.za",
+    "sandbox.payfast.co.za",
+}
+BILLING_PLAN_CONFIG = {
+    "student_plus": {
+        "name": "Student Plus",
+        "amount_zar": os.getenv("BILLING_STUDENT_PLUS_AMOUNT_ZAR", "49.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "Monthly student plan with higher AI credits, exports, reports, quizzes, and mind maps.",
+    },
+    "pro_research": {
+        "name": "Pro Research",
+        "amount_zar": os.getenv("BILLING_PRO_RESEARCH_AMOUNT_ZAR", "149.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "Monthly research plan for large documents, research reports, presentations, and priority generation.",
+    },
+}
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
 APPLE_IDENTITY_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = f"{APPLE_IDENTITY_ISSUER}/auth/keys"
@@ -998,6 +1033,10 @@ class SessionModeRequest(BaseModel):
     mode: str = "user"
 
 
+class BillingCheckoutRequest(BaseModel):
+    plan_id: str
+
+
 class PdfSection(BaseModel):
     title: str
     content: str = ""
@@ -1369,6 +1408,68 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_request_rate_limits_updated_at
             ON request_rate_limits (updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_checkout_sessions (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                plan_id TEXT NOT NULL,
+                amount_zar TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_payment_id TEXT NOT NULL DEFAULT '',
+                provider_token TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                checkout_fields_json TEXT NOT NULL,
+                raw_event_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_billing_checkout_sessions_email_created_at
+            ON billing_checkout_sessions (email, created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_subscriptions (
+                email TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_token TEXT NOT NULL DEFAULT '',
+                provider_payment_id TEXT NOT NULL DEFAULT '',
+                amount_zar TEXT NOT NULL,
+                current_period_start TEXT NOT NULL,
+                current_period_end TEXT NOT NULL,
+                cancel_at TEXT NOT NULL DEFAULT '',
+                raw_event_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS billing_events (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                checkout_session_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_billing_events_email_created_at
+            ON billing_events (email, created_at DESC)
             """
         )
 
@@ -4316,6 +4417,267 @@ def compact_text(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
+def normalize_billing_plan_id(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", compact_text(value).lower()).strip("_")
+
+
+def format_zar_amount(value: Any) -> str:
+    try:
+        amount = Decimal(compact_text(value, "0")).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=500, detail="Billing plan amount is not configured correctly.")
+    if amount <= 0:
+        raise HTTPException(status_code=500, detail="Billing plan amount must be greater than zero.")
+    return f"{amount:.2f}"
+
+
+def get_billing_plan(plan_id: str) -> dict[str, str]:
+    normalized_plan_id = normalize_billing_plan_id(plan_id)
+    plan = BILLING_PLAN_CONFIG.get(normalized_plan_id)
+    if not plan:
+        raise HTTPException(status_code=400, detail="This subscription plan is not available for checkout.")
+    return {
+        "id": normalized_plan_id,
+        "name": compact_text(plan.get("name"), normalized_plan_id.replace("_", " ").title()),
+        "amount_zar": format_zar_amount(plan.get("amount_zar")),
+        "frequency": compact_text(plan.get("frequency"), "3"),
+        "cycles": compact_text(plan.get("cycles"), "0"),
+        "description": compact_text(plan.get("description")),
+    }
+
+
+def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
+    plan = get_billing_plan(plan_id)
+    return {
+        "id": plan["id"],
+        "name": plan["name"],
+        "amount_zar": plan["amount_zar"],
+        "currency": "ZAR",
+        "billing_interval": "monthly",
+        "description": plan["description"],
+        "provider": "payfast",
+        "checkout_enabled": bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and PAYFAST_PASSPHRASE),
+    }
+
+
+def get_payfast_signature(fields: dict[str, Any]) -> str:
+    pairs = []
+    for key, value in fields.items():
+        if key == "signature":
+            continue
+        text = compact_text(value)
+        if not text:
+            continue
+        pairs.append(f"{key}={quote_plus(text)}")
+    signature_payload = "&".join(pairs)
+    if PAYFAST_PASSPHRASE:
+        signature_payload = f"{signature_payload}&passphrase={quote_plus(PAYFAST_PASSPHRASE)}"
+    return hashlib.md5(signature_payload.encode("utf-8")).hexdigest()
+
+
+def require_payfast_configured():
+    if not PAYFAST_MERCHANT_ID or not PAYFAST_MERCHANT_KEY or not PAYFAST_PASSPHRASE:
+        raise HTTPException(
+            status_code=503,
+            detail="PayFast checkout is not configured yet. Add PAYFAST_MERCHANT_ID, PAYFAST_MERCHANT_KEY, and PAYFAST_PASSPHRASE on the backend.",
+        )
+
+
+def get_request_public_base_url(request: Request) -> str:
+    if API_PUBLIC_URL:
+        return API_PUBLIC_URL
+    forwarded_proto = compact_text(request.headers.get("x-forwarded-proto"), request.url.scheme)
+    forwarded_host = compact_text(request.headers.get("x-forwarded-host"), request.headers.get("host"))
+    if forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def build_payfast_checkout_fields(
+    *,
+    request: Request,
+    email: str,
+    checkout_id: str,
+    plan: dict[str, str],
+) -> dict[str, str]:
+    app_base_url = APP_PUBLIC_URL or str(request.base_url).rstrip("/")
+    api_base_url = get_request_public_base_url(request)
+    fields = {
+        "merchant_id": PAYFAST_MERCHANT_ID,
+        "merchant_key": PAYFAST_MERCHANT_KEY,
+        "return_url": f"{app_base_url}/pricing?billing=success&session_id={quote(checkout_id)}",
+        "cancel_url": f"{app_base_url}/pricing?billing=cancelled&session_id={quote(checkout_id)}",
+        "notify_url": f"{api_base_url}/api/billing/payfast/itn",
+        "name_first": email.split("@", 1)[0][:100],
+        "email_address": email[:100],
+        "m_payment_id": checkout_id,
+        "amount": plan["amount_zar"],
+        "item_name": f"MABASO.AI {plan['name']}"[:100],
+        "item_description": plan["description"][:255],
+        "subscription_type": "1",
+        "billing_date": utc_now().date().isoformat(),
+        "recurring_amount": plan["amount_zar"],
+        "frequency": plan["frequency"],
+        "cycles": plan["cycles"],
+        "payment_method": "cc",
+        "custom_str1": email[:255],
+        "custom_str2": plan["id"][:255],
+        "custom_str3": checkout_id[:255],
+    }
+    fields["signature"] = get_payfast_signature(fields)
+    return fields
+
+
+async def parse_payfast_itn_payload(request: Request) -> tuple[dict[str, str], str]:
+    raw_body = (await request.body()).decode("utf-8", errors="replace")
+    pairs = parse_qsl(raw_body, keep_blank_values=True)
+    payload: dict[str, str] = {}
+    ordered_for_signature: dict[str, str] = {}
+    for key, value in pairs:
+        clean_key = compact_text(key)
+        if not clean_key:
+            continue
+        payload[clean_key] = compact_text(value)
+        if clean_key != "signature":
+            ordered_for_signature[clean_key] = compact_text(value)
+    return payload, get_payfast_signature(ordered_for_signature)
+
+
+def verify_payfast_source(request: Request):
+    if not PAYFAST_REQUIRE_SOURCE_CHECK:
+        return
+    referer_host = (urlparse(compact_text(request.headers.get("referer"))).hostname or "").lower()
+    if referer_host and referer_host in PAYFAST_ALLOWED_REFERER_HOSTS:
+        return
+    raise HTTPException(status_code=403, detail="PayFast source could not be verified.")
+
+
+def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
+    normalized_id = compact_text(checkout_id)
+    if not normalized_id:
+        return None
+    with get_db_connection() as connection:
+        return connection.execute(
+            """
+            SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                   provider_token, status, checkout_fields_json, raw_event_json,
+                   created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE id = ?
+            """,
+            (normalized_id,),
+        ).fetchone()
+
+
+def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
+    if not row:
+        return {"status": "free", "plan_id": "free", "provider": "", "amount_zar": "0.00"}
+    return {
+        "status": row["status"],
+        "plan_id": row["plan_id"],
+        "provider": row["provider"],
+        "amount_zar": row["amount_zar"],
+        "current_period_start": row["current_period_start"],
+        "current_period_end": row["current_period_end"],
+        "cancel_at": row["cancel_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def get_user_subscription(email: str) -> dict[str, Any]:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
+                   amount_zar, current_period_start, current_period_end, cancel_at,
+                   raw_event_json, created_at, updated_at
+            FROM billing_subscriptions
+            WHERE email = ?
+            """,
+            (normalize_email(email),),
+        ).fetchone()
+    return serialize_subscription_row(row)
+
+
+def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqlite3.Row) -> str:
+    payment_status = compact_text(payload.get("payment_status")).upper()
+    checkout_id = session["id"]
+    email = normalize_email(compact_text(payload.get("custom_str1"), session["email"]))
+    plan_id = normalize_billing_plan_id(compact_text(payload.get("custom_str2"), session["plan_id"]))
+    amount_gross = format_zar_amount(compact_text(payload.get("amount_gross"), session["amount_zar"]))
+    expected_amount = format_zar_amount(session["amount_zar"])
+    if amount_gross != expected_amount:
+        raise HTTPException(status_code=400, detail="PayFast amount does not match the checkout session.")
+    if plan_id != session["plan_id"]:
+        raise HTTPException(status_code=400, detail="PayFast plan does not match the checkout session.")
+
+    raw_event_json = json.dumps(payload, ensure_ascii=False)
+    provider_payment_id = compact_text(payload.get("pf_payment_id"))
+    provider_token = compact_text(payload.get("token"))
+    now_iso = utc_now().isoformat()
+    period_end = (utc_now() + timedelta(days=31)).isoformat()
+    next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE billing_checkout_sessions
+            SET status = ?, provider_payment_id = ?, provider_token = ?,
+                raw_event_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (next_status, provider_payment_id, provider_token, raw_event_json, now_iso, checkout_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_events (
+                id, email, checkout_session_id, provider, event_type, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (uuid4().hex, email, checkout_id, "payfast", payment_status or "UNKNOWN", raw_event_json, now_iso),
+        )
+        if next_status == "active":
+            connection.execute(
+                """
+                INSERT INTO billing_subscriptions (
+                    email, plan_id, status, provider, provider_token, provider_payment_id,
+                    amount_zar, current_period_start, current_period_end, cancel_at,
+                    raw_event_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET
+                    plan_id = excluded.plan_id,
+                    status = excluded.status,
+                    provider = excluded.provider,
+                    provider_token = excluded.provider_token,
+                    provider_payment_id = excluded.provider_payment_id,
+                    amount_zar = excluded.amount_zar,
+                    current_period_start = excluded.current_period_start,
+                    current_period_end = excluded.current_period_end,
+                    cancel_at = excluded.cancel_at,
+                    raw_event_json = excluded.raw_event_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    email,
+                    plan_id,
+                    "active",
+                    "payfast",
+                    provider_token,
+                    provider_payment_id,
+                    expected_amount,
+                    now_iso,
+                    period_end,
+                    "",
+                    raw_event_json,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+    return next_status
+
+
 GENERIC_CONVERSATION_TITLES = {
     "",
     "new chat",
@@ -6837,6 +7199,115 @@ async def logout(request: Request, authorization: str | None = Header(None)):
             resource_name=context["mode"],
         )
     return {"message": "Logged out."}
+
+
+@app.get("/api/billing/plans")
+async def list_billing_plans():
+    return {
+        "provider": "payfast",
+        "sandbox": PAYFAST_SANDBOX,
+        "checkout_enabled": bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and PAYFAST_PASSPHRASE),
+        "plans": [serialize_billing_plan(plan_id) for plan_id in BILLING_PLAN_CONFIG],
+    }
+
+
+@app.get("/api/billing/subscription")
+async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
+    return {"subscription": get_user_subscription(current_user)}
+
+
+@app.post("/api/billing/checkout")
+async def create_billing_checkout(
+    payload: BillingCheckoutRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    require_payfast_configured()
+    email = normalize_email(current_user)
+    plan = get_billing_plan(payload.plan_id)
+    checkout_id = f"mabaso-{uuid4().hex[:24]}"
+    fields = build_payfast_checkout_fields(
+        request=request,
+        email=email,
+        checkout_id=checkout_id,
+        plan=plan,
+    )
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO billing_checkout_sessions (
+                id, email, plan_id, amount_zar, provider, status,
+                checkout_fields_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                checkout_id,
+                email,
+                plan["id"],
+                plan["amount_zar"],
+                "payfast",
+                "pending",
+                json.dumps(fields, ensure_ascii=False),
+                now_iso,
+                now_iso,
+            ),
+        )
+    record_audit_log(
+        action="billing.checkout.create",
+        email=email,
+        request=request,
+        resource_type="billing",
+        resource_name=plan["id"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"provider": "payfast", "checkout_id": checkout_id, "amount_zar": plan["amount_zar"]},
+    )
+    return {
+        "provider": "payfast",
+        "sandbox": PAYFAST_SANDBOX,
+        "checkout_id": checkout_id,
+        "checkout_url": PAYFAST_PROCESS_URL,
+        "fields": fields,
+    }
+
+
+@app.post("/api/billing/payfast/itn")
+async def payfast_itn(request: Request):
+    started_at = utc_now()
+    verify_payfast_source(request)
+    payload, expected_signature = await parse_payfast_itn_payload(request)
+    posted_signature = compact_text(payload.get("signature")).lower()
+    if not posted_signature or not hmac.compare_digest(posted_signature, expected_signature.lower()):
+        record_audit_log(
+            action="billing.payfast.itn",
+            status="failed",
+            request=request,
+            resource_type="billing",
+            resource_name=compact_text(payload.get("m_payment_id")),
+            metadata={"reason": "signature_mismatch"},
+        )
+        raise HTTPException(status_code=400, detail="Invalid PayFast signature.")
+    if compact_text(payload.get("merchant_id")) != PAYFAST_MERCHANT_ID:
+        raise HTTPException(status_code=400, detail="Invalid PayFast merchant.")
+
+    checkout_id = compact_text(payload.get("m_payment_id"))
+    session = get_checkout_session(checkout_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Checkout session not found.")
+
+    status = upsert_paid_subscription_from_payfast(payload, session)
+    record_audit_log(
+        action="billing.payfast.itn",
+        email=session["email"],
+        request=request,
+        resource_type="billing",
+        resource_name=session["plan_id"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"checkout_id": checkout_id, "status": status},
+    )
+    return Response(content="OK", media_type="text/plain")
 
 
 async def process_support_request_submission(

@@ -524,29 +524,37 @@ const reportFeatureToggles = [
 const mindMapDepthOptions = ["Basic", "Standard", "Advanced", "Research"];
 const fairSubscriptionPlans = [
   {
+    id: "free",
     name: "Free Study",
     price: "R0",
+    paymentType: "free",
     audience: "Trial users and light study",
     limits: "Small monthly credits, limited exports, community support",
     safeguards: ["No card required", "No surprise renewals", "Clear usage meter"],
   },
   {
+    id: "student_plus",
     name: "Student Plus",
-    price: "Low monthly student price",
+    price: "R49 / month",
+    paymentType: "checkout",
     audience: "Students who generate weekly study packs",
     limits: "Higher AI credits, PDF/DOCX exports, reports, quizzes, mind maps",
     safeguards: ["Cancel anytime", "Overages off by default", "Renewal reminders"],
   },
   {
+    id: "pro_research",
     name: "Pro Research",
-    price: "Fair premium price",
+    price: "R149 / month",
+    paymentType: "checkout",
     audience: "Heavy academic and professional users",
     limits: "Large documents, research reports, presentations, priority queue",
     safeguards: ["Hard spend cap", "Usage alerts", "Plan downgrade kept easy"],
   },
   {
+    id: "team",
     name: "Team / Institution",
     price: "Custom quote",
+    paymentType: "quote",
     audience: "Classes, tutors, departments, and schools",
     limits: "Shared seats, admin controls, pooled credits, audit logs",
     safeguards: ["Seat-level controls", "Invoice approval", "No hidden per-seat add-ons"],
@@ -3805,6 +3813,8 @@ export default function App() {
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
+  const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -4331,10 +4341,15 @@ export default function App() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Upgrade to Pro</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. Payments should only continue after real usage tracking, cancellation, refunds, and overage controls are connected.</p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. Card details are handled by PayFast secure checkout; MABASO.AI never stores customer card or bank details.</p>
           </div>
-          <button type="button" onClick={() => setIsUpgradeModalOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
+          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
+        {billingCheckoutMessage ? (
+          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
+            {billingCheckoutMessage}
+          </div>
+        ) : null}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           {fairSubscriptionPlans.map((plan) => (
             <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Student Plus" || plan.name === "Pro Research" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
@@ -4349,8 +4364,8 @@ export default function App() {
               <div className="mt-4 flex flex-wrap gap-2">
                 {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
               </div>
-              <button type="button" onClick={() => { setIsUpgradeModalOpen(false); navigateToPath("/pricing"); }} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50">
-                {plan.name === "Free Study" ? "Start Free" : plan.name === "Team / Institution" ? "Request Quote" : "Continue to Payment"}
+              <button type="button" onClick={() => startBillingCheckout(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
+                {billingCheckoutPlanId === plan.id ? "Opening PayFast..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Continue to Payment"}
               </button>
             </article>
           ))}
@@ -10760,6 +10775,59 @@ export default function App() {
         attempt += 1;
         await wait(1200 * attempt);
       }
+    }
+  };
+
+  const submitExternalCheckoutForm = (checkoutData) => {
+    const checkoutUrl = checkoutData?.checkout_url || "";
+    const fields = checkoutData?.fields || {};
+    if (!checkoutUrl || !fields || typeof fields !== "object") {
+      throw new Error("Checkout could not start because the payment provider response was incomplete.");
+    }
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = checkoutUrl;
+    form.style.display = "none";
+    Object.entries(fields).forEach(([name, value]) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = String(value ?? "");
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  };
+
+  const startBillingCheckout = async (plan) => {
+    if (!plan) return;
+    if (plan.paymentType === "free") {
+      setIsUpgradeModalOpen(false);
+      navigateToPath("/app");
+      return;
+    }
+    if (plan.paymentType === "quote") {
+      setIsUpgradeModalOpen(false);
+      navigateToPath("/pricing");
+      return;
+    }
+    setBillingCheckoutMessage("");
+    setBillingCheckoutPlanId(plan.id);
+    try {
+      const { data } = await authJsonWithTransientRetries(
+        "/api/billing/checkout",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan_id: plan.id }),
+        },
+        { timeoutMs: 30000, retries: 1 },
+      );
+      setBillingCheckoutMessage("Redirecting to PayFast secure checkout...");
+      submitExternalCheckoutForm(data);
+    } catch (err) {
+      setBillingCheckoutMessage(getReadableRequestError(err));
+      setBillingCheckoutPlanId("");
     }
   };
 
