@@ -316,28 +316,65 @@ PAYFAST_ALLOWED_REFERER_HOSTS = {
     "sandbox.payfast.co.za",
 }
 BILLING_PLAN_CONFIG = {
-    "student_plus": {
-        "name": "Student Plus",
-        "amount_zar": os.getenv("BILLING_STUDENT_PLUS_AMOUNT_ZAR", "49.00").strip(),
+    "pro_student": {
+        "name": "Pro Student",
+        "amount_zar": os.getenv("BILLING_PRO_STUDENT_AMOUNT_ZAR", "50.00").strip(),
         "frequency": "3",
         "cycles": "0",
-        "description": "Monthly student plan with higher AI credits, exports, reports, quizzes, and mind maps.",
+        "description": "Monthly student plan with three times the Free daily attempts, faster generation, exports, and stronger study tools.",
     },
-    "pro_research": {
-        "name": "Pro Research",
-        "amount_zar": os.getenv("BILLING_PRO_RESEARCH_AMOUNT_ZAR", "149.00").strip(),
+    "pro_student_semester": {
+        "name": "Pro Student Semester",
+        "amount_zar": os.getenv("BILLING_PRO_STUDENT_SEMESTER_AMOUNT_ZAR", "270.00").strip(),
         "frequency": "3",
         "cycles": "0",
-        "description": "Monthly research plan for large documents, research reports, presentations, and priority generation.",
+        "description": "Six-month Pro Student access with three times the Free daily attempts and included semester savings.",
+    },
+    "pro_student_annual": {
+        "name": "Pro Student Annual",
+        "amount_zar": os.getenv("BILLING_PRO_STUDENT_ANNUAL_AMOUNT_ZAR", "480.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "One-year Pro Student access with three times the Free daily attempts and annual savings.",
+    },
+    "premium_student": {
+        "name": "Premium Student",
+        "amount_zar": os.getenv("BILLING_PREMIUM_STUDENT_AMOUNT_ZAR", "150.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "Unlimited student plan with premium models, research tools, large-file processing, priority queue, and unlimited generation.",
+    },
+    "premium_student_semester": {
+        "name": "Premium Student Semester",
+        "amount_zar": os.getenv("BILLING_PREMIUM_STUDENT_SEMESTER_AMOUNT_ZAR", "765.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "Six-month Premium Student access with unlimited usage and included semester savings.",
+    },
+    "premium_student_annual": {
+        "name": "Premium Student Annual",
+        "amount_zar": os.getenv("BILLING_PREMIUM_STUDENT_ANNUAL_AMOUNT_ZAR", "1350.00").strip(),
+        "frequency": "3",
+        "cycles": "0",
+        "description": "One-year Premium Student access with unlimited usage and annual savings.",
     },
 }
+BILLING_PLAN_ALIASES = {
+    "student_plus": "pro_student",
+    "pro_research": "premium_student",
+}
 BILLING_FEATURE_LABELS = {
+    "ai_chat": "AI chat messages",
     "study_guide": "Study guides",
+    "worked_examples": "Worked examples",
+    "formula_solver": "Formula solver",
+    "flashcards": "Flashcards",
     "quiz": "Quizzes",
     "report": "Reports",
     "mind_map": "Mind maps",
     "presentation": "Presentations",
     "podcast": "Podcasts",
+    "ai_notes": "AI notes",
     "teacher_lesson": "AI teacher lessons",
     "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
@@ -354,40 +391,55 @@ def get_int_env(name: str, default: int) -> int:
 
 BILLING_PLAN_QUOTAS = {
     "free": {
-        "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_MONTH", 5),
-        "quiz": get_int_env("FREE_PLAN_QUIZZES_PER_MONTH", 5),
-        "report": get_int_env("FREE_PLAN_REPORTS_PER_MONTH", 2),
-        "mind_map": get_int_env("FREE_PLAN_MIND_MAPS_PER_MONTH", 5),
-        "presentation": get_int_env("FREE_PLAN_PRESENTATIONS_PER_MONTH", 2),
-        "podcast": get_int_env("FREE_PLAN_PODCASTS_PER_MONTH", 2),
-        "teacher_lesson": get_int_env("FREE_PLAN_TEACHER_LESSONS_PER_MONTH", 2),
-        "study_chat": get_int_env("FREE_PLAN_STUDY_CHAT_MESSAGES_PER_MONTH", 50),
-        "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_MONTH", 20),
-        "source_upload": get_int_env("FREE_PLAN_SOURCE_PROCESSING_PER_MONTH", 20),
+        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15),
+        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15),
+        "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_DAY", 2),
+        "worked_examples": get_int_env("FREE_PLAN_WORKED_EXAMPLES_PER_DAY", 2),
+        "formula_solver": get_int_env("FREE_PLAN_FORMULA_SOLVER_PER_DAY", 2),
+        "flashcards": get_int_env("FREE_PLAN_FLASHCARDS_PER_DAY", 2),
+        "quiz": get_int_env("FREE_PLAN_EXAMS_PER_DAY", 2),
+        "report": get_int_env("FREE_PLAN_REPORTS_PER_DAY", 2),
+        "mind_map": get_int_env("FREE_PLAN_MIND_MAPS_PER_DAY", 2),
+        "presentation": get_int_env("FREE_PLAN_POWERPOINTS_PER_DAY", 1),
+        "podcast": get_int_env("FREE_PLAN_PODCASTS_PER_DAY", 1),
+        "ai_notes": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
+        "teacher_lesson": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
+        "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 15),
+        "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
     },
-    "student_plus": {
-        "study_guide": get_int_env("STUDENT_PLUS_STUDY_GUIDES_PER_MONTH", 80),
-        "quiz": get_int_env("STUDENT_PLUS_QUIZZES_PER_MONTH", 80),
-        "report": get_int_env("STUDENT_PLUS_REPORTS_PER_MONTH", 25),
-        "mind_map": get_int_env("STUDENT_PLUS_MIND_MAPS_PER_MONTH", 80),
-        "presentation": get_int_env("STUDENT_PLUS_PRESENTATIONS_PER_MONTH", 20),
-        "podcast": get_int_env("STUDENT_PLUS_PODCASTS_PER_MONTH", 20),
-        "teacher_lesson": get_int_env("STUDENT_PLUS_TEACHER_LESSONS_PER_MONTH", 30),
-        "study_chat": get_int_env("STUDENT_PLUS_STUDY_CHAT_MESSAGES_PER_MONTH", 1000),
-        "voice_transcription": get_int_env("STUDENT_PLUS_VOICE_MESSAGES_PER_MONTH", 400),
-        "source_upload": get_int_env("STUDENT_PLUS_SOURCE_PROCESSING_PER_MONTH", 200),
+    "pro_student": {
+        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 45),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 45),
+        "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 6),
+        "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 6),
+        "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 6),
+        "flashcards": get_int_env("PRO_STUDENT_FLASHCARDS_PER_DAY", 6),
+        "quiz": get_int_env("PRO_STUDENT_EXAMS_PER_DAY", 6),
+        "report": get_int_env("PRO_STUDENT_REPORTS_PER_DAY", 6),
+        "mind_map": get_int_env("PRO_STUDENT_MIND_MAPS_PER_DAY", 6),
+        "presentation": get_int_env("PRO_STUDENT_POWERPOINTS_PER_DAY", 3),
+        "podcast": get_int_env("PRO_STUDENT_PODCASTS_PER_DAY", 3),
+        "ai_notes": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
+        "teacher_lesson": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
+        "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 45),
+        "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
     },
-    "pro_research": {
-        "study_guide": get_int_env("PRO_RESEARCH_STUDY_GUIDES_PER_MONTH", 300),
-        "quiz": get_int_env("PRO_RESEARCH_QUIZZES_PER_MONTH", 300),
-        "report": get_int_env("PRO_RESEARCH_REPORTS_PER_MONTH", 120),
-        "mind_map": get_int_env("PRO_RESEARCH_MIND_MAPS_PER_MONTH", 300),
-        "presentation": get_int_env("PRO_RESEARCH_PRESENTATIONS_PER_MONTH", 80),
-        "podcast": get_int_env("PRO_RESEARCH_PODCASTS_PER_MONTH", 80),
-        "teacher_lesson": get_int_env("PRO_RESEARCH_TEACHER_LESSONS_PER_MONTH", 120),
-        "study_chat": get_int_env("PRO_RESEARCH_STUDY_CHAT_MESSAGES_PER_MONTH", 5000),
-        "voice_transcription": get_int_env("PRO_RESEARCH_VOICE_MESSAGES_PER_MONTH", 1500),
-        "source_upload": get_int_env("PRO_RESEARCH_SOURCE_PROCESSING_PER_MONTH", 1000),
+    "premium_student": {
+        "ai_chat": -1,
+        "study_chat": -1,
+        "study_guide": -1,
+        "worked_examples": -1,
+        "formula_solver": -1,
+        "flashcards": -1,
+        "quiz": -1,
+        "report": -1,
+        "mind_map": -1,
+        "presentation": -1,
+        "podcast": -1,
+        "ai_notes": -1,
+        "teacher_lesson": -1,
+        "voice_transcription": -1,
+        "source_upload": -1,
     },
 }
 WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php"
@@ -4507,7 +4559,32 @@ def compact_text(value: Any, fallback: str = "") -> str:
 
 
 def normalize_billing_plan_id(value: Any) -> str:
-    return re.sub(r"[^a-z0-9_]+", "_", compact_text(value).lower()).strip("_")
+    normalized = re.sub(r"[^a-z0-9_]+", "_", compact_text(value).lower()).strip("_")
+    return BILLING_PLAN_ALIASES.get(normalized, normalized)
+
+
+def get_billing_quota_plan_id(plan_id: str) -> str:
+    normalized_plan_id = normalize_billing_plan_id(plan_id)
+    if normalized_plan_id.startswith("pro_student"):
+        return "pro_student"
+    if normalized_plan_id.startswith("premium_student"):
+        return "premium_student"
+    return normalized_plan_id if normalized_plan_id in BILLING_PLAN_QUOTAS else "free"
+
+
+def get_billing_plan_duration_days(plan_id: str) -> int:
+    normalized_plan_id = normalize_billing_plan_id(plan_id)
+    if normalized_plan_id.endswith("_annual"):
+        return 365
+    if normalized_plan_id.endswith("_semester"):
+        return 183
+    return 31
+
+
+USAGE_TIMEZONE = timezone(
+    timedelta(hours=get_int_env("USAGE_TIMEZONE_OFFSET_HOURS", 2)),
+    os.getenv("USAGE_TIMEZONE_NAME", "SAST").strip() or "SAST",
+)
 
 
 def format_zar_amount(value: Any) -> str:
@@ -4675,7 +4752,7 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
         return {"status": "free", "plan_id": "free", "provider": "", "amount_zar": "0.00"}
     return {
         "status": row["status"],
-        "plan_id": row["plan_id"],
+        "plan_id": normalize_billing_plan_id(row["plan_id"]),
         "provider": row["provider"],
         "amount_zar": row["amount_zar"],
         "current_period_start": row["current_period_start"],
@@ -4686,6 +4763,19 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
 
 
 def get_user_subscription(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    if is_admin_email(normalized_email):
+        now_iso = utc_now().isoformat()
+        return {
+            "status": "active",
+            "plan_id": "premium_student",
+            "provider": "admin",
+            "amount_zar": "0.00",
+            "current_period_start": now_iso,
+            "current_period_end": "",
+            "cancel_at": "",
+            "updated_at": now_iso,
+        }
     with get_db_connection() as connection:
         row = connection.execute(
             """
@@ -4695,7 +4785,7 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             FROM billing_subscriptions
             WHERE email = ?
             """,
-            (normalize_email(email),),
+            (normalized_email,),
         ).fetchone()
     return serialize_subscription_row(row)
 
@@ -4728,20 +4818,33 @@ def get_active_subscription_row(email: str) -> sqlite3.Row | None:
 
 
 def get_effective_plan_id(email: str) -> str:
+    if is_admin_email(email):
+        return "premium_student"
     row = get_active_subscription_row(email)
     if not row:
         return "free"
     plan_id = normalize_billing_plan_id(row["plan_id"])
-    return plan_id if plan_id in BILLING_PLAN_QUOTAS else "free"
+    return get_billing_quota_plan_id(plan_id)
 
 
 def get_usage_period_key(now: datetime | None = None) -> str:
-    current = now or utc_now()
-    return current.strftime("%Y-%m")
+    current = (now or utc_now()).astimezone(USAGE_TIMEZONE)
+    return current.strftime("%Y-%m-%d")
+
+
+def get_next_usage_reset(now: datetime | None = None) -> datetime:
+    current = (now or utc_now()).astimezone(USAGE_TIMEZONE)
+    tomorrow = current.date() + timedelta(days=1)
+    return datetime.combine(tomorrow, datetime.min.time(), tzinfo=USAGE_TIMEZONE)
+
+
+def format_usage_reset_time(now: datetime | None = None) -> str:
+    reset_at = get_next_usage_reset(now)
+    return reset_at.strftime("%H:%M %Z on %d %B %Y")
 
 
 def get_plan_quota(plan_id: str, feature: str) -> int:
-    normalized_plan_id = normalize_billing_plan_id(plan_id) or "free"
+    normalized_plan_id = get_billing_quota_plan_id(plan_id) or "free"
     normalized_feature = normalize_billing_plan_id(feature)
     plan_quotas = BILLING_PLAN_QUOTAS.get(normalized_plan_id) or BILLING_PLAN_QUOTAS["free"]
     return int(plan_quotas.get(normalized_feature, BILLING_PLAN_QUOTAS["free"].get(normalized_feature, 0)))
@@ -4766,6 +4869,7 @@ def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: 
     limit = get_plan_quota(plan_id, feature)
     used = get_usage_count(email, feature, period_key)
     remaining = None if limit < 0 else max(0, limit - used)
+    reset_at = get_next_usage_reset()
     return {
         "feature": feature,
         "label": BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title()),
@@ -4773,6 +4877,9 @@ def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: 
         "limit": limit,
         "remaining": remaining,
         "unlimited": limit < 0,
+        "period_type": "daily",
+        "reset_at": reset_at.isoformat(),
+        "reset_label": format_usage_reset_time(),
     }
 
 
@@ -4787,6 +4894,9 @@ def get_billing_usage_summary(email: str) -> dict[str, Any]:
     return {
         "plan_id": plan_id,
         "period_key": period_key,
+        "period_type": "daily",
+        "reset_at": get_next_usage_reset().isoformat(),
+        "reset_label": format_usage_reset_time(),
         "features": features,
     }
 
@@ -4807,6 +4917,8 @@ def consume_plan_quota(
     plan_id = get_effective_plan_id(normalized_email)
     limit = get_plan_quota(plan_id, normalized_feature)
     label = BILLING_FEATURE_LABELS.get(normalized_feature, normalized_feature.replace("_", " ").title())
+    reset_label = format_usage_reset_time()
+    reset_at = get_next_usage_reset().isoformat()
 
     with get_db_connection() as connection:
         row = connection.execute(
@@ -4820,6 +4932,12 @@ def consume_plan_quota(
         used = int(row["total_quantity"] or 0)
         if limit >= 0 and used + safe_quantity > limit:
             remaining = max(0, limit - used)
+            base_limit_message = (
+                "Today's free limit has been reached. Upgrade to Pro Student for more attempts."
+                if plan_id == "free"
+                else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
+            )
+            upgrade_hint = "" if plan_id == "free" else " Upgrade to Premium Student for unlimited usage."
             record_audit_log(
                 action="billing.quota.block",
                 status="blocked",
@@ -4832,8 +4950,10 @@ def consume_plan_quota(
             raise HTTPException(
                 status_code=402,
                 detail=(
-                    f"You have reached your {label} limit for the {plan_id.replace('_', ' ').title()} plan. "
-                    f"Remaining attempts: {remaining}. Upgrade to continue."
+                    f"{base_limit_message} "
+                    f"Attempts remaining today: {remaining}/{limit}. "
+                    f"You can generate again at {reset_label} for {normalized_email}."
+                    f"{upgrade_hint}"
                 ),
             )
         connection.execute(
@@ -4861,6 +4981,9 @@ def consume_plan_quota(
         "limit": limit,
         "remaining": None if limit < 0 else max(0, limit - used - safe_quantity),
         "period_key": period_key,
+        "period_type": "daily",
+        "reset_at": reset_at,
+        "reset_label": reset_label,
     }
 
 
@@ -4880,7 +5003,7 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     provider_payment_id = compact_text(payload.get("pf_payment_id"))
     provider_token = compact_text(payload.get("token"))
     now_iso = utc_now().isoformat()
-    period_end = (utc_now() + timedelta(days=31)).isoformat()
+    period_end = (utc_now() + timedelta(days=get_billing_plan_duration_days(plan_id))).isoformat()
     next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
 
     with get_db_connection() as connection:

@@ -525,86 +525,85 @@ const mindMapDepthOptions = ["Basic", "Standard", "Advanced", "Research"];
 const fairSubscriptionPlans = [
   {
     id: "free",
-    name: "Free Study",
+    name: "Free",
     price: "R0",
     paymentType: "free",
-    audience: "Trial users and light study",
-    limits: "Small monthly credits, limited exports, community support",
-    howItWorks: "Best for testing MABASO.AI. Free users get strict monthly limits and must upgrade when attempts run out.",
+    audience: "Light study and trial users",
+    limits: "Daily limits reset every 24 hours. No card required.",
+    howItWorks: "Free users can generate within the daily attempts below. When a tool reaches 0 attempts, that tool is blocked until the next daily reset or the user upgrades.",
     attempts: [
-      "5 study guides",
-      "5 quizzes",
-      "2 reports",
-      "5 mind maps",
-      "2 presentations",
-      "2 podcasts",
-      "2 AI teacher lessons",
-      "50 study chat messages",
-      "20 voice messages",
-      "20 source uploads / processing jobs",
+      "15 AI chat messages/day",
+      "2 reports/day",
+      "2 study guides/day",
+      "2 formula solver uses/day",
+      "2 flashcard generations/day",
+      "1 PowerPoint/day",
+      "2 exams/tests/day",
+      "1 podcast/day",
+      "2 mind maps/day",
+      "1 upload or source processing/day",
+      "1 AI notes generation/day",
     ],
     safeguards: ["No card required", "No surprise renewals", "Clear usage meter"],
   },
   {
-    id: "student_plus",
-    name: "Student Plus",
-    price: "R49 / month",
+    id: "pro_student",
+    name: "Pro Student",
+    price: "R50 / month",
+    priceOptions: "R270 / semester · R480 / year",
+    billingOptions: [
+      { id: "pro_student", label: "Monthly", price: "R50" },
+      { id: "pro_student_semester", label: "Semester", price: "R270" },
+      { id: "pro_student_annual", label: "Annual", price: "R480" },
+    ],
     paymentType: "checkout",
-    audience: "Students who generate weekly study packs",
-    limits: "Higher AI credits, PDF/DOCX exports, reports, quizzes, mind maps",
-    howItWorks: "Built for active students. This plan increases every major study limit while keeping paid overages off by default.",
+    audience: "Active students who generate weekly study packs",
+    limits: "3× Free daily limits, faster generation queue, exports, stronger study tools.",
+    howItWorks: "Pro Student gives three times the Free daily attempts. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
-      "80 study guides",
-      "80 quizzes",
-      "25 reports",
-      "80 mind maps",
-      "20 presentations",
-      "20 podcasts",
-      "30 AI teacher lessons",
-      "1,000 study chat messages",
-      "400 voice messages",
-      "200 source uploads / processing jobs",
+      "45 AI chat messages/day",
+      "6 reports/day",
+      "6 study guides/day",
+      "6 worked examples/day",
+      "6 formula solver uses/day",
+      "6 flashcard generations/day",
+      "3 PowerPoints/day",
+      "6 exams/tests/day",
+      "3 podcasts/day",
+      "6 mind maps/day",
+      "3 uploads or source processing jobs/day",
+      "3 AI notes generations/day",
     ],
     safeguards: ["Cancel anytime", "Overages off by default", "Renewal reminders"],
   },
   {
-    id: "pro_research",
-    name: "Pro Research",
-    price: "R149 / month",
+    id: "premium_student",
+    name: "Premium Student",
+    price: "R150 / month",
+    priceOptions: "R765 / semester · R1350 / year",
+    billingOptions: [
+      { id: "premium_student", label: "Monthly", price: "R150" },
+      { id: "premium_student_semester", label: "Semester", price: "R765" },
+      { id: "premium_student_annual", label: "Annual", price: "R1350" },
+    ],
     paymentType: "checkout",
-    audience: "Heavy academic and professional users",
-    limits: "Large documents, research reports, presentations, priority queue",
-    howItWorks: "Designed for heavy academic work, large documents, research workflows, and frequent generation across all tools.",
+    audience: "Heavy academic users and research students",
+    limits: "Unlimited usage, premium models, deep research mode, large file processing.",
+    howItWorks: "Premium Student removes daily generation limits. Admin accounts are treated as Premium automatically and must never be restricted.",
     attempts: [
-      "300 study guides",
-      "300 quizzes",
-      "120 reports",
-      "300 mind maps",
-      "80 presentations",
-      "80 podcasts",
-      "120 AI teacher lessons",
-      "5,000 study chat messages",
-      "1,500 voice messages",
-      "1,000 source uploads / processing jobs",
+      "Unlimited chat",
+      "Unlimited reports and expansions",
+      "Unlimited study guides",
+      "Unlimited worked examples",
+      "Unlimited formula solver",
+      "Unlimited exams and quizzes",
+      "Unlimited PowerPoints",
+      "Unlimited podcasts",
+      "Unlimited mind maps",
+      "Unlimited transcription and slide analysis",
+      "Unlimited AI notes and research tools",
     ],
-    safeguards: ["Hard spend cap", "Usage alerts", "Plan downgrade kept easy"],
-  },
-  {
-    id: "team",
-    name: "Team / Institution",
-    price: "Custom quote",
-    paymentType: "quote",
-    audience: "Classes, tutors, departments, and schools",
-    limits: "Shared seats, admin controls, pooled credits, audit logs",
-    howItWorks: "For organizations that need seats, pooled usage, invoices, admin controls, and agreed limits before payment.",
-    attempts: [
-      "Custom seat count",
-      "Custom pooled monthly attempts",
-      "Admin-managed usage controls",
-      "Invoice approval before billing",
-      "No hidden per-seat add-ons",
-    ],
-    safeguards: ["Seat-level controls", "Invoice approval", "No hidden per-seat add-ons"],
+    safeguards: ["Unlimited access", "Highest priority", "Premium features included"],
   },
 ];
 const fairBillingGuardrails = [
@@ -3761,7 +3760,10 @@ function renderFairBillingPlan(theme = "light") {
                 <h3 className={`text-lg font-semibold ${titleClass}`}>{plan.name}</h3>
                 <p className={`mt-2 text-sm ${bodyClass}`}>{plan.audience}</p>
               </div>
-              <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${chipClass}`}>{plan.price}</span>
+              <div className="text-left sm:text-right">
+                <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${chipClass}`}>{plan.price}</span>
+                {plan.priceOptions ? <p className={`mt-2 text-xs ${bodyClass}`}>{plan.priceOptions}</p> : null}
+              </div>
             </div>
             <p className={`mt-4 text-sm leading-7 ${bodyClass}`}>{plan.limits}</p>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -4401,13 +4403,16 @@ export default function App() {
         ) : null}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           {fairSubscriptionPlans.map((plan) => (
-            <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Student Plus" || plan.name === "Pro Research" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+            <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Pro Student" || plan.name === "Premium Student" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h3 className="text-xl font-semibold text-white">{plan.name}</h3>
                   <p className="mt-2 text-sm leading-6 text-slate-300">{plan.audience}</p>
                 </div>
-                <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-50">{plan.price}</span>
+                <div className="text-right">
+                  <span className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-50">{plan.price}</span>
+                  {plan.priceOptions ? <p className="mt-2 text-xs font-semibold text-emerald-100">{plan.priceOptions}</p> : null}
+                </div>
               </div>
               <p className="mt-4 text-sm leading-7 text-slate-200">{plan.limits}</p>
               <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/45 p-4">
@@ -4415,7 +4420,7 @@ export default function App() {
                 <p className="mt-2 text-sm leading-6 text-slate-200">{plan.howItWorks}</p>
               </div>
               <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Monthly attempts included</p>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Daily attempts included</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {plan.attempts.map((item) => (
                     <div key={`${plan.name}-${item}`} className="rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2 text-xs font-semibold text-slate-200">{item}</div>
@@ -4425,9 +4430,25 @@ export default function App() {
               <div className="mt-4 flex flex-wrap gap-2">
                 {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
               </div>
-              <button type="button" onClick={() => startBillingCheckout(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
-                {billingCheckoutPlanId === plan.id ? "Opening PayFast..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Continue to Payment"}
-              </button>
+              {plan.billingOptions?.length ? (
+                <div className="mt-5 grid gap-2 sm:grid-cols-3">
+                  {plan.billingOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => startBillingCheckout({ ...plan, id: option.id })}
+                      disabled={Boolean(billingCheckoutPlanId)}
+                      className="rounded-2xl bg-white px-3 py-3 text-xs font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70"
+                    >
+                      {billingCheckoutPlanId === option.id ? "Opening..." : `${option.label} ${option.price}`}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <button type="button" onClick={() => startBillingCheckout(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
+                  {billingCheckoutPlanId === plan.id ? "Opening PayFast..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Continue to Payment"}
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -4441,9 +4462,10 @@ export default function App() {
           <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Remaining attempts</p>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Attempts Remaining Today</p>
                 <p className="mt-2 text-sm text-slate-300">
-                  Current plan: {(billingUsage.plan_id || billingSubscription?.plan_id || "free").replaceAll("_", " ")} · Period: {billingUsage.period_key || "current month"}
+                  Current plan: {(billingUsage.plan_id || billingSubscription?.plan_id || "free").replaceAll("_", " ")} · Daily period: {billingUsage.period_key || "today"}
+                  {billingUsage.reset_label ? ` · Resets ${billingUsage.reset_label}` : ""}
                 </p>
               </div>
               <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10">Refresh Usage</button>
@@ -4453,12 +4475,12 @@ export default function App() {
                 <div key={feature.feature} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <div className="flex items-center justify-between gap-3 text-sm">
                     <span className="font-semibold text-white">{feature.label}</span>
-                    <span className="text-emerald-100">{feature.unlimited ? "Unlimited" : `${feature.remaining} left`}</span>
+                    <span className="text-emerald-100">{feature.unlimited ? "Unlimited" : `${feature.remaining} left today`}</span>
                   </div>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
                     <div className="h-full rounded-full bg-emerald-400" style={{ width: `${feature.unlimited ? 100 : Math.min(100, Math.round((Number(feature.used || 0) / Math.max(1, Number(feature.limit || 1))) * 100))}%` }} />
                   </div>
-                  <p className="mt-2 text-xs text-slate-400">{feature.unlimited ? `${feature.used || 0} used` : `${feature.used || 0}/${feature.limit || 0} used`}</p>
+                  <p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "Unlimited access" : `${feature.used || 0}/${feature.limit || 0} used today${feature.reset_label ? ` · resets ${feature.reset_label}` : ""}`}</p>
                 </div>
               ))}
             </div>
@@ -10838,6 +10860,30 @@ export default function App() {
     if (response.status === 401) {
       clearSession("Your session expired. Please sign in again.");
       throw new Error("Your session expired. Please sign in again.");
+    }
+    const requestMethod = String(requestOptions.method || "GET").toUpperCase();
+    const shouldRefreshUsage = response.ok
+      && requestMethod !== "GET"
+      && !String(path || "").startsWith("/api/billing/")
+      && [
+        "/upload-audio/",
+        "/transcribe-video-url/",
+        "/extract-slide-text/",
+        "/generate-study-guide/",
+        "/generate-quiz/",
+        "/generate-teacher-lesson/",
+        "/generate-podcast/",
+        "/generate-report/",
+        "/generate-mind-map/",
+        "/generate-presentation/",
+        "/ask-study-assistant/",
+        "/api/chat/",
+        "/api/voice/transcribe",
+      ].some((prefix) => String(path || "").startsWith(prefix));
+    if (shouldRefreshUsage) {
+      window.setTimeout(() => {
+        refreshBillingStatus().catch(() => {});
+      }, 250);
     }
     return response;
   };
