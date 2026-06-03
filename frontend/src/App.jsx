@@ -4343,7 +4343,7 @@ export default function App() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Upgrade to Pro</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. Card details are handled by PayFast secure checkout; MABASO.AI never stores customer card or bank details.</p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. PayFast handles PayShap/card checkout securely; MABASO.AI never stores customer card or bank details. If checkout is configured as once-off, payment grants the current plan period instead of silently auto-renewing.</p>
           </div>
           <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>

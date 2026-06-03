@@ -297,6 +297,7 @@ PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
 PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
 PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
 PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "true").strip().lower() not in {"0", "false", "no", "off"}
+PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_PROCESS_URL = (
     "https://sandbox.payfast.co.za/eng/process"
     if PAYFAST_SANDBOX
@@ -4527,6 +4528,7 @@ def get_billing_plan(plan_id: str) -> dict[str, str]:
 
 def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
     plan = get_billing_plan(plan_id)
+    checkout_enabled = bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and (PAYFAST_PASSPHRASE or not PAYFAST_SUBSCRIPTION_ENABLED))
     return {
         "id": plan["id"],
         "name": plan["name"],
@@ -4535,7 +4537,7 @@ def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
         "billing_interval": "monthly",
         "description": plan["description"],
         "provider": "payfast",
-        "checkout_enabled": bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and PAYFAST_PASSPHRASE),
+        "checkout_enabled": checkout_enabled,
     }
 
 
@@ -4555,10 +4557,15 @@ def get_payfast_signature(fields: dict[str, Any]) -> str:
 
 
 def require_payfast_configured():
-    if not PAYFAST_MERCHANT_ID or not PAYFAST_MERCHANT_KEY or not PAYFAST_PASSPHRASE:
+    if not PAYFAST_MERCHANT_ID or not PAYFAST_MERCHANT_KEY:
         raise HTTPException(
             status_code=503,
-            detail="PayFast checkout is not configured yet. Add PAYFAST_MERCHANT_ID, PAYFAST_MERCHANT_KEY, and PAYFAST_PASSPHRASE on the backend.",
+            detail="PayFast checkout is not configured yet. Add PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY on the backend.",
+        )
+    if PAYFAST_SUBSCRIPTION_ENABLED and not PAYFAST_PASSPHRASE:
+        raise HTTPException(
+            status_code=503,
+            detail="PayFast recurring subscriptions require PAYFAST_PASSPHRASE. Disable PAYFAST_SUBSCRIPTION_ENABLED for PayShap-compatible once-off plan payments.",
         )
 
 
@@ -4593,16 +4600,22 @@ def build_payfast_checkout_fields(
         "amount": plan["amount_zar"],
         "item_name": f"MABASO.AI {plan['name']}"[:100],
         "item_description": plan["description"][:255],
-        "subscription_type": "1",
-        "billing_date": utc_now().date().isoformat(),
-        "recurring_amount": plan["amount_zar"],
-        "frequency": plan["frequency"],
-        "cycles": plan["cycles"],
-        "payment_method": "cc",
         "custom_str1": email[:255],
         "custom_str2": plan["id"][:255],
         "custom_str3": checkout_id[:255],
     }
+    if PAYFAST_SUBSCRIPTION_ENABLED:
+        fields.update(
+            {
+                "subscription_type": "1",
+                "recurring_amount": plan["amount_zar"],
+                "frequency": plan["frequency"],
+                "cycles": plan["cycles"],
+                "subscription_notify_email": "true",
+                "subscription_notify_webhook": "true",
+                "subscription_notify_buyer": "true",
+            }
+        )
     fields["signature"] = get_payfast_signature(fields)
     return fields
 
@@ -7446,10 +7459,12 @@ async def logout(request: Request, authorization: str | None = Header(None)):
 
 @app.get("/api/billing/plans")
 async def list_billing_plans():
+    checkout_enabled = bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and (PAYFAST_PASSPHRASE or not PAYFAST_SUBSCRIPTION_ENABLED))
     return {
         "provider": "payfast",
         "sandbox": PAYFAST_SANDBOX,
-        "checkout_enabled": bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and PAYFAST_PASSPHRASE),
+        "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+        "checkout_enabled": checkout_enabled,
         "plans": [serialize_billing_plan(plan_id) for plan_id in BILLING_PLAN_CONFIG],
     }
 
@@ -7507,11 +7522,17 @@ async def create_billing_checkout(
         resource_type="billing",
         resource_name=plan["id"],
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"provider": "payfast", "checkout_id": checkout_id, "amount_zar": plan["amount_zar"]},
+        metadata={
+            "provider": "payfast",
+            "checkout_id": checkout_id,
+            "amount_zar": plan["amount_zar"],
+            "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+        },
     )
     return {
         "provider": "payfast",
         "sandbox": PAYFAST_SANDBOX,
+        "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
         "checkout_id": checkout_id,
         "checkout_url": PAYFAST_PROCESS_URL,
         "fields": fields,
