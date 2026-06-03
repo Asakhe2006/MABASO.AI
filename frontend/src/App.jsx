@@ -530,6 +530,19 @@ const fairSubscriptionPlans = [
     paymentType: "free",
     audience: "Trial users and light study",
     limits: "Small monthly credits, limited exports, community support",
+    howItWorks: "Best for testing MABASO.AI. Free users get strict monthly limits and must upgrade when attempts run out.",
+    attempts: [
+      "5 study guides",
+      "5 quizzes",
+      "2 reports",
+      "5 mind maps",
+      "2 presentations",
+      "2 podcasts",
+      "2 AI teacher lessons",
+      "50 study chat messages",
+      "20 voice messages",
+      "20 source uploads / processing jobs",
+    ],
     safeguards: ["No card required", "No surprise renewals", "Clear usage meter"],
   },
   {
@@ -539,6 +552,19 @@ const fairSubscriptionPlans = [
     paymentType: "checkout",
     audience: "Students who generate weekly study packs",
     limits: "Higher AI credits, PDF/DOCX exports, reports, quizzes, mind maps",
+    howItWorks: "Built for active students. This plan increases every major study limit while keeping paid overages off by default.",
+    attempts: [
+      "80 study guides",
+      "80 quizzes",
+      "25 reports",
+      "80 mind maps",
+      "20 presentations",
+      "20 podcasts",
+      "30 AI teacher lessons",
+      "1,000 study chat messages",
+      "400 voice messages",
+      "200 source uploads / processing jobs",
+    ],
     safeguards: ["Cancel anytime", "Overages off by default", "Renewal reminders"],
   },
   {
@@ -548,6 +574,19 @@ const fairSubscriptionPlans = [
     paymentType: "checkout",
     audience: "Heavy academic and professional users",
     limits: "Large documents, research reports, presentations, priority queue",
+    howItWorks: "Designed for heavy academic work, large documents, research workflows, and frequent generation across all tools.",
+    attempts: [
+      "300 study guides",
+      "300 quizzes",
+      "120 reports",
+      "300 mind maps",
+      "80 presentations",
+      "80 podcasts",
+      "120 AI teacher lessons",
+      "5,000 study chat messages",
+      "1,500 voice messages",
+      "1,000 source uploads / processing jobs",
+    ],
     safeguards: ["Hard spend cap", "Usage alerts", "Plan downgrade kept easy"],
   },
   {
@@ -557,6 +596,14 @@ const fairSubscriptionPlans = [
     paymentType: "quote",
     audience: "Classes, tutors, departments, and schools",
     limits: "Shared seats, admin controls, pooled credits, audit logs",
+    howItWorks: "For organizations that need seats, pooled usage, invoices, admin controls, and agreed limits before payment.",
+    attempts: [
+      "Custom seat count",
+      "Custom pooled monthly attempts",
+      "Admin-managed usage controls",
+      "Invoice approval before billing",
+      "No hidden per-seat add-ons",
+    ],
     safeguards: ["Seat-level controls", "Invoice approval", "No hidden per-seat add-ons"],
   },
 ];
@@ -4363,6 +4410,18 @@ export default function App() {
                 <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-bold text-emerald-50">{plan.price}</span>
               </div>
               <p className="mt-4 text-sm leading-7 text-slate-200">{plan.limits}</p>
+              <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-100">How this plan works</p>
+                <p className="mt-2 text-sm leading-6 text-slate-200">{plan.howItWorks}</p>
+              </div>
+              <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Monthly attempts included</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {plan.attempts.map((item) => (
+                    <div key={`${plan.name}-${item}`} className="rounded-xl border border-white/10 bg-slate-950/55 px-3 py-2 text-xs font-semibold text-slate-200">{item}</div>
+                  ))}
+                </div>
+              </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
               </div>
