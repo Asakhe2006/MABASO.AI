@@ -5574,14 +5574,33 @@ def get_usage_count(email: str, feature: str, period_key: str) -> int:
     return int((row or {}).get("total_quantity", 0) if isinstance(row, dict) else row["total_quantity"] or 0)
 
 
-def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: str) -> dict[str, Any]:
+def get_usage_counts_for_period(email: str, period_key: str) -> dict[str, int]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT feature, COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND period_key = ?
+            GROUP BY feature
+            """,
+            (normalized_email, period_key),
+        ).fetchall()
+    return {
+        normalize_billing_plan_id(row["feature"]): int(row["total_quantity"] or 0)
+        for row in rows
+    }
+
+
+def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: str, usage_counts: dict[str, int] | None = None) -> dict[str, Any]:
     limit = get_plan_quota(plan_id, feature)
-    used = get_usage_count(email, feature, period_key)
+    normalized_feature = normalize_billing_plan_id(feature)
+    used = int((usage_counts or {}).get(normalized_feature, 0)) if usage_counts is not None else get_usage_count(email, normalized_feature, period_key)
     remaining = None if limit < 0 else max(0, limit - used)
     reset_at = get_next_usage_reset()
     return {
-        "feature": feature,
-        "label": BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title()),
+        "feature": normalized_feature,
+        "label": BILLING_FEATURE_LABELS.get(normalized_feature, normalized_feature.replace("_", " ").title()),
         "used": used,
         "limit": limit,
         "remaining": remaining,
@@ -5596,8 +5615,9 @@ def get_billing_usage_summary(email: str) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     period_key = get_usage_period_key()
     plan_id = get_effective_plan_id(normalized_email)
+    usage_counts = get_usage_counts_for_period(normalized_email, period_key)
     features = [
-        serialize_usage_feature(normalized_email, plan_id, feature, period_key)
+        serialize_usage_feature(normalized_email, plan_id, feature, period_key, usage_counts)
         for feature in BILLING_FEATURE_LABELS
     ]
     return {
@@ -5625,16 +5645,35 @@ def get_monthly_usage_count(email: str, feature: str, month_key: str) -> int:
     return int(row["total_quantity"] or 0)
 
 
+def get_monthly_usage_counts(email: str, month_key: str) -> dict[str, int]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT feature, COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND substr(created_at, 1, 7) = ?
+            GROUP BY feature
+            """,
+            (normalized_email, month_key),
+        ).fetchall()
+    return {
+        normalize_billing_plan_id(row["feature"]): int(row["total_quantity"] or 0)
+        for row in rows
+    }
+
+
 def get_monthly_usage_summary(email: str) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     month_key = utc_now().strftime("%Y-%m")
+    monthly_counts = get_monthly_usage_counts(normalized_email, month_key)
     return {
         "month_key": month_key,
         "features": [
             {
                 "feature": feature,
                 "label": BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title()),
-                "used": get_monthly_usage_count(normalized_email, feature, month_key),
+                "used": int(monthly_counts.get(normalize_billing_plan_id(feature), 0)),
             }
             for feature in BILLING_FEATURE_LABELS
         ],
@@ -8861,14 +8900,28 @@ async def get_account_status(current_user: str = Depends(require_authenticated_u
 
 @app.get("/api/billing/subscription")
 async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
-    account = sync_user_account_snapshot(current_user)
+    normalized_email = normalize_email(current_user)
+    subscription = get_user_subscription(normalized_email)
+    usage = get_billing_usage_summary(normalized_email)
+    monthly_usage = get_monthly_usage_summary(normalized_email)
+    payment_history = list_user_payment_history(normalized_email)
+    feature_permissions = build_feature_permissions(usage)
     return {
-        "account": account,
-        "subscription": account["subscription"],
-        "usage": account["usage"],
-        "monthly_usage": account["monthly_usage"],
-        "payment_history": account["payment_history"],
-        "feature_permissions": account["feature_permissions"],
+        "account": {
+            "email": normalized_email,
+            "current_plan": compact_text(usage.get("plan_id"), "free"),
+            "subscription": subscription,
+            "usage": usage,
+            "monthly_usage": monthly_usage,
+            "payment_history": payment_history,
+            "feature_permissions": feature_permissions,
+            "last_synced_at": utc_now().isoformat(),
+        },
+        "subscription": subscription,
+        "usage": usage,
+        "monthly_usage": monthly_usage,
+        "payment_history": payment_history,
+        "feature_permissions": feature_permissions,
     }
 
 

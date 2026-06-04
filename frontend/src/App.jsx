@@ -78,6 +78,8 @@ const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
+const AI_GENERATION_REQUEST_TIMEOUT_MS = 120000;
+const AI_EXPORT_REQUEST_TIMEOUT_MS = 120000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const TEACHER_REALTIME_CONNECT_TIMEOUT_MS = 18000;
 const TEACHER_REALTIME_SESSION_EVENT_TIMEOUT_MS = 12000;
@@ -2844,11 +2846,35 @@ async function parseJsonSafe(response) {
 
 async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
+  const startedAt = Date.now();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const nextOptions = { ...options, signal: options.signal || controller.signal };
 
   try {
-    return await fetch(resource, nextOptions);
+    const response = await fetch(resource, nextOptions);
+    const durationMs = Date.now() - startedAt;
+    if (!response.ok || durationMs > Math.max(10000, timeoutMs * 0.75)) {
+      console.warn("[MABASO request]", {
+        url: String(resource || "").replace(API_BASE_URL, ""),
+        method: String(nextOptions.method || "GET").toUpperCase(),
+        status: response.status,
+        durationMs,
+        timeoutMs,
+      });
+    }
+    return response;
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    console.error("[MABASO request failed]", {
+      url: String(resource || "").replace(API_BASE_URL, ""),
+      method: String(nextOptions.method || "GET").toUpperCase(),
+      durationMs,
+      timeoutMs,
+      errorName: error?.name || "",
+      errorMessage: error?.message || "",
+      aborted: isAbortError(error),
+    });
+    throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -3927,6 +3953,7 @@ export default function App() {
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [isBillingUsageLoading, setIsBillingUsageLoading] = useState(false);
+  const billingStatusRequestRef = useRef(null);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -11291,13 +11318,23 @@ export default function App() {
       setIsBillingUsageLoading(false);
       return null;
     }
+    if (billingStatusRequestRef.current) {
+      return billingStatusRequestRef.current;
+    }
     setIsBillingUsageLoading(true);
-    try {
+    const request = (async () => {
       const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
       setBillingUsage(data.usage || null);
       setBillingSubscription(data.subscription || null);
       return data;
+    })();
+    billingStatusRequestRef.current = request;
+    try {
+      return await request;
     } finally {
+      if (billingStatusRequestRef.current === request) {
+        billingStatusRequestRef.current = null;
+      }
       setIsBillingUsageLoading(false);
     }
   };
@@ -14236,7 +14273,7 @@ export default function App() {
     let transientFailureCount = 0;
     while (true) {
       try {
-        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: 120000 });
+        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS });
         const data = await parseJsonSafe(response);
         if (!response.ok) {
           const requestError = new Error(data.detail || "Could not read job status.");
@@ -14303,7 +14340,7 @@ export default function App() {
               language: outputLanguage,
               reference_images: getSafeAiReferenceImageUrls(visualReferences),
             }),
-            timeoutMs: 120000,
+            timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
           });
           const data = await parseJsonSafe(response);
           if (!response.ok) {
@@ -14428,6 +14465,7 @@ export default function App() {
       const response = await authFetch("/generate-flashcards/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript,
           summary,
@@ -14506,6 +14544,7 @@ export default function App() {
       const response = await authFetch("/generate-quiz/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript,
           summary,
@@ -14605,6 +14644,7 @@ export default function App() {
     try {
       const response = await authFetch("/generate-presentation/", {
         method: "POST",
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: (() => {
           const formData = new FormData();
           formData.append("transcript", resolvedTranscript);
@@ -14723,7 +14763,7 @@ export default function App() {
     setCurrentJobType("podcast");
     try {
       setStatus("Loading full podcast audio...");
-      const response = await authFetch(`/jobs/${jobId}/podcast-download`);
+      const response = await authFetch(`/jobs/${jobId}/podcast-download`, { timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
       if (!response.ok) {
         const data = await parseJsonSafe(response);
         throw new Error(data.detail || "Could not load the podcast audio.");
@@ -14765,6 +14805,7 @@ export default function App() {
       const response = await authFetch("/generate-podcast/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript,
           summary,
@@ -14882,6 +14923,7 @@ export default function App() {
       const response = await authFetch("/generate-report/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify(buildReportRequestPayload(activeConfig)),
       });
       const data = await parseJsonSafe(response);
@@ -14935,6 +14977,7 @@ export default function App() {
       const response = await authFetch("/export-report-docx/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({ title, content }),
       });
       if (!response.ok) {
@@ -14985,6 +15028,7 @@ export default function App() {
       const response = await authFetch("/generate-mind-map/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript,
           summary,
@@ -15330,6 +15374,7 @@ export default function App() {
       const response = await authFetch("/generate-teacher-lesson/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript,
           summary,
@@ -15443,6 +15488,7 @@ export default function App() {
       const response = await authFetch("/transcribe-video-url/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        timeoutMs: STUDY_SOURCE_EXTRACT_TIMEOUT_MS,
         body: JSON.stringify({ video_url: videoUrl.trim() }),
       });
       const data = await parseJsonSafe(response);
@@ -15757,6 +15803,7 @@ export default function App() {
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeoutMs: 90000,
       body: JSON.stringify({
         question,
         transcript,
@@ -16694,6 +16741,7 @@ export default function App() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title, sections }),
+      timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
     });
     if (!response.ok) {
       const data = await parseJsonSafe(response);
@@ -16753,7 +16801,7 @@ export default function App() {
   const downloadPresentationFile = async () => {
     if (!presentationData.jobId) return setError("Generate the PowerPoint presentation again to download the file.");
     try {
-      const response = await authFetch(`/jobs/${presentationData.jobId}/presentation-download`);
+      const response = await authFetch(`/jobs/${presentationData.jobId}/presentation-download`, { timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
       if (!response.ok) {
         const data = await parseJsonSafe(response);
         throw new Error(data.detail || "Could not download the PowerPoint presentation.");
@@ -16776,7 +16824,7 @@ export default function App() {
   const downloadPodcastAudio = async () => {
     if (!podcastData.jobId) return setError("Generate the podcast again to download the audio.");
     try {
-      const response = await authFetch(`/jobs/${podcastData.jobId}/podcast-download`);
+      const response = await authFetch(`/jobs/${podcastData.jobId}/podcast-download`, { timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
       if (!response.ok) {
         const data = await parseJsonSafe(response);
         throw new Error(data.detail || "Could not download the podcast audio.");
@@ -17253,7 +17301,7 @@ export default function App() {
         formData.append("student_selection_json", JSON.stringify(selectedOptions));
         formData.append("student_answer", typedAnswer);
         if (!isOptionBasedQuestion(item)) imageFiles.forEach((imageFile) => formData.append("answer_images", imageFile));
-        const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
+        const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData, timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
         nextResults[item.number] = data;
@@ -17378,7 +17426,7 @@ export default function App() {
         formData.append("student_selection_json", JSON.stringify(selectedOptions));
         formData.append("student_answer", typedAnswer);
         if (!isOptionBasedQuestion(item)) imageFiles.forEach((imageFile) => formData.append("answer_images", imageFile));
-        const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData });
+        const response = await authFetch("/mark-quiz-answer/", { method: "POST", body: formData, timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || `Could not mark question ${item.number}.`);
         nextResults[item.number] = data;
