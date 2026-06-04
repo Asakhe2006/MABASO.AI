@@ -1406,6 +1406,36 @@ def describe_database_url_endpoint(database_url: str) -> tuple[str, str, int, bo
         return username, host, int(port_text) if port_text.isdigit() else 5432, False
 
 
+def parse_database_url_components(database_url: str) -> dict[str, Any]:
+    try:
+        parsed_url = urlparse(database_url)
+        username = unquote(parsed_url.username or "")
+        password = unquote(parsed_url.password or "")
+        host = parsed_url.hostname or ""
+        port = parsed_url.port or 5432
+        dbname = unquote((parsed_url.path or "/postgres").lstrip("/") or "postgres")
+        query = parse_qs(parsed_url.query)
+        sslmode = (query.get("sslmode") or ["require" if "supabase" in host else "prefer"])[0]
+        return {
+            "user": username,
+            "password": password,
+            "host": host,
+            "port": port,
+            "dbname": dbname,
+            "sslmode": sslmode,
+            "bracketed_dns_host": False,
+        }
+    except ValueError as exc:
+        username, host, port, bracketed_dns_host = describe_database_url_endpoint(database_url)
+        if bracketed_dns_host:
+            raise RuntimeError(
+                "DATABASE_URL wraps a DNS hostname in square brackets. Brackets are only valid for literal IPv6 addresses. "
+                f"Remove the brackets around {host} and use a Supabase pooler URL like "
+                "postgresql://postgres.<project-ref>:<password>@aws-1-eu-north-1.pooler.supabase.com:6543/postgres?sslmode=require."
+            ) from exc
+        raise
+
+
 POSTGRES_ENDPOINT_LOGGED = False
 
 
@@ -1414,7 +1444,10 @@ class PostgresConnection:
         if psycopg is None or dict_row is None:
             raise RuntimeError("PostgreSQL is configured, but psycopg is not installed. Install psycopg[binary].")
         global POSTGRES_ENDPOINT_LOGGED
-        username, host, port, bracketed_dns_host = describe_database_url_endpoint(DATABASE_URL)
+        db_config = parse_database_url_components(DATABASE_URL)
+        username = str(db_config.get("user") or "")
+        host = str(db_config.get("host") or "")
+        port = int(db_config.get("port") or 5432)
         if not POSTGRES_ENDPOINT_LOGGED:
             logger.info("Parsed DB Host: %s", host or "(missing)")
             logger.info("Parsed DB Port: %s", port)
@@ -1422,18 +1455,17 @@ class PostgresConnection:
             POSTGRES_ENDPOINT_LOGGED = True
         try:
             self._connection = psycopg.connect(
-                DATABASE_URL,
+                host=host,
+                port=port,
+                dbname=str(db_config.get("dbname") or "postgres"),
+                user=username,
+                password=str(db_config.get("password") or ""),
+                sslmode=str(db_config.get("sslmode") or "require"),
                 row_factory=dict_row,
                 connect_timeout=10,
                 application_name="mabaso_ai",
             )
         except Exception as exc:
-            if bracketed_dns_host:
-                raise RuntimeError(
-                    "DATABASE_URL wraps a DNS hostname in square brackets. Brackets are only valid for literal IPv6 addresses. "
-                    f"Remove the brackets around {host} and use a Supabase pooler URL like "
-                    "postgresql://postgres.<project-ref>:<password>@aws-1-eu-north-1.pooler.supabase.com:6543/postgres?sslmode=require."
-                ) from exc
             if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
                 raise RuntimeError(
                     "DATABASE_URL is using the direct Supabase database host "
