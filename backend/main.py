@@ -1390,7 +1390,25 @@ class PostgresConnection:
     def __init__(self):
         if psycopg is None or dict_row is None:
             raise RuntimeError("PostgreSQL is configured, but psycopg is not installed. Install psycopg[binary].")
-        self._connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        try:
+            self._connection = psycopg.connect(
+                DATABASE_URL,
+                row_factory=dict_row,
+                connect_timeout=10,
+                application_name="mabaso_ai",
+            )
+        except Exception as exc:
+            parsed_url = urlparse(DATABASE_URL)
+            host = parsed_url.hostname or ""
+            port = parsed_url.port or 5432
+            if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
+                raise RuntimeError(
+                    "DATABASE_URL is using the direct Supabase database host "
+                    f"{host}:{port}. Render may not reach that IPv6 endpoint. "
+                    "Use the Supabase Connection Pooler URL instead, usually "
+                    "aws-0-<region>.pooler.supabase.com:6543 with sslmode=require."
+                ) from exc
+            raise
 
     def __enter__(self) -> "PostgresConnection":
         self._connection.__enter__()
