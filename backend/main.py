@@ -5632,7 +5632,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
                 compact_text(subscription.get("current_period_end")),
                 compact_text(usage.get("reset_at")),
                 json.dumps(feature_permissions, ensure_ascii=False),
-                1 if mark_login else 0,
+                bool(mark_login),
                 now_iso,
                 now_iso,
                 normalized_email,
