@@ -4463,7 +4463,7 @@ export default function App() {
 
         <div className="mt-6 flex flex-wrap justify-end gap-3">
           <button type="button" onClick={() => setIsReportConfigOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white">Cancel</button>
-          <button type="button" onClick={() => generateReport({ closePanel: true })} disabled={loading || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Now..." : "Generate Now"}</button>
+          <button type="button" onClick={() => generateReport({ closePanel: true })} disabled={isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Now..." : reportData.body?.trim() ? "↻ Regenerate Now" : "Generate Now"}</button>
         </div>
       </div>
     </div>
@@ -4502,7 +4502,7 @@ export default function App() {
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Open the advanced panel first, then generate a complete academic report with cover page, contents, analysis, recommendations, and references.</p>
             </div>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={openReportConfiguration} disabled={loading || isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Report..." : "Generate Report"}</button>
+              <button type="button" onClick={openReportConfiguration} disabled={isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Report..." : hasReport ? "↻ Regenerate Report" : "Generate Report"}</button>
               <button type="button" onClick={downloadActiveContent} disabled={!hasReport} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">Download Report</button>
             </div>
           </div>
@@ -4687,7 +4687,7 @@ export default function App() {
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">Detects concepts, hierarchy, relationships, definitions, formulas, examples, processes, and source locations from your study material.</p>
             </div>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={generateMindMap} disabled={loading || isGeneratingMindMap || !hasMindMapGenerationInputs} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-[0_12px_30px_rgba(15,23,42,0.16)] ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(15,23,42,0.22)] disabled:translate-y-0 disabled:opacity-50">{isGeneratingMindMap ? "Generating Mind Map..." : "Generate Mind Map"}</button>
+              <button type="button" onClick={generateMindMap} disabled={isGeneratingMindMap} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-[0_12px_30px_rgba(15,23,42,0.16)] ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(15,23,42,0.22)] disabled:translate-y-0 disabled:opacity-50">{isGeneratingMindMap ? "Generating Mind Map..." : hasMindMap ? "↻ Regenerate Mind Map" : "Generate Mind Map"}</button>
               <button type="button" onClick={downloadMindMapJson} disabled={!hasMindMap} className="rounded-full border border-slate-200 bg-slate-950 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Export JSON</button>
             </div>
           </div>
@@ -5052,15 +5052,6 @@ export default function App() {
   const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
-  const hasMindMapInputs = Boolean(
-    transcript.trim()
-    || summary.trim()
-    || lectureNotes.trim()
-    || lectureSlides.trim()
-    || pastQuestionPapers.trim()
-    || (reportData.body || "").trim()
-    || mindMapTopic.trim()
-  );
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Slides are still being read. Please wait before generating the study guide."
@@ -11797,8 +11788,6 @@ export default function App() {
   });
   const lectureAssistantMessages = lectureAssistant.messages;
   const latestLectureAssistantReply = [...lectureAssistantMessages].reverse().find((message) => message.role === "assistant") || null;
-  const hasMindMapGenerationInputs = Boolean(hasMindMapInputs || chatToText(lectureAssistantMessages).trim());
-
   const buildTeacherRealtimeRequestPayload = () => ({
     summary,
     transcript,
@@ -14980,12 +14969,14 @@ export default function App() {
     }
   };
 
-  const buildReportRequestPayload = (config = reportConfig) => ({
-    transcript,
-    summary,
-    lecture_notes: lectureNotes,
-    lecture_slides: lectureSlides,
-    past_question_papers: pastQuestionPapers,
+  const buildReportRequestPayload = (config = reportConfig, contextOverride = null) => {
+    const toolContext = contextOverride || getResolvedStudyToolContext();
+    return {
+    transcript: toolContext.transcript,
+    summary: toolContext.summary,
+    lecture_notes: toolContext.lectureNotes,
+    lecture_slides: toolContext.lectureSlides,
+    past_question_papers: toolContext.pastQuestionPapers,
     language: outputLanguage,
     report_title: config.reportTitle,
     academic_level: config.academicLevel,
@@ -15001,11 +14992,13 @@ export default function App() {
     lecturer: config.lecturer,
     report_date: config.reportDate,
     features: config.features,
-  });
+    };
+  };
 
   const generateReport = async ({ closePanel = false, configOverride = null } = {}) => {
     const activeConfig = configOverride ? { ...reportConfig, ...configOverride, features: { ...reportConfig.features, ...(configOverride.features || {}) } } : reportConfig;
-    if (!(activeConfig.reportTitle.trim() || summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+    const toolContext = getResolvedStudyToolContext();
+    if (!(activeConfig.reportTitle.trim() || toolContext.hasContent)) {
       return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
     if (!validateReportPlanAccess(activeConfig)) return false;
@@ -15022,7 +15015,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
-        body: JSON.stringify(buildReportRequestPayload(activeConfig)),
+        body: JSON.stringify(buildReportRequestPayload(activeConfig, toolContext)),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Report generation failed.");
@@ -15106,8 +15099,15 @@ export default function App() {
   };
 
   const generateMindMap = async () => {
+    const toolContext = getResolvedStudyToolContext();
     const chatContext = chatToText(lectureAssistantMessages);
-    if (!hasMindMapGenerationInputs) {
+    const hasMindMapContext = Boolean(
+      toolContext.hasContent
+      || (reportData.body || "").trim()
+      || chatContext.trim()
+      || mindMapTopic.trim()
+    );
+    if (!hasMindMapContext) {
       return setError("Add lecture material, generate a report, chat with AI, paste text, or enter a topic before creating the mind map.");
     }
     if (!isMindMapDepthAllowed(mindMapDepth)) {
@@ -15128,11 +15128,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
+          transcript: toolContext.transcript,
+          summary: toolContext.summary,
+          lecture_notes: toolContext.lectureNotes,
+          lecture_slides: toolContext.lectureSlides,
+          past_question_papers: toolContext.pastQuestionPapers,
           report_body: reportData.body || "",
           chat_context: chatContext,
           topic: mindMapTopic,
