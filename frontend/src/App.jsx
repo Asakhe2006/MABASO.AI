@@ -10519,7 +10519,7 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credential }),
-      }, 20000);
+      }, 45000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
@@ -10546,7 +10546,7 @@ export default function App() {
           user,
           redirect_uri: redirectUri,
         }),
-      }, 20000);
+      }, 45000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Apple sign-in failed.");
       applyAuthResponse(data, data.email || "", { promptForMode: true });

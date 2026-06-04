@@ -174,6 +174,7 @@ REALTIME_TUTOR_IDLE_TIMEOUT_MS = min(
 )
 REALTIME_TUTOR_CONTEXT_CHARS = max(5000, int(os.getenv("REALTIME_TUTOR_CONTEXT_CHARS", "8000")))
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_AUTH_VERIFY_TIMEOUT = float(os.getenv("GOOGLE_AUTH_VERIFY_TIMEOUT", "8"))
 APPLE_CLIENT_ID = os.getenv("APPLE_CLIENT_ID", "").strip()
 APPLE_TEAM_ID = os.getenv("APPLE_TEAM_ID", "").strip()
 APPLE_KEY_ID = os.getenv("APPLE_KEY_ID", "").strip()
@@ -3946,13 +3947,29 @@ def verify_email_password_auth(email: str, password: str, code: str, mode: str) 
     return create_session(email)
 
 
+class TimeoutGoogleRequest:
+    def __init__(self, timeout: float):
+        self.timeout = timeout
+        self.request = GoogleRequest()
+
+    def __call__(self, url, method="GET", body=None, headers=None, timeout=None, **kwargs):
+        return self.request(
+            url=url,
+            method=method,
+            body=body,
+            headers=headers,
+            timeout=timeout or self.timeout,
+            **kwargs,
+        )
+
+
 def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     verify_google_auth_is_configured()
 
     try:
         token_info = google_id_token.verify_oauth2_token(
             credential,
-            GoogleRequest(),
+            TimeoutGoogleRequest(GOOGLE_AUTH_VERIFY_TIMEOUT),
             GOOGLE_CLIENT_ID,
         )
     except Exception as exc:
@@ -8557,7 +8574,9 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
     credential = payload.credential.strip()
     if not credential:
         raise HTTPException(status_code=400, detail="Google credential is required.")
+    logger.info("Google auth request started.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
     record_audit_log(
         action="auth.google.login",
         email=email,
@@ -8566,7 +8585,9 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
         resource_name="google",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
-    return build_auth_response(email, session_token)
+    response = build_auth_response(email, session_token)
+    logger.info("Google auth response built for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
+    return response
 
 
 @app.post("/auth/apple")
