@@ -5832,7 +5832,7 @@ def consume_plan_quota(
         if limit >= 0 and used + safe_quantity > limit:
             remaining = max(0, limit - used)
             base_limit_message = (
-                f"You have used all free attempts for today for {label}. Upgrade to continue using premium features."
+                f"You have used all free attempts for today for {label}. upgrade to pro to continue."
                 if plan_id == "free"
                 else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
             )
@@ -5920,7 +5920,7 @@ def ensure_plan_quota_available(
     if limit >= 0 and used + safe_quantity > limit:
         remaining = max(0, limit - used)
         base_limit_message = (
-            f"You have used all free attempts for today for {label}. Upgrade to continue using premium features."
+            f"You have used all free attempts for today for {label}. upgrade to pro to continue."
             if plan_id == "free"
             else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
         )

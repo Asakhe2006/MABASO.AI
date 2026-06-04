@@ -98,6 +98,7 @@ const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
+const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
 const ADMIN_DASHBOARD_RANGE_STORAGE_KEY = "mabaso-admin-dashboard-range-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
@@ -1577,6 +1578,33 @@ function getHistoryStorageKey(email = "") {
   return normalizedEmail ? `${HISTORY_STORAGE_KEY}:${normalizedEmail}` : HISTORY_STORAGE_KEY;
 }
 
+function getBillingStatusStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${BILLING_STATUS_CACHE_KEY}:${normalizedEmail}` : BILLING_STATUS_CACHE_KEY;
+}
+
+function loadBillingStatusCache(email = "") {
+  try {
+    const rawValue = window.localStorage.getItem(getBillingStatusStorageKey(email));
+    if (!rawValue) return null;
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveBillingStatusCache(email = "", snapshot = null) {
+  try {
+    const normalizedEmail = normalizeHistoryOwnerEmail(email);
+    if (!normalizedEmail || !snapshot) return;
+    window.localStorage.setItem(getBillingStatusStorageKey(normalizedEmail), JSON.stringify(snapshot));
+  } catch {
+    // Keep billing cache best-effort only.
+  }
+}
+
 function getWorkspaceDraftStorageKey(email = "") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email);
   return normalizedEmail ? `${WORKSPACE_DRAFT_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_DRAFT_STORAGE_KEY;
@@ -2833,7 +2861,7 @@ function getErrorHint(message) {
 }
 
 function isUsageBlockedMessage(message = "") {
-  return /used all .*attempts|usage will reset|upgrade to continue using premium features|remaining attempts|current usage limit/i.test(String(message || ""));
+  return /used all .*attempts|usage will reset|upgrade to continue using premium features|upgrade to pro to continue|remaining attempts|current usage limit/i.test(String(message || ""));
 }
 
 async function parseJsonSafe(response) {
@@ -5152,6 +5180,27 @@ export default function App() {
   const errorHint = getErrorHint(error);
   const isCurrentErrorUsageBlocked = isUsageBlockedMessage(error);
   const captureErrorTitle = isCurrentErrorUsageBlocked ? "Access limit reached" : "Processing failed";
+  const renderCaptureErrorMessage = (message) => {
+    const rawMessage = String(message || "");
+    const match = rawMessage.match(/upgrade to pro\s+to continue/i);
+    if (!match) return rawMessage;
+    const before = rawMessage.slice(0, match.index);
+    const after = rawMessage.slice((match.index || 0) + match[0].length);
+    return (
+      <>
+        {before}
+        <button
+          type="button"
+          onClick={openUpgradeModal}
+          className="font-bold text-emerald-200 underline decoration-emerald-200/70 underline-offset-4 transition hover:text-emerald-100"
+        >
+          upgrade to pro
+        </button>
+        {" to continue"}
+        {after}
+      </>
+    );
+  };
   const showHistoryPanel = currentPage === "materials";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
@@ -10147,6 +10196,19 @@ export default function App() {
       setAuthChecked(true);
       return undefined;
     }
+    const storedEmail = window.localStorage.getItem(AUTH_EMAIL_KEY) || "";
+    const storedMode = window.localStorage.getItem(AUTH_MODE_KEY) || "user";
+    let storedAvailableModes = [];
+    try {
+      storedAvailableModes = JSON.parse(window.localStorage.getItem(AUTH_AVAILABLE_MODES_KEY) || "[]");
+    } catch {
+      storedAvailableModes = [];
+    }
+    setAuthToken(token);
+    setAuthEmail(storedEmail);
+    setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
+    setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
+    setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
     setAuthChecked(true);
     fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
@@ -10222,10 +10284,17 @@ export default function App() {
 
   useEffect(() => {
     if (!authChecked || !authEmail) return;
-    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
+    historyOwnerEmailRef.current = normalizedEmail;
     skipNextHistorySyncRef.current = true;
-    setHistoryItems([]);
-    setActiveHistoryId("");
+    const cachedHistoryItems = loadHistoryItems(normalizedEmail);
+    setHistoryItems(cachedHistoryItems);
+    setActiveHistoryId((current) => (cachedHistoryItems.some((item) => item.id === current) ? current : ""));
+    const cachedBillingStatus = loadBillingStatusCache(normalizedEmail);
+    if (cachedBillingStatus?.usage || cachedBillingStatus?.subscription) {
+      setBillingUsage(cachedBillingStatus.usage || null);
+      setBillingSubscription(cachedBillingStatus.subscription || null);
+    }
   }, [authChecked, authEmail]);
 
   useEffect(() => {
@@ -11122,6 +11191,10 @@ export default function App() {
     if (!authChecked || !authToken) return;
     if (browserPath === "/admin/dashboard") {
       if (authSessionMode !== "admin") {
+        if (authAvailableModes.includes("admin")) {
+          if (currentPage !== "mode-select") setCurrentPage("mode-select");
+          return;
+        }
         openProtectedAppPage("capture", { replace: true });
         return;
       }
@@ -11133,7 +11206,7 @@ export default function App() {
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
     setCurrentPage(routedPage);
-  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
+  }, [authAvailableModes, authChecked, authSessionMode, authToken, browserPath, currentPage]);
 
   useEffect(() => {
     if (!authChecked || !authToken) return;
@@ -11324,8 +11397,15 @@ export default function App() {
     setIsBillingUsageLoading(true);
     const request = (async () => {
       const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
-      setBillingUsage(data.usage || null);
-      setBillingSubscription(data.subscription || null);
+      const nextUsage = data.usage || null;
+      const nextSubscription = data.subscription || null;
+      setBillingUsage(nextUsage);
+      setBillingSubscription(nextSubscription);
+      saveBillingStatusCache(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "", {
+        usage: nextUsage,
+        subscription: nextSubscription,
+        saved_at: new Date().toISOString(),
+      });
       return data;
     })();
     billingStatusRequestRef.current = request;
@@ -11373,7 +11453,7 @@ export default function App() {
     const prefix = planId === "free"
       ? `You have used all free attempts for today for ${label}.`
       : `You have used all ${planId} attempts for today for ${label}.`;
-    return `${prefix} ${resetWait ? `Your usage will reset in ${resetWait}` : "Your usage will reset"} at ${resetLabel}. Upgrade to continue using premium features.`;
+    return `${prefix} ${resetWait ? `Your usage will reset in ${resetWait}` : "Your usage will reset"} at ${resetLabel}. upgrade to pro to continue.`;
   };
 
   const createUsageBlockedError = (fallbackMessage = "This action is blocked by your current usage limit.") => {
@@ -12872,7 +12952,12 @@ export default function App() {
       }
       if (!silent) setError(err.message || "Could not load the admin dashboard.");
       if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
-        setCurrentPage("capture");
+        if (authAvailableModes.includes("admin")) {
+          setAuthMessage("Choose admin mode again to reopen the protected dashboard.");
+          setCurrentPage("mode-select");
+        } else {
+          setCurrentPage("capture");
+        }
       }
     } finally {
       if (shouldShowLoader) setIsLoadingAdminDashboard(false);
@@ -17841,7 +17926,7 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
                     <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
-                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{error}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
+                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{renderCaptureErrorMessage(error)}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
