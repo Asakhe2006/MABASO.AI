@@ -4054,24 +4054,61 @@ def create_session_from_apple_auth(payload: AppleAuthRequest) -> tuple[str, str]
     return create_session(email), email
 
 
-def build_auth_response(email: str, token: str) -> dict[str, Any]:
+def build_auth_response(email: str, token: str, *, include_account_snapshot: bool = True) -> dict[str, Any]:
     available_modes = get_available_auth_modes(email)
     payload = decode_signed_session_token(token) or {}
     session_mode = normalize_session_mode(str(payload.get("mode") or "user"), email)
-    account = sync_user_account_snapshot(email, mark_login=True)
-    return {
+    account: dict[str, Any] = {}
+    if include_account_snapshot:
+        try:
+            account = sync_user_account_snapshot(email, mark_login=True)
+        except Exception:
+            logger.exception("Auth account snapshot failed for %s; returning session response without account payload.", email)
+            account = {}
+    response = {
         "token": token,
         "email": email,
         "session_mode": session_mode,
         "available_modes": available_modes,
         "is_admin": "admin" in available_modes,
-        "account": account,
-        "subscription": account.get("subscription"),
-        "usage": account.get("usage"),
-        "monthly_usage": account.get("monthly_usage"),
-        "payment_history": account.get("payment_history"),
-        "feature_permissions": account.get("feature_permissions"),
+        "account": account or None,
     }
+    if account:
+        response.update(
+            {
+                "subscription": account.get("subscription"),
+                "usage": account.get("usage"),
+                "monthly_usage": account.get("monthly_usage"),
+                "payment_history": account.get("payment_history"),
+                "feature_permissions": account.get("feature_permissions"),
+            }
+        )
+    return response
+
+
+def run_post_auth_background_sync(
+    *,
+    email: str,
+    request: Request,
+    action: str,
+    resource_name: str,
+    started_at: datetime,
+) -> None:
+    try:
+        sync_user_account_snapshot(email, mark_login=True)
+    except Exception:
+        logger.exception("Post-auth account sync failed for %s", email)
+    try:
+        record_audit_log(
+            action=action,
+            email=email,
+            request=request,
+            resource_type="auth",
+            resource_name=resource_name,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        )
+    except Exception:
+        logger.exception("Post-auth audit log failed for %s", email)
 
 
 def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
@@ -8697,16 +8734,23 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
     logger.info("Google auth request started.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
     logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
-    record_audit_log(
-        action="auth.google.login",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="google",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    response = build_auth_response(email, session_token, include_account_snapshot=False)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "request": request,
+            "action": "auth.google.login",
+            "resource_name": "google",
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    logger.info(
+        "Google auth lightweight response built for %s in %sms.",
+        email,
+        int((utc_now() - started_at).total_seconds() * 1000),
     )
-    response = build_auth_response(email, session_token)
-    logger.info("Google auth response built for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
     return response
 
 
@@ -8717,15 +8761,19 @@ async def apple_login(payload: AppleAuthRequest, request: Request):
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
         raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
     session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
-    record_audit_log(
-        action="auth.apple.login",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="apple",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    response = build_auth_response(email, session_token, include_account_snapshot=False)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "request": request,
+            "action": "auth.apple.login",
+            "resource_name": "apple",
+            "started_at": started_at,
+        },
+        daemon=True,
     )
-    return build_auth_response(email, session_token)
+    return response
 
 
 @app.get("/auth/me")
