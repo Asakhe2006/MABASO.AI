@@ -4134,6 +4134,8 @@ export default function App() {
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
+  const adminAutoModeSwitchRef = useRef(false);
+  const adminAutoModeSwitchLastAtRef = useRef(0);
   const hasRestoredWorkspaceDraftRef = useRef("");
   const hasRestoredRecoveredRecordingRef = useRef("");
   const hasResumedPendingJobRef = useRef("");
@@ -10214,13 +10216,15 @@ export default function App() {
         return;
       }
       const nextToken = data.token || token;
+      const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
+      const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
       setAuthToken(nextToken);
       setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
       setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-      setAuthSessionMode(data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user");
-      setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : []);
+      setAuthSessionMode(nextSessionMode);
+      setAuthAvailableModes(nextAvailableModes);
       applyServerAccountState(data);
-      if ((data.session_mode || "") === "admin") {
+      if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
         setCurrentPage("admin");
       }
     }).catch((error) => {
@@ -10453,8 +10457,14 @@ export default function App() {
         if (data.token) {
           setAuthToken(data.token);
         }
-        if (data.session_mode) setAuthSessionMode(data.session_mode);
-        if (Array.isArray(data.available_modes)) setAuthAvailableModes(data.available_modes);
+        const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
+        const nextSessionMode = data.session_mode || authSessionMode;
+        const keepAdminRouteStable = browserPath === "/admin/dashboard"
+          && authSessionMode === "admin"
+          && nextSessionMode !== "admin"
+          && nextAvailableModes.includes("admin");
+        if (nextSessionMode && !keepAdminRouteStable) setAuthSessionMode(nextSessionMode);
+        setAuthAvailableModes(nextAvailableModes);
       }).catch(() => {
         // Keep the saved session locally if the server is temporarily unavailable.
       });
@@ -10462,7 +10472,7 @@ export default function App() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [authToken]);
+  }, [authAvailableModes, authSessionMode, authToken, browserPath]);
 
   useEffect(() => () => {
     if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
@@ -10601,6 +10611,11 @@ export default function App() {
       return;
     }
     if (promptForMode && nextAvailableModes.includes("admin")) {
+      const pendingRedirectPath = readPendingPostAuthRedirectPath();
+      if (browserPath === "/admin/dashboard" || pendingRedirectPath === "/admin/dashboard") {
+        setCurrentPage("admin");
+        return;
+      }
       setCurrentPage("mode-select");
       return;
     }
@@ -10631,10 +10646,16 @@ export default function App() {
           throw requestError;
         }
         const nextToken = data.token || currentToken;
+        const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
+        const nextSessionMode = data.session_mode || authSessionMode || "user";
+        const keepAdminRouteStable = browserPath === "/admin/dashboard"
+          && authSessionMode === "admin"
+          && nextSessionMode !== "admin"
+          && nextAvailableModes.includes("admin");
         setAuthToken(nextToken);
         setAuthEmail(data.email || authEmail || "");
-        setAuthSessionMode(data.session_mode || authSessionMode || "user");
-        setAuthAvailableModes(Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes);
+        if (!keepAdminRouteStable) setAuthSessionMode(nextSessionMode);
+        setAuthAvailableModes(nextAvailableModes);
         applyServerAccountState(data, { includeBilling: false });
         return nextToken;
       } catch (err) {
@@ -11184,7 +11205,7 @@ export default function App() {
     if (browserPath === "/admin/dashboard") {
       if (authSessionMode !== "admin") {
         if (authAvailableModes.includes("admin")) {
-          if (currentPage !== "mode-select") setCurrentPage("mode-select");
+          if (currentPage !== "admin") setCurrentPage("admin");
           return;
         }
         openProtectedAppPage("capture", { replace: true });
@@ -12933,6 +12954,19 @@ export default function App() {
       if (!silent) setError(err.message || "Could not switch session mode.");
     }
   };
+
+  useEffect(() => {
+    if (!authChecked || !authToken || browserPath !== "/admin/dashboard") return undefined;
+    if (authSessionMode === "admin" || !authAvailableModes.includes("admin")) return undefined;
+    const now = Date.now();
+    if (adminAutoModeSwitchRef.current || now - adminAutoModeSwitchLastAtRef.current < 10000) return undefined;
+    adminAutoModeSwitchRef.current = true;
+    adminAutoModeSwitchLastAtRef.current = now;
+    chooseSessionMode("admin", { silent: true }).finally(() => {
+      adminAutoModeSwitchRef.current = false;
+    });
+    return undefined;
+  }, [authAvailableModes, authChecked, authSessionMode, authToken, browserPath]);
 
   const pushHistoryToServer = async (items) => {
     const response = await authFetch("/history", {
@@ -17822,6 +17856,7 @@ export default function App() {
   }
 
   if (authToken && activeSitePage?.access === "admin") {
+    const isOpeningAllowedAdminDashboard = isAdminAccount && authSessionMode !== "admin";
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -17833,12 +17868,16 @@ export default function App() {
           <section className="w-full rounded-[32px] border border-white/10 bg-slate-950/75 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
             <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Admin access</p>
-            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">Open the protected admin dashboard.</h1>
+            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">
+              {isOpeningAllowedAdminDashboard ? "Opening the admin dashboard." : "Open the protected admin dashboard."}
+            </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
-              This route is protected. If this email is configured as an administrator, switch into admin mode to continue.
+              {isOpeningAllowedAdminDashboard
+                ? "This email is configured as an administrator. The app is switching this session into admin mode and keeping you on the protected dashboard route."
+                : "This route is protected. If this email is configured as an administrator, switch into admin mode to continue."}
             </p>
             <div className="mt-8 grid gap-5 xl:grid-cols-2">
-              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Enter admin dashboard</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">{isOpeningAllowedAdminDashboard ? "Open admin mode now" : "Enter admin dashboard"}</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
               <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Return to student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study tools, and use the normal Mabaso workspace.</p></button>
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3">
