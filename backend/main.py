@@ -1416,12 +1416,9 @@ class PostgresConnection:
         global POSTGRES_ENDPOINT_LOGGED
         username, host, port, bracketed_dns_host = describe_database_url_endpoint(DATABASE_URL)
         if not POSTGRES_ENDPOINT_LOGGED:
-            logger.info(
-                "PostgreSQL DATABASE_URL endpoint parsed as user=%s host=%s port=%s",
-                username or "(missing)",
-                host or "(missing)",
-                port,
-            )
+            logger.info("Parsed DB Host: %s", host or "(missing)")
+            logger.info("Parsed DB Port: %s", port)
+            logger.info("Parsed DB User: %s", username or "(missing)")
             POSTGRES_ENDPOINT_LOGGED = True
         try:
             self._connection = psycopg.connect(
