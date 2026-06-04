@@ -11447,6 +11447,18 @@ export default function App() {
     return error;
   };
 
+  const isUsageResetInFuture = (featureState = {}, usage = {}) => {
+    const resetTime = new Date(featureState?.reset_at || usage?.reset_at || "").getTime();
+    return Number.isFinite(resetTime) && resetTime > Date.now();
+  };
+
+  const refreshBillingStatusInBackground = () => {
+    if (!authToken || billingStatusRequestRef.current) return;
+    window.setTimeout(() => {
+      refreshBillingStatus().catch(() => {});
+    }, 0);
+  };
+
   const ensurePremiumFeatureAvailable = async (featureId, fallbackLabel = "this feature") => {
     lastUsageBlockedMessageRef.current = "";
     if (!authToken) {
@@ -11455,6 +11467,23 @@ export default function App() {
       setError(message);
       setStatus(message);
       return false;
+    }
+
+    const cachedUsage = billingUsage;
+    const cachedFeatureState = getUsageFeatureState(cachedUsage, featureId);
+    if (cachedUsage && cachedFeatureState) {
+      if (!cachedFeatureState.unlimited && Number(cachedFeatureState.remaining) <= 0 && isUsageResetInFuture(cachedFeatureState, cachedUsage)) {
+        const message = `${billingSubscription?.message ? `${billingSubscription.message} ` : ""}${buildUsageBlockedMessage(cachedFeatureState, cachedUsage, fallbackLabel)}`;
+        lastUsageBlockedMessageRef.current = message;
+        setError(message);
+        setStatus(message);
+        setIsUpgradeModalOpen(true);
+        return false;
+      }
+      if (cachedFeatureState.unlimited || Number(cachedFeatureState.remaining) > 0) {
+        refreshBillingStatusInBackground();
+        return true;
+      }
     }
 
     let usage = null;
