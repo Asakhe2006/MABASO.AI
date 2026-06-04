@@ -18773,6 +18773,17 @@ def ensure_chat_history_store_configured() -> None:
     )
 
 
+CHAT_HISTORY_CONFIG_WARNING_LOGGED = False
+
+
+def log_chat_history_config_warning() -> None:
+    global CHAT_HISTORY_CONFIG_WARNING_LOGGED
+    if CHAT_HISTORY_CONFIG_WARNING_LOGGED:
+        return
+    logger.warning("Supabase REST chat history is not configured. Assistant conversation list will use local fallback mode.")
+    CHAT_HISTORY_CONFIG_WARNING_LOGGED = True
+
+
 @app.get("/api/assistant/conversations")
 async def list_lecture_assistant_conversations(
     search: str = Query(default=""),
@@ -18781,7 +18792,15 @@ async def list_lecture_assistant_conversations(
     archived: bool = Query(default=False),
     current_user: str = Depends(require_authenticated_user),
 ):
-    ensure_chat_history_store_configured()
+    if not chat_history_store.available:
+        log_chat_history_config_warning()
+        return AssistantConversationListResponse(
+            items=[],
+            total=0,
+            limit=limit,
+            offset=offset,
+            storage_mode="local",
+        )
     try:
         result = chat_history_store.list_conversations(
             email=current_user,
@@ -18807,7 +18826,9 @@ async def get_lecture_assistant_conversation(
     message_limit: int = Query(default=80, ge=1, le=120),
     current_user: str = Depends(require_authenticated_user),
 ):
-    ensure_chat_history_store_configured()
+    if not chat_history_store.available:
+        log_chat_history_config_warning()
+        raise HTTPException(status_code=404, detail="Conversation history is not configured on the backend yet.")
     try:
         conversation = chat_history_store.get_conversation(current_user, conversation_id)
         if not conversation:
@@ -18839,7 +18860,15 @@ async def get_lecture_assistant_conversation_messages(
     limit: int = Query(default=80, ge=1, le=120),
     current_user: str = Depends(require_authenticated_user),
 ):
-    ensure_chat_history_store_configured()
+    if not chat_history_store.available:
+        log_chat_history_config_warning()
+        return AssistantConversationMessagesResponse(
+            items=[],
+            total=0,
+            has_more=False,
+            next_before="",
+            storage_mode="local",
+        )
     try:
         conversation = chat_history_store.get_conversation(current_user, conversation_id)
         if not conversation:
