@@ -5061,6 +5061,7 @@ export default function App() {
     || mindMapTopic.trim()
   );
   const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
+  const hasToolGenerationInputs = hasQuizGenerationInputs;
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Slides are still being read. Please wait before generating the study guide."
@@ -7626,7 +7627,7 @@ export default function App() {
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
             <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Generate below, then review the deck view as soon as the progress reaches 100%.</p>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+              <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
               <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
             </div>
           </div>
@@ -7815,7 +7816,7 @@ export default function App() {
               </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
                 <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> while matching the generated slide order shown here.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
-                <button type="button" onClick={generatePresentation} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
               </div>
             </div>
           </div>
@@ -7916,7 +7917,7 @@ export default function App() {
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Full podcast audio, exam-focused turns, and named voices.</p>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generatePodcast} disabled={loading || !hasStudyInputs} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : "Generate Podcast"}</button>
+            <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : "Generate Podcast"}</button>
             <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-50 disabled:opacity-50">Download Audio</button>
           </div>
         </div>
@@ -16472,7 +16473,7 @@ export default function App() {
       return;
     }
     if (actionId === "generate-quiz") {
-      await generateQuizFromGuide();
+      await generateQuiz();
       if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
       return;
     }
