@@ -17761,7 +17761,7 @@ export default function App() {
     );
   }
 
-  if (authToken && activeSitePage) {
+  if (authToken && activeSitePage && !(activeSitePage.access === "admin" && authSessionMode !== "admin" && isAdminAccount)) {
     if (activeSitePage.access === "admin" && authSessionMode === "admin") {
       return renderAdminDashboardPage();
     }
