@@ -1713,6 +1713,56 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS assistant_conversations (
+                id TEXT PRIMARY KEY,
+                user_email TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                lecture_label TEXT NOT NULL DEFAULT '',
+                context_key TEXT NOT NULL DEFAULT '',
+                preview_text TEXT NOT NULL DEFAULT '',
+                last_message_preview TEXT NOT NULL DEFAULT '',
+                memory_summary TEXT NOT NULL DEFAULT '',
+                search_document TEXT NOT NULL DEFAULT '',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                is_pinned INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_message_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assistant_conversations_email_updated_at
+            ON assistant_conversations (user_email, is_archived, is_pinned, updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assistant_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                interaction_mode TEXT NOT NULL DEFAULT 'text',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assistant_messages_conversation_timestamp
+            ON assistant_messages (conversation_id, user_email, timestamp DESC, id DESC)
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS email_password_credentials (
                 email TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
@@ -18240,6 +18290,458 @@ def format_chat_history_conversation(row: dict[str, Any], *, include_messages: b
     return payload
 
 
+def shorten_text(value: Any, limit: int, *, ellipsis: str = "...") -> str:
+    cleaned = compact_text(value)
+    if not cleaned or len(cleaned) <= limit:
+        return cleaned
+    clipped = cleaned[:limit].rsplit(" ", 1)[0].strip() or cleaned[:limit].strip()
+    return f"{clipped}{ellipsis}"
+
+
+class DatabaseChatHistoryStore:
+    @property
+    def available(self) -> bool:
+        return True
+
+    def ensure_user(self, email: str) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        if not normalized_email:
+            raise SupabaseChatHistoryError("A valid email is required for conversation history.")
+        now_iso = utc_now().isoformat()
+        with get_db_connection() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+                (normalized_email, now_iso, uuid4().hex, now_iso),
+            )
+            row = connection.execute(
+                "SELECT email, user_id, created_at, updated_at FROM users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+        if not row:
+            raise SupabaseChatHistoryError("Could not create the chat history user record.")
+        return dict(row)
+
+    def get_conversation(self, email: str, conversation_id: str) -> dict[str, Any] | None:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            return None
+        with get_db_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM assistant_conversations
+                WHERE id = ? AND user_email = ?
+                """,
+                (normalized_id, normalized_email),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def ensure_conversation(
+        self,
+        *,
+        email: str,
+        conversation_id: str,
+        title: str = "",
+        lecture_label: str = "",
+        context_key: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            raise SupabaseChatHistoryError("A valid conversation id and email are required.")
+
+        existing = self.get_conversation(normalized_email, normalized_id)
+        if existing:
+            updates: dict[str, Any] = {"updated_at": utc_now().isoformat()}
+            if lecture_label and compact_text(existing.get("lecture_label")) != lecture_label:
+                updates["lecture_label"] = compact_text(lecture_label)
+            if context_key and compact_text(existing.get("context_key")) != context_key:
+                updates["context_key"] = compact_text(context_key)
+            if title and not compact_text(existing.get("title")):
+                updates["title"] = compact_text(title)
+            if metadata:
+                merged_metadata = normalize_chat_history_json(existing.get("metadata_json"))
+                merged_metadata.update(metadata)
+                updates["metadata_json"] = merged_metadata
+            if len(updates) > 1:
+                return self.update_conversation(email=normalized_email, conversation_id=normalized_id, updates=updates) or existing
+            return existing
+
+        self.ensure_user(normalized_email)
+        now_iso = utc_now().isoformat()
+        metadata_payload = json.dumps(metadata or {}, ensure_ascii=False)
+        with get_db_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO assistant_conversations (
+                    id, user_email, title, lecture_label, context_key, preview_text,
+                    last_message_preview, memory_summary, search_document, message_count,
+                    is_archived, is_pinned, metadata_json, created_at, updated_at, last_message_at
+                )
+                VALUES (?, ?, ?, ?, ?, '', '', '', ?, 0, 0, 0, ?, ?, ?, ?)
+                ON CONFLICT(id) DO NOTHING
+                """,
+                (
+                    normalized_id,
+                    normalized_email,
+                    compact_text(title),
+                    compact_text(lecture_label),
+                    compact_text(context_key),
+                    compact_text(title),
+                    metadata_payload,
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+        conversation = self.get_conversation(normalized_email, normalized_id)
+        if not conversation:
+            raise SupabaseChatHistoryError("Could not create the chat history conversation.")
+        return conversation
+
+    def list_conversations(
+        self,
+        *,
+        email: str,
+        search: str = "",
+        include_archived: bool = False,
+        limit: int = 30,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        if not normalized_email:
+            return {"items": [], "total": 0}
+        normalized_limit = max(1, min(int(limit or 30), 100))
+        normalized_offset = max(0, int(offset or 0))
+        search_query = compact_text(search).lower()
+        where_clauses = ["user_email = ?"]
+        parameters: list[Any] = [normalized_email]
+        if not include_archived:
+            where_clauses.append("is_archived = ?")
+            parameters.append(0)
+        if search_query:
+            where_clauses.append("LOWER(search_document) LIKE ?")
+            parameters.append(f"%{search_query}%")
+        where_sql = " AND ".join(where_clauses)
+        with get_db_connection() as connection:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS total FROM assistant_conversations WHERE {where_sql}",
+                tuple(parameters),
+            ).fetchone()
+            rows = connection.execute(
+                f"""
+                SELECT id,title,preview_text,last_message_preview,memory_summary,lecture_label,context_key,
+                       message_count,is_pinned,is_archived,metadata_json,last_message_at,created_at,updated_at
+                FROM assistant_conversations
+                WHERE {where_sql}
+                ORDER BY is_pinned DESC, updated_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(parameters + [normalized_limit, normalized_offset]),
+            ).fetchall()
+        return {
+            "items": [dict(row) for row in rows],
+            "total": int((total_row or {}).get("total") or 0),
+        }
+
+    def get_messages(
+        self,
+        *,
+        email: str,
+        conversation_id: str,
+        limit: int = 80,
+        before: str = "",
+    ) -> dict[str, Any]:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        normalized_limit = max(1, min(int(limit or 80), 120))
+        if not normalized_email or not normalized_id:
+            return {"items": [], "total": 0, "has_more": False, "next_before": ""}
+        where_clauses = ["conversation_id = ?", "user_email = ?"]
+        parameters: list[Any] = [normalized_id, normalized_email]
+        normalized_before = compact_text(before)
+        if normalized_before:
+            where_clauses.append("timestamp < ?")
+            parameters.append(normalized_before)
+        where_sql = " AND ".join(where_clauses)
+        with get_db_connection() as connection:
+            total_row = connection.execute(
+                f"SELECT COUNT(*) AS total FROM assistant_messages WHERE {where_sql}",
+                tuple(parameters),
+            ).fetchone()
+            descending_rows = connection.execute(
+                f"""
+                SELECT id,conversation_id,role,content,timestamp,interaction_mode,provider,model,metadata_json
+                FROM assistant_messages
+                WHERE {where_sql}
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(parameters + [normalized_limit]),
+            ).fetchall()
+        descending_items = [dict(row) for row in descending_rows]
+        total = int((total_row or {}).get("total") or 0)
+        next_before = compact_text(descending_items[-1].get("timestamp")) if descending_items else ""
+        return {
+            "items": list(reversed(descending_items)),
+            "total": total,
+            "has_more": total > len(descending_items) and bool(descending_items),
+            "next_before": next_before,
+        }
+
+    def fetch_all_messages(self, *, email: str, conversation_id: str, batch_size: int = 200, max_messages: int = 2000) -> list[dict[str, Any]]:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            return []
+        normalized_limit = max(1, min(int(max_messages or 2000), 5000))
+        with get_db_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id,conversation_id,role,content,timestamp,interaction_mode,provider,model,metadata_json
+                FROM assistant_messages
+                WHERE conversation_id = ? AND user_email = ?
+                ORDER BY timestamp ASC, id ASC
+                LIMIT ?
+                """,
+                (normalized_id, normalized_email, normalized_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def insert_messages(self, *, email: str, conversation_id: str, messages: list[dict[str, Any]]) -> None:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            raise SupabaseChatHistoryError("A valid conversation id and email are required.")
+        prepared: list[tuple[Any, ...]] = []
+        for message in messages or []:
+            message_id = compact_text(message.get("id"))
+            role = compact_text(message.get("role")).lower()
+            content = compact_text(message.get("content"))
+            if not message_id or role not in {"user", "assistant"} or not content:
+                continue
+            prepared.append(
+                (
+                    message_id,
+                    normalized_id,
+                    normalized_email,
+                    role,
+                    content,
+                    compact_text(message.get("interaction_mode"), "text"),
+                    compact_text(message.get("provider")),
+                    compact_text(message.get("model")),
+                    json.dumps(message.get("metadata_json") or {}, ensure_ascii=False),
+                    compact_text(message.get("timestamp"), utc_now().isoformat()),
+                )
+            )
+        if not prepared:
+            return
+        with get_db_connection() as connection:
+            for parameters in prepared:
+                connection.execute(
+                    """
+                    INSERT INTO assistant_messages (
+                        id, conversation_id, user_email, role, content, interaction_mode,
+                        provider, model, metadata_json, timestamp
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        conversation_id = EXCLUDED.conversation_id,
+                        user_email = EXCLUDED.user_email,
+                        role = EXCLUDED.role,
+                        content = EXCLUDED.content,
+                        interaction_mode = EXCLUDED.interaction_mode,
+                        provider = EXCLUDED.provider,
+                        model = EXCLUDED.model,
+                        metadata_json = EXCLUDED.metadata_json,
+                        timestamp = EXCLUDED.timestamp
+                    """,
+                    parameters,
+                )
+
+    def delete_last_assistant_message(self, *, email: str, conversation_id: str) -> None:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            return
+        with get_db_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id
+                FROM assistant_messages
+                WHERE conversation_id = ? AND user_email = ? AND role = 'assistant'
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 1
+                """,
+                (normalized_id, normalized_email),
+            ).fetchone()
+            message_id = compact_text((row or {}).get("id"))
+            if message_id:
+                connection.execute(
+                    "DELETE FROM assistant_messages WHERE id = ? AND conversation_id = ? AND user_email = ?",
+                    (message_id, normalized_id, normalized_email),
+                )
+
+    def update_conversation(self, *, email: str, conversation_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            return None
+        allowed_columns = {
+            "title",
+            "lecture_label",
+            "context_key",
+            "preview_text",
+            "last_message_preview",
+            "memory_summary",
+            "search_document",
+            "message_count",
+            "is_archived",
+            "is_pinned",
+            "metadata_json",
+            "last_message_at",
+            "updated_at",
+        }
+        set_parts: list[str] = []
+        parameters: list[Any] = []
+        for key, value in (updates or {}).items():
+            if key not in allowed_columns:
+                continue
+            set_parts.append(f"{key} = ?")
+            if key == "metadata_json":
+                parameters.append(json.dumps(value if isinstance(value, dict) else normalize_chat_history_json(value), ensure_ascii=False))
+            elif key in {"is_archived", "is_pinned"}:
+                parameters.append(1 if bool(value) else 0)
+            elif key == "message_count":
+                parameters.append(int(value or 0))
+            else:
+                parameters.append(compact_text(value))
+        if "updated_at" not in (updates or {}):
+            set_parts.append("updated_at = ?")
+            parameters.append(utc_now().isoformat())
+        if not set_parts:
+            return self.get_conversation(normalized_email, normalized_id)
+        parameters.extend([normalized_id, normalized_email])
+        with get_db_connection() as connection:
+            connection.execute(
+                f"""
+                UPDATE assistant_conversations
+                SET {", ".join(set_parts)}
+                WHERE id = ? AND user_email = ?
+                """,
+                tuple(parameters),
+            )
+        return self.get_conversation(normalized_email, normalized_id)
+
+    def delete_conversation(self, *, email: str, conversation_id: str) -> None:
+        normalized_email = normalize_email(email)
+        normalized_id = compact_text(conversation_id)
+        if not normalized_email or not normalized_id:
+            return
+        with get_db_connection() as connection:
+            connection.execute(
+                "DELETE FROM assistant_messages WHERE conversation_id = ? AND user_email = ?",
+                (normalized_id, normalized_email),
+            )
+            connection.execute(
+                "DELETE FROM assistant_conversations WHERE id = ? AND user_email = ?",
+                (normalized_id, normalized_email),
+            )
+
+    def build_memory_summary(self, messages: list[dict[str, Any]], existing_summary: str = "", *, keep_recent: int = 8, max_chars: int = 1500) -> str:
+        older_messages = messages[:-keep_recent] if len(messages) > keep_recent else []
+        lines: list[str] = []
+        seen: set[str] = set()
+
+        if compact_text(existing_summary):
+            for raw_line in compact_text(existing_summary).splitlines():
+                line = compact_text(raw_line)
+                if line and line.lower() not in seen:
+                    seen.add(line.lower())
+                    lines.append(line)
+
+        for message in older_messages[-18:]:
+            role = compact_text(message.get("role")).lower()
+            role_label = "Student" if role == "user" else "Assistant"
+            content = shorten_text(message.get("content", ""), 180)
+            if not content:
+                continue
+            line = f"- {role_label}: {content}"
+            lowered = line.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            lines.append(line)
+
+        if not lines:
+            return ""
+        return shorten_text("Conversation memory summary:\n" + "\n".join(lines), max_chars)
+
+    def refresh_conversation_state(
+        self,
+        *,
+        email: str,
+        conversation_id: str,
+        title: str = "",
+        lecture_label: str = "",
+    ) -> dict[str, Any] | None:
+        conversation = self.get_conversation(email, conversation_id)
+        if not conversation:
+            return None
+        messages = self.fetch_all_messages(email=email, conversation_id=conversation_id, max_messages=80)
+        last_message = messages[-1] if messages else None
+        preview_text = shorten_text((last_message or {}).get("content", ""), 220)
+        memory_summary = self.build_memory_summary(messages, compact_text(conversation.get("memory_summary")))
+        latest_snippets = " ".join(shorten_text(item.get("content", ""), 180) for item in messages[-12:])
+        title_value = compact_text(title, compact_text(conversation.get("title")))
+        lecture_value = compact_text(lecture_label, compact_text(conversation.get("lecture_label")))
+        search_document = shorten_text(
+            " ".join(part for part in [title_value, lecture_value, preview_text, memory_summary, latest_snippets] if compact_text(part)),
+            6000,
+        )
+        return self.update_conversation(
+            email=email,
+            conversation_id=conversation_id,
+            updates={
+                "title": title_value,
+                "lecture_label": lecture_value,
+                "preview_text": preview_text,
+                "last_message_preview": preview_text,
+                "memory_summary": memory_summary,
+                "search_document": search_document,
+                "message_count": len(messages),
+                "last_message_at": compact_text((last_message or {}).get("timestamp"), compact_text(conversation.get("last_message_at"), utc_now().isoformat())),
+            },
+        )
+
+    def load_context_bundle(self, *, email: str, conversation_id: str, recent_limit: int = 8) -> dict[str, Any]:
+        conversation = self.get_conversation(email, conversation_id)
+        if not conversation:
+            return {"conversation": None, "recent_messages": []}
+        recent = self.get_messages(email=email, conversation_id=conversation_id, limit=recent_limit)
+        return {
+            "conversation": conversation,
+            "recent_messages": recent["items"],
+        }
+
+    def export_conversation(self, *, email: str, conversation_id: str) -> dict[str, Any] | None:
+        conversation = self.get_conversation(email, conversation_id)
+        if not conversation:
+            return None
+        messages = self.fetch_all_messages(email=email, conversation_id=conversation_id)
+        return {"conversation": conversation, "messages": messages}
+
+
+if not chat_history_store.available:
+    chat_history_store = DatabaseChatHistoryStore()
+
+
+def chat_history_storage_mode() -> str:
+    return "postgres" if isinstance(chat_history_store, DatabaseChatHistoryStore) else "supabase"
+
+
 def load_persisted_lecture_assistant_context(current_user: str, payload: LectureAssistantRequest) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
     conversation_id = compact_text(payload.conversation_id)
     if not chat_history_store.available or not conversation_id:
@@ -18816,7 +19318,7 @@ async def list_lecture_assistant_conversations(
         total=int(result.get("total") or 0),
         limit=limit,
         offset=offset,
-        storage_mode="supabase",
+        storage_mode=chat_history_storage_mode(),
     )
 
 
@@ -18849,7 +19351,7 @@ async def get_lecture_assistant_conversation(
         "has_more": bool(message_bundle.get("has_more")),
         "next_before": compact_text(message_bundle.get("next_before")),
         "total_messages": int(message_bundle.get("total") or 0),
-        "storage_mode": "supabase",
+        "storage_mode": chat_history_storage_mode(),
     }
 
 
@@ -18886,7 +19388,7 @@ async def get_lecture_assistant_conversation_messages(
         total=int(bundle.get("total") or 0),
         has_more=bool(bundle.get("has_more")),
         next_before=compact_text(bundle.get("next_before")),
-        storage_mode="supabase",
+        storage_mode=chat_history_storage_mode(),
     )
 
 
@@ -18920,7 +19422,7 @@ async def update_lecture_assistant_conversation(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(status_code=404, detail="Conversation not found.")
-    return {"conversation": format_chat_history_conversation(updated), "storage_mode": "supabase"}
+    return {"conversation": format_chat_history_conversation(updated), "storage_mode": chat_history_storage_mode()}
 
 
 @app.delete("/api/assistant/conversations/{conversation_id}")
@@ -18936,7 +19438,7 @@ async def delete_lecture_assistant_conversation(
         chat_history_store.delete_conversation(email=current_user, conversation_id=conversation_id)
     except SupabaseChatHistoryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"deleted": True, "conversation_id": compact_text(conversation_id), "storage_mode": "supabase"}
+    return {"deleted": True, "conversation_id": compact_text(conversation_id), "storage_mode": chat_history_storage_mode()}
 
 
 @app.get("/api/assistant/conversations/{conversation_id}/export")
@@ -18968,7 +19470,7 @@ async def export_lecture_assistant_conversation(
         "markdown": "\n".join(transcript_lines).strip(),
         "conversation": format_chat_history_conversation(conversation),
         "messages": [format_chat_history_message(item) for item in messages],
-        "storage_mode": "supabase",
+        "storage_mode": chat_history_storage_mode(),
     }
 
 
