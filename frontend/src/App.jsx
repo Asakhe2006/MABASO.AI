@@ -17761,10 +17761,41 @@ export default function App() {
     );
   }
 
-  if (authToken && activeSitePage && !(activeSitePage.access === "admin" && authSessionMode !== "admin" && isAdminAccount)) {
-    if (activeSitePage.access === "admin" && authSessionMode === "admin") {
-      return renderAdminDashboardPage();
-    }
+  if (authToken && activeSitePage?.access === "admin" && authSessionMode === "admin") {
+    return renderAdminDashboardPage();
+  }
+
+  if (authToken && activeSitePage?.access === "admin") {
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="hero-glow hero-glow-left" />
+          <div className="hero-glow hero-glow-right" />
+          <div className="hero-grid" />
+        </div>
+        <main className="relative mx-auto flex min-h-screen max-w-5xl items-center px-4 py-10 sm:px-6 lg:px-8">
+          <section className="w-full rounded-[32px] border border-white/10 bg-slate-950/75 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
+            <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
+            <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Admin access</p>
+            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">Open the protected admin dashboard.</h1>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
+              This route is protected. If this email is configured as an administrator, switch into admin mode to continue.
+            </p>
+            <div className="mt-8 grid gap-5 xl:grid-cols-2">
+              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Enter admin dashboard</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Return to student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study tools, and use the normal Mabaso workspace.</p></button>
+            </div>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <div className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
+              <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white">Sign Out</button>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (authToken && activeSitePage) {
     return (
       <EnterpriseSiteShell
         page={activeSitePage}
