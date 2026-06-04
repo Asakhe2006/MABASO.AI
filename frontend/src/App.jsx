@@ -5045,6 +5045,7 @@ export default function App() {
   const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
+  const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
   const visualReferences = uploadedVisualReferences;
   const canShareSystemAudio = typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
@@ -5060,8 +5061,6 @@ export default function App() {
     || (reportData.body || "").trim()
     || mindMapTopic.trim()
   );
-  const hasQuizGenerationInputs = Boolean(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
-  const hasToolGenerationInputs = hasQuizGenerationInputs;
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Slides are still being read. Please wait before generating the study guide."
@@ -5137,7 +5136,6 @@ export default function App() {
   const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
   const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
-  const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
   const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
     const leftIsHighlighted = left.id === highlightedInviteRoomId ? 1 : 0;
@@ -6591,8 +6589,8 @@ export default function App() {
               <h4 className="mt-2 text-2xl font-semibold text-white">Generate the test only when you need it.</h4>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Your study guide, formulas, and worked examples are already saved. Generate flashcards or a full test only when you need those separate study tools.</p>
             </div>
-            <button type="button" onClick={generateQuiz} disabled={isGeneratingQuiz || !hasQuizGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
-              {isGeneratingQuiz ? "Generating Test..." : "Generate Test"}
+            <button type="button" onClick={generateQuiz} disabled={isGeneratingQuiz} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              {isGeneratingQuiz ? "Generating Test..." : selectedQuizQuestions.length ? "↻ Regenerate Test" : "Generate Test"}
             </button>
           </div>
           {isGeneratingQuiz ? (
@@ -7627,7 +7625,7 @@ export default function App() {
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
             <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Generate below, then review the deck view as soon as the progress reaches 100%.</p>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+              <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
               <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
             </div>
           </div>
@@ -7816,7 +7814,7 @@ export default function App() {
               </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
                 <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> while matching the generated slide order shown here.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
-                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : "Generate Presentation"}</button>
+                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
               </div>
             </div>
           </div>
@@ -7917,7 +7915,7 @@ export default function App() {
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Full podcast audio, exam-focused turns, and named voices.</p>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio || !hasToolGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : "Generate Podcast"}</button>
+            <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : podcastData.script ? "↻ Regenerate Podcast" : "Generate Podcast"}</button>
             <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-50 disabled:opacity-50">Download Audio</button>
           </div>
         </div>
@@ -13347,6 +13345,48 @@ export default function App() {
     return nextItem;
   };
 
+  const getResolvedStudyToolContext = () => {
+    const history = activeHistoryItem || {};
+    const resolvedLectureNoteFileNames = lectureNoteFileNames.length
+      ? lectureNoteFileNames
+      : (Array.isArray(history.lectureNoteFileNames) ? history.lectureNoteFileNames : []);
+    const resolvedLectureSlideFileNames = lectureSlideFileNames.length
+      ? lectureSlideFileNames
+      : (Array.isArray(history.lectureSlideFileNames) ? history.lectureSlideFileNames : []);
+    const resolvedPastQuestionPaperFileNames = pastQuestionPaperFileNames.length
+      ? pastQuestionPaperFileNames
+      : (Array.isArray(history.pastQuestionPaperFileNames) ? history.pastQuestionPaperFileNames : []);
+
+    const resolved = {
+      transcript: transcript || history.transcript || "",
+      summary: summary || history.summary || "",
+      lectureNotes: lectureNotes || history.lectureNotes || "",
+      lectureSlides: lectureSlides || history.lectureSlides || "",
+      pastQuestionPapers: pastQuestionPapers || history.pastQuestionPapers || "",
+      lectureNotesFileName: lectureNotesFileName || history.lectureNotesFileName || formatGroupedSourceLabel(resolvedLectureNoteFileNames, "note file", "note files"),
+      lectureNoteFileNames: resolvedLectureNoteFileNames,
+      lectureSlideFileNames: resolvedLectureSlideFileNames,
+      pastQuestionPaperFileNames: resolvedPastQuestionPaperFileNames,
+    };
+
+    resolved.hasContent = Boolean(
+      resolved.summary.trim()
+      || resolved.transcript.trim()
+      || resolved.lectureNotes.trim()
+      || resolved.lectureSlides.trim()
+      || resolved.pastQuestionPapers.trim()
+    );
+    resolved.sourceLabel = getPrimarySourceLabel({
+      fileName: file?.name || "",
+      historyFileName: history.fileName || "",
+      videoUrl,
+      lectureNotesFileName: resolved.lectureNotesFileName,
+      lectureSlideFileNames: resolved.lectureSlideFileNames,
+      pastQuestionPaperFileNames: resolved.pastQuestionPaperFileNames,
+    });
+    return resolved;
+  };
+
   const loadHistoryItem = (item) => {
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
@@ -14527,7 +14567,8 @@ export default function App() {
   };
 
   const generateFlashcards = async () => {
-    if (!hasQuizGenerationInputs) {
+    const toolContext = getResolvedStudyToolContext();
+    if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating flashcards.");
     }
     const requestedCount = clampFlashcardCountForPlan(flashcardCount);
@@ -14547,11 +14588,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
+          transcript: toolContext.transcript,
+          summary: toolContext.summary,
+          lecture_notes: toolContext.lectureNotes,
+          lecture_slides: toolContext.lectureSlides,
+          past_question_papers: toolContext.pastQuestionPapers,
           language: outputLanguage,
           count: requestedCount,
         }),
@@ -14561,34 +14602,27 @@ export default function App() {
       const nextFlashcards = Array.isArray(data.flashcards) ? data.flashcards : [];
       setFlashcards(nextFlashcards);
       setFlashcardCount(clampFlashcardCountForPlan(data.requested_count || requestedCount));
-      const sourceLabel = getPrimarySourceLabel({
-        fileName: file?.name || "",
-        videoUrl,
-        lectureNotesFileName,
-        lectureSlideFileNames,
-        pastQuestionPaperFileNames,
-      });
       addHistoryItem({
         id: activeHistoryId || "",
-        title: extractHistoryTitle(summary || "", sourceLabel),
-        fileName: sourceLabel,
-        summary,
-        transcript,
+        title: extractHistoryTitle(toolContext.summary || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
         formula,
         example,
         flashcards: nextFlashcards,
         quizQuestions,
         studyImages,
-        lectureNotes,
-        lectureNotesFileName,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
         lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
-        lectureNoteFileNames,
-        lectureSlides,
-        lectureSlideFileNames,
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
         lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
-        pastQuestionPapers,
-        pastQuestionPaperFileNames,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
@@ -14607,7 +14641,8 @@ export default function App() {
   };
 
   const generateQuiz = async () => {
-    if (!hasQuizGenerationInputs) {
+    const toolContext = getResolvedStudyToolContext();
+    if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the test.");
     }
     if (!(await ensurePremiumFeatureAvailable("quiz", "Quizzes"))) return false;
@@ -14626,11 +14661,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
+          transcript: toolContext.transcript,
+          summary: toolContext.summary,
+          lecture_notes: toolContext.lectureNotes,
+          lecture_slides: toolContext.lectureSlides,
+          past_question_papers: toolContext.pastQuestionPapers,
           language: outputLanguage,
         }),
       });
@@ -14651,34 +14686,27 @@ export default function App() {
         setQuizSubmitted(false);
         resetQuizSessionState(nextQuizQuestions);
       });
-      const sourceLabel = getPrimarySourceLabel({
-        fileName: file?.name || "",
-        videoUrl,
-        lectureNotesFileName,
-        lectureSlideFileNames,
-        pastQuestionPaperFileNames,
-      });
       addHistoryItem({
         id: activeHistoryId || "",
-        title: extractHistoryTitle(summary || "", sourceLabel),
-        fileName: sourceLabel,
-        summary,
-        transcript,
+        title: extractHistoryTitle(toolContext.summary || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
         formula,
         example,
         flashcards,
         quizQuestions: nextQuizQuestions,
         studyImages,
-        lectureNotes,
-        lectureNotesFileName,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
         lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
-        lectureNoteFileNames,
-        lectureSlides,
-        lectureSlideFileNames,
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
         lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
-        pastQuestionPapers,
-        pastQuestionPaperFileNames,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
@@ -14698,10 +14726,13 @@ export default function App() {
   };
 
   const generatePresentation = async ({ summaryOverride = "", transcriptOverride = "", lectureNotesOverride = "" } = {}) => {
-    const resolvedSummary = summaryOverride || summary;
-    const resolvedTranscript = transcriptOverride || transcript;
-    const resolvedLectureNotes = lectureNotesOverride || lectureNotes;
-    if (!(resolvedSummary.trim() || resolvedTranscript.trim() || resolvedLectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+    const toolContext = getResolvedStudyToolContext();
+    const resolvedSummary = summaryOverride || toolContext.summary;
+    const resolvedTranscript = transcriptOverride || toolContext.transcript;
+    const resolvedLectureNotes = lectureNotesOverride || toolContext.lectureNotes;
+    const resolvedLectureSlides = toolContext.lectureSlides;
+    const resolvedPastQuestionPapers = toolContext.pastQuestionPapers;
+    if (!(resolvedSummary.trim() || resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before creating the PowerPoint presentation.");
     }
     if (!isPresentationTemplateAllowed(selectedPresentationDesign)) {
@@ -14730,8 +14761,8 @@ export default function App() {
           formData.append("transcript", resolvedTranscript);
           formData.append("summary", resolvedSummary);
           formData.append("lecture_notes", resolvedLectureNotes);
-          formData.append("lecture_slides", lectureSlides);
-          formData.append("past_question_papers", pastQuestionPapers);
+          formData.append("lecture_slides", resolvedLectureSlides);
+          formData.append("past_question_papers", resolvedPastQuestionPapers);
           formData.append("design_id", selectedPresentationDesign);
           formData.append("language", outputLanguage);
           getSafeAiReferenceImageUrls(visualReferences).forEach((imageUrl) => {
@@ -14766,17 +14797,10 @@ export default function App() {
       window.requestAnimationFrame(() => {
         presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
-      const sourceLabel = getPrimarySourceLabel({
-        fileName: file?.name || "",
-        videoUrl,
-        lectureNotesFileName,
-        lectureSlideFileNames,
-        pastQuestionPaperFileNames,
-      });
       addHistoryItem({
         id: activeHistoryId || "",
-        title: extractHistoryTitle(resolvedSummary || nextPresentationData.title || "", sourceLabel),
-        fileName: sourceLabel,
+        title: extractHistoryTitle(resolvedSummary || nextPresentationData.title || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
         summary: resolvedSummary,
         transcript: resolvedTranscript,
         formula,
@@ -14785,15 +14809,15 @@ export default function App() {
         quizQuestions,
         studyImages,
         lectureNotes: resolvedLectureNotes,
-        lectureNotesFileName,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
         lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
-        lectureNoteFileNames,
-        lectureSlides,
-        lectureSlideFileNames,
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: resolvedLectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
         lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
-        pastQuestionPapers,
-        pastQuestionPaperFileNames,
+        pastQuestionPapers: resolvedPastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(nextPresentationData),
         podcastData: sanitizePodcastForHistory(podcastData),
@@ -14866,7 +14890,8 @@ export default function App() {
   };
 
   const generatePodcast = async () => {
-    if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
+    const toolContext = getResolvedStudyToolContext();
+    if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the podcast debate.");
     }
     if (!(await ensurePremiumFeatureAvailable("podcast", "Podcasts"))) return false;
@@ -14887,11 +14912,11 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript,
-          summary,
-          lecture_notes: lectureNotes,
-          lecture_slides: lectureSlides,
-          past_question_papers: pastQuestionPapers,
+          transcript: toolContext.transcript,
+          summary: toolContext.summary,
+          lecture_notes: toolContext.lectureNotes,
+          lecture_slides: toolContext.lectureSlides,
+          past_question_papers: toolContext.pastQuestionPapers,
           speaker_count: podcastSpeakerCount,
           target_minutes: podcastTargetMinutes,
           language: outputLanguage,
@@ -14918,34 +14943,27 @@ export default function App() {
       await loadPodcastAudioTrack(data.job_id, job.podcast_segments || []);
       revealWorkspacePage("podcast");
       setProgress(100);
-      const sourceLabel = getPrimarySourceLabel({
-        fileName: file?.name || "",
-        videoUrl,
-        lectureNotesFileName,
-        lectureSlideFileNames,
-        pastQuestionPaperFileNames,
-      });
       addHistoryItem({
         id: activeHistoryId || "",
-        title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
-        fileName: sourceLabel,
-        summary,
-        transcript,
+        title: extractHistoryTitle(toolContext.summary || nextPodcastData.script || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
         formula,
         example,
         flashcards,
         quizQuestions,
         studyImages,
-        lectureNotes,
-        lectureNotesFileName,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
         lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
-        lectureNoteFileNames,
-        lectureSlides,
-        lectureSlideFileNames,
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
         lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
         pastQuestionMemo,
-        pastQuestionPapers,
-        pastQuestionPaperFileNames,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
         pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(nextPodcastData),
@@ -18195,8 +18213,8 @@ export default function App() {
                               className="mt-2 w-28 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm font-semibold text-white outline-none"
                             />
                           </label>
-                          <button type="button" onClick={generateFlashcards} disabled={isGeneratingFlashcards || !hasQuizGenerationInputs} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
-                            {isGeneratingFlashcards ? "Generating..." : "Generate Flashcards"}
+                          <button type="button" onClick={generateFlashcards} disabled={isGeneratingFlashcards} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+                            {isGeneratingFlashcards ? "Generating..." : flashcards.length ? "↻ Regenerate Flashcards" : "Generate Flashcards"}
                           </button>
                         </div>
                       </div>
