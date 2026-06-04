@@ -330,3 +330,56 @@ label {
     transform: translateY(-50%) translateX(6%);
   }
 }
+
+/* === Touch/click safety: decorative layers must never block tool buttons === */
+.tutor-wave-field,
+.tutor-wave-field::before,
+.tutor-wave-field::after,
+.tutor-orb-shell,
+.tutor-orb-shell::before,
+.tutor-orb-shell::after,
+.tutor-orb-core,
+.tutor-orb-ring,
+.tutor-orb-ring-primary,
+.tutor-orb-ring-secondary,
+.ticks,
+.ticks::before,
+.ticks::after {
+  pointer-events: none !important;
+}
+
+button,
+a.button,
+.button,
+.generate-button,
+.card button,
+input[type="button"],
+input[type="submit"],
+[role="button"] {
+  pointer-events: auto;
+  position: relative;
+  z-index: 60;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.generate-button.important,
+.report-button,
+.mindmap-button {
+  z-index: 80;
+}
+
+@media (max-width: 1024px) {
+  .tutor-orb-shell {
+    filter: none;
+    box-shadow: none;
+  }
+
+  .tutor-wave-field::before,
+  .tutor-wave-field::after {
+    filter: none;
+  }
+}
