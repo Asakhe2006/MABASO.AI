@@ -74,7 +74,7 @@ def migrate(sqlite_path: Path, database_url: str) -> None:
             """
         ).fetchall()
 
-        with psycopg.connect(database_url) as postgres_connection:
+        with psycopg.connect(database_url, prepare_threshold=None) as postgres_connection:
             for row in table_rows:
                 postgres_connection.execute(sqlite_create_to_postgres(row["sql"]))
             for row in index_rows:

@@ -1493,6 +1493,7 @@ class PostgresConnection:
                     row_factory=dict_row,
                     connect_timeout=10,
                     application_name="mabaso_ai",
+                    prepare_threshold=None,
                 )
             except Exception as keyword_exc:
                 logger.warning(
@@ -1506,6 +1507,7 @@ class PostgresConnection:
                     row_factory=dict_row,
                     connect_timeout=10,
                     application_name="mabaso_ai",
+                    prepare_threshold=None,
                 )
         except Exception as exc:
             logger.exception("Failed to connect to PostgreSQL at %s:%s as user %s", host, port, username)
