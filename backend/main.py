@@ -49,9 +49,11 @@ from supabase_chat_history import (
 )
 try:
     import psycopg
+    from psycopg_pool import ConnectionPool
     from psycopg.rows import dict_row
 except ImportError:
     psycopg = None
+    ConnectionPool = None
     dict_row = None
 
 try:
@@ -1352,6 +1354,14 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+@app.on_event("shutdown")
+def close_postgres_pool() -> None:
+    global POSTGRES_POOL
+    if POSTGRES_POOL is not None:
+        POSTGRES_POOL.close()
+        POSTGRES_POOL = None
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1444,13 +1454,15 @@ def parse_database_url_components(database_url: str) -> dict[str, Any]:
 
 
 POSTGRES_ENDPOINT_LOGGED = False
+POSTGRES_POOL: ConnectionPool | None = None
 
 
 class PostgresConnection:
     def __init__(self):
-        if psycopg is None or dict_row is None:
-            raise RuntimeError("PostgreSQL is configured, but psycopg is not installed. Install psycopg[binary].")
+        if psycopg is None or ConnectionPool is None or dict_row is None:
+            raise RuntimeError("PostgreSQL is configured, but psycopg/psycopg_pool is not installed. Install psycopg[binary] and psycopg-pool.")
         global POSTGRES_ENDPOINT_LOGGED
+        global POSTGRES_POOL
         db_config = parse_database_url_components(DATABASE_URL)
         username = str(db_config.get("user") or "")
         host = str(db_config.get("host") or "")
@@ -1460,75 +1472,61 @@ class PostgresConnection:
             logger.info("Parsed DB Port: %s", port)
             logger.info("Parsed DB User: %s", username or "(missing)")
             POSTGRES_ENDPOINT_LOGGED = True
-        try:
-            raw_dsn = DATABASE_URL or os.environ.get("DATABASE_URL", "")
-            masked_dsn = raw_dsn
-            if raw_dsn:
-                try:
-                    scheme, rest = raw_dsn.split("://", 1)
-                    userinfo, after = rest.split("@", 1) if "@" in rest else ("", rest)
-                    if ":" in userinfo:
-                        userpart, _password = userinfo.split(":", 1)
-                        masked_dsn = f"{scheme}://{userpart}:***@{after}"
-                except Exception:
-                    masked_dsn = f"{raw_dsn[:160]}{'...' if len(raw_dsn) > 160 else ''}"
-            logger.info("DB CONNECT: masked DATABASE_URL=%s", masked_dsn)
-            logger.info(
-                "DB CONNECT PARAMS: user=%r host=%r port=%r dbname=%r sslmode=%r",
-                username,
-                host,
-                port,
-                db_config.get("dbname"),
-                db_config.get("sslmode"),
-            )
-
+        if POSTGRES_POOL is None:
             try:
-                self._connection = psycopg.connect(
-                    host=host,
-                    port=port,
-                    dbname=str(db_config.get("dbname") or "postgres"),
-                    user=username,
-                    password=str(db_config.get("password") or ""),
-                    sslmode=str(db_config.get("sslmode") or "require"),
-                    row_factory=dict_row,
-                    connect_timeout=10,
-                    application_name="mabaso_ai",
-                    prepare_threshold=None,
+                POSTGRES_POOL = ConnectionPool(
+                    kwargs={
+                        "host": host,
+                        "port": port,
+                        "dbname": str(db_config.get("dbname") or "postgres"),
+                        "user": username,
+                        "password": str(db_config.get("password") or ""),
+                        "sslmode": str(db_config.get("sslmode") or "require"),
+                        "row_factory": dict_row,
+                        "connect_timeout": 10,
+                        "application_name": "mabaso_ai",
+                        "prepare_threshold": None,
+                    },
+                    min_size=1,
+                    max_size=max(2, get_int_env("POSTGRES_POOL_MAX_SIZE", 6)),
+                    timeout=15,
+                    open=True,
                 )
-            except Exception as keyword_exc:
-                logger.warning(
-                    "psycopg.connect(kwargs) failed (%s). Falling back to DSN connect.",
-                    type(keyword_exc).__name__,
+                logger.info(
+                    "PostgreSQL pool initialized for user=%s host=%s port=%s",
+                    username or "(missing)",
+                    host or "(missing)",
+                    port,
                 )
-                if not raw_dsn:
-                    raise
-                self._connection = psycopg.connect(
-                    raw_dsn,
-                    row_factory=dict_row,
-                    connect_timeout=10,
-                    application_name="mabaso_ai",
-                    prepare_threshold=None,
-                )
-        except Exception as exc:
-            logger.exception("Failed to connect to PostgreSQL at %s:%s as user %s", host, port, username)
-            if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
-                raise RuntimeError(
-                    "DATABASE_URL is using the direct Supabase database host "
-                    f"{host}:{port}. Render may not reach that IPv6 endpoint. "
-                    "Use the Supabase Connection Pooler URL instead, usually "
-                    "aws-0-<region>.pooler.supabase.com:6543 with sslmode=require."
-                ) from exc
-            raise
+            except Exception as exc:
+                logger.exception("Failed to initialize PostgreSQL pool at %s:%s as user %s", host, port, username)
+                if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
+                    raise RuntimeError(
+                        "DATABASE_URL is using the direct Supabase database host "
+                        f"{host}:{port}. Render may not reach that IPv6 endpoint. "
+                        "Use the Supabase Connection Pooler URL instead, usually "
+                        "aws-0-<region>.pooler.supabase.com:6543 with sslmode=require."
+                    ) from exc
+                raise
+        self._pool_context = None
+        self._connection = None
 
     def __enter__(self) -> "PostgresConnection":
-        self._connection.__enter__()
+        if POSTGRES_POOL is None:
+            raise RuntimeError("PostgreSQL pool is not initialized.")
+        self._pool_context = POSTGRES_POOL.connection()
+        self._connection = self._pool_context.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        self._connection.__exit__(exc_type, exc, traceback)
-        self._connection.close()
+        if self._pool_context is not None:
+            self._pool_context.__exit__(exc_type, exc, traceback)
+        self._pool_context = None
+        self._connection = None
 
     def execute(self, sql: str, parameters: tuple[Any, ...] | list[Any] | None = None):
+        if self._connection is None:
+            raise RuntimeError("PostgreSQL connection is not active. Use PostgresConnection as a context manager.")
         pragma_match = re.match(r"^\s*PRAGMA\s+table_info\(([^)]+)\)\s*$", sql, flags=re.IGNORECASE)
         if pragma_match:
             table_name = pragma_match.group(1).strip().strip('"').strip("'")
