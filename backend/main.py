@@ -48,6 +48,13 @@ from supabase_chat_history import (
     SupabaseChatHistoryStore,
 )
 try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg = None
+    dict_row = None
+
+try:
     from curl_cffi import requests as curl_requests
 except ImportError:
     curl_requests = None
@@ -623,16 +630,35 @@ def resolve_database_path() -> Path:
             db_path = Path(__file__).with_name("mabaso_ai.db")
     else:
         db_path = Path(configured).expanduser() if configured else Path(__file__).with_name("mabaso_ai.db")
-    if is_render and configured and not str(db_path).startswith("/data/"):
+    is_render_data_path = str(db_path).startswith("/data/")
+    if is_render and configured and not is_render_data_path:
         logger.warning(
             "SQLITE_DB_PATH=%s is not under /data. Ensure this path is mounted as a Render persistent disk; otherwise account usage and subscriptions may reset.",
             db_path,
         )
+    if is_render and is_render_data_path and not Path("/data").exists():
+        message = (
+            "SQLITE_DB_PATH points to /data, but the Render persistent disk mount is missing. "
+            "Add a persistent disk with mount path /data, or set ALLOW_EPHEMERAL_SQLITE=true only for temporary testing."
+        )
+        if not allow_ephemeral_sqlite:
+            raise RuntimeError(message)
+        logger.warning("%s Continuing because ALLOW_EPHEMERAL_SQLITE is enabled.", message)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    if is_render:
+        logger.info("Using SQLite database at %s", db_path)
     return db_path
 
 
-DB_PATH = resolve_database_path()
+DATABASE_URL = (
+    os.getenv("DATABASE_URL", "").strip()
+    or os.getenv("SUPABASE_DATABASE_URL", "").strip()
+    or os.getenv("POSTGRES_URL", "").strip()
+)
+DATABASE_BACKEND = "postgres" if DATABASE_URL else "sqlite"
+DB_PATH = resolve_database_path() if DATABASE_BACKEND == "sqlite" else None
+if DATABASE_BACKEND == "postgres":
+    logger.info("Using PostgreSQL database from DATABASE_URL/SUPABASE_DATABASE_URL.")
 
 
 def resolve_cors_allow_origins() -> list[str]:
@@ -1327,7 +1353,73 @@ def iso_in_future(*, minutes: int = 0, days: int = 0) -> str:
     return (utc_now() + timedelta(minutes=minutes, days=days)).isoformat()
 
 
-def get_db_connection() -> sqlite3.Connection:
+class StaticCursor:
+    def __init__(self, rows: list[dict[str, Any]] | None = None):
+        self._rows = rows or []
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self._rows
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self._rows[0] if self._rows else None
+
+
+def translate_postgres_sql(sql: str) -> str:
+    translated = sql.strip()
+    compact = re.sub(r"\s+", " ", translated).strip().lower()
+    if compact.startswith("insert or ignore into "):
+        translated = re.sub(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\s+", "INSERT INTO ", translated, flags=re.IGNORECASE)
+        translated = f"{translated} ON CONFLICT DO NOTHING"
+    elif compact.startswith("insert or replace into revoked_sessions "):
+        translated = re.sub(r"^\s*INSERT\s+OR\s+REPLACE\s+INTO\s+", "INSERT INTO ", translated, flags=re.IGNORECASE)
+        translated = (
+            f"{translated} ON CONFLICT (token_hash) DO UPDATE SET "
+            "expires_at = EXCLUDED.expires_at, created_at = EXCLUDED.created_at"
+        )
+    elif compact.startswith("insert or replace into collaboration_room_members "):
+        translated = re.sub(r"^\s*INSERT\s+OR\s+REPLACE\s+INTO\s+", "INSERT INTO ", translated, flags=re.IGNORECASE)
+        translated = (
+            f"{translated} ON CONFLICT (room_id, email) DO UPDATE SET "
+            "role = EXCLUDED.role, created_at = EXCLUDED.created_at"
+        )
+    translated = re.sub(r"\bexcluded\.", "EXCLUDED.", translated, flags=re.IGNORECASE)
+    return translated.replace("?", "%s")
+
+
+class PostgresConnection:
+    def __init__(self):
+        if psycopg is None or dict_row is None:
+            raise RuntimeError("PostgreSQL is configured, but psycopg is not installed. Install psycopg[binary].")
+        self._connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+    def __enter__(self) -> "PostgresConnection":
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self._connection.__exit__(exc_type, exc, traceback)
+        self._connection.close()
+
+    def execute(self, sql: str, parameters: tuple[Any, ...] | list[Any] | None = None):
+        pragma_match = re.match(r"^\s*PRAGMA\s+table_info\(([^)]+)\)\s*$", sql, flags=re.IGNORECASE)
+        if pragma_match:
+            table_name = pragma_match.group(1).strip().strip('"').strip("'")
+            cursor = self._connection.execute(
+                """
+                SELECT column_name AS name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = %s
+                ORDER BY ordinal_position
+                """,
+                (table_name,),
+            )
+            return cursor
+        return self._connection.execute(translate_postgres_sql(sql), parameters or ())
+
+
+def get_db_connection():
+    if DATABASE_BACKEND == "postgres":
+        return PostgresConnection()
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection

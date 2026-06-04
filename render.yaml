@@ -2,19 +2,13 @@ services:
   - type: web
     name: mabaso-ai-api
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
-    disk:
-      name: mabaso-ai-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
-      - key: SQLITE_DB_PATH
-        value: /data/mabaso_ai.db
-      - key: REQUIRE_PERSISTENT_DB
-        value: "true"
+      - key: DATABASE_URL
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: GEMINI_API_KEY
