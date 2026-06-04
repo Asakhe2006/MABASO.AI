@@ -1386,6 +1386,24 @@ def translate_postgres_sql(sql: str) -> str:
     return translated.replace("?", "%s")
 
 
+def describe_database_url_endpoint(database_url: str) -> tuple[str, int, bool]:
+    try:
+        parsed_url = urlparse(database_url)
+        return parsed_url.hostname or "", parsed_url.port or 5432, False
+    except ValueError:
+        netloc = database_url.split("://", 1)[-1].split("/", 1)[0]
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        if netloc.startswith("[") and "]" in netloc:
+            host = netloc[1:netloc.index("]")]
+            port_match = re.search(r"\]:(\d+)", netloc)
+            return host, int(port_match.group(1)) if port_match else 5432, not re.fullmatch(r"[0-9A-Fa-f:.]+", host)
+        host, _, port_text = netloc.rpartition(":")
+        if not host:
+            host = netloc
+        return host, int(port_text) if port_text.isdigit() else 5432, False
+
+
 class PostgresConnection:
     def __init__(self):
         if psycopg is None or dict_row is None:
@@ -1398,9 +1416,13 @@ class PostgresConnection:
                 application_name="mabaso_ai",
             )
         except Exception as exc:
-            parsed_url = urlparse(DATABASE_URL)
-            host = parsed_url.hostname or ""
-            port = parsed_url.port or 5432
+            host, port, bracketed_dns_host = describe_database_url_endpoint(DATABASE_URL)
+            if bracketed_dns_host:
+                raise RuntimeError(
+                    "DATABASE_URL wraps a DNS hostname in square brackets. Brackets are only valid for literal IPv6 addresses. "
+                    f"Remove the brackets around {host} and use a Supabase pooler URL like "
+                    "postgresql://postgres.<project-ref>:<password>@aws-1-eu-north-1.pooler.supabase.com:6543/postgres?sslmode=require."
+                ) from exc
             if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
                 raise RuntimeError(
                     "DATABASE_URL is using the direct Supabase database host "
