@@ -680,6 +680,10 @@ def resolve_cors_allow_origins() -> list[str]:
 
 
 CORS_ALLOW_ORIGINS = resolve_cors_allow_origins()
+CORS_ALLOW_ORIGIN_REGEX = os.getenv(
+    "CORS_ALLOW_ORIGIN_REGEX",
+    r"^https://([a-z0-9-]+\.)?mabaso(ai)?\.(com|co\.za)$|^https://[a-z0-9-]+\.onrender\.com$",
+).strip() or None
 
 LEGACY_STUDY_GUIDE_PROMPT = """
 You are an expert academic assistant for university students.
@@ -1334,6 +1338,7 @@ class AdminUserStatusRequest(BaseModel):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
+    allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],

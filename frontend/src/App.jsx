@@ -10515,18 +10515,18 @@ export default function App() {
     if (previewEmail) setAuthEmailInput(previewEmail);
     setIsGoogleSigningIn(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/google`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/google`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credential }),
-      });
+      }, 20000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
       setStatus("Signed in successfully.");
       setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
-      setAuthMessage(err.message || "Google sign-in failed.");
+      setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
       setIsGoogleSigningIn(false);
     }
@@ -10535,7 +10535,7 @@ export default function App() {
   const finishAppleLogin = async ({ authorizationCode = "", idToken = "", nonce = "", state = "", user = null, redirectUri = "" }) => {
     setAuthMessage("");
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/apple`, {
+      const response = await fetchWithTimeout(`${API_BASE_URL}/auth/apple`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -10546,14 +10546,14 @@ export default function App() {
           user,
           redirect_uri: redirectUri,
         }),
-      });
+      }, 20000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Apple sign-in failed.");
       applyAuthResponse(data, data.email || "", { promptForMode: true });
       setStatus("Signed in successfully.");
       setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
     } catch (err) {
-      setAuthMessage(err.message || "Apple sign-in failed.");
+      setAuthMessage(getReadableRequestError(err) || "Apple sign-in failed.");
     }
   };
 
