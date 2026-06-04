@@ -4478,7 +4478,7 @@ export default function App() {
     );
     const reportActions = [
       ["EDIT REPORT", () => { setEditableReportBody(reportData.body || ""); setIsEditingReport(true); }],
-      ["REGENERATE", () => generateReport()],
+      ["↻ REGENERATE", () => generateReport()],
       ["EXPORT PDF", downloadActiveContent],
       ["EXPORT DOCX", downloadReportDoc],
       ["EXPORT PPT", createPresentationFromReport],
@@ -4735,6 +4735,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={openMindMapFullscreen} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">Fullscreen</button>
                   {isMindMapFullscreen ? <button type="button" onClick={closeMindMapFullscreen} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Minimize</button> : null}
+                  <button type="button" onClick={generateMindMap} disabled={isGeneratingMindMap} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{isGeneratingMindMap ? "Generating..." : "↻ Regenerate"}</button>
                   <button type="button" onClick={downloadMindMapPng} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PNG</button>
                   <button type="button" onClick={downloadMindMapSvg} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">SVG</button>
                   <button type="button" onClick={downloadMindMapPdf} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PDF</button>
@@ -6542,9 +6543,14 @@ export default function App() {
             <h4 className="mt-2 text-2xl font-semibold text-white">Your test is ready to begin.</h4>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">When you press Start Test, the countdown begins immediately. When time finishes, MABASO ends the test and marks it automatically.</p>
           </div>
-          <button type="button" onClick={startQuizSession} disabled={!selectedQuizQuestions.length} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#3b82f6)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
-            Start Test
-          </button>
+          <div className="flex flex-wrap gap-3">
+            <button type="button" onClick={generateQuiz} disabled={isGeneratingQuiz} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-5 py-3 text-sm font-semibold text-emerald-50 disabled:opacity-50">
+              {isGeneratingQuiz ? "Generating..." : "↻ Regenerate Test"}
+            </button>
+            <button type="button" onClick={startQuizSession} disabled={!selectedQuizQuestions.length} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#3b82f6)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+              Start Test
+            </button>
+          </div>
         </div>
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4">
@@ -7633,6 +7639,7 @@ export default function App() {
                 <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{presentationData.subtitle || "A concise lecture deck is ready for download."}</p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-50 disabled:opacity-50">{isGeneratingPresentation ? "Generating..." : "↻ Regenerate"}</button>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length} slides</div>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</div>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{outputLanguage}</div>
@@ -7943,6 +7950,7 @@ export default function App() {
                   <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{podcastData.overview || "The overview will appear here once the podcast is ready."}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-50 disabled:opacity-50">{isGeneratingPodcast ? "Generating..." : "↻ Regenerate"}</button>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">About {podcastEstimatedMinutes} min</div>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.speakerCount || podcastSpeakerCount} voices</div>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.segments.length} debate turns</div>
@@ -18254,6 +18262,11 @@ export default function App() {
                         </div>
                       </div>
                       {isGeneratingFlashcards ? <p className="mt-4 text-sm leading-7 text-slate-200">{status || "Generating flashcards..."}</p> : null}
+                      {flashcards.length && !isGeneratingFlashcards ? (
+                        <button type="button" onClick={generateFlashcards} className="mt-4 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">
+                          ↻ Regenerate Flashcards
+                        </button>
+                      ) : null}
                     </div>
                     <StudyToolFlashcardsPanel
                       cards={flashcards}
