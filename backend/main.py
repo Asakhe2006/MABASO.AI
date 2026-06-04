@@ -1454,18 +1454,54 @@ class PostgresConnection:
             logger.info("Parsed DB User: %s", username or "(missing)")
             POSTGRES_ENDPOINT_LOGGED = True
         try:
-            self._connection = psycopg.connect(
-                host=host,
-                port=port,
-                dbname=str(db_config.get("dbname") or "postgres"),
-                user=username,
-                password=str(db_config.get("password") or ""),
-                sslmode=str(db_config.get("sslmode") or "require"),
-                row_factory=dict_row,
-                connect_timeout=10,
-                application_name="mabaso_ai",
+            raw_dsn = DATABASE_URL or os.environ.get("DATABASE_URL", "")
+            masked_dsn = raw_dsn
+            if raw_dsn:
+                try:
+                    scheme, rest = raw_dsn.split("://", 1)
+                    userinfo, after = rest.split("@", 1) if "@" in rest else ("", rest)
+                    if ":" in userinfo:
+                        userpart, _password = userinfo.split(":", 1)
+                        masked_dsn = f"{scheme}://{userpart}:***@{after}"
+                except Exception:
+                    masked_dsn = f"{raw_dsn[:160]}{'...' if len(raw_dsn) > 160 else ''}"
+            logger.info("DB CONNECT: masked DATABASE_URL=%s", masked_dsn)
+            logger.info(
+                "DB CONNECT PARAMS: user=%r host=%r port=%r dbname=%r sslmode=%r",
+                username,
+                host,
+                port,
+                db_config.get("dbname"),
+                db_config.get("sslmode"),
             )
+
+            try:
+                self._connection = psycopg.connect(
+                    host=host,
+                    port=port,
+                    dbname=str(db_config.get("dbname") or "postgres"),
+                    user=username,
+                    password=str(db_config.get("password") or ""),
+                    sslmode=str(db_config.get("sslmode") or "require"),
+                    row_factory=dict_row,
+                    connect_timeout=10,
+                    application_name="mabaso_ai",
+                )
+            except Exception as keyword_exc:
+                logger.warning(
+                    "psycopg.connect(kwargs) failed (%s). Falling back to DSN connect.",
+                    type(keyword_exc).__name__,
+                )
+                if not raw_dsn:
+                    raise
+                self._connection = psycopg.connect(
+                    raw_dsn,
+                    row_factory=dict_row,
+                    connect_timeout=10,
+                    application_name="mabaso_ai",
+                )
         except Exception as exc:
+            logger.exception("Failed to connect to PostgreSQL at %s:%s as user %s", host, port, username)
             if host.endswith(".supabase.co") and "pooler.supabase.com" not in host:
                 raise RuntimeError(
                     "DATABASE_URL is using the direct Supabase database host "
