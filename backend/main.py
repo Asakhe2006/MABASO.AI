@@ -27,7 +27,7 @@ import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlparse
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
@@ -1386,28 +1386,43 @@ def translate_postgres_sql(sql: str) -> str:
     return translated.replace("?", "%s")
 
 
-def describe_database_url_endpoint(database_url: str) -> tuple[str, int, bool]:
+def describe_database_url_endpoint(database_url: str) -> tuple[str, str, int, bool]:
     try:
         parsed_url = urlparse(database_url)
-        return parsed_url.hostname or "", parsed_url.port or 5432, False
+        return unquote(parsed_url.username or ""), parsed_url.hostname or "", parsed_url.port or 5432, False
     except ValueError:
         netloc = database_url.split("://", 1)[-1].split("/", 1)[0]
+        username = ""
         if "@" in netloc:
-            netloc = netloc.rsplit("@", 1)[-1]
+            userinfo, netloc = netloc.rsplit("@", 1)
+            username = unquote(userinfo.split(":", 1)[0])
         if netloc.startswith("[") and "]" in netloc:
             host = netloc[1:netloc.index("]")]
             port_match = re.search(r"\]:(\d+)", netloc)
-            return host, int(port_match.group(1)) if port_match else 5432, not re.fullmatch(r"[0-9A-Fa-f:.]+", host)
+            return username, host, int(port_match.group(1)) if port_match else 5432, not re.fullmatch(r"[0-9A-Fa-f:.]+", host)
         host, _, port_text = netloc.rpartition(":")
         if not host:
             host = netloc
-        return host, int(port_text) if port_text.isdigit() else 5432, False
+        return username, host, int(port_text) if port_text.isdigit() else 5432, False
+
+
+POSTGRES_ENDPOINT_LOGGED = False
 
 
 class PostgresConnection:
     def __init__(self):
         if psycopg is None or dict_row is None:
             raise RuntimeError("PostgreSQL is configured, but psycopg is not installed. Install psycopg[binary].")
+        global POSTGRES_ENDPOINT_LOGGED
+        username, host, port, bracketed_dns_host = describe_database_url_endpoint(DATABASE_URL)
+        if not POSTGRES_ENDPOINT_LOGGED:
+            logger.info(
+                "PostgreSQL DATABASE_URL endpoint parsed as user=%s host=%s port=%s",
+                username or "(missing)",
+                host or "(missing)",
+                port,
+            )
+            POSTGRES_ENDPOINT_LOGGED = True
         try:
             self._connection = psycopg.connect(
                 DATABASE_URL,
@@ -1416,7 +1431,6 @@ class PostgresConnection:
                 application_name="mabaso_ai",
             )
         except Exception as exc:
-            host, port, bracketed_dns_host = describe_database_url_endpoint(DATABASE_URL)
             if bracketed_dns_host:
                 raise RuntimeError(
                     "DATABASE_URL wraps a DNS hostname in square brackets. Brackets are only valid for literal IPv6 addresses. "
