@@ -3926,6 +3926,7 @@ export default function App() {
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
+  const [isBillingUsageLoading, setIsBillingUsageLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -4501,7 +4502,23 @@ export default function App() {
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
             {billingCheckoutMessage}
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Attempts Remaining Today</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {!authToken
+                    ? "Sign in to load your account-based usage meter."
+                    : isBillingUsageLoading
+                      ? "Loading your remaining attempts from the backend..."
+                      : "Usage meter is not loaded yet. Refresh to fetch your remaining attempts for this email."}
+                </p>
+              </div>
+              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} disabled={!authToken || isBillingUsageLoading} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60">{isBillingUsageLoading ? "Loading..." : "Refresh Usage"}</button>
+            </div>
+          </div>
+        )}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           {fairSubscriptionPlans.map((plan) => (
             <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Pro Student" || plan.name === "Premium Student" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
@@ -4569,7 +4586,7 @@ export default function App() {
                   {billingUsage.reset_label ? ` · Resets ${billingUsage.reset_label}` : ""}
                 </p>
               </div>
-              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10">Refresh Usage</button>
+              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 disabled:cursor-wait disabled:opacity-70">{isBillingUsageLoading ? "Refreshing..." : "Refresh Usage"}</button>
             </div>
             <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {billingUsage.features.map((feature) => (
@@ -4586,7 +4603,23 @@ export default function App() {
               ))}
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Attempts Remaining Today</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {!authToken
+                    ? "Sign in to load your account-based usage meter."
+                    : isBillingUsageLoading
+                      ? "Loading your remaining attempts from the backend..."
+                      : "Usage meter is not loaded yet. Refresh to fetch your remaining attempts for this email."}
+                </p>
+              </div>
+              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} disabled={!authToken || isBillingUsageLoading} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60">{isBillingUsageLoading ? "Loading..." : "Refresh Usage"}</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -10451,6 +10484,13 @@ export default function App() {
   const applyServerAccountState = (data = {}, { includeBilling = true } = {}) => {
     if (!includeBilling) return;
     const account = data?.account && typeof data.account === "object" ? data.account : {};
+    const hasBillingPayload = Boolean(
+      Object.prototype.hasOwnProperty.call(data || {}, "usage")
+      || Object.prototype.hasOwnProperty.call(data || {}, "subscription")
+      || Object.prototype.hasOwnProperty.call(account, "usage")
+      || Object.prototype.hasOwnProperty.call(account, "subscription")
+    );
+    if (!hasBillingPayload) return;
     const nextSubscription = data?.subscription || account.subscription || null;
     const nextUsage = data?.usage || account.usage || null;
     setBillingSubscription(nextSubscription);
@@ -11248,12 +11288,28 @@ export default function App() {
     if (!authToken) {
       setBillingUsage(null);
       setBillingSubscription(null);
+      setIsBillingUsageLoading(false);
       return null;
     }
-    const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
-    setBillingUsage(data.usage || null);
-    setBillingSubscription(data.subscription || null);
-    return data;
+    setIsBillingUsageLoading(true);
+    try {
+      const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
+      setBillingUsage(data.usage || null);
+      setBillingSubscription(data.subscription || null);
+      return data;
+    } finally {
+      setIsBillingUsageLoading(false);
+    }
+  };
+
+  const openUpgradeModal = () => {
+    setIsUpgradeModalOpen(true);
+    setBillingCheckoutMessage("");
+    if (authToken) {
+      refreshBillingStatus().catch((err) => {
+        setBillingCheckoutMessage(getReadableRequestError(err));
+      });
+    }
   };
 
   const getUsageFeatureState = (usage, featureId) => {
@@ -17657,7 +17713,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
-              <button type="button" onClick={() => setIsUpgradeModalOpen(true)} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
+              <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
@@ -17677,7 +17733,7 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
-          <button type="button" onClick={() => setIsUpgradeModalOpen(true)} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
+          <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>
         <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
         {collaborationInvitePrompt}
