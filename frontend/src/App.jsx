@@ -2874,8 +2874,22 @@ function getBackendConnectionTroubleshootingMessage(context = "") {
   );
 }
 
-function getReadableRequestError(error) {
+function getReadableRequestError(error, context = "") {
+  const normalizedContext = String(context || "").toLowerCase();
   if (isAbortError(error)) {
+    if (normalizedContext.includes("extract-slide-text")) {
+      return (
+        "Slide reading took too long before text could be returned. "
+        + "The backend is online, but this source may be too large, scanned, image-heavy, or slow to OCR. "
+        + "Try a smaller file, fewer slides, clearer images, or a text-based PDF/PPTX."
+      );
+    }
+    if (normalizedContext.includes("upload-audio") || normalizedContext.includes("transcribe-video-url")) {
+      return (
+        "Lecture transcription took too long before a job could be started. "
+        + "Try a smaller file, shorter recording, or retry after the Render backend is fully awake."
+      );
+    }
     return (
       "The Mabaso server took too long to respond. "
       + "The backend may be sleeping on Render, timing out, or restarting while processing. Please try again in a few seconds."
@@ -11151,7 +11165,7 @@ export default function App() {
     try {
       response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...requestOptions, headers }, timeoutMs);
     } catch (err) {
-      throw new Error(getReadableRequestError(err));
+      throw new Error(getReadableRequestError(err, path));
     }
     if (response.status === 401) {
       clearSession("Your session expired. Please sign in again.");

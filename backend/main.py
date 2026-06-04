@@ -1390,7 +1390,9 @@ class StaticCursor:
 def translate_postgres_sql(sql: str) -> str:
     translated = sql.strip()
     compact = re.sub(r"\s+", " ", translated).strip().lower()
-    if compact.startswith("insert or ignore into "):
+    if compact == "begin immediate":
+        translated = "BEGIN"
+    elif compact.startswith("insert or ignore into "):
         translated = re.sub(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\s+", "INSERT INTO ", translated, flags=re.IGNORECASE)
         translated = f"{translated} ON CONFLICT DO NOTHING"
     elif compact.startswith("insert or replace into revoked_sessions "):
@@ -5807,6 +5809,74 @@ def consume_plan_quota(
         "reset_at": reset_at,
         "reset_label": reset_label,
         "account": account_snapshot,
+    }
+
+
+def ensure_plan_quota_available(
+    *,
+    email: str,
+    feature: str,
+    request: Request | None = None,
+    quantity: int = 1,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    normalized_feature = normalize_billing_plan_id(feature)
+    safe_quantity = max(1, int(quantity or 1))
+    period_key = get_usage_period_key()
+    plan_id = get_effective_plan_id(normalized_email)
+    limit = get_plan_quota(plan_id, normalized_feature)
+    label = BILLING_FEATURE_LABELS.get(normalized_feature, normalized_feature.replace("_", " ").title())
+    reset_label = format_usage_reset_time()
+    reset_wait = format_usage_reset_wait()
+    reset_at = get_next_usage_reset().isoformat()
+
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE email = ? AND feature = ? AND period_key = ?
+            """,
+            (normalized_email, normalized_feature, period_key),
+        ).fetchone()
+    used = int(row["total_quantity"] or 0) if row else 0
+    if limit >= 0 and used + safe_quantity > limit:
+        remaining = max(0, limit - used)
+        base_limit_message = (
+            f"You have used all free attempts for today for {label}. Upgrade to continue using premium features."
+            if plan_id == "free"
+            else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
+        )
+        upgrade_hint = "" if plan_id == "free" else " Upgrade to Premium Student for unlimited usage."
+        record_audit_log(
+            action="billing.quota.block",
+            status="blocked",
+            email=normalized_email,
+            request=request,
+            resource_type="billing_usage",
+            resource_name=normalized_feature,
+            metadata={"plan_id": plan_id, "used": used, "limit": limit, "remaining": remaining, **(metadata or {})},
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"{base_limit_message} "
+                f"Attempts remaining today: {remaining}/{limit}. "
+                f"Your usage will reset in {reset_wait} at {reset_label} for {normalized_email}."
+                f"{upgrade_hint}"
+            ),
+        )
+    return {
+        "plan_id": plan_id,
+        "feature": normalized_feature,
+        "used": used,
+        "limit": limit,
+        "remaining": None if limit < 0 else max(0, limit - used),
+        "period_key": period_key,
+        "period_type": "daily",
+        "reset_at": reset_at,
+        "reset_label": reset_label,
     }
 
 
@@ -17264,11 +17334,41 @@ async def extract_slide_text(
     ensure_openai_key()
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
     reference_images: list[str] = []
+    ensure_plan_quota_available(
+        email=current_user,
+        feature="source_upload",
+        request=request,
+        metadata={"route": "extract_slide_text", "stage": "precheck"},
+    )
+
+    def finish_extracted_source(text: str, image_urls: list[str], *, source_kind: str) -> dict[str, Any]:
+        consume_plan_quota(
+            email=current_user,
+            feature="source_upload",
+            request=request,
+            metadata={"route": "extract_slide_text", "source_kind": source_kind},
+        )
+        record_audit_log(
+            action="study_source.extract",
+            email=current_user,
+            request=request,
+            resource_type="study_source",
+            resource_name=file.filename or source_kind,
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={
+                "source_kind": source_kind,
+                "content_type": content_type,
+                "text_chars": len(text or ""),
+            },
+        )
+        return {"text": text, "image_urls": image_urls}
 
     try:
+        logger.info("Study source extraction started for %s (%s) by %s", file.filename, content_type or "unknown", current_user)
         file_bytes = await file.read()
         if not file_bytes:
             raise HTTPException(status_code=400, detail="The selected slide file is empty.")
+        logger.info("Study source extraction read %s bytes from %s", len(file_bytes), file.filename)
 
         size_limit = MAX_IMAGE_UPLOAD_BYTES if content_type.startswith("image/") else MAX_SLIDE_UPLOAD_BYTES
         if len(file_bytes) > size_limit:
@@ -17280,19 +17380,18 @@ async def extract_slide_text(
                 ),
             )
 
-        consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "extract_slide_text"})
         if is_text_upload(file.filename, content_type):
             text = file_bytes.decode("utf-8", errors="ignore").strip()
             if not text:
                 raise HTTPException(status_code=400, detail="The slide text file does not contain readable text.")
-            return {"text": text, "image_urls": []}
+            return finish_extracted_source(text, [], source_kind="text")
 
         if is_pdf_upload(file.filename, content_type):
             text = await asyncio.to_thread(extract_slide_text_from_pdf, file_bytes)
             reference_images = await asyncio.to_thread(extract_reference_images_from_pdf, file_bytes, limit=6)
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that PDF.")
-            return {"text": text, "image_urls": reference_images}
+            return finish_extracted_source(text, reference_images, source_kind="pdf")
 
         if is_pptx_upload(file.filename, content_type):
             ensure_safe_zip_upload(file_bytes, file.filename)
@@ -17304,7 +17403,7 @@ async def extract_slide_text(
 
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that PowerPoint file.")
-            return {"text": text, "image_urls": reference_images}
+            return finish_extracted_source(text, reference_images, source_kind="pptx")
 
         if is_docx_upload(file.filename, content_type):
             ensure_safe_zip_upload(file_bytes, file.filename)
@@ -17315,7 +17414,7 @@ async def extract_slide_text(
 
             if not text:
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that Word document.")
-            return {"text": text, "image_urls": []}
+            return finish_extracted_source(text, [], source_kind="docx")
 
         if not content_type.startswith("image/"):
             raise HTTPException(
@@ -17328,15 +17427,21 @@ async def extract_slide_text(
         text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
         if not text:
             raise HTTPException(status_code=422, detail="MABASO could not read text from that slide image.")
-        record_audit_log(
-            action="study_source.extract",
-            email=current_user,
-            request=request,
-            resource_type="study_source",
-            resource_name=file.filename,
-            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        return finish_extracted_source(text, [image_data_url], source_kind="image")
+    except HTTPException as exc:
+        logger.warning(
+            "Study source extraction failed for %s with status %s: %s",
+            file.filename,
+            exc.status_code,
+            compact_text(exc.detail),
         )
-        return {"text": text, "image_urls": [image_data_url]}
+        raise
+    except Exception as exc:
+        logger.exception("Study source extraction crashed for %s", file.filename)
+        raise HTTPException(
+            status_code=502,
+            detail="Study source extraction failed before text could be returned. Try a smaller file, fewer slides, clearer images, or a text-based PDF/PPTX.",
+        ) from exc
     finally:
         await file.close()
 
