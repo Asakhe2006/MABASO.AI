@@ -152,10 +152,7 @@ services:
         value: public, max-age=300
     envVars:
       - key: VITE_API_BASE_URL
-        fromService:
-          type: web
-          name: mabaso-ai-api
-          envVarKey: RENDER_EXTERNAL_URL
+        value: "https://mabaso-ai-api.onrender.com"
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
       - key: VITE_APPLE_CLIENT_ID

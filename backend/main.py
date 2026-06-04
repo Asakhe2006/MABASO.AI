@@ -667,7 +667,14 @@ def resolve_cors_allow_origins() -> list[str]:
         for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
         if origin.strip() and origin.strip() != "*"
     ]
-    return configured or list(DEFAULT_CORS_ALLOW_ORIGINS)
+    candidates = configured or list(DEFAULT_CORS_ALLOW_ORIGINS)
+    for env_name in ("APP_PUBLIC_URL", "FRONTEND_PUBLIC_URL", "RENDER_EXTERNAL_URL"):
+        origin = os.getenv(env_name, "").strip().rstrip("/")
+        if origin and origin not in candidates:
+            candidates.append(origin)
+    if APP_PUBLIC_URL and APP_PUBLIC_URL not in candidates:
+        candidates.append(APP_PUBLIC_URL)
+    return candidates
 
 
 CORS_ALLOW_ORIGINS = resolve_cors_allow_origins()

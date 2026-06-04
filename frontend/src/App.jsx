@@ -2865,7 +2865,8 @@ function getBackendConnectionTroubleshootingMessage(context = "") {
   }
   return (
     "The app could not reach the Mabaso server. This usually means the backend is sleeping, timed out, restarted while processing, "
-    + "the API URL is wrong, or there is a network issue. If it keeps happening, check the backend service status and logs on Render."
+    + `the API URL is wrong, or there is a network issue. API: ${API_BASE_URL}. `
+    + "If it keeps happening, check the backend service status, browser Network tab, and logs on Render."
   );
 }
 
