@@ -14561,6 +14561,7 @@ export default function App() {
       return setError("Generate a study guide or add lecture material before creating flashcards.");
     }
     const requestedCount = clampFlashcardCountForPlan(flashcardCount);
+    setStatus("Checking flashcard attempts...");
     if (!(await ensurePremiumFeatureAvailable("flashcards", "Flashcards"))) return false;
 
     setIsGeneratingFlashcards(true);
@@ -14634,6 +14635,7 @@ export default function App() {
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the test.");
     }
+    setStatus("Checking exam attempts...");
     if (!(await ensurePremiumFeatureAvailable("quiz", "Quizzes"))) return false;
 
     setIsGeneratingQuiz(true);
@@ -14728,6 +14730,7 @@ export default function App() {
       const selectedDesign = presentationDesigns.find((design) => design.id === selectedPresentationDesign);
       return blockLockedPlanOption(`${selectedDesign?.name || "This"} PowerPoint template`, "a higher presentation plan");
     }
+    setStatus("Checking presentation attempts...");
     if (!(await ensurePremiumFeatureAvailable("presentation", "Presentations"))) return false;
 
     setIsGeneratingPresentation(true);
@@ -14883,6 +14886,7 @@ export default function App() {
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the podcast debate.");
     }
+    setStatus("Checking podcast attempts...");
     if (!(await ensurePremiumFeatureAvailable("podcast", "Podcasts"))) return false;
 
     setIsGeneratingPodcast(true);
@@ -15002,6 +15006,7 @@ export default function App() {
       return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
     if (!validateReportPlanAccess(activeConfig)) return false;
+    setStatus("Checking report attempts...");
     if (!(await ensurePremiumFeatureAvailable("report", "Reports"))) return false;
 
     setIsGeneratingReport(true);
@@ -15113,6 +15118,7 @@ export default function App() {
     if (!isMindMapDepthAllowed(mindMapDepth)) {
       return blockLockedPlanOption(`Mind map ${mindMapDepth} depth`, mindMapDepth === "Research" ? "Premium" : "Pro");
     }
+    setStatus("Checking mind map attempts...");
     if (!(await ensurePremiumFeatureAvailable("mind_map", "Mind maps"))) return false;
 
     setIsGeneratingMindMap(true);

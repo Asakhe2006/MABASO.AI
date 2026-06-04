@@ -17,6 +17,15 @@
   }
 }
 
+button,
+[role="button"],
+input,
+select,
+textarea,
+label {
+  touch-action: manipulation;
+}
+
 .hero {
   position: relative;
 
@@ -164,6 +173,7 @@
 .ticks {
   position: relative;
   width: 100%;
+  pointer-events: none;
 
   &::before,
   &::after {
@@ -188,12 +198,14 @@
   inset: 0;
   overflow: hidden;
   opacity: 0.92;
+  pointer-events: none;
 }
 
 .tutor-wave-field::before,
 .tutor-wave-field::after {
   content: "";
   position: absolute;
+  pointer-events: none;
   inset-inline: 8%;
   top: 50%;
   height: 2px;
@@ -226,6 +238,7 @@
   place-items: center;
   filter: drop-shadow(0 0 40px rgba(56, 189, 248, 0.25));
   transition: transform 0.35s ease, filter 0.35s ease;
+  pointer-events: none;
 }
 
 .tutor-orb-shell.is-speaking {
