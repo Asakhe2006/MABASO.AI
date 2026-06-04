@@ -374,18 +374,13 @@ BILLING_PLAN_ALIASES = {
     "pro_research": "premium_student",
 }
 BILLING_FEATURE_LABELS = {
-    "ai_chat": "AI chat messages",
     "study_guide": "Study guides",
-    "worked_examples": "Worked examples",
-    "formula_solver": "Formula solver",
     "flashcards": "Flashcards",
     "quiz": "Quizzes",
     "report": "Reports",
     "mind_map": "Mind maps",
     "presentation": "Presentations",
     "podcast": "Podcasts",
-    "ai_notes": "AI notes",
-    "teacher_lesson": "AI teacher lessons",
     "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
     "source_upload": "Document/audio source processing",
@@ -421,7 +416,7 @@ BILLING_PLAN_QUOTAS = {
         "podcast": get_int_env("FREE_PLAN_PODCASTS_PER_DAY", 1),
         "ai_notes": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
         "teacher_lesson": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
-        "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 15),
+        "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 3),
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
     },
     "pro_student": {
@@ -438,7 +433,7 @@ BILLING_PLAN_QUOTAS = {
         "podcast": get_int_env("PRO_STUDENT_PODCASTS_PER_DAY", 3),
         "ai_notes": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
         "teacher_lesson": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
-        "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 45),
+        "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
     },
     "premium_student": {
