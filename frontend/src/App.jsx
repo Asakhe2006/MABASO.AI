@@ -2830,6 +2830,10 @@ function getErrorHint(message) {
   return "Check the backend logs for the exact failing stage.";
 }
 
+function isUsageBlockedMessage(message = "") {
+  return /used all .*attempts|usage will reset|upgrade to continue using premium features|remaining attempts|current usage limit/i.test(String(message || ""));
+}
+
 async function parseJsonSafe(response) {
   try {
     return await response.json();
@@ -4058,6 +4062,7 @@ export default function App() {
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
+  const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
   const markQuizRef = useRef(null);
   const quizAutoSubmitTriggeredRef = useRef(false);
@@ -5071,6 +5076,8 @@ export default function App() {
     : hasResults || ["chat"].includes(activeTab);
   const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
+  const isCurrentErrorUsageBlocked = isUsageBlockedMessage(error);
+  const captureErrorTitle = isCurrentErrorUsageBlocked ? "Access limit reached" : "Processing failed";
   const showHistoryPanel = currentPage === "materials";
   const activePodcastSegment = podcastAudioSegments[activePodcastSegmentIndex] || podcastData.segments[activePodcastSegmentIndex] || podcastData.segments[0] || null;
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
@@ -11262,9 +11269,18 @@ export default function App() {
     return `${prefix} ${resetWait ? `Your usage will reset in ${resetWait}` : "Your usage will reset"} at ${resetLabel}. Upgrade to continue using premium features.`;
   };
 
+  const createUsageBlockedError = (fallbackMessage = "This action is blocked by your current usage limit.") => {
+    const message = lastUsageBlockedMessageRef.current || fallbackMessage;
+    const error = new Error(message);
+    error.usageBlocked = true;
+    return error;
+  };
+
   const ensurePremiumFeatureAvailable = async (featureId, fallbackLabel = "this feature") => {
+    lastUsageBlockedMessageRef.current = "";
     if (!authToken) {
       const message = "Please sign in so your usage limits can be checked before using this feature.";
+      lastUsageBlockedMessageRef.current = message;
       setError(message);
       setStatus(message);
       return false;
@@ -11278,6 +11294,7 @@ export default function App() {
       subscription = data?.subscription || data?.account?.subscription || subscription || null;
     } catch (err) {
       const message = err?.message || "Could not verify your remaining attempts. Try again when the server reconnects.";
+      lastUsageBlockedMessageRef.current = message;
       setError(message);
       setStatus(message);
       return false;
@@ -11287,12 +11304,14 @@ export default function App() {
     const featureState = getUsageFeatureState(usage, featureId);
     if (!usage || !featureState) {
       const message = `Could not verify remaining attempts for ${fallbackLabel}. This action was blocked so your limits cannot be bypassed.`;
+      lastUsageBlockedMessageRef.current = message;
       setError(message);
       setStatus(message);
       return false;
     }
     if (featureState && !featureState.unlimited && Number(featureState.remaining) <= 0) {
       const message = `${subscriptionMessage ? `${subscriptionMessage} ` : ""}${buildUsageBlockedMessage(featureState, usage, fallbackLabel)}`;
+      lastUsageBlockedMessageRef.current = message;
       setError(message);
       setStatus(message);
       setIsUpgradeModalOpen(true);
@@ -11463,7 +11482,7 @@ export default function App() {
 
   const requestLectureAssistantStream = async (payload, signal) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
-      throw new Error("You have used all free attempts for today.");
+      throw createUsageBlockedError("You have used all free attempts for today.");
     }
     return authFetch("/api/chat/stream", {
       method: "POST",
@@ -11476,7 +11495,7 @@ export default function App() {
 
   const requestLectureAssistantTranscription = async (formData, signal) => {
     if (!(await ensurePremiumFeatureAvailable("voice_transcription", "Voice messages"))) {
-      throw new Error("You have used all free voice attempts for today.");
+      throw createUsageBlockedError("You have used all free voice attempts for today.");
     }
     return authFetch("/api/voice/transcribe", {
       method: "POST",
@@ -13512,7 +13531,7 @@ export default function App() {
       return !isTextFile;
     });
     if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
-      throw new Error("You have used all free source-processing attempts for today.");
+      throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
 
     const extractedEntries = [];
@@ -13652,7 +13671,7 @@ export default function App() {
       throw new Error("Upload or record a lecture first.");
     }
     if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
-      throw new Error("You have used all free source-processing attempts for today.");
+      throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
 
     setIsTranscribing(true);
@@ -15663,7 +15682,7 @@ export default function App() {
     currentSection = "",
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
-      throw new Error("You have used all free study chat attempts for today.");
+      throw createUsageBlockedError("You have used all free study chat attempts for today.");
     }
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
@@ -17704,7 +17723,7 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
                     <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
-                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">Processing failed</p><p className="mt-2">{error}</p>{errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
+                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{error}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
