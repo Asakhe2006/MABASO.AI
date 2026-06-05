@@ -77,7 +77,7 @@ const ROOM_REFRESH_INTERVAL_MS = 5000;
 const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
-const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 180000;
+const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 20 * 60 * 1000;
 const AI_GENERATION_REQUEST_TIMEOUT_MS = 120000;
 const AI_EXPORT_REQUEST_TIMEOUT_MS = 120000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
@@ -140,7 +140,7 @@ const RECORDING_MIME_CANDIDATES = [
   "audio/mp4",
 ];
 const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
-const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
 
@@ -2919,7 +2919,7 @@ function getErrorHint(message) {
   if (text.includes("smtp")) {
     return "For Gmail, keep smtp.gmail.com with port 587, SMTP_USE_TLS=true, SMTP_USE_SSL=false, and set SMTP_PASSWORD to a Gmail app password instead of your normal Gmail password.";
   }
-  if (text.includes("timed out")) return "Try again or split a very long lecture into smaller sections.";
+  if (text.includes("timed out")) return "Large lecture processing can take time. Retry after the backend finishes waking up, and keep this tab open while the job starts.";
   return "Check the backend logs for the exact failing stage.";
 }
 
@@ -3003,8 +3003,8 @@ function getReadableRequestError(error, context = "") {
     }
     if (normalizedContext.includes("upload-audio") || normalizedContext.includes("transcribe-video-url")) {
       return (
-        "Lecture transcription took too long before a job could be started. "
-        + "Try a smaller file, shorter recording, or retry after the Render backend is fully awake."
+        "Large lecture transcription is taking longer than the browser waited for the job to start. "
+        + "Keep this tab open and retry once the backend is fully awake; paid plan level does not reduce lecture file size support."
       );
     }
     return (
@@ -3032,7 +3032,7 @@ function isTransientHttpStatus(status) {
 function getAdaptiveFileUploadTimeoutMs(file, { minMs = MIN_FILE_UPLOAD_TIMEOUT_MS, maxMs = LARGE_LECTURE_UPLOAD_TIMEOUT_MS } = {}) {
   const sizeBytes = Number(file?.size || 0);
   const sizeMb = sizeBytes > 0 ? sizeBytes / (1024 * 1024) : 0;
-  const scaledMs = Math.ceil(Math.max(sizeMb, 1) / 20) * 60 * 1000;
+  const scaledMs = Math.ceil(Math.max(sizeMb, 1) / 10) * 60 * 1000;
   return Math.min(maxMs, Math.max(minMs, scaledMs));
 }
 

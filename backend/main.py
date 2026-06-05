@@ -181,7 +181,7 @@ APPLE_KEY_ID = os.getenv("APPLE_KEY_ID", "").strip()
 APPLE_REDIRECT_URI = os.getenv("APPLE_REDIRECT_URI", "").strip()
 APPLE_PRIVATE_KEY = os.getenv("APPLE_PRIVATE_KEY", "").strip()
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
-MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(600 * 1024 * 1024)))
+MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(5 * 1024 * 1024 * 1024)))
 OPENAI_AUDIO_LIMIT_BYTES = int(os.getenv("OPENAI_AUDIO_LIMIT_BYTES", str(25 * 1024 * 1024)))
 CHUNK_DURATION_SECONDS = int(os.getenv("CHUNK_DURATION_SECONDS", "300"))
 CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "20"))
@@ -195,9 +195,9 @@ MIND_MAP_REQUEST_TIMEOUT = float(os.getenv("MIND_MAP_REQUEST_TIMEOUT", "90"))
 VISION_REQUEST_TIMEOUT = float(os.getenv("VISION_REQUEST_TIMEOUT", "45"))
 TRANSCRIPTION_REQUEST_TIMEOUT = float(os.getenv("TRANSCRIPTION_REQUEST_TIMEOUT", "1200"))
 TRANSCRIPTION_JOB_TIMEOUT = float(
-    os.getenv("TRANSCRIPTION_JOB_TIMEOUT", str(max(int(TRANSCRIPTION_REQUEST_TIMEOUT * 4), 3600)))
+    os.getenv("TRANSCRIPTION_JOB_TIMEOUT", str(max(int(TRANSCRIPTION_REQUEST_TIMEOUT * 12), 14400)))
 )
-VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "1200"))
+VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "3600"))
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
 MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
@@ -10088,8 +10088,8 @@ async def save_upload_to_disk(file: UploadFile, job_id: str | None = None) -> Pa
                         raise HTTPException(
                             status_code=413,
                             detail=(
-                                f"File is too large ({total_written / (1024 * 1024):.1f} MB). "
-                                f"Please upload a file smaller than {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB."
+                                f"File is above the current server safety limit ({total_written / (1024 * 1024):.1f} MB). "
+                                f"The configured lecture media ceiling is {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB and applies equally to every plan."
                             ),
                         )
                     if job_id:
@@ -11238,8 +11238,8 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         except OSError:
             logger.warning("Could not delete oversized video download: %s", file_path)
         raise RuntimeError(
-            f"The downloaded video audio is too large ({file_size / (1024 * 1024):.1f} MB). "
-            f"Please use a shorter video or a link with a smaller audio track."
+            f"The downloaded video audio is above the current server safety limit ({file_size / (1024 * 1024):.1f} MB). "
+            f"The configured lecture media ceiling is {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB and applies equally to every plan."
         )
     return file_path
 
@@ -11269,7 +11269,7 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
             "This can happen because of temporary upstream issues or an unsupported file."
         )
     if isinstance(exc, TimeoutError):
-        return "Processing timed out. Try again, compress the file, or use a shorter lecture segment."
+        return "Processing timed out before the lecture transcript completed. Retry after the backend is fully awake; lecture media size support is not reduced by plan."
     message = str(exc).strip()
     lowered = message.lower()
     is_youtube_source = bool(source_url and extract_youtube_video_id(source_url))
@@ -18117,8 +18117,8 @@ async def upload_audio(
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    f"File is too large ({file_size / (1024 * 1024):.1f} MB). "
-                    f"Please upload a file smaller than {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB."
+                    f"File is above the current server safety limit ({file_size / (1024 * 1024):.1f} MB). "
+                    f"The configured lecture media ceiling is {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB and applies equally to every plan."
                 ),
             )
 
