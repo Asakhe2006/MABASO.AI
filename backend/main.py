@@ -7201,10 +7201,18 @@ def classify_audit_feature(log: dict[str, Any]) -> str:
         return "Study Guides"
     if "quiz" in action or resource_type == "quiz":
         return "Tests"
+    if "flashcards" in action or resource_type == "flashcards":
+        return "Flashcards"
     if "presentation" in action or resource_type == "presentation":
         return "Presentations"
     if "podcast" in action or resource_type == "podcast":
         return "Podcasts"
+    if "report" in action or resource_type == "report":
+        return "Reports"
+    if "mind_map" in action or resource_type == "mind_map":
+        return "Mind Maps"
+    if "teacher_lesson" in action or resource_type == "teacher_lesson":
+        return "Study Audio Sessions"
     if "transcription" in action or "upload" in action or resource_type == "transcription":
         return "Lecture Capture"
     if "chat" in action:
@@ -7902,6 +7910,15 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         admin_attempt_rows = connection.execute(
             "SELECT email, ip_address, failure_count, last_failed_at, locked_until FROM admin_login_attempts"
         ).fetchall()
+        usage_event_rows = connection.execute(
+            """
+            SELECT email, feature, COALESCE(SUM(quantity), 0) AS total_quantity
+            FROM billing_usage_events
+            WHERE created_at >= ?
+            GROUP BY email, feature
+            """,
+            (range_start.isoformat(),),
+        ).fetchall()
 
     account_state_by_email = {
         normalize_email(row["email"]): {
@@ -7922,6 +7939,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     last_login_by_email_in_range: dict[str, dict[str, str]] = {}
     uploads_by_email: dict[str, int] = {}
     generations_by_email: dict[str, int] = {}
+    usage_counts_by_email: dict[str, dict[str, int]] = {}
     failed_auth_by_email: dict[str, int] = {}
     transcriptions_by_email: dict[str, int] = {}
     unique_ips_by_email: dict[str, set[str]] = {}
@@ -7929,6 +7947,13 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     saved_items_by_email: dict[str, int] = {}
     tests_by_email: dict[str, int] = {}
     storage_bytes_by_email: dict[str, int] = {}
+
+    for row in usage_event_rows:
+        email = normalize_email(row["email"])
+        feature = normalize_billing_plan_id(row["feature"])
+        if not email or not feature:
+            continue
+        usage_counts_by_email.setdefault(email, {})[feature] = int(row["total_quantity"] or 0)
 
     for item in history_items:
         email = normalize_email(item.get("owner_email", ""))
@@ -7958,6 +7983,14 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         "presentation.completed",
         "podcast.request",
         "podcast.completed",
+        "flashcards.request",
+        "flashcards.completed",
+        "teacher_lesson.request",
+        "teacher_lesson.completed",
+        "report.request",
+        "report.completed",
+        "mind_map.request",
+        "mind_map.completed",
     }
 
     def build_last_login_map(source_logs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
@@ -8005,6 +8038,21 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     user_records: list[dict[str, Any]] = []
     for row in user_rows:
         email = normalize_email(row["email"])
+        usage_counts = usage_counts_by_email.get(email, {})
+        source_upload_count = int(usage_counts.get("source_upload", 0))
+        generated_tool_count = sum(
+            int(usage_counts.get(feature, 0))
+            for feature in (
+                "study_guide",
+                "flashcards",
+                "quiz",
+                "presentation",
+                "podcast",
+                "report",
+                "mind_map",
+                "teacher_lesson",
+            )
+        )
         status = account_state_by_email.get(email, {}).get("status", "active")
         failed_attempts = failed_auth_by_email.get(email, 0)
         ip_count = len(unique_ips_by_email.get(email, set()))
@@ -8025,10 +8073,10 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 "sessions_count": sessions_by_email.get(email, 0),
                 "active_sessions_now": session_profile.get("active_sessions", sessions_by_email.get(email, 0)),
                 "tracked_sessions_in_range": session_profile.get("total_sessions_in_range", 0),
-                "total_uploads": uploads_by_email.get(email, 0),
-                "uploads_in_range": uploads_by_email.get(email, 0),
-                "total_generations": generations_by_email.get(email, 0),
-                "generations_in_range": generations_by_email.get(email, 0),
+                "total_uploads": max(uploads_by_email.get(email, 0), source_upload_count),
+                "uploads_in_range": max(uploads_by_email.get(email, 0), source_upload_count),
+                "total_generations": max(generations_by_email.get(email, 0), generated_tool_count),
+                "generations_in_range": max(generations_by_email.get(email, 0), generated_tool_count),
                 "lectures_transcribed": transcriptions_by_email.get(email, 0),
                 "lectures_transcribed_in_range": transcriptions_by_email.get(email, 0),
                 "study_materials": saved_items_by_email.get(email, 0),
@@ -8110,7 +8158,12 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         and log["created_at_dt"] >= now - timedelta(days=7)
     )
 
-    guide_count = len(history_items)
+    usage_feature_totals: dict[str, int] = {}
+    for feature_counts_by_user in usage_counts_by_email.values():
+        for feature, count in feature_counts_by_user.items():
+            usage_feature_totals[feature] = usage_feature_totals.get(feature, 0) + int(count)
+
+    guide_count = max(len(history_items), usage_feature_totals.get("study_guide", 0))
     study_material_count = sum(
         1
         for item in history_items
@@ -8122,7 +8175,23 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         or item.get("presentationData")
         or item.get("podcastData")
     )
-    test_count = sum(1 for item in history_items if item.get("quizQuestions"))
+    study_material_count = max(
+        study_material_count,
+        sum(
+            int(usage_feature_totals.get(feature, 0))
+            for feature in (
+                "study_guide",
+                "flashcards",
+                "quiz",
+                "presentation",
+                "podcast",
+                "report",
+                "mind_map",
+                "teacher_lesson",
+            )
+        ),
+    )
+    test_count = max(sum(1 for item in history_items if item.get("quizQuestions")), usage_feature_totals.get("quiz", 0))
     processing_durations = [
         log["duration_ms"]
         for log in logs
@@ -8247,12 +8316,25 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 }
             )
 
-    upload_count = sum(1 for log in logs if log["action"] in upload_actions)
+    upload_count = max(sum(1 for log in logs if log["action"] in upload_actions), usage_feature_totals.get("source_upload", 0))
     processed_count = sum(
         1 for log in logs if log["action"] == "transcription.completed" and log["status"] == "success"
     )
-    generated_count = sum(
-        1 for log in logs if log["action"] == "study_guide.completed" and log["status"] == "success"
+    generated_count = max(
+        sum(1 for log in logs if log["action"] == "study_guide.completed" and log["status"] == "success"),
+        sum(
+            int(usage_feature_totals.get(feature, 0))
+            for feature in (
+                "study_guide",
+                "flashcards",
+                "quiz",
+                "presentation",
+                "podcast",
+                "report",
+                "mind_map",
+                "teacher_lesson",
+            )
+        ),
     )
 
     activity_logs = [
@@ -8273,14 +8355,29 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         normalize_email(row["email"])
         for row in user_rows
         if normalize_email(row["email"])
-    } | set(saved_items_by_email) | set(last_login_by_email_all) | set(transcriptions_by_email)
+    } | set(saved_items_by_email) | set(last_login_by_email_all) | set(transcriptions_by_email) | set(usage_counts_by_email)
     top_users_by_usage = sorted(
         (
             {
                 "email": email,
                 "lectures": max(uploads_by_email.get(email, 0), transcriptions_by_email.get(email, 0)),
-                "materials": saved_items_by_email.get(email, 0),
-                "tests": tests_by_email.get(email, 0),
+                "materials": max(
+                    saved_items_by_email.get(email, 0),
+                    sum(
+                        int(usage_counts_by_email.get(email, {}).get(feature, 0))
+                        for feature in (
+                            "study_guide",
+                            "flashcards",
+                            "quiz",
+                            "presentation",
+                            "podcast",
+                            "report",
+                            "mind_map",
+                            "teacher_lesson",
+                        )
+                    ),
+                ),
+                "tests": max(tests_by_email.get(email, 0), int(usage_counts_by_email.get(email, {}).get("quiz", 0))),
                 "sessions": sessions_by_email.get(email, 0),
                 "total_actions": session_table_by_email.get(email, {}).get("total_actions", 0),
                 "storage_bytes": storage_bytes_by_email.get(email, 0),
@@ -8451,24 +8548,34 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         "ai_generation": {
             "totals": {
                 "study_guides": guide_count,
-                "presentations": sum(
-                    1
-                    for item in history_items
-                    if isinstance(item.get("presentationData"), dict)
-                    and (
-                        item["presentationData"].get("slides")
-                        or item["presentationData"].get("presentation_slides")
-                    )
+                "flashcards": usage_feature_totals.get("flashcards", 0),
+                "tests": test_count,
+                "presentations": max(
+                    sum(
+                        1
+                        for item in history_items
+                        if isinstance(item.get("presentationData"), dict)
+                        and (
+                            item["presentationData"].get("slides")
+                            or item["presentationData"].get("presentation_slides")
+                        )
+                    ),
+                    usage_feature_totals.get("presentation", 0),
                 ),
-                "podcasts": sum(
-                    1
-                    for item in history_items
-                    if isinstance(item.get("podcastData"), dict)
-                    and (
-                        item["podcastData"].get("script")
-                        or item["podcastData"].get("podcast_script")
-                    )
+                "podcasts": max(
+                    sum(
+                        1
+                        for item in history_items
+                        if isinstance(item.get("podcastData"), dict)
+                        and (
+                            item["podcastData"].get("script")
+                            or item["podcastData"].get("podcast_script")
+                        )
+                    ),
+                    usage_feature_totals.get("podcast", 0),
                 ),
+                "reports": usage_feature_totals.get("report", 0),
+                "mind_maps": usage_feature_totals.get("mind_map", 0),
             },
             "success_rate_percent": round(
                 (
