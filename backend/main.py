@@ -1005,6 +1005,7 @@ class PodcastGenerationRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     speaker_count: int = 2
+    speaker_profiles: list[dict[str, str]] = []
     target_minutes: int = 10
     language: str = "English"
 
@@ -1337,7 +1338,7 @@ app.add_middleware(
     allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Mabaso-Device-Id", "X-Device-Id"],
 )
 
 
@@ -1678,6 +1679,89 @@ def init_db():
                 email TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_devices (
+                device_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                browser TEXT NOT NULL DEFAULT '',
+                operating_system TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                first_ip_address TEXT NOT NULL DEFAULT '',
+                last_ip_address TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                city TEXT NOT NULL DEFAULT '',
+                first_login_at TEXT NOT NULL,
+                last_active_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_account_devices_email_last_active
+            ON account_devices (email, last_active_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_sessions (
+                session_id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                ip_address TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                city TEXT NOT NULL DEFAULT '',
+                login_at TEXT NOT NULL,
+                last_activity_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_active_sessions_email_status_activity
+            ON active_sessions (email, status, last_activity_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_abuse_events (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                severity INTEGER NOT NULL,
+                message TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_subscription_abuse_events_email_created_at
+            ON subscription_abuse_events (email, created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_sharing_risk (
+                email TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL DEFAULT 'free',
+                risk_score INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'normal',
+                device_count INTEGER NOT NULL DEFAULT 0,
+                active_session_count INTEGER NOT NULL DEFAULT 0,
+                last_login_at TEXT NOT NULL DEFAULT '',
+                reasons_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL
             )
             """
         )
@@ -2066,6 +2150,13 @@ def hash_value(value: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def safe_json_loads(value: Any, fallback: Any = None) -> Any:
+    try:
+        return json.loads(value or "")
+    except (TypeError, ValueError):
+        return fallback
+
+
 def encode_token_component(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
 
@@ -2276,6 +2367,10 @@ def revoke_all_sessions_for_user(email: str):
                 (row["token_hash"], row["expires_at"], utc_now().isoformat()),
             )
         connection.execute("DELETE FROM sessions WHERE email = ?", (normalized_email,))
+        connection.execute(
+            "UPDATE active_sessions SET status = 'revoked', last_activity_at = ? WHERE email = ? AND status = 'active'",
+            (utc_now().isoformat(), normalized_email),
+        )
 
 
 def get_client_ip(request: Request | None) -> str:
@@ -2292,6 +2387,348 @@ def get_client_ip(request: Request | None) -> str:
 
     client_host = getattr(request.client, "host", "") or ""
     return client_host[:120]
+
+
+ACCOUNT_SHARING_DEVICE_LIMIT = int(os.getenv("ACCOUNT_SHARING_DEVICE_LIMIT", "5"))
+ACCOUNT_SHARING_SESSION_LIMIT = int(os.getenv("ACCOUNT_SHARING_SESSION_LIMIT", "3"))
+ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES = int(os.getenv("ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES", "20"))
+
+
+def normalize_device_id(value: str = "") -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.:-]", "", str(value or "").strip())[:120]
+    return cleaned or f"server-{uuid4().hex}"
+
+
+def parse_user_agent_summary(user_agent: str) -> tuple[str, str]:
+    text = compact_text(user_agent)[:400]
+    lower = text.lower()
+    browser = "Browser"
+    if "edg/" in lower:
+        browser = "Microsoft Edge"
+    elif "chrome/" in lower and "chromium" not in lower:
+        browser = "Chrome"
+    elif "firefox/" in lower:
+        browser = "Firefox"
+    elif "safari/" in lower and "chrome/" not in lower:
+        browser = "Safari"
+    elif "opr/" in lower or "opera" in lower:
+        browser = "Opera"
+    operating_system = "Unknown OS"
+    if "windows" in lower:
+        operating_system = "Windows"
+    elif "android" in lower:
+        operating_system = "Android"
+    elif "iphone" in lower or "ipad" in lower or "ios" in lower:
+        operating_system = "iOS"
+    elif "mac os" in lower or "macintosh" in lower:
+        operating_system = "macOS"
+    elif "linux" in lower:
+        operating_system = "Linux"
+    return browser, operating_system
+
+
+def get_request_location(request: Request | None) -> tuple[str, str]:
+    if request is None:
+        return "", ""
+    country = compact_text(
+        request.headers.get("x-vercel-ip-country")
+        or request.headers.get("cf-ipcountry")
+        or request.headers.get("x-country")
+    )[:80]
+    city = compact_text(
+        request.headers.get("x-vercel-ip-city")
+        or request.headers.get("x-city")
+    )[:120]
+    return country, city
+
+
+def get_request_device_id(request: Request | None) -> str:
+    if request is None:
+        return normalize_device_id("")
+    return normalize_device_id(
+        request.headers.get("x-mabaso-device-id")
+        or request.headers.get("x-device-id")
+        or ""
+    )
+
+
+def record_subscription_abuse_event(
+    connection,
+    *,
+    email: str,
+    rule_id: str,
+    severity: int,
+    message: str,
+    metadata: dict[str, Any] | None = None,
+):
+    dedupe_cutoff = (utc_now() - timedelta(hours=6)).isoformat()
+    existing = connection.execute(
+        """
+        SELECT id FROM subscription_abuse_events
+        WHERE email = ? AND rule_id = ? AND created_at >= ?
+        LIMIT 1
+        """,
+        (email, rule_id, dedupe_cutoff),
+    ).fetchone()
+    if existing:
+        return
+    connection.execute(
+        """
+        INSERT INTO subscription_abuse_events (
+            id, email, rule_id, severity, message, metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid4().hex,
+            email,
+            rule_id,
+            max(0, int(severity or 0)),
+            compact_text(message)[:500],
+            json.dumps(metadata or {}, ensure_ascii=False),
+            utc_now().isoformat(),
+        ),
+    )
+
+
+def evaluate_account_sharing_risk(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    now = utc_now()
+    active_cutoff = (now - timedelta(minutes=ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES)).isoformat()
+    day_cutoff = (now - timedelta(hours=24)).isoformat()
+    plan_id = get_effective_plan_id(normalized_email)
+    with get_db_connection() as connection:
+        device_rows = connection.execute(
+            """
+            SELECT device_id, email, browser, operating_system, first_ip_address, last_ip_address,
+                   country, city, first_login_at, last_active_at, status
+            FROM account_devices
+            WHERE email = ? AND status != 'removed'
+            ORDER BY last_active_at DESC
+            """,
+            (normalized_email,),
+        ).fetchall()
+        active_session_rows = connection.execute(
+            """
+            SELECT session_id, device_id, ip_address, country, city, login_at, last_activity_at, status
+            FROM active_sessions
+            WHERE email = ? AND status = 'active' AND expires_at > ? AND last_activity_at >= ?
+            ORDER BY last_activity_at DESC
+            """,
+            (normalized_email, now.isoformat(), active_cutoff),
+        ).fetchall()
+        recent_session_rows = connection.execute(
+            """
+            SELECT session_id, device_id, ip_address, country, city, login_at, last_activity_at
+            FROM active_sessions
+            WHERE email = ? AND login_at >= ?
+            ORDER BY login_at DESC
+            """,
+            (normalized_email, day_cutoff),
+        ).fetchall()
+
+        device_count = len(device_rows)
+        active_session_count = len(active_session_rows)
+        devices_24h = sum(1 for row in device_rows if compact_text(row["first_login_at"]) >= day_cutoff)
+        unique_ips_24h = {compact_text(row["ip_address"]) for row in recent_session_rows if compact_text(row["ip_address"])}
+        unique_regions_24h = {
+            f"{compact_text(row['country'])}:{compact_text(row['city'])}"
+            for row in recent_session_rows
+            if compact_text(row["country"]) or compact_text(row["city"])
+        }
+        reasons: list[dict[str, Any]] = []
+        risk_score = 0
+        if device_count > ACCOUNT_SHARING_DEVICE_LIMIT:
+            severity = min(35, 12 + ((device_count - ACCOUNT_SHARING_DEVICE_LIMIT) * 5))
+            risk_score += severity
+            reasons.append({"rule": "too_many_devices", "message": f"{device_count} registered devices.", "severity": severity})
+            record_subscription_abuse_event(connection, email=normalized_email, rule_id="too_many_devices", severity=severity, message=f"More than {ACCOUNT_SHARING_DEVICE_LIMIT} devices are linked.", metadata={"device_count": device_count})
+        if active_session_count > ACCOUNT_SHARING_SESSION_LIMIT:
+            severity = min(30, 10 + ((active_session_count - ACCOUNT_SHARING_SESSION_LIMIT) * 6))
+            risk_score += severity
+            reasons.append({"rule": "concurrent_usage", "message": f"{active_session_count} active sessions.", "severity": severity})
+            record_subscription_abuse_event(connection, email=normalized_email, rule_id="concurrent_usage", severity=severity, message="Concurrent active session limit exceeded.", metadata={"active_sessions": active_session_count})
+        if devices_24h >= 7:
+            risk_score += 25
+            reasons.append({"rule": "rapid_device_accumulation", "message": f"{devices_24h} devices added within 24 hours.", "severity": 25})
+            record_subscription_abuse_event(connection, email=normalized_email, rule_id="rapid_device_accumulation", severity=25, message="Rapid device accumulation detected.", metadata={"devices_24h": devices_24h})
+        if len(unique_ips_24h) >= 10 or len(unique_regions_24h) >= 5:
+            severity = 20 if len(unique_ips_24h) >= 10 else 15
+            risk_score += severity
+            reasons.append({"rule": "different_ip_patterns", "message": f"{len(unique_ips_24h)} IPs and {len(unique_regions_24h)} regions in 24 hours.", "severity": severity})
+            record_subscription_abuse_event(connection, email=normalized_email, rule_id="different_ip_patterns", severity=severity, message="Different IP/region pattern detected.", metadata={"unique_ips": len(unique_ips_24h), "unique_regions": len(unique_regions_24h)})
+        sorted_sessions = sorted(recent_session_rows, key=lambda row: compact_text(row["login_at"]))
+        for previous, current in zip(sorted_sessions, sorted_sessions[1:]):
+            previous_region = f"{compact_text(previous['country'])}:{compact_text(previous['city'])}"
+            current_region = f"{compact_text(current['country'])}:{compact_text(current['city'])}"
+            if not previous_region.strip(":") or not current_region.strip(":") or previous_region == current_region:
+                continue
+            minutes_between = abs((parse_history_datetime(current["login_at"]) - parse_history_datetime(previous["login_at"])).total_seconds()) / 60
+            if minutes_between <= 30:
+                risk_score += 20
+                reasons.append({"rule": "impossible_travel", "message": f"Region changed within {int(minutes_between)} minutes.", "severity": 20})
+                record_subscription_abuse_event(connection, email=normalized_email, rule_id="impossible_travel", severity=20, message="Possible impossible travel detected.", metadata={"from": previous_region, "to": current_region, "minutes": minutes_between})
+                break
+        risk_score = min(100, risk_score)
+        status = "normal"
+        if risk_score >= 91:
+            status = "suspended"
+        elif risk_score >= 71:
+            status = "verification_required"
+        elif risk_score >= 41:
+            status = "warning"
+        last_login_at = compact_text(recent_session_rows[0]["login_at"]) if recent_session_rows else ""
+        connection.execute(
+            """
+            INSERT INTO account_sharing_risk (
+                email, plan_id, risk_score, status, device_count, active_session_count,
+                last_login_at, reasons_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                plan_id = excluded.plan_id,
+                risk_score = excluded.risk_score,
+                status = excluded.status,
+                device_count = excluded.device_count,
+                active_session_count = excluded.active_session_count,
+                last_login_at = excluded.last_login_at,
+                reasons_json = excluded.reasons_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_email,
+                plan_id,
+                risk_score,
+                status,
+                device_count,
+                active_session_count,
+                last_login_at,
+                json.dumps(reasons, ensure_ascii=False),
+                now.isoformat(),
+            ),
+        )
+    return {
+        "email": normalized_email,
+        "plan_id": plan_id,
+        "risk_score": risk_score,
+        "status": status,
+        "device_count": device_count,
+        "active_session_count": active_session_count,
+        "last_login_at": last_login_at,
+        "reasons": reasons,
+    }
+
+
+def register_account_session(email: str, token: str, request: Request | None, *, action: str = "login") -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    if not normalized_email or not token:
+        return {}
+    now = utc_now()
+    token_hash = hash_value(token)
+    payload = decode_signed_session_token(token) or {}
+    expires_at = datetime.fromtimestamp(int(payload.get("exp", int((now + timedelta(minutes=SESSION_TTL_MINUTES)).timestamp()))), tz=timezone.utc).isoformat()
+    device_id = get_request_device_id(request)
+    ip_address = get_client_ip(request)
+    country, city = get_request_location(request)
+    user_agent = (request.headers.get("user-agent") or "")[:400] if request is not None else ""
+    browser, operating_system = parse_user_agent_summary(user_agent)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO account_devices (
+                device_id, email, browser, operating_system, user_agent, first_ip_address,
+                last_ip_address, country, city, first_login_at, last_active_at, status, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_id) DO UPDATE SET
+                email = excluded.email,
+                browser = excluded.browser,
+                operating_system = excluded.operating_system,
+                user_agent = excluded.user_agent,
+                last_ip_address = excluded.last_ip_address,
+                country = excluded.country,
+                city = excluded.city,
+                last_active_at = excluded.last_active_at,
+                status = 'active'
+            """,
+            (
+                device_id,
+                normalized_email,
+                browser,
+                operating_system,
+                user_agent,
+                ip_address,
+                ip_address,
+                country,
+                city,
+                now.isoformat(),
+                now.isoformat(),
+                "active",
+                json.dumps({"source": action}, ensure_ascii=False),
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO active_sessions (
+                session_id, email, token_hash, device_id, ip_address, country, city,
+                login_at, last_activity_at, expires_at, status, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                last_activity_at = excluded.last_activity_at,
+                expires_at = excluded.expires_at,
+                status = 'active'
+            """,
+            (
+                token_hash,
+                normalized_email,
+                token_hash,
+                device_id,
+                ip_address,
+                country,
+                city,
+                now.isoformat(),
+                now.isoformat(),
+                expires_at,
+                "active",
+                json.dumps({"action": action, "session_mode": compact_text(payload.get("mode"), "user")}, ensure_ascii=False),
+            ),
+        )
+    risk = evaluate_account_sharing_risk(normalized_email)
+    if risk.get("status") == "suspended":
+        set_user_account_status(normalized_email, "suspended", "sharing-risk-engine")
+        revoke_all_sessions_for_user(normalized_email)
+    return {"device_id": device_id, "risk": risk}
+
+
+def touch_account_session(token: str, request: Request | None):
+    if not token:
+        return
+    token_hash = hash_value(token)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT email, device_id FROM active_sessions WHERE session_id = ?",
+            (token_hash,),
+        ).fetchone()
+        if not row:
+            return
+        connection.execute(
+            """
+            UPDATE active_sessions
+            SET last_activity_at = ?, status = 'active'
+            WHERE session_id = ?
+            """,
+            (now_iso, token_hash),
+        )
+        connection.execute(
+            """
+            UPDATE account_devices
+            SET last_active_at = ?, last_ip_address = ?
+            WHERE device_id = ?
+            """,
+            (now_iso, get_client_ip(request), row["device_id"]),
+        )
 
 
 def build_rate_limit_bucket_key(scope: str, request: Request | None, identity: str = "") -> str:
@@ -3263,7 +3700,7 @@ def consume_login_code(email: str, code: str):
         connection.execute("DELETE FROM login_codes WHERE email = ?", (email,))
 
 
-def create_session(email: str, session_mode: str = "user") -> str:
+def create_session(email: str, session_mode: str = "user", revoke_existing: bool = False) -> str:
     ensure_user_account_is_active(email)
     raw_token = build_signed_session_token(email, session_mode=session_mode)
     token_payload = decode_signed_session_token(raw_token) or {}
@@ -3272,22 +3709,27 @@ def create_session(email: str, session_mode: str = "user") -> str:
         tz=timezone.utc,
     ).isoformat()
     with get_db_connection() as connection:
-        existing_sessions = connection.execute(
-            "SELECT token_hash, expires_at FROM sessions WHERE email = ?",
-            (email,),
-        ).fetchall()
-        for session_row in existing_sessions:
+        if revoke_existing:
+            existing_sessions = connection.execute(
+                "SELECT token_hash, expires_at FROM sessions WHERE email = ?",
+                (email,),
+            ).fetchall()
+            for session_row in existing_sessions:
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO revoked_sessions (token_hash, expires_at, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (session_row["token_hash"], session_row["expires_at"], utc_now().isoformat()),
+                )
             connection.execute(
-                """
-                INSERT OR REPLACE INTO revoked_sessions (token_hash, expires_at, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (session_row["token_hash"], session_row["expires_at"], utc_now().isoformat()),
+                "DELETE FROM sessions WHERE email = ?",
+                (email,),
             )
-        connection.execute(
-            "DELETE FROM sessions WHERE email = ?",
-            (email,),
-        )
+            connection.execute(
+                "UPDATE active_sessions SET status = 'revoked', last_activity_at = ? WHERE email = ? AND status = 'active'",
+                (utc_now().isoformat(), email),
+            )
         connection.execute(
             """
             INSERT INTO sessions (token_hash, email, expires_at, created_at)
@@ -3305,6 +3747,10 @@ def create_session(email: str, session_mode: str = "user") -> str:
 def revoke_session(token: str):
     with get_db_connection() as connection:
         connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_value(token),))
+        connection.execute(
+            "UPDATE active_sessions SET status = 'logged_out', last_activity_at = ? WHERE session_id = ?",
+            (utc_now().isoformat(), hash_value(token)),
+        )
         payload = decode_signed_session_token(token)
         if payload:
             expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc).isoformat()
@@ -7280,6 +7726,146 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
     }
 
 
+def build_subscription_abuse_monitor() -> dict[str, Any]:
+    now = utc_now()
+    active_cutoff = (now - timedelta(minutes=ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES)).isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE active_sessions SET status = 'expired' WHERE status = 'active' AND expires_at <= ?",
+            (now.isoformat(),),
+        )
+        subscription_rows = connection.execute(
+            """
+            SELECT email, plan_id, status, current_period_end, created_at, updated_at
+            FROM billing_subscriptions
+            WHERE status = 'active'
+            """
+        ).fetchall()
+        risk_rows = connection.execute(
+            """
+            SELECT email, plan_id, risk_score, status, device_count, active_session_count,
+                   last_login_at, reasons_json, updated_at
+            FROM account_sharing_risk
+            ORDER BY risk_score DESC, updated_at DESC
+            LIMIT 200
+            """
+        ).fetchall()
+        device_rows = connection.execute(
+            """
+            SELECT email, COUNT(*) AS device_count
+            FROM account_devices
+            WHERE status != 'removed'
+            GROUP BY email
+            """
+        ).fetchall()
+        active_session_rows = connection.execute(
+            """
+            SELECT email, COUNT(*) AS session_count
+            FROM active_sessions
+            WHERE status = 'active' AND expires_at > ? AND last_activity_at >= ?
+            GROUP BY email
+            """,
+            (now.isoformat(), active_cutoff),
+        ).fetchall()
+        abuse_event_rows = connection.execute(
+            """
+            SELECT id, email, rule_id, severity, message, metadata_json, created_at
+            FROM subscription_abuse_events
+            ORDER BY created_at DESC
+            LIMIT 150
+            """
+        ).fetchall()
+
+    premium_users = [
+        row for row in subscription_rows
+        if get_billing_quota_plan_id(row["plan_id"]) in {"pro_student", "premium_student"}
+    ]
+    device_count_by_email = {normalize_email(row["email"]): int(row["device_count"] or 0) for row in device_rows}
+    active_sessions_by_email = {normalize_email(row["email"]): int(row["session_count"] or 0) for row in active_session_rows}
+    premium_plan_by_email = {normalize_email(row["email"]): get_billing_quota_plan_id(row["plan_id"]) for row in premium_users}
+
+    accounts: list[dict[str, Any]] = []
+    seen_emails: set[str] = set()
+    for row in risk_rows:
+        email = normalize_email(row["email"])
+        if not email:
+            continue
+        seen_emails.add(email)
+        try:
+            reasons = json.loads(row["reasons_json"] or "[]")
+        except (TypeError, ValueError):
+            reasons = []
+        accounts.append(
+            {
+                "email": email,
+                "plan_id": compact_text(row["plan_id"], premium_plan_by_email.get(email, "free")),
+                "subscription_plan": get_billing_plan(compact_text(row["plan_id"], premium_plan_by_email.get(email, "free")))["name"],
+                "risk_score": int(row["risk_score"] or 0),
+                "status": compact_text(row["status"], "normal"),
+                "device_count": int(row["device_count"] or device_count_by_email.get(email, 0)),
+                "active_sessions": int(row["active_session_count"] or active_sessions_by_email.get(email, 0)),
+                "last_login": compact_text(row["last_login_at"]),
+                "updated_at": compact_text(row["updated_at"]),
+                "reasons": reasons,
+            }
+        )
+
+    for email, plan_id in premium_plan_by_email.items():
+        if email in seen_emails:
+            continue
+        device_count = device_count_by_email.get(email, 0)
+        active_sessions = active_sessions_by_email.get(email, 0)
+        if device_count <= ACCOUNT_SHARING_DEVICE_LIMIT and active_sessions <= ACCOUNT_SHARING_SESSION_LIMIT:
+            continue
+        score = min(100, max(0, (device_count - ACCOUNT_SHARING_DEVICE_LIMIT) * 5 + (active_sessions - ACCOUNT_SHARING_SESSION_LIMIT) * 8))
+        accounts.append(
+            {
+                "email": email,
+                "plan_id": plan_id,
+                "subscription_plan": get_billing_plan(plan_id)["name"],
+                "risk_score": score,
+                "status": "warning" if score >= 41 else "normal",
+                "device_count": device_count,
+                "active_sessions": active_sessions,
+                "last_login": "",
+                "updated_at": now.isoformat(),
+                "reasons": [{"rule": "live_limit_check", "message": "Live device/session count exceeds plan limit.", "severity": score}],
+            }
+        )
+
+    suspicious_accounts = [account for account in accounts if int(account["risk_score"]) >= 41 or account["status"] != "normal"]
+    suspended_accounts = [account for account in accounts if account["status"] == "suspended"]
+    over_device_limit = [account for account in accounts if int(account["device_count"]) > ACCOUNT_SHARING_DEVICE_LIMIT]
+    return {
+        "limits": {
+            "premium_concurrent_sessions": ACCOUNT_SHARING_SESSION_LIMIT,
+            "premium_registered_devices": ACCOUNT_SHARING_DEVICE_LIMIT,
+            "activity_window_minutes": ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES,
+            "thresholds": {"normal": 40, "warning": 70, "verification": 90, "suspension": 91},
+        },
+        "overview": {
+            "total_premium_users": len(premium_users),
+            "active_sessions": sum(active_sessions_by_email.values()),
+            "suspicious_accounts": len(suspicious_accounts),
+            "suspended_accounts": len(suspended_accounts),
+            "accounts_over_device_limit": len(over_device_limit),
+        },
+        "suspicious_accounts": sorted(suspicious_accounts, key=lambda account: int(account["risk_score"]), reverse=True)[:100],
+        "events": [
+            {
+                "id": row["id"],
+                "email": normalize_email(row["email"]),
+                "rule_id": row["rule_id"],
+                "severity": int(row["severity"] or 0),
+                "message": row["message"],
+                "metadata": safe_json_loads(row["metadata_json"], {}),
+                "created_at": row["created_at"],
+            }
+            for row in abuse_event_rows
+        ],
+    }
+
+
 def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, Any]:
     now = utc_now()
     time_window = build_dashboard_time_window(now, range_key)
@@ -7794,6 +8380,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         device_activity[device] = device_activity.get(device, 0) + 1
 
     billing_snapshot = build_admin_billing_snapshot(range_start, now)
+    subscription_abuse_monitor = build_subscription_abuse_monitor()
 
     return {
         "overview": {
@@ -7942,6 +8529,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 if log["action"].startswith("auth.") and log["status"] != "success"
             ][:40],
             "suspicious_activity": suspicious_activity[:20],
+            "subscription_abuse_monitor": subscription_abuse_monitor,
             "ip_tracking": [
                 {
                     "ip_address": item["ip_address"],
@@ -7968,7 +8556,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "unread_count_in_range": unread_support_count_in_range,
             "latest_message_at": support_messages_all[0]["created_at"] if support_messages_all else "",
         },
-        "billing": billing_snapshot,
+        "billing": {**billing_snapshot, "subscription_abuse_monitor": subscription_abuse_monitor},
         "settings": {
             "available_languages": sorted(set(SUPPORTED_OUTPUT_LANGUAGES.values())),
             "admin_email_count": len(get_admin_email_set()),
@@ -8571,6 +9159,7 @@ async def verify_login(payload: VerifyCodeRequest, request: Request):
         resource_name="email-code",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
+    register_account_session(email, session_token, request, action="auth.code.verify")
     return build_auth_response(email, session_token)
 
 
@@ -8649,6 +9238,7 @@ async def complete_email_password_registration_route(payload: EmailPasswordRegis
         resource_name="user-register",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
+    register_account_session(email, session_token, request, action="auth.email_password.register_complete")
     return build_auth_response(email, session_token)
 
 
@@ -8715,6 +9305,7 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
         resource_name="admin-login" if is_admin_email(email) else "user-login",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
+    register_account_session(email, session_token, request, action="auth.email_password.login")
     return build_auth_response(email, session_token)
 
 
@@ -8735,6 +9326,7 @@ async def register_with_email_password_route(payload: EmailPasswordAuthRequest, 
         resource_name="user-register",
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
+    register_account_session(email, session_token, request, action="auth.email_password.register")
     return build_auth_response(email, session_token)
 
 
@@ -8755,6 +9347,7 @@ async def verify_email_password_login(payload: EmailPasswordVerifyRequest, reque
         resource_name=normalize_email_password_auth_mode(payload.mode),
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
+    register_account_session(email, session_token, request, action="auth.email_password.verify_code")
     return build_auth_response(email, session_token)
 
 
@@ -8768,6 +9361,7 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
     logger.info("Google auth request started.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
     logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
+    await asyncio.to_thread(register_account_session, email, session_token, request, action="auth.google.login")
     response = build_auth_response(email, session_token, include_account_snapshot=False)
     threading.Thread(
         target=run_post_auth_background_sync,
@@ -8795,6 +9389,7 @@ async def apple_login(payload: AppleAuthRequest, request: Request):
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
         raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
     session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
+    await asyncio.to_thread(register_account_session, email, session_token, request, action="auth.apple.login")
     response = build_auth_response(email, session_token, include_account_snapshot=False)
     threading.Thread(
         target=run_post_auth_background_sync,
@@ -8820,7 +9415,10 @@ async def auth_me(request: Request, authorization: str | None = Header(None)):
 
     refreshed_token = ""
     if should_refresh_session_token(token):
-        refreshed_token = create_session(context["email"], session_mode=context["mode"])
+        refreshed_token = create_session(context["email"], session_mode=context["mode"], revoke_existing=False)
+        register_account_session(context["email"], refreshed_token, request, action="auth.session.refresh")
+    else:
+        touch_account_session(token, request)
     record_audit_log(
         action="auth.session.resume",
         email=context["email"],
@@ -8848,7 +9446,8 @@ async def select_auth_mode(
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
     next_mode = normalize_session_mode(payload.mode, context["email"])
-    session_token = create_session(context["email"], session_mode=next_mode)
+    session_token = create_session(context["email"], session_mode=next_mode, revoke_existing=False)
+    register_account_session(context["email"], session_token, request, action="auth.mode.select")
     record_audit_log(
         action="auth.mode.select",
         email=context["email"],
@@ -9235,6 +9834,141 @@ async def force_logout_admin_user(
         resource_name=normalized_email,
     )
     return {"email": normalized_email, "message": "User sessions revoked."}
+
+
+@app.post("/admin/subscription-abuse/{target_email}/reset-devices")
+async def reset_subscription_abuse_devices(
+    target_email: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE account_devices SET status = 'removed', last_active_at = ? WHERE email = ?",
+            (utc_now().isoformat(), normalized_email),
+        )
+        connection.execute(
+            "UPDATE active_sessions SET status = 'revoked', last_activity_at = ? WHERE email = ?",
+            (utc_now().isoformat(), normalized_email),
+        )
+        connection.execute(
+            """
+            UPDATE account_sharing_risk
+            SET risk_score = 0, status = 'normal', device_count = 0, active_session_count = 0,
+                reasons_json = '[]', updated_at = ?
+            WHERE email = ?
+            """,
+            (utc_now().isoformat(), normalized_email),
+        )
+    revoke_all_sessions_for_user(normalized_email)
+    record_audit_log(
+        action="admin.subscription_abuse.reset_devices",
+        email=current_admin,
+        request=request,
+        resource_type="subscription_abuse",
+        resource_name=normalized_email,
+    )
+    return {"email": normalized_email, "message": "Devices reset and active sessions logged out."}
+
+
+@app.post("/admin/subscription-abuse/{target_email}/clear-warning")
+async def clear_subscription_abuse_warning(
+    target_email: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE account_sharing_risk
+            SET risk_score = 0, status = 'normal', reasons_json = '[]', updated_at = ?
+            WHERE email = ?
+            """,
+            (utc_now().isoformat(), normalized_email),
+        )
+    record_audit_log(
+        action="admin.subscription_abuse.clear_warning",
+        email=current_admin,
+        request=request,
+        resource_type="subscription_abuse",
+        resource_name=normalized_email,
+    )
+    return {"email": normalized_email, "message": "Sharing warning cleared."}
+
+
+@app.post("/admin/subscription-abuse/{target_email}/suspend")
+async def suspend_subscription_abuse_account(
+    target_email: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    set_user_account_status(normalized_email, "suspended", current_admin)
+    revoke_all_sessions_for_user(normalized_email)
+    plan_id = get_effective_plan_id(normalized_email)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO account_sharing_risk (
+                email, plan_id, risk_score, status, device_count, active_session_count,
+                last_login_at, reasons_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                risk_score = excluded.risk_score,
+                status = excluded.status,
+                reasons_json = excluded.reasons_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_email,
+                plan_id,
+                100,
+                "suspended",
+                0,
+                0,
+                "",
+                json.dumps([{"rule": "admin_action", "message": "Suspended by admin.", "severity": 100}], ensure_ascii=False),
+                utc_now().isoformat(),
+            ),
+        )
+    record_audit_log(
+        action="admin.subscription_abuse.suspend",
+        email=current_admin,
+        request=request,
+        resource_type="subscription_abuse",
+        resource_name=normalized_email,
+    )
+    return {"email": normalized_email, "status": "suspended"}
+
+
+@app.post("/admin/subscription-abuse/{target_email}/reinstate")
+async def reinstate_subscription_abuse_account(
+    target_email: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    set_user_account_status(normalized_email, "active", current_admin)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE account_sharing_risk
+            SET risk_score = 0, status = 'normal', reasons_json = '[]', updated_at = ?
+            WHERE email = ?
+            """,
+            (utc_now().isoformat(), normalized_email),
+        )
+    record_audit_log(
+        action="admin.subscription_abuse.reinstate",
+        email=current_admin,
+        request=request,
+        resource_type="subscription_abuse",
+        resource_name=normalized_email,
+    )
+    return {"email": normalized_email, "status": "active"}
 
 
 @app.get("/jobs/{job_id}")
@@ -12188,31 +12922,50 @@ def clamp_podcast_target_minutes(value: int) -> int:
     return max(6, min(18, int(value or 10)))
 
 
-def build_podcast_speaker_profiles(speaker_count: int) -> list[dict[str, str]]:
+def build_podcast_speaker_profiles(
+    speaker_count: int,
+    requested_profiles: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    requested_by_key = {
+        compact_text(profile.get("key")).lower(): profile
+        for profile in (requested_profiles or [])
+        if isinstance(profile, dict) and compact_text(profile.get("key"))
+    }
     profiles = [
         {
-            "key": "speaker_1",
-            "name": "Njabulo",
-            "role": "the calm explainer who keeps the lesson academically solid",
-            "voice": "ash",
-            "voice_style": "Sound warm, clear, confident, and distinctly like a young man hosting a serious revision podcast.",
+            "key": "professor",
+            "name": "Professor",
+            "role": "the professor and teacher who keeps the lesson academically accurate, structured, and clear",
+            "voice": "marin",
+            "voice_style": "Sound authoritative, warm, precise, and clearly like a professor leading a serious study discussion.",
         },
         {
-            "key": "speaker_2",
-            "name": "Olwethu",
-            "role": "the curious challenger who adds light jokes, asks obvious student questions, and pushes for simpler wording",
+            "key": "student_1",
+            "name": "Student 1",
+            "role": "the curious student who asks practical questions and pushes the professor to explain difficult ideas simply",
             "voice": "coral",
-            "voice_style": "Sound lively, sharp, conversational, and distinctly like a young woman with light humor.",
+            "voice_style": "Sound lively, curious, conversational, and clearly like a student learning the topic.",
         },
         {
-            "key": "speaker_3",
-            "name": "Melusi",
-            "role": "the exam coach who keeps connecting the topic to worked examples, likely test traps, and revision advice",
+            "key": "student_2",
+            "name": "Student 2",
+            "role": "the second student who adds follow-up questions, exam concerns, and alternative ways students might misunderstand the topic",
             "voice": "echo",
-            "voice_style": "Sound focused, practical, grounded, and distinctly like a young man guiding exam revision.",
+            "voice_style": "Sound focused, practical, grounded, and clearly like a second student checking understanding.",
         },
     ]
-    return profiles[: clamp_podcast_speaker_count(speaker_count)]
+    resolved_profiles: list[dict[str, str]] = []
+    for profile in profiles:
+        requested = requested_by_key.get(profile["key"], {})
+        requested_name = compact_text(requested.get("name"))
+        requested_voice = compact_text(requested.get("voice"))
+        resolved = dict(profile)
+        if profile["key"] != "professor" and requested_name:
+            resolved["name"] = requested_name[:80]
+        if requested_voice:
+            resolved["voice"] = normalize_realtime_tutor_voice(requested_voice)
+        resolved_profiles.append(resolved)
+    return resolved_profiles[: clamp_podcast_speaker_count(speaker_count)]
 
 
 TEACHER_GUIDE_SECTION_HEADINGS = [
@@ -13520,13 +14273,14 @@ async def generate_podcast_package(
     lecture_slides: str,
     past_question_papers: str,
     speaker_count: int,
+    speaker_profiles: list[dict[str, str]] | None,
     target_minutes: int,
     job_id: str,
     output_language: str,
 ) -> dict[str, Any]:
     normalized_speaker_count = clamp_podcast_speaker_count(speaker_count)
     normalized_target_minutes = clamp_podcast_target_minutes(target_minutes)
-    speaker_profiles = build_podcast_speaker_profiles(normalized_speaker_count)
+    speaker_profiles = build_podcast_speaker_profiles(normalized_speaker_count, speaker_profiles)
     target_turns = 12 if normalized_speaker_count == 2 else 15
     target_words = normalized_target_minutes * 140
 
@@ -16491,6 +17245,7 @@ async def run_podcast_job(
     lecture_slides: str,
     past_question_papers: str,
     speaker_count: int,
+    speaker_profiles: list[dict[str, str]] | None,
     target_minutes: int,
     output_language: str,
 ):
@@ -16503,6 +17258,7 @@ async def run_podcast_job(
             lecture_slides,
             past_question_papers,
             speaker_count,
+            speaker_profiles,
             target_minutes,
             job_id,
             output_language,
@@ -18103,10 +18859,13 @@ async def create_podcast(
             detail="Generate a study guide or add lecture material before creating the podcast debate.",
         )
 
+    speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
+    if speaker_count > 2 and get_effective_plan_id(current_user) == "free":
+        raise HTTPException(status_code=402, detail="3-speaker podcasts require Pro or Premium.")
     consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     ensure_openai_key()
-    speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
     target_minutes = clamp_podcast_target_minutes(payload.target_minutes)
+    speaker_profiles = build_podcast_speaker_profiles(speaker_count, payload.speaker_profiles)
     job_id = create_job("podcast", owner_email=current_user)
     update_job(job_id, _output_language=output_language)
     asyncio.create_task(
@@ -18118,6 +18877,7 @@ async def create_podcast(
             lecture_slides,
             past_question_papers,
             speaker_count,
+            speaker_profiles,
             target_minutes,
             output_language,
         )
@@ -18129,7 +18889,7 @@ async def create_podcast(
         resource_type="podcast",
         resource_name=output_language,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"job_id": job_id, "language": output_language},
+        metadata={"job_id": job_id, "language": output_language, "speaker_count": speaker_count},
     )
     return {"job_id": job_id}
 

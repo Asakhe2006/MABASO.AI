@@ -105,6 +105,7 @@ const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
+const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
 const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
@@ -142,6 +143,25 @@ const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
+
+function getOrCreateAuthDeviceId() {
+  try {
+    const existing = window.localStorage.getItem(AUTH_DEVICE_ID_KEY);
+    if (existing) return existing;
+    const browserCrypto = typeof window !== "undefined" ? window.crypto : null;
+    const nextId = `web-${browserCrypto?.randomUUID ? browserCrypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+    window.localStorage.setItem(AUTH_DEVICE_ID_KEY, nextId);
+    return nextId;
+  } catch {
+    return `web-${Date.now()}`;
+  }
+}
+
+function withDeviceHeaders(headers = {}) {
+  const nextHeaders = new Headers(headers || {});
+  nextHeaders.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
+  return nextHeaders;
+}
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const BULK_LECTURE_ACCEPT = "audio/*,video/*,image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -1263,6 +1283,51 @@ function normalizeRealtimeTutorVoiceId(value = "") {
   return "marin";
 }
 
+const defaultPodcastSpeakerProfiles = [
+  {
+    key: "professor",
+    name: "Professor",
+    role: "Professor / teacher",
+    voice: "marin",
+  },
+  {
+    key: "student_1",
+    name: "Student 1",
+    role: "Student",
+    voice: "coral",
+  },
+  {
+    key: "student_2",
+    name: "Student 2",
+    role: "Student",
+    voice: "echo",
+  },
+];
+
+function createDefaultPodcastSpeakerProfiles() {
+  return defaultPodcastSpeakerProfiles.map((profile) => ({ ...profile }));
+}
+
+function normalizePodcastSpeakerProfiles(value, speakerCount = 2) {
+  const requestedProfiles = Array.isArray(value) ? value : [];
+  const requestedByKey = new Map(
+    requestedProfiles
+      .filter((profile) => profile && typeof profile === "object")
+      .map((profile) => [String(profile.key || "").trim().toLowerCase(), profile]),
+  );
+  const normalizedCount = Number(speakerCount || 2) >= 3 ? 3 : 2;
+  return defaultPodcastSpeakerProfiles.slice(0, normalizedCount).map((defaultProfile) => {
+    const requested = requestedByKey.get(defaultProfile.key) || {};
+    const nextName = String(requested.name || "").trim();
+    return {
+      ...defaultProfile,
+      name: defaultProfile.key === "professor" ? "Professor" : (nextName || defaultProfile.name),
+      role: defaultProfile.role,
+      voice: normalizeRealtimeTutorVoiceId(requested.voice || defaultProfile.voice),
+    };
+  });
+}
+
 function resolveRealtimeTutorLanguageHint(language = "English") {
   const normalized = String(language || "").trim().toLowerCase();
   if (normalized === "isizulu") return "zu";
@@ -2262,6 +2327,8 @@ function sanitizeHistoryItemForStorage(item = {}) {
     podcastData: sanitizePodcastForHistory(item?.podcastData),
     teacherLessonData: sanitizeTeacherLessonForHistory(item?.teacherLessonData),
     presentationData: sanitizePresentationForHistory(item?.presentationData),
+    reportData: sanitizeReportForHistory(item?.reportData),
+    mindMapData: sanitizeMindMapForHistory(item?.mindMapData),
   };
 }
 
@@ -2279,6 +2346,8 @@ function sanitizeWorkspaceSnapshotForStorage(snapshot = {}) {
     podcastData: normalizePodcastData(snapshot?.podcastData),
     teacherLessonData: normalizeTeacherLessonData(snapshot?.teacherLessonData),
     presentationData: normalizePresentationData(snapshot?.presentationData),
+    reportData: sanitizeReportForHistory(snapshot?.reportData),
+    mindMapData: sanitizeMindMapForHistory(snapshot?.mindMapData),
   };
 }
 
@@ -3087,6 +3156,7 @@ function createEmptyPodcastData() {
     segments: [],
     speakerCount: 2,
     targetMinutes: 10,
+    speakerProfiles: createDefaultPodcastSpeakerProfiles().slice(0, 2),
   };
 }
 
@@ -3122,14 +3192,16 @@ function getPodcastTurnStartSeconds(segments, index) {
 
 function normalizePodcastData(value) {
   const raw = value && typeof value === "object" ? value : {};
+  const speakerCount = Number(raw.speakerCount || raw.speaker_count || 2) >= 3 ? 3 : 2;
   return {
     jobId: raw.jobId || raw.job_id || "",
     title: raw.title || "",
     overview: raw.overview || "",
     script: raw.script || "",
     segments: Array.isArray(raw.segments) ? raw.segments : [],
-    speakerCount: Number(raw.speakerCount || raw.speaker_count || 2) >= 3 ? 3 : 2,
+    speakerCount,
     targetMinutes: Number(raw.targetMinutes || raw.target_minutes || 10) || 10,
+    speakerProfiles: normalizePodcastSpeakerProfiles(raw.speakerProfiles || raw.speaker_profiles, speakerCount),
   };
 }
 
@@ -3158,6 +3230,7 @@ function sanitizePodcastForHistory(value) {
   return {
     ...podcast,
     jobId: "",
+    speakerProfiles: normalizePodcastSpeakerProfiles(podcast.speakerProfiles, podcast.speakerCount),
     segments: (podcast.segments || []).map((segment, index) => ({
       index: Number(segment?.index || index + 1),
       speaker_key: segment?.speaker_key || "",
@@ -3205,6 +3278,63 @@ function normalizePresentationData(value) {
     ),
     templateName: raw.templateName || raw.template_name || raw.presentation_template_name || "",
     slides: normalizedSlides,
+  };
+}
+
+function normalizeReportData(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    jobId: raw.jobId || raw.job_id || "",
+    title: raw.title || raw.report_title || "",
+    body: raw.body || raw.report_body || "",
+    sections: Array.isArray(raw.sections) ? raw.sections : Array.isArray(raw.report_sections) ? raw.report_sections : [],
+    configuration: raw.configuration && typeof raw.configuration === "object"
+      ? raw.configuration
+      : raw.report_configuration && typeof raw.report_configuration === "object" ? raw.report_configuration : {},
+  };
+}
+
+function sanitizeReportForHistory(value) {
+  const report = normalizeReportData(value);
+  return {
+    ...report,
+    jobId: "",
+    body: truncateStoredText(report.body, MAX_STORAGE_SUMMARY_CHARS),
+    sections: Array.isArray(report.sections) ? report.sections.slice(0, 40) : [],
+  };
+}
+
+function sanitizeMindMapNodeForStorage(node, depth = 0) {
+  if (!node || typeof node !== "object" || depth > 6) return null;
+  const children = Array.isArray(node.children)
+    ? node.children.map((child) => sanitizeMindMapNodeForStorage(child, depth + 1)).filter(Boolean).slice(0, 40)
+    : [];
+  return {
+    ...node,
+    id: node.id || `${node.title || node.label || "node"}-${depth}`,
+    title: node.title || node.label || "Mind map node",
+    label: node.label || node.title || "Mind map node",
+    summary: truncateStoredText(node.summary || "", 1600),
+    children,
+  };
+}
+
+function normalizeMindMapData(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const root = sanitizeMindMapNodeForStorage(raw.root || raw.mind_map_root || null);
+  return {
+    jobId: raw.jobId || raw.job_id || "",
+    title: raw.title || raw.mind_map_title || root?.title || "",
+    root,
+    depth: raw.depth || raw.mind_map_depth || "Advanced",
+    nodeCount: Number(raw.nodeCount || raw.node_count || raw.mind_map_node_count || 0),
+  };
+}
+
+function sanitizeMindMapForHistory(value) {
+  return {
+    ...normalizeMindMapData(value),
+    jobId: "",
   };
 }
 
@@ -3971,6 +4101,7 @@ export default function App() {
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
+  const [upgradeLimitMessage, setUpgradeLimitMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
@@ -4015,6 +4146,7 @@ export default function App() {
   const mindMapFullExportRef = useRef(null);
   const [teacherLessonData, setTeacherLessonData] = useState(createEmptyTeacherLessonData);
   const [podcastSpeakerCount, setPodcastSpeakerCount] = useState(2);
+  const [podcastSpeakerProfiles, setPodcastSpeakerProfiles] = useState(createDefaultPodcastSpeakerProfiles);
   const [podcastTargetMinutes, setPodcastTargetMinutes] = useState(10);
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState(0);
@@ -4125,6 +4257,7 @@ export default function App() {
   const enterpriseGoogleButtonRef = useRef(null);
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
+  const authTokenRef = useRef(window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
@@ -4547,29 +4680,17 @@ export default function App() {
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Upgrade to Pro</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. PayFast handles PayShap/card checkout securely; MABASO.AI never stores customer card or bank details. If checkout is configured as once-off, payment grants the current plan period instead of silently auto-renewing.</p>
           </div>
-          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
+          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
         {billingCheckoutMessage ? (
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
             {billingCheckoutMessage}
           </div>
-        ) : (
-          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Attempts Remaining Today</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  {!authToken
-                    ? "Sign in to load your account-based usage meter."
-                    : isBillingUsageLoading
-                      ? "Loading your remaining attempts from the backend..."
-                      : "Usage meter is not loaded yet. Refresh to fetch your remaining attempts for this email."}
-                </p>
-              </div>
-              <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} disabled={!authToken || isBillingUsageLoading} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60">{isBillingUsageLoading ? "Loading..." : "Refresh Usage"}</button>
-            </div>
+        ) : upgradeLimitMessage ? (
+          <div className="mt-4 rounded-2xl border border-rose-300/25 bg-rose-500/10 px-4 py-3 text-sm font-semibold leading-7 text-rose-50">
+            {renderCaptureErrorMessage(upgradeLimitMessage)}
           </div>
-        )}
+        ) : null}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           {fairSubscriptionPlans.map((plan) => (
             <article key={plan.name} className={`rounded-[24px] border p-5 ${plan.name === "Pro Student" || plan.name === "Premium Student" ? "border-emerald-300/30 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
@@ -5504,8 +5625,13 @@ export default function App() {
     presentationView: overrides.presentationView ?? presentationView,
     podcastData: overrides.podcastData ?? normalizePodcastData(podcastData),
     podcastSpeakerCount: overrides.podcastSpeakerCount ?? podcastSpeakerCount,
+    podcastSpeakerProfiles: overrides.podcastSpeakerProfiles ?? normalizePodcastSpeakerProfiles(podcastSpeakerProfiles, overrides.podcastSpeakerCount ?? podcastSpeakerCount),
     podcastTargetMinutes: overrides.podcastTargetMinutes ?? podcastTargetMinutes,
     teacherLessonData: overrides.teacherLessonData ?? normalizeTeacherLessonData(teacherLessonData),
+    reportData: overrides.reportData ?? normalizeReportData(reportData),
+    mindMapData: overrides.mindMapData ?? normalizeMindMapData(mindMapData),
+    mindMapDepth: overrides.mindMapDepth ?? mindMapDepth,
+    mindMapTopic: overrides.mindMapTopic ?? mindMapTopic,
     outputLanguage: overrides.outputLanguage ?? outputLanguage,
     workspaceFileName: overrides.workspaceFileName ?? file?.name ?? "",
   });
@@ -5526,6 +5652,8 @@ export default function App() {
   ) => {
     if (!snapshot || typeof snapshot !== "object") return;
     const restoredPresentationData = normalizePresentationData(snapshot.presentationData);
+    const restoredReportData = normalizeReportData(snapshot.reportData);
+    const restoredMindMapData = normalizeMindMapData(snapshot.mindMapData);
     const restoredPresentationDesign = normalizePresentationDesignId(
       snapshot.selectedPresentationDesign || restoredPresentationData.designId || defaultPresentationDesignId,
       { allowLegacyDefault: restoredPresentationData.slides.length > 0 },
@@ -5555,10 +5683,18 @@ export default function App() {
       setPresentationData(restoredPresentationData);
       setSelectedPresentationDesign(restoredPresentationDesign);
       setPresentationView(snapshot.presentationView || "setup");
-      setPodcastData(normalizePodcastData(snapshot.podcastData));
-      setPodcastSpeakerCount(Number(snapshot.podcastSpeakerCount || 2) >= 3 ? 3 : 2);
+      const restoredPodcastData = normalizePodcastData(snapshot.podcastData);
+      const restoredPodcastSpeakerCount = Number(snapshot.podcastSpeakerCount || restoredPodcastData.speakerCount || 2) >= 3 ? 3 : 2;
+      setPodcastData(restoredPodcastData);
+      setPodcastSpeakerCount(restoredPodcastSpeakerCount);
+      setPodcastSpeakerProfiles(normalizePodcastSpeakerProfiles(snapshot.podcastSpeakerProfiles || restoredPodcastData.speakerProfiles, restoredPodcastSpeakerCount));
       setPodcastTargetMinutes(Number(snapshot.podcastTargetMinutes || 10) || 10);
       setTeacherLessonData(normalizeTeacherLessonData(snapshot.teacherLessonData));
+      setReportData(restoredReportData);
+      setMindMapData(restoredMindMapData);
+      setSelectedMindMapNode(restoredMindMapData.root || null);
+      setMindMapDepth(snapshot.mindMapDepth || restoredMindMapData.depth || "Advanced");
+      setMindMapTopic(snapshot.mindMapTopic || "");
       setOutputLanguage(snapshot.outputLanguage || outputLanguage);
       setVideoUrl(snapshot.videoUrl || "");
       setActiveHistoryId(snapshot.activeHistoryId || "");
@@ -7923,12 +8059,15 @@ export default function App() {
           <div>
             <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Speakers</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {[2, 3].map((count) => (
-                <button key={count} type="button" onClick={() => setPodcastSpeakerCount(count)} className={`rounded-2xl border px-4 py-3 text-left text-sm ${podcastSpeakerCount === count ? "border-amber-300/35 bg-amber-300/10 text-amber-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
+              {[2, 3].map((count) => {
+                const isAllowed = isPodcastSpeakerCountAllowed(count);
+                return (
+                <button key={count} type="button" onClick={() => (isAllowed ? setPodcastSpeakerCount(count) : blockLockedPlanOption("3-speaker podcasts", "Pro"))} className={`rounded-2xl border px-4 py-3 text-left text-sm ${podcastSpeakerCount === count ? "border-amber-300/35 bg-amber-300/10 text-amber-50" : isAllowed ? "border-white/10 bg-slate-950/75 text-slate-200" : "border-amber-300/25 bg-slate-950/55 text-slate-400"}`}>
                   <p className="font-semibold">{count} voices</p>
-                  <p className="mt-2 text-xs leading-6 text-slate-300">{count === 2 ? "Njabulo and Olwethu." : "Njabulo, Olwethu, and Melusi."}</p>
+                  <p className="mt-2 text-xs leading-6 text-slate-300">{count === 2 ? "Professor and Student 1." : isAllowed ? "Professor, Student 1, and Student 2." : "🔒 Pro and Premium only."}</p>
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div>
@@ -7937,6 +8076,43 @@ export default function App() {
               {[8, 10, 12, 14, 16].map((minutes) => <option key={minutes} value={minutes}>{minutes} minute podcast</option>)}
             </select>
             <p className="mt-3 text-xs leading-6 text-slate-300">The generator now pushes much closer to the length you choose.</p>
+          </div>
+        </div>
+        <div className="mt-5 rounded-[22px] border border-white/10 bg-slate-950/65 p-4">
+          <div className="force-mobile-stack flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.22em] text-slate-400">Podcast Speakers</p>
+              <p className="mt-2 text-sm leading-6 text-slate-300">Professor is always the teacher. Student names are optional and default to Student 1 / Student 2.</p>
+            </div>
+            <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-semibold text-amber-50">{podcastSpeakerCount} active</span>
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            {normalizePodcastSpeakerProfiles(podcastSpeakerProfiles, podcastSpeakerCount).map((profile) => (
+              <div key={profile.key} className="rounded-2xl border border-white/10 bg-slate-950/80 p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-amber-100/80">{profile.role}</p>
+                <label className="mt-3 block text-xs font-semibold text-slate-300">{profile.key === "professor" ? "Required speaker" : "Speaker name"}</label>
+                <input
+                  value={profile.name}
+                  disabled={profile.key === "professor"}
+                  onChange={(event) => setPodcastSpeakerProfiles((profiles) => {
+                    const nextProfiles = normalizePodcastSpeakerProfiles(profiles, 3);
+                    return nextProfiles.map((item) => item.key === profile.key ? { ...item, name: event.target.value } : item);
+                  })}
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/80 px-3 py-3 text-sm text-white outline-none disabled:cursor-not-allowed disabled:opacity-70"
+                />
+                <label className="mt-3 block text-xs font-semibold text-slate-300">Voice</label>
+                <select
+                  value={profile.voice}
+                  onChange={(event) => setPodcastSpeakerProfiles((profiles) => {
+                    const nextProfiles = normalizePodcastSpeakerProfiles(profiles, 3);
+                    return nextProfiles.map((item) => item.key === profile.key ? { ...item, voice: event.target.value } : item);
+                  })}
+                  className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/80 px-3 py-3 text-sm text-white outline-none"
+                >
+                  {realtimeTutorVoiceOptions.map((voice) => <option key={voice.value} value={voice.value}>{voice.label}</option>)}
+                </select>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -8894,6 +9070,9 @@ export default function App() {
     const billingAiCosts = billing.ai_costs || {};
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
+    const subscriptionAbuseMonitor = billing.subscription_abuse_monitor || security.subscription_abuse_monitor || {};
+    const subscriptionAbuseOverview = subscriptionAbuseMonitor.overview || {};
+    const suspiciousSubscriptionAccounts = subscriptionAbuseMonitor.suspicious_accounts || [];
     const users = dashboard.users || [];
     const activityLogs = dashboard.activity_logs || [];
     const failedJobs = aiGeneration.failed_jobs || [];
@@ -9755,6 +9934,65 @@ export default function App() {
               ) : null}
             </article>
 
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Subscription Abuse Monitor</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-950">Device sharing, active sessions, and risk scores</h3>
+                </div>
+                <span className="rounded-full bg-amber-50 px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] text-amber-700">{formatAdminInteger(subscriptionAbuseOverview.suspicious_accounts || 0)} suspicious</span>
+              </div>
+              <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ["Premium Users", subscriptionAbuseOverview.total_premium_users],
+                  ["Active Sessions", subscriptionAbuseOverview.active_sessions],
+                  ["Suspicious", subscriptionAbuseOverview.suspicious_accounts],
+                  ["Suspended", subscriptionAbuseOverview.suspended_accounts],
+                  ["Over Device Limit", subscriptionAbuseOverview.accounts_over_device_limit],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</p>
+                    <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminInteger(value || 0)}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    <tr>
+                      {["User Email", "Plan", "Risk", "Devices", "Sessions", "Last Login", "Status", "Actions"].map((heading) => (
+                        <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {suspiciousSubscriptionAccounts.length ? suspiciousSubscriptionAccounts.slice(0, 25).map((account) => (
+                      <tr key={account.email} className="border-b border-slate-100 align-top">
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{account.email}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{account.subscription_plan || account.plan_id || "Free"}</td>
+                        <td className="whitespace-nowrap px-3 py-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${Number(account.risk_score || 0) >= 91 ? "bg-rose-100 text-rose-700" : Number(account.risk_score || 0) >= 71 ? "bg-orange-100 text-orange-700" : "bg-amber-100 text-amber-700"}`}>{formatAdminInteger(account.risk_score || 0)}</span></td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(account.device_count || 0)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(account.active_sessions || 0)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-600">{account.last_login ? formatAdminDateTime(account.last_login) : "Unknown"}</td>
+                        <td className="whitespace-nowrap px-3 py-3"><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{titleCaseWords(account.status || "normal")}</span></td>
+                        <td className="min-w-[300px] px-3 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => runSubscriptionAbuseAction(account.email, "clear-warning")} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">Clear Warning</button>
+                            <button type="button" onClick={() => runSubscriptionAbuseAction(account.email, "reset-devices")} className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">Reset Devices</button>
+                            <button type="button" onClick={() => forceLogoutAdminUser(account.email)} className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700">Logout All</button>
+                            <button type="button" onClick={() => runSubscriptionAbuseAction(account.email, account.status === "suspended" ? "reinstate" : "suspend")} className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700">{account.status === "suspended" ? "Reinstate" : "Suspend"}</button>
+                          </div>
+                          {Array.isArray(account.reasons) && account.reasons.length ? <p className="mt-2 text-xs leading-5 text-slate-500">{account.reasons.map((reason) => reason.message).filter(Boolean).join(" • ")}</p> : null}
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">No suspicious subscription sharing patterns detected.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
             <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Payment History</p>
@@ -10180,6 +10418,7 @@ export default function App() {
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
     window.localStorage.removeItem(AUTH_MODE_KEY);
     window.localStorage.removeItem(AUTH_AVAILABLE_MODES_KEY);
+    authTokenRef.current = "";
     setAuthMessage(message);
   };
 
@@ -10204,7 +10443,7 @@ export default function App() {
     setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
     setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
     setAuthChecked(true);
-    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${token}` } }, 8000).then(async (response) => {
+    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -10216,6 +10455,7 @@ export default function App() {
         return;
       }
       const nextToken = data.token || token;
+      authTokenRef.current = nextToken;
       const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
       const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
       setAuthToken(nextToken);
@@ -10253,11 +10493,17 @@ export default function App() {
 
   useEffect(() => {
     if (!authToken) return;
+    authTokenRef.current = authToken;
     window.localStorage.setItem(AUTH_TOKEN_KEY, authToken);
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
     window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
   }, [authAvailableModes, authEmail, authSessionMode, authToken]);
+
+  useEffect(() => {
+    if (authToken) return;
+    authTokenRef.current = "";
+  }, [authToken]);
 
   useEffect(() => {
     if (!authEmailInput.trim()) return;
@@ -10345,6 +10591,8 @@ export default function App() {
       || pastQuestionMemo.trim()
       || presentationData.slides.length
       || podcastData.script
+      || reportData.body
+      || mindMapData.root
       || teacherLessonData.segments.length
       || recording
     );
@@ -10378,6 +10626,10 @@ export default function App() {
     presentationView,
     quizQuestions,
     recording,
+    reportData,
+    mindMapData,
+    mindMapDepth,
+    mindMapTopic,
     selectedPresentationDesign,
     studyImages,
     summary,
@@ -10404,6 +10656,8 @@ export default function App() {
       || lectureSlideSources.length
       || pastQuestionPaperSources.length
       || podcastData.script
+      || reportData.body
+      || mindMapData.root
       || teacherLessonData.segments.length
     );
     if (hasLiveWorkspace) return;
@@ -10425,6 +10679,8 @@ export default function App() {
     pastQuestionPaperSources.length,
     podcastData.script,
     quizQuestions.length,
+    reportData.body,
+    mindMapData.root,
     studyImages.length,
     summary,
     teacherLessonData.segments.length,
@@ -10451,10 +10707,11 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${authToken}` } }, 8000).then(async (response) => {
+      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
+          authTokenRef.current = data.token;
           setAuthToken(data.token);
         }
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
@@ -10601,6 +10858,7 @@ export default function App() {
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
     applyServerAccountState(data);
+    authTokenRef.current = nextToken;
     setAuthToken(nextToken);
     setAuthEmail(nextEmail);
     setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
@@ -10634,7 +10892,7 @@ export default function App() {
     let transientAttempt = 0;
     while (true) {
       try {
-        const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: { Authorization: `Bearer ${currentToken}` } }, 20000);
+        const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
         const data = await parseJsonSafe(response);
         if (response.status === 401) {
           clearSession("Your session expired. Please sign in again.");
@@ -10646,6 +10904,7 @@ export default function App() {
           throw requestError;
         }
         const nextToken = data.token || currentToken;
+        authTokenRef.current = nextToken;
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
         const nextSessionMode = data.session_mode || authSessionMode || "user";
         const keepAdminRouteStable = browserPath === "/admin/dashboard"
@@ -10777,7 +11036,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
           password: authPasswordInput,
@@ -10898,7 +11157,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/complete`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
           password,
@@ -10992,7 +11251,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/verify-code`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
           password: authPasswordInput,
@@ -11314,6 +11573,7 @@ export default function App() {
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
     const headers = new Headers(requestOptions.headers || {});
     headers.set("Authorization", `Bearer ${activeToken}`);
+    headers.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
     let response;
     try {
       response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...requestOptions, headers }, timeoutMs);
@@ -11321,6 +11581,12 @@ export default function App() {
       throw new Error(getReadableRequestError(err, path));
     }
     if (response.status === 401) {
+      const latestToken = authTokenRef.current || window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+      if (latestToken && latestToken !== activeToken) {
+        const staleAuthError = new Error("A stale authenticated request was ignored after the session token changed.");
+        staleAuthError.staleAuthRequest = true;
+        throw staleAuthError;
+      }
       clearSession("Your session expired. Please sign in again.");
       throw new Error("Your session expired. Please sign in again.");
     }
@@ -11435,6 +11701,7 @@ export default function App() {
   const openUpgradeModal = () => {
     setIsUpgradeModalOpen(true);
     setBillingCheckoutMessage("");
+    setUpgradeLimitMessage("");
     if (authToken) {
       refreshBillingStatus().catch((err) => {
         setBillingCheckoutMessage(getReadableRequestError(err));
@@ -11506,6 +11773,7 @@ export default function App() {
         lastUsageBlockedMessageRef.current = message;
         setError(message);
         setStatus(message);
+        setUpgradeLimitMessage(message);
         setIsUpgradeModalOpen(true);
         return false;
       }
@@ -11543,6 +11811,7 @@ export default function App() {
       lastUsageBlockedMessageRef.current = message;
       setError(message);
       setStatus(message);
+      setUpgradeLimitMessage(message);
       setIsUpgradeModalOpen(true);
       return false;
     }
@@ -11557,6 +11826,17 @@ export default function App() {
   };
 
   const getCurrentPlanEntitlements = () => planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
+  const getAllowedPodcastSpeakerCount = () => (getCurrentPlanTier() === "free" ? 2 : 3);
+  const isPodcastSpeakerCountAllowed = (count = podcastSpeakerCount) => Number(count || 2) <= getAllowedPodcastSpeakerCount();
+
+  useEffect(() => {
+    if (!billingUsage && !billingSubscription) return;
+    const allowedCount = getAllowedPodcastSpeakerCount();
+    if (podcastSpeakerCount > allowedCount) {
+      setPodcastSpeakerCount(allowedCount);
+      setPodcastSpeakerProfiles((profiles) => normalizePodcastSpeakerProfiles(profiles, allowedCount));
+    }
+  }, [billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
 
   const buildPlanLockedMessage = (itemLabel, requiredPlan = "a higher plan") => (
     `${itemLabel} is locked on your current ${getCurrentPlanEntitlements().label} plan. Upgrade to ${requiredPlan} to use it.`
@@ -13058,6 +13338,21 @@ export default function App() {
     }
   };
 
+  const runSubscriptionAbuseAction = async (email, action) => {
+    if (!email || !action) return;
+    try {
+      const response = await authFetch(`/admin/subscription-abuse/${encodeURIComponent(email)}/${action}`, {
+        method: "POST",
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not update subscription abuse status.");
+      setStatus(data.message || `${email} updated.`);
+      await loadAdminDashboard(true);
+    } catch (err) {
+      setError(err.message || "Could not update subscription abuse status.");
+    }
+  };
+
   const reviewSupportMessage = async (messageId) => {
     if (!messageId) return;
     try {
@@ -13401,7 +13696,24 @@ export default function App() {
 
   const addHistoryItem = (item) => {
     const nextItem = upsertWorkspaceHistoryItem(item);
-    persistWorkspaceDraft({ activeHistoryId: nextItem.id });
+    persistWorkspaceDraft({
+      activeHistoryId: nextItem.id,
+      summary: nextItem.summary ?? summary,
+      transcript: nextItem.transcript ?? transcript,
+      formula: nextItem.formula ?? formula,
+      example: nextItem.example ?? example,
+      flashcards: nextItem.flashcards ?? flashcards,
+      quizQuestions: nextItem.quizQuestions ?? quizQuestions,
+      studyImages: nextItem.studyImages ?? studyImages,
+      presentationData: normalizePresentationData(nextItem.presentationData ?? presentationData),
+      podcastData: normalizePodcastData(nextItem.podcastData ?? podcastData),
+      podcastSpeakerCount: Number(nextItem.podcastData?.speakerCount || nextItem.podcastData?.speaker_count || podcastSpeakerCount || 2) >= 3 ? 3 : 2,
+      podcastSpeakerProfiles: normalizePodcastSpeakerProfiles(nextItem.podcastData?.speakerProfiles || nextItem.podcastData?.speaker_profiles || podcastSpeakerProfiles, Number(nextItem.podcastData?.speakerCount || nextItem.podcastData?.speaker_count || podcastSpeakerCount || 2) >= 3 ? 3 : 2),
+      reportData: normalizeReportData(nextItem.reportData ?? reportData),
+      mindMapData: normalizeMindMapData(nextItem.mindMapData ?? mindMapData),
+      activeTab,
+      currentPage: "workspace",
+    });
     return nextItem;
   };
 
@@ -13484,9 +13796,19 @@ export default function App() {
       setPresentationData(nextPresentationData);
       setPresentationView(nextPresentationData.slides.length ? "viewer" : "setup");
       setSelectedPresentationDesign(nextPresentationData.designId || defaultPresentationDesignId);
-      setPodcastData(normalizePodcastData(item.podcastData));
+      const nextPodcastData = normalizePodcastData(item.podcastData);
+      const nextPodcastSpeakerCount = Number(nextPodcastData.speakerCount || 2) >= 3 ? 3 : 2;
+      setPodcastData(nextPodcastData);
       setTeacherLessonData(normalizeTeacherLessonData(item.teacherLessonData));
-      setPodcastSpeakerCount(Number(item.podcastData?.speakerCount || item.podcastData?.speaker_count || 2) >= 3 ? 3 : 2);
+      const nextReportData = normalizeReportData(item.reportData);
+      const nextMindMapData = normalizeMindMapData(item.mindMapData);
+      setReportData(nextReportData);
+      setMindMapData(nextMindMapData);
+      setSelectedMindMapNode(nextMindMapData.root || null);
+      setMindMapDepth(nextMindMapData.depth || "Advanced");
+      setMindMapTopic("");
+      setPodcastSpeakerCount(nextPodcastSpeakerCount);
+      setPodcastSpeakerProfiles(normalizePodcastSpeakerProfiles(nextPodcastData.speakerProfiles, nextPodcastSpeakerCount));
       setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
@@ -13521,7 +13843,13 @@ export default function App() {
     setPresentationView("setup");
     setSelectedPresentationDesign(defaultPresentationDesignId);
     setPodcastData(createEmptyPodcastData());
+    setPodcastSpeakerProfiles(createDefaultPodcastSpeakerProfiles());
     setTeacherLessonData(createEmptyTeacherLessonData());
+    setReportData({ jobId: "", title: "", body: "", sections: [] });
+    setMindMapData({ jobId: "", title: "", root: null, depth: "Advanced", nodeCount: 0 });
+    setSelectedMindMapNode(null);
+    setMindMapDepth("Advanced");
+    setMindMapTopic("");
     setPodcastSpeakerCount(2);
     setPodcastTargetMinutes(10);
     replacePodcastAudioUrl("");
@@ -14575,6 +14903,7 @@ export default function App() {
         setPodcastData(createEmptyPodcastData());
         setTeacherLessonData(createEmptyTeacherLessonData());
         setPodcastSpeakerCount(2);
+        setPodcastSpeakerProfiles(createDefaultPodcastSpeakerProfiles());
         setPodcastTargetMinutes(10);
         setActivePodcastSegmentIndex(0);
         setIsPodcastAutoPlaying(false);
@@ -14606,6 +14935,8 @@ export default function App() {
           pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(resolvedPastQuestionPaperSources),
           presentationData: sanitizePresentationForHistory(createEmptyPresentationData()),
           podcastData: sanitizePodcastForHistory(createEmptyPodcastData()),
+          reportData: sanitizeReportForHistory({ jobId: "", title: "", body: "", sections: [] }),
+          mindMapData: sanitizeMindMapForHistory({ jobId: "", title: "", root: null, depth: "Advanced", nodeCount: 0 }),
           teacherLessonData: sanitizeTeacherLessonForHistory(createEmptyTeacherLessonData()),
         });
       });
@@ -14957,6 +15288,11 @@ export default function App() {
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the podcast debate.");
     }
+    if (!isPodcastSpeakerCountAllowed(podcastSpeakerCount)) {
+      return blockLockedPlanOption("3-speaker podcasts", "Pro");
+    }
+    const resolvedPodcastSpeakerCount = Math.min(podcastSpeakerCount, getAllowedPodcastSpeakerCount());
+    const resolvedPodcastSpeakerProfiles = normalizePodcastSpeakerProfiles(podcastSpeakerProfiles, resolvedPodcastSpeakerCount);
     setStatus("Checking podcast attempts...");
     if (!(await ensurePremiumFeatureAvailable("podcast", "Podcasts"))) return false;
 
@@ -14973,7 +15309,7 @@ export default function App() {
     try {
       const response = await authFetch("/generate-podcast/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
           transcript: toolContext.transcript,
@@ -14981,7 +15317,8 @@ export default function App() {
           lecture_notes: toolContext.lectureNotes,
           lecture_slides: toolContext.lectureSlides,
           past_question_papers: toolContext.pastQuestionPapers,
-          speaker_count: podcastSpeakerCount,
+          speaker_count: resolvedPodcastSpeakerCount,
+          speaker_profiles: resolvedPodcastSpeakerProfiles,
           target_minutes: podcastTargetMinutes,
           language: outputLanguage,
         }),
@@ -15000,14 +15337,17 @@ export default function App() {
         overview: job.podcast_overview,
         script: job.podcast_script,
         segments: job.podcast_segments,
-        speakerCount: podcastSpeakerCount,
+        speakerCount: resolvedPodcastSpeakerCount,
         targetMinutes: podcastTargetMinutes,
+        speakerProfiles: resolvedPodcastSpeakerProfiles,
       });
       setPodcastData(nextPodcastData);
+      setPodcastSpeakerCount(resolvedPodcastSpeakerCount);
+      setPodcastSpeakerProfiles(resolvedPodcastSpeakerProfiles);
       await loadPodcastAudioTrack(data.job_id, job.podcast_segments || []);
       revealWorkspacePage("podcast");
       setProgress(100);
-      addHistoryItem({
+      const nextHistoryItem = addHistoryItem({
         id: activeHistoryId || "",
         title: extractHistoryTitle(toolContext.summary || nextPodcastData.script || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
@@ -15032,6 +15372,15 @@ export default function App() {
         presentationData: sanitizePresentationForHistory(presentationData),
         podcastData: sanitizePodcastForHistory(nextPodcastData),
         teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+      });
+      persistWorkspaceDraft({
+        activeHistoryId: nextHistoryItem.id,
+        podcastData: nextPodcastData,
+        podcastSpeakerCount: resolvedPodcastSpeakerCount,
+        podcastSpeakerProfiles: resolvedPodcastSpeakerProfiles,
+        podcastTargetMinutes,
+        activeTab: "podcast",
+        currentPage: "workspace",
       });
       clearPendingJob();
     } catch (err) {
@@ -15089,7 +15438,7 @@ export default function App() {
     try {
       const response = await authFetch("/generate-report/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify(buildReportRequestPayload(activeConfig, toolContext)),
       });
@@ -15115,6 +15464,35 @@ export default function App() {
       revealWorkspacePage("report");
       setProgress(100);
       setStatus("Academic report ready.");
+      addHistoryItem({
+        id: activeHistoryId || "",
+        title: extractHistoryTitle(toolContext.summary || nextReportData.title || activeConfig.reportTitle || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+        reportData: sanitizeReportForHistory(nextReportData),
+        mindMapData: sanitizeMindMapForHistory(mindMapData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+      });
+      persistWorkspaceDraft({ reportData: nextReportData, activeTab: "report", currentPage: "workspace" });
       clearPendingJob();
     } catch (err) {
       clearPendingJob();
@@ -15237,6 +15615,35 @@ export default function App() {
       revealWorkspacePage("mindmap");
       setProgress(100);
       setStatus("Mind map ready.");
+      addHistoryItem({
+        id: activeHistoryId || "",
+        title: extractHistoryTitle(toolContext.summary || nextMindMapData.title || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+        reportData: sanitizeReportForHistory(reportData),
+        mindMapData: sanitizeMindMapForHistory(nextMindMapData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+      });
+      persistWorkspaceDraft({ mindMapData: nextMindMapData, activeTab: "mindmap", currentPage: "workspace" });
       clearPendingJob();
     } catch (err) {
       clearPendingJob();
