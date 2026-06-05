@@ -13372,6 +13372,7 @@ export default function App() {
     if (!authChecked || !authToken || !authEmail) return undefined;
 
     let cancelled = false;
+    const normalizedHistoryOwnerEmail = normalizeHistoryOwnerEmail(authEmail);
     historyHydratingRef.current = true;
 
     const hydrateHistory = async () => {
@@ -13383,6 +13384,7 @@ export default function App() {
         const shouldImportLocalItems = serverItems.length === 0 && localItems.length > 0;
         const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : serverItems;
         if (cancelled) return;
+        historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
         skipNextHistorySyncRef.current = true;
         setHistoryItems(accountItems);
         setActiveHistoryId((current) => (accountItems.some((item) => item.id === current) ? current : ""));
@@ -13396,6 +13398,7 @@ export default function App() {
         }
       } catch (err) {
         if (!cancelled) {
+          historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
           setAuthMessage((current) => current || (err.message || "Could not sync your history right now."));
         }
       } finally {

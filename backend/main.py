@@ -3831,16 +3831,19 @@ def sort_history_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return []
     with get_db_connection() as connection:
         rows = connection.execute(
             """
             SELECT payload_json
             FROM study_history_items
-            WHERE email = ?
+            WHERE lower(email) = ?
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (email, MAX_HISTORY_ITEMS),
+            (normalized_email, MAX_HISTORY_ITEMS),
         ).fetchall()
 
     items: list[dict[str, Any]] = []
@@ -3853,10 +3856,13 @@ def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
 
 
 def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return []
     normalized_items = sort_history_items([normalize_history_item_payload(item) for item in items])[:MAX_HISTORY_ITEMS]
 
     with get_db_connection() as connection:
-        connection.execute("DELETE FROM study_history_items WHERE email = ?", (email,))
+        connection.execute("DELETE FROM study_history_items WHERE lower(email) = ?", (normalized_email,))
         for item in normalized_items:
             created_at = compact_text(item.get("createdAt"), utc_now().isoformat())
             updated_at = compact_text(item.get("updatedAt"), created_at)
@@ -3865,7 +3871,7 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
                 INSERT INTO study_history_items (email, id, payload_json, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (email, item["id"], json.dumps(item), created_at, updated_at),
+                (normalized_email, item["id"], json.dumps(item), created_at, updated_at),
             )
 
     return normalized_items
