@@ -8093,9 +8093,28 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     }
     storage_usage_breakdown = compute_storage_usage_breakdown(history_items)
 
+    user_row_by_email = {
+        normalize_email(row["email"]): row
+        for row in user_rows
+        if normalize_email(row["email"])
+    }
+    dashboard_user_emails = (
+        set(user_row_by_email)
+        | set(saved_items_by_email)
+        | set(last_login_by_email_all)
+        | set(last_login_by_email_in_range)
+        | set(uploads_by_email)
+        | set(generations_by_email)
+        | set(transcriptions_by_email)
+        | set(sessions_by_email)
+        | set(session_table_by_email)
+        | set(usage_counts_by_email)
+        | set(unique_ips_by_email)
+    )
+
     user_records: list[dict[str, Any]] = []
-    for row in user_rows:
-        email = normalize_email(row["email"])
+    for email in sorted(email for email in dashboard_user_emails if email):
+        row = user_row_by_email.get(email, {})
         usage_counts = usage_counts_by_email.get(email, {})
         source_upload_count = int(usage_counts.get("source_upload", 0))
         generated_tool_count = sum(
@@ -8118,12 +8137,15 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         last_login = last_login_by_email_all.get(email, {})
         last_login_in_range = last_login_by_email_in_range.get(email, {})
         session_profile = session_table_by_email.get(email, {})
+        created_at = row.get("created_at") or last_login.get("created_at") or last_login_in_range.get("created_at") or ""
+        study_material_count_for_user = max(saved_items_by_email.get(email, 0), generated_tool_count)
+        test_count_for_user = max(tests_by_email.get(email, 0), int(usage_counts.get("quiz", 0)))
         user_records.append(
             {
                 "email": email,
                 "role": "admin" if is_admin_email(email) else "user",
                 "status": status,
-                "created_at": row["created_at"],
+                "created_at": created_at,
                 "last_login_at": last_login.get("created_at", ""),
                 "last_login_ip": last_login.get("ip_address", ""),
                 "last_login_in_range_at": last_login_in_range.get("created_at", ""),
@@ -8137,10 +8159,10 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 "generations_in_range": max(generations_by_email.get(email, 0), generated_tool_count),
                 "lectures_transcribed": transcriptions_by_email.get(email, 0),
                 "lectures_transcribed_in_range": transcriptions_by_email.get(email, 0),
-                "study_materials": saved_items_by_email.get(email, 0),
-                "study_materials_in_range": saved_items_by_email.get(email, 0),
-                "tests_generated": tests_by_email.get(email, 0),
-                "tests_generated_in_range": tests_by_email.get(email, 0),
+                "study_materials": study_material_count_for_user,
+                "study_materials_in_range": study_material_count_for_user,
+                "tests_generated": test_count_for_user,
+                "tests_generated_in_range": test_count_for_user,
                 "avg_session_duration_seconds": session_profile.get("avg_session_duration_seconds", 0),
                 "avg_session_duration": session_profile.get("avg_session_duration_seconds", 0),
                 "next_timeout_at": session_profile.get("next_timeout_at", ""),
@@ -8220,6 +8242,11 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     for feature_counts_by_user in usage_counts_by_email.values():
         for feature, count in feature_counts_by_user.items():
             usage_feature_totals[feature] = usage_feature_totals.get(feature, 0) + int(count)
+    for feature, count in usage_feature_totals.items():
+        if count <= 0:
+            continue
+        label = BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title())
+        feature_counts[label] = max(feature_counts.get(label, 0), int(count))
 
     guide_count = max(len(history_items), usage_feature_totals.get("study_guide", 0))
     study_material_count = sum(
