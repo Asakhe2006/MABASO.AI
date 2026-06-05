@@ -7970,10 +7970,10 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         ).fetchall()
         usage_event_rows = connection.execute(
             """
-            SELECT email, feature, COALESCE(SUM(quantity), 0) AS total_quantity
+            SELECT email, plan_id, feature, COALESCE(SUM(quantity), 0) AS total_quantity, MAX(created_at) AS last_created_at
             FROM billing_usage_events
             WHERE created_at >= ?
-            GROUP BY email, feature
+            GROUP BY email, plan_id, feature
             """,
             (range_start.isoformat(),),
         ).fetchall()
@@ -8509,6 +8509,44 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             }
         )
 
+    generated_material_features = {
+        "study_guide",
+        "flashcards",
+        "quiz",
+        "presentation",
+        "podcast",
+        "report",
+        "mind_map",
+        "teacher_lesson",
+    }
+    for row in usage_event_rows:
+        feature = normalize_billing_plan_id(row["feature"])
+        if feature not in generated_material_features:
+            continue
+        quantity = int(row["total_quantity"] or 0)
+        if quantity <= 0:
+            continue
+        label = BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title())
+        email = normalize_email(row["email"])
+        content_items.append(
+            {
+                "file_name": f"{label} usage event",
+                "owner_email": email,
+                "title": f"{quantity} {label} generated",
+                "upload_date": row["last_created_at"] or "",
+                "processing_status": "done",
+                "output_generated": "Y",
+                "size_bytes": 0,
+                "size_label": "usage event",
+                "duration_label": "--",
+                "source": "billing_usage_events",
+                "feature": feature,
+                "quantity": quantity,
+            }
+        )
+    content_items.sort(key=lambda item: item.get("upload_date") or "", reverse=True)
+    content_items = content_items[:120]
+
     failed_jobs = [
         {
             "timestamp": log["created_at"],
@@ -8671,6 +8709,13 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             ),
             "avg_generation_time_ms": avg_processing_time,
             "failed_jobs": failed_jobs,
+        },
+        "diagnostics": {
+            "usage_event_groups": len(usage_event_rows),
+            "usage_event_users": len(usage_counts_by_email),
+            "usage_feature_totals": usage_feature_totals,
+            "history_items_in_range": len(history_items),
+            "virtual_usage_material_rows": len([item for item in content_items if item.get("source") == "billing_usage_events"]),
         },
         "analytics": {
             "session_heatmap": session_heatmap,
@@ -9958,6 +10003,17 @@ async def get_admin_dashboard(
     started_at = utc_now()
     selected_range = normalize_admin_dashboard_range(time_range)
     snapshot = build_admin_dashboard_snapshot(selected_range)
+    diagnostics = snapshot.get("diagnostics", {}) if isinstance(snapshot, dict) else {}
+    logger.info(
+        "Admin dashboard requested by %s range=%s users=%s usage_groups=%s usage_users=%s virtual_material_rows=%s ai_cost_records=%s",
+        current_admin,
+        selected_range,
+        len(snapshot.get("users", [])) if isinstance(snapshot, dict) else 0,
+        diagnostics.get("usage_event_groups", 0),
+        diagnostics.get("usage_event_users", 0),
+        diagnostics.get("virtual_usage_material_rows", 0),
+        len(((snapshot.get("billing", {}) if isinstance(snapshot, dict) else {}).get("ai_costs", {}) or {}).get("records", [])),
+    )
     record_audit_log(
         action="admin.dashboard.view",
         email=current_admin,
