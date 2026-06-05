@@ -143,6 +143,13 @@ const MIN_FILE_UPLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 const LARGE_LECTURE_UPLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const LECTURE_MEDIA_ACCEPT = "audio/*,video/*";
 const NOTE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.docx";
+const SOURCE_MATERIAL_PLAN_LIMITS_MB = {
+  free: 100,
+  pro: 200,
+  pro_student: 200,
+  premium: 600,
+  premium_student: 600,
+};
 
 function getOrCreateAuthDeviceId() {
   try {
@@ -11743,6 +11750,36 @@ export default function App() {
     return error;
   };
 
+  const getCurrentPlanIdForLimits = () => String(
+    billingUsage?.plan_id
+    || billingSubscription?.plan_id
+    || billingSubscription?.plan
+    || "free",
+  ).trim().toLowerCase();
+
+  const getSourceMaterialLimitMbForCurrentPlan = () => {
+    const planId = getCurrentPlanIdForLimits();
+    if (planId.startsWith("premium")) return SOURCE_MATERIAL_PLAN_LIMITS_MB.premium_student;
+    if (planId.startsWith("pro")) return SOURCE_MATERIAL_PLAN_LIMITS_MB.pro_student;
+    return SOURCE_MATERIAL_PLAN_LIMITS_MB.free;
+  };
+
+  const assertSourceMaterialFileSizeAllowed = (selectedFile, label = "source material") => {
+    if (!selectedFile || !(billingUsage || billingSubscription)) return;
+    const limitMb = getSourceMaterialLimitMbForCurrentPlan();
+    const sizeMb = Number(selectedFile.size || 0) / (1024 * 1024);
+    if (!Number.isFinite(sizeMb) || sizeMb <= limitMb) return;
+    const planId = getCurrentPlanIdForLimits();
+    const upgradeMessage = planId.startsWith("pro")
+      ? "Upgrade to Premium to process source materials above 200 MB."
+      : planId.startsWith("premium")
+        ? "Premium source material processing is capped at 600 MB."
+        : "Upgrade to Pro to process source materials above 100 MB.";
+    const message = `${selectedFile.name || label} is ${sizeMb.toFixed(1)} MB. Your current plan can process ${label} up to ${limitMb} MB. ${upgradeMessage}`;
+    lastUsageBlockedMessageRef.current = message;
+    throw createUsageBlockedError(message);
+  };
+
   const isUsageResetInFuture = (featureState = {}, usage = {}) => {
     const resetTime = new Date(featureState?.reset_at || usage?.reset_at || "").getTime();
     return Number.isFinite(resetTime) && resetTime > Date.now();
@@ -14151,6 +14188,7 @@ export default function App() {
     if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
       throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
+    files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, "source materials"));
 
     const extractedEntries = [];
     const addedNames = [];
@@ -14291,6 +14329,7 @@ export default function App() {
     if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
       throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
+    assertSourceMaterialFileSizeAllowed(selectedFile, "lecture files");
 
     setIsTranscribing(true);
     if (surfaceError) setError("");

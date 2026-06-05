@@ -182,6 +182,9 @@ APPLE_REDIRECT_URI = os.getenv("APPLE_REDIRECT_URI", "").strip()
 APPLE_PRIVATE_KEY = os.getenv("APPLE_PRIVATE_KEY", "").strip()
 MAX_COMPLETION_TOKENS = int(os.getenv("MAX_COMPLETION_TOKENS", "8000"))
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", str(5 * 1024 * 1024 * 1024)))
+FREE_SOURCE_MATERIAL_LIMIT_BYTES = int(os.getenv("FREE_SOURCE_MATERIAL_LIMIT_BYTES", str(100 * 1024 * 1024)))
+PRO_SOURCE_MATERIAL_LIMIT_BYTES = int(os.getenv("PRO_SOURCE_MATERIAL_LIMIT_BYTES", str(200 * 1024 * 1024)))
+PREMIUM_SOURCE_MATERIAL_LIMIT_BYTES = int(os.getenv("PREMIUM_SOURCE_MATERIAL_LIMIT_BYTES", str(600 * 1024 * 1024)))
 OPENAI_AUDIO_LIMIT_BYTES = int(os.getenv("OPENAI_AUDIO_LIMIT_BYTES", str(25 * 1024 * 1024)))
 CHUNK_DURATION_SECONDS = int(os.getenv("CHUNK_DURATION_SECONDS", "300"))
 CHUNK_OVERLAP_SECONDS = int(os.getenv("CHUNK_OVERLAP_SECONDS", "20"))
@@ -199,8 +202,8 @@ TRANSCRIPTION_JOB_TIMEOUT = float(
 )
 VIDEO_DOWNLOAD_TIMEOUT = float(os.getenv("VIDEO_DOWNLOAD_TIMEOUT", "3600"))
 TRANSCRIPTION_RETRIES = int(os.getenv("TRANSCRIPTION_RETRIES", "2"))
-MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(15 * 1024 * 1024)))
-MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(30 * 1024 * 1024)))
+MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(PREMIUM_SOURCE_MATERIAL_LIMIT_BYTES)))
+MAX_SLIDE_UPLOAD_BYTES = int(os.getenv("MAX_SLIDE_UPLOAD_BYTES", str(PREMIUM_SOURCE_MATERIAL_LIMIT_BYTES)))
 MAX_COLLABORATION_BOARD_IMAGES = int(os.getenv("MAX_COLLABORATION_BOARD_IMAGES", "8"))
 MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
@@ -5954,6 +5957,61 @@ def get_effective_plan_id(email: str) -> str:
     return get_billing_quota_plan_id(plan_id)
 
 
+def get_source_material_size_limit_bytes(email: str) -> tuple[str, int]:
+    plan_id = get_effective_plan_id(email)
+    if plan_id.startswith("premium"):
+        return "premium_student", PREMIUM_SOURCE_MATERIAL_LIMIT_BYTES
+    if plan_id.startswith("pro"):
+        return "pro_student", PRO_SOURCE_MATERIAL_LIMIT_BYTES
+    return "free", FREE_SOURCE_MATERIAL_LIMIT_BYTES
+
+
+def format_size_mb(size_bytes: int) -> str:
+    return f"{max(0, int(size_bytes or 0)) / (1024 * 1024):.1f} MB"
+
+
+def enforce_source_material_size_limit(
+    *,
+    email: str,
+    file_size: int,
+    file_name: str = "",
+    request: Request | None = None,
+):
+    plan_id, limit_bytes = get_source_material_size_limit_bytes(email)
+    if int(file_size or 0) <= limit_bytes:
+        return
+
+    current_limit_mb = int(limit_bytes / (1024 * 1024))
+    file_label = compact_text(file_name, "This source file")
+    if plan_id == "free":
+        upgrade_message = "Upgrade to Pro to process source materials above 100 MB. Pro supports 200 MB and Premium supports 600 MB."
+    elif plan_id.startswith("pro"):
+        upgrade_message = "Upgrade to Premium to process source materials above 200 MB. Premium supports 600 MB."
+    else:
+        upgrade_message = "Premium source material processing is capped at 600 MB."
+
+    record_audit_log(
+        action="billing.source_size.block",
+        status="blocked",
+        email=email,
+        request=request,
+        resource_type="source_upload",
+        resource_name=file_label,
+        metadata={
+            "plan_id": plan_id,
+            "file_size_bytes": int(file_size or 0),
+            "limit_bytes": limit_bytes,
+        },
+    )
+    raise HTTPException(
+        status_code=402 if not plan_id.startswith("premium") else 413,
+        detail=(
+            f"{file_label} is {format_size_mb(file_size)}, but the {plan_id.replace('_', ' ').title()} plan "
+            f"can process source materials up to {current_limit_mb} MB. {upgrade_message}"
+        ),
+    )
+
+
 def get_plan_entitlements_for_email(email: str) -> tuple[str, dict[str, Any]]:
     plan_id = get_effective_plan_id(email)
     if plan_id.startswith("premium"):
@@ -11370,6 +11428,8 @@ def require_ffprobe() -> str:
 
 
 def format_job_error(exc: Exception, source_url: str = "") -> str:
+    if isinstance(exc, HTTPException):
+        return compact_text(exc.detail, "Processing failed.")
     if isinstance(exc, APIStatusError):
         return (
             f"OpenAI request failed with status {exc.status_code}. "
@@ -17078,6 +17138,12 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             asyncio.to_thread(download_audio_from_video_url, video_url, job_id),
             timeout=VIDEO_DOWNLOAD_TIMEOUT,
         )
+        job = jobs.get(job_id, {})
+        enforce_source_material_size_limit(
+            email=job.get("owner_email", ""),
+            file_size=get_file_size(file_path),
+            file_name="Downloaded video audio",
+        )
         transcript = await transcribe_audio(file_path, job_id)
         if not transcript:
             raise RuntimeError("The video link was processed, but no transcript text was returned.")
@@ -18228,6 +18294,18 @@ async def upload_audio(
                     f"The configured lecture media ceiling is {MAX_FILE_SIZE_BYTES / (1024 * 1024):.0f} MB and applies equally to every plan."
                 ),
             )
+        try:
+            enforce_source_material_size_limit(
+                email=current_user,
+                file_size=file_size,
+                file_name=file.filename,
+                request=request,
+            )
+        except HTTPException:
+            if file_path.exists():
+                file_path.unlink()
+            jobs.pop(job_id, None)
+            raise
 
         try:
             consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
@@ -18334,6 +18412,12 @@ async def extract_slide_text(
         if not file_bytes:
             raise HTTPException(status_code=400, detail="The selected slide file is empty.")
         logger.info("Study source extraction read %s bytes from %s", len(file_bytes), file.filename)
+        enforce_source_material_size_limit(
+            email=current_user,
+            file_size=len(file_bytes),
+            file_name=file.filename,
+            request=request,
+        )
 
         size_limit = MAX_IMAGE_UPLOAD_BYTES if content_type.startswith("image/") else MAX_SLIDE_UPLOAD_BYTES
         if len(file_bytes) > size_limit:
