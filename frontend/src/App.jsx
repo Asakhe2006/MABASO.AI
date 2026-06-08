@@ -11750,12 +11750,20 @@ export default function App() {
     return error;
   };
 
-  const getCurrentPlanIdForLimits = () => String(
-    billingUsage?.plan_id
-    || billingSubscription?.plan_id
-    || billingSubscription?.plan
-    || "free",
-  ).trim().toLowerCase();
+  const getResolvedCurrentPlanId = () => {
+    const planId = String(
+      billingUsage?.plan_id
+      || billingSubscription?.plan_id
+      || billingSubscription?.plan
+      || billingSubscription?.current_plan
+      || "",
+    ).trim().toLowerCase();
+    if (planId) return planId;
+    if (authSessionMode === "admin" || authAvailableModes.includes("admin")) return "premium_student";
+    return "free";
+  };
+
+  const getCurrentPlanIdForLimits = () => getResolvedCurrentPlanId();
 
   const getSourceMaterialLimitMbForCurrentPlan = () => {
     const planId = getCurrentPlanIdForLimits();
@@ -11802,9 +11810,15 @@ export default function App() {
       return false;
     }
 
+    const resolvedPlanId = getResolvedCurrentPlanId();
     const cachedUsage = billingUsage;
-    const cachedFeatureState = getUsageFeatureState(cachedUsage, featureId);
-    if (cachedUsage && cachedFeatureState) {
+    const cachedUsagePlanId = String(cachedUsage?.plan_id || "").trim().toLowerCase();
+    const canTrustCachedUsage = Boolean(
+      cachedUsage
+      && (!cachedUsagePlanId || cachedUsagePlanId === resolvedPlanId || (resolvedPlanId === "free" && cachedUsagePlanId === "free")),
+    );
+    const cachedFeatureState = canTrustCachedUsage ? getUsageFeatureState(cachedUsage, featureId) : null;
+    if (canTrustCachedUsage && cachedUsage && cachedFeatureState) {
       if (!cachedFeatureState.unlimited && Number(cachedFeatureState.remaining) <= 0 && isUsageResetInFuture(cachedFeatureState, cachedUsage)) {
         const message = `${billingSubscription?.message ? `${billingSubscription.message} ` : ""}${buildUsageBlockedMessage(cachedFeatureState, cachedUsage, fallbackLabel)}`;
         lastUsageBlockedMessageRef.current = message;
@@ -11827,6 +11841,10 @@ export default function App() {
       usage = data?.usage || null;
       subscription = data?.subscription || data?.account?.subscription || subscription || null;
     } catch (err) {
+      if (resolvedPlanId !== "free") {
+        refreshBillingStatusInBackground();
+        return true;
+      }
       const message = err?.message || "Could not verify your remaining attempts. Try again when the server reconnects.";
       lastUsageBlockedMessageRef.current = message;
       setError(message);
@@ -11837,6 +11855,10 @@ export default function App() {
     const subscriptionMessage = subscription?.message || "";
     const featureState = getUsageFeatureState(usage, featureId);
     if (!usage || !featureState) {
+      if (resolvedPlanId !== "free") {
+        refreshBillingStatusInBackground();
+        return true;
+      }
       const message = `Could not verify remaining attempts for ${fallbackLabel}. This action was blocked so your limits cannot be bypassed.`;
       lastUsageBlockedMessageRef.current = message;
       setError(message);
@@ -11856,7 +11878,7 @@ export default function App() {
   };
 
   const getCurrentPlanTier = () => {
-    const planId = String(billingUsage?.plan_id || billingSubscription?.plan_id || "free").toLowerCase();
+    const planId = getResolvedCurrentPlanId();
     if (planId.includes("premium")) return "premium";
     if (planId.includes("pro")) return "pro";
     return "free";
@@ -11873,7 +11895,7 @@ export default function App() {
       setPodcastSpeakerCount(allowedCount);
       setPodcastSpeakerProfiles((profiles) => normalizePodcastSpeakerProfiles(profiles, allowedCount));
     }
-  }, [billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
+  }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
 
   const buildPlanLockedMessage = (itemLabel, requiredPlan = "a higher plan") => (
     `${itemLabel} is locked on your current ${getCurrentPlanEntitlements().label} plan. Upgrade to ${requiredPlan} to use it.`
@@ -11954,10 +11976,10 @@ export default function App() {
         features: nextFeatures,
       };
     });
-  }, [billingSubscription?.plan_id, billingUsage?.plan_id]);
+  }, [authAvailableModes, authSessionMode, billingSubscription?.plan_id, billingUsage?.plan_id]);
 
   const getFlashcardCountBounds = () => {
-    const planId = String(billingUsage?.plan_id || billingSubscription?.plan_id || "free").toLowerCase();
+    const planId = getResolvedCurrentPlanId();
     if (planId.includes("premium")) return { min: 5, max: 30 };
     if (planId.includes("pro")) return { min: 5, max: 20 };
     return { min: 5, max: 10 };
@@ -12024,7 +12046,7 @@ export default function App() {
 
   useEffect(() => {
     setFlashcardCount((current) => clampFlashcardCountForPlan(current));
-  }, [billingUsage?.plan_id, billingSubscription?.plan_id]);
+  }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id]);
 
   const requestLectureAssistantStream = async (payload, signal) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
