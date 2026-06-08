@@ -77,6 +77,7 @@ const ROOM_REFRESH_INTERVAL_MS = 5000;
 const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 10000;
+const ADMIN_DASHBOARD_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 20 * 60 * 1000;
 const AI_GENERATION_REQUEST_TIMEOUT_MS = 120000;
 const AI_EXPORT_REQUEST_TIMEOUT_MS = 120000;
@@ -1825,10 +1826,16 @@ function loadAdminDashboardCache(rangeKey = "") {
   try {
     const bundle = loadAdminDashboardCacheBundle();
     const selectedRange = normalizeAdminDashboardRangeKey(rangeKey || bundle.latestRangeKey || "7d");
-    return bundle.snapshotsByRange[selectedRange]
+    const snapshot = bundle.snapshotsByRange[selectedRange]
       || bundle.snapshotsByRange[bundle.latestRangeKey]
       || Object.values(bundle.snapshotsByRange)[0]
       || null;
+    if (!snapshot || typeof snapshot !== "object") return null;
+    const generatedAt = Date.parse(snapshot.generated_at || snapshot.cached_at || "");
+    if (!Number.isFinite(generatedAt) || Date.now() - generatedAt > ADMIN_DASHBOARD_CACHE_MAX_AGE_MS) {
+      return null;
+    }
+    return snapshot;
   } catch {
     return null;
   }
@@ -1846,7 +1853,7 @@ function saveAdminDashboardCache(snapshot = null) {
       latestRangeKey: rangeKey,
       snapshotsByRange: {
         ...bundle.snapshotsByRange,
-        [rangeKey]: snapshot,
+        [rangeKey]: { ...snapshot, cached_at: new Date().toISOString() },
       },
     };
     window.localStorage.setItem(ADMIN_DASHBOARD_CACHE_KEY, JSON.stringify(nextBundle));
@@ -13344,7 +13351,18 @@ export default function App() {
     const shouldShowLoader = !silent || !hasLoadedAdminDashboardRef.current;
     if (shouldShowLoader) setIsLoadingAdminDashboard(true);
     try {
-      const response = await authFetch(`/admin/dashboard?time_range=${encodeURIComponent(selectedRange)}`, { tokenOverride });
+      const response = await authFetch(
+        `/admin/dashboard?time_range=${encodeURIComponent(selectedRange)}&_=${Date.now()}`,
+        {
+          tokenOverride,
+          timeoutMs: 60000,
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        },
+      );
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load the admin dashboard.");
       hasLoadedAdminDashboardRef.current = true;

@@ -8016,6 +8016,44 @@ def build_subscription_abuse_monitor() -> dict[str, Any]:
     }
 
 
+def build_admin_database_freshness() -> dict[str, Any]:
+    table_columns = {
+        "audit_logs": "created_at",
+        "billing_usage_events": "created_at",
+        "billing_payments": "created_at",
+        "billing_subscriptions": "updated_at",
+        "study_history_items": "updated_at",
+        "sessions": "created_at",
+        "users": "created_at",
+    }
+    freshness: dict[str, Any] = {
+        "database_backend": DATABASE_BACKEND,
+        "database_url_configured": bool(DATABASE_URL),
+        "sqlite_path_configured": bool(DB_PATH),
+        "tables": {},
+    }
+    with get_db_connection() as connection:
+        for table_name, timestamp_column in table_columns.items():
+            try:
+                row = connection.execute(
+                    f"SELECT MAX({timestamp_column}) AS latest_at, COUNT(*) AS row_count FROM {table_name}"
+                ).fetchone()
+                freshness["tables"][table_name] = {
+                    "latest_at": row["latest_at"] if row else "",
+                    "row_count": int(row["row_count"] or 0) if row else 0,
+                    "timestamp_column": timestamp_column,
+                }
+            except Exception as exc:
+                logger.warning("Admin database freshness check failed table=%s: %s", table_name, exc)
+                freshness["tables"][table_name] = {
+                    "latest_at": "",
+                    "row_count": 0,
+                    "timestamp_column": timestamp_column,
+                    "error": str(exc),
+                }
+    return freshness
+
+
 def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, Any]:
     now = utc_now()
     time_window = build_dashboard_time_window(now, range_key)
@@ -8685,6 +8723,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
 
     billing_snapshot = build_admin_billing_snapshot(range_start, now)
     subscription_abuse_monitor = build_subscription_abuse_monitor()
+    database_freshness = build_admin_database_freshness()
 
     return {
         "overview": {
@@ -8794,6 +8833,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "usage_feature_totals": usage_feature_totals,
             "history_items_in_range": len(history_items),
             "virtual_usage_material_rows": len([item for item in content_items if item.get("source") == "billing_usage_events"]),
+            "database_freshness": database_freshness,
         },
         "analytics": {
             "session_heatmap": session_heatmap,
