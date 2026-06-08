@@ -2985,6 +2985,16 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
   }
 }
 
+async function apiFetch(path, options = {}, timeoutMs = 15000) {
+  const url = /^https?:\/\//i.test(String(path || "")) ? path : `${API_BASE_URL}${path}`;
+  const nextOptions = {
+    credentials: "include",
+    ...options,
+    headers: new Headers(options.headers || {}),
+  };
+  return fetchWithTimeout(url, nextOptions, timeoutMs);
+}
+
 function isAbortError(error) {
   return error?.name === "AbortError";
 }
@@ -4110,6 +4120,7 @@ export default function App() {
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [authServerStateReady, setAuthServerStateReady] = useState(false);
+  const isAuthReady = authChecked && authServerStateReady;
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
@@ -10461,7 +10472,7 @@ export default function App() {
     setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
     setAuthServerStateReady(false);
     setAuthChecked(true);
-    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
+    apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -10727,7 +10738,7 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
+      apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
@@ -10913,7 +10924,7 @@ export default function App() {
     let transientAttempt = 0;
     while (true) {
       try {
-        const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
+        const response = await apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
         const data = await parseJsonSafe(response);
         if (response.status === 401) {
           clearSession("Your session expired. Please sign in again.");
@@ -11602,7 +11613,7 @@ export default function App() {
     headers.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
     let response;
     try {
-      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { credentials: "include", ...requestOptions, headers }, timeoutMs);
+      response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
     } catch (err) {
       throw new Error(getReadableRequestError(err, path));
     }
@@ -13665,7 +13676,7 @@ export default function App() {
   }, [authToken, browserPath]);
 
   useEffect(() => {
-    if (!authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
+    if (!isAuthReady || !authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
     loadAdminDashboard(true, "", adminDashboardRange);
     const intervalId = window.setInterval(() => {
       loadAdminDashboard(true, "", adminDashboardRange);
@@ -13681,7 +13692,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleDashboardRefresh);
       window.clearInterval(intervalId);
     };
-  }, [adminDashboardRange, authSessionMode, authToken, currentPage]);
+  }, [adminDashboardRange, authSessionMode, authToken, currentPage, isAuthReady]);
 
   useEffect(() => {
     if (adminSidebarTab === "support") {
