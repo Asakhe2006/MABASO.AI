@@ -6360,6 +6360,7 @@ def consume_plan_quota(
                     f"{upgrade_hint}"
                 ),
             )
+        usage_event_id = uuid4().hex
         connection.execute(
             """
             INSERT INTO billing_usage_events (
@@ -6368,7 +6369,7 @@ def consume_plan_quota(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                uuid4().hex,
+                usage_event_id,
                 normalized_email,
                 plan_id,
                 normalized_feature,
@@ -6379,6 +6380,16 @@ def consume_plan_quota(
             ),
         )
     account_snapshot = sync_user_account_snapshot(normalized_email)
+    logger.info(
+        "Usage consumed id=%s email=%s plan=%s feature=%s quantity=%s period=%s remaining=%s",
+        usage_event_id,
+        normalized_email,
+        plan_id,
+        normalized_feature,
+        safe_quantity,
+        period_key,
+        None if limit < 0 else max(0, limit - used - safe_quantity),
+    )
     return {
         "plan_id": plan_id,
         "feature": normalized_feature,
@@ -6389,8 +6400,61 @@ def consume_plan_quota(
         "period_type": "daily",
         "reset_at": reset_at,
         "reset_label": reset_label,
+        "usage_event_id": usage_event_id,
         "account": account_snapshot,
     }
+
+
+def refund_usage_event(
+    *,
+    usage_event_id: str,
+    email: str = "",
+    reason: str = "",
+) -> bool:
+    normalized_event_id = compact_text(usage_event_id)
+    if not normalized_event_id:
+        return False
+    normalized_email = normalize_email(email) if email else ""
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, email, feature, quantity, metadata_json
+            FROM billing_usage_events
+            WHERE id = ?
+            """,
+            (normalized_event_id,),
+        ).fetchone()
+        if not row:
+            return False
+        if normalized_email and normalize_email(row["email"]) != normalized_email:
+            logger.warning("Refusing usage refund for mismatched email event=%s email=%s", normalized_event_id, normalized_email)
+            return False
+        connection.execute("DELETE FROM billing_usage_events WHERE id = ?", (normalized_event_id,))
+    logger.info(
+        "Refunded usage event id=%s email=%s feature=%s quantity=%s reason=%s",
+        normalized_event_id,
+        row["email"],
+        row["feature"],
+        row["quantity"],
+        compact_text(reason, "job_failed"),
+    )
+    sync_user_account_snapshot(row["email"])
+    return True
+
+
+def refund_job_usage_if_failed(job_id: str, reason: str = "job_failed") -> bool:
+    job = jobs.get(job_id, {})
+    usage_event_id = compact_text(job.get("_usage_event_id"))
+    if not usage_event_id:
+        return False
+    refunded = refund_usage_event(
+        usage_event_id=usage_event_id,
+        email=compact_text(job.get("owner_email")),
+        reason=reason,
+    )
+    if refunded:
+        update_job(job_id, _usage_event_id="")
+    return refunded
 
 
 def ensure_plan_quota_available(
@@ -6518,6 +6582,12 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             ),
         )
         if is_duplicate_paid_payment:
+            logger.info(
+                "PayFast duplicate paid notification ignored checkout=%s payment_id=%s email=%s",
+                checkout_id,
+                payment_id,
+                email,
+            )
             return "duplicate_active"
         connection.execute(
             """
@@ -6552,6 +6622,14 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 now_iso,
                 now_iso,
             ),
+            )
+        logger.info(
+            "PayFast payment upserted checkout=%s payment_id=%s email=%s plan=%s status=%s",
+            checkout_id,
+            payment_id,
+            email,
+            plan_id,
+            next_status,
         )
         if next_status == "active":
             connection.execute(
@@ -7573,8 +7651,8 @@ def compute_session_analytics(
 def parse_zar_amount(value: Any) -> float:
     try:
         cleaned = re.sub(r"[^0-9.\-]+", "", str(value or ""))
-        return round(float(cleaned), 2) if cleaned else 0.0
-    except (TypeError, ValueError):
+        return float(Decimal(cleaned).quantize(Decimal("0.01"))) if cleaned else 0.0
+    except (TypeError, ValueError, InvalidOperation):
         return 0.0
 
 
@@ -17084,6 +17162,7 @@ async def run_transcription_job(job_id: str, file_path: Path):
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "source_upload_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="transcription.completed",
@@ -17258,6 +17337,7 @@ async def run_video_transcription_job(job_id: str, video_url: str):
             error=format_job_error(exc, video_url),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "source_upload_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="transcription.completed",
@@ -17353,6 +17433,7 @@ async def run_summary_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "study_guide_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="study_guide.completed",
@@ -17428,6 +17509,7 @@ async def run_teacher_lesson_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "teacher_lesson_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="teacher_lesson.completed",
@@ -17487,6 +17569,7 @@ async def run_quiz_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "quiz_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="quiz.completed",
@@ -17552,6 +17635,7 @@ async def run_podcast_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "podcast_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="podcast.completed",
@@ -17947,6 +18031,7 @@ async def run_report_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "report_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="report.completed",
@@ -18268,6 +18353,7 @@ async def run_mind_map_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "mind_map_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="mind_map.completed",
@@ -18335,6 +18421,7 @@ async def run_presentation_job(
             error=format_job_error(exc),
         )
         job = jobs.get(job_id, {})
+        refund_job_usage_if_failed(job_id, "presentation_failed")
         started_at = parse_history_datetime(job.get("created_at"), utc_now())
         record_audit_log(
             action="presentation.completed",
@@ -18391,7 +18478,8 @@ async def upload_audio(
             raise
 
         try:
-            consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
+            usage = consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
+            update_job(job_id, _usage_event_id=usage.get("usage_event_id", ""))
         except HTTPException:
             if file_path.exists():
                 file_path.unlink()
@@ -18429,9 +18517,9 @@ async def transcribe_video_url(
     if not can_process_video_url(video_url):
         raise HTTPException(status_code=500, detail="Video-link transcription is not configured on the backend yet.")
 
-    consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
+    usage = consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
     job_id = create_job("video_transcription", owner_email=current_user)
-    update_job(job_id, status="processing", stage="Preparing video link", progress=1)
+    update_job(job_id, status="processing", stage="Preparing video link", progress=1, _usage_event_id=usage.get("usage_event_id", ""))
     asyncio.create_task(run_video_transcription_job(job_id, video_url))
     record_audit_log(
         action="lecture.video_link.request",
@@ -18598,10 +18686,10 @@ async def create_study_guide(
             detail="Upload a transcript, notes, slides, or past question paper before generating a study guide.",
         )
 
-    consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
     job_id = create_job("study_guide", owner_email=current_user)
-    update_job(job_id, _output_language=output_language)
+    update_job(job_id, _output_language=output_language, _usage_event_id=usage.get("usage_event_id", ""))
     asyncio.create_task(
         run_summary_job(
             job_id,
@@ -18646,10 +18734,10 @@ async def create_quiz(
             detail="Generate a study guide or add lecture material before creating the test.",
         )
 
-    consume_plan_quota(email=current_user, feature="quiz", request=request, metadata={"route": "generate_quiz"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="quiz", request=request, metadata={"route": "generate_quiz"})
     job_id = create_job("quiz", owner_email=current_user)
-    update_job(job_id, _output_language=output_language)
+    update_job(job_id, _output_language=output_language, _usage_event_id=usage.get("usage_event_id", ""))
     asyncio.create_task(
         run_quiz_job(
             job_id,
@@ -18695,7 +18783,7 @@ async def create_flashcards(
         )
 
     count, plan_id, minimum_count, maximum_count = validate_flashcard_count_for_user(current_user, payload.count)
-    consume_plan_quota(email=current_user, feature="flashcards", request=request, metadata={"route": "generate_flashcards", "count": count})
+    ensure_plan_quota_available(email=current_user, feature="flashcards", request=request, metadata={"route": "generate_flashcards", "count": count})
     ensure_openai_key()
     cards = await generate_flashcards_package(
         summary=summary,
@@ -18706,6 +18794,7 @@ async def create_flashcards(
         output_language=output_language,
         count=count,
     )
+    consume_plan_quota(email=current_user, feature="flashcards", request=request, metadata={"route": "generate_flashcards", "count": count})
     record_audit_log(
         action="flashcards.request",
         email=current_user,
@@ -18754,10 +18843,10 @@ async def create_teacher_lesson(
             detail="Generate a study guide or add lecture material before starting Mabaso AI Tutor.",
         )
 
-    consume_plan_quota(email=current_user, feature="teacher_lesson", request=request, metadata={"route": "generate_teacher_lesson"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="teacher_lesson", request=request, metadata={"route": "generate_teacher_lesson"})
     job_id = create_job("teacher_lesson", owner_email=current_user)
-    update_job(job_id, _output_language=output_language)
+    update_job(job_id, _output_language=output_language, _usage_event_id=usage.get("usage_event_id", ""))
     asyncio.create_task(
         run_teacher_lesson_job(
             job_id,
@@ -19142,12 +19231,12 @@ async def create_podcast(
     speaker_count = clamp_podcast_speaker_count(payload.speaker_count)
     if speaker_count > 2 and get_effective_plan_id(current_user) == "free":
         raise HTTPException(status_code=402, detail="3-speaker podcasts require Pro or Premium.")
-    consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="podcast", request=request, metadata={"route": "generate_podcast"})
     target_minutes = clamp_podcast_target_minutes(payload.target_minutes)
     speaker_profiles = build_podcast_speaker_profiles(speaker_count, payload.speaker_profiles)
     job_id = create_job("podcast", owner_email=current_user)
-    update_job(job_id, _output_language=output_language)
+    update_job(job_id, _output_language=output_language, _usage_event_id=usage.get("usage_event_id", ""))
     asyncio.create_task(
         run_podcast_job(
             job_id,
@@ -19196,8 +19285,8 @@ async def create_report(
         )
 
     validate_report_options_for_user(current_user, payload)
-    consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="report", request=request, metadata={"route": "generate_report"})
     job_id = create_job("report", owner_email=current_user)
     update_job(
         job_id,
@@ -19211,6 +19300,7 @@ async def create_report(
             "reference_style": compact_text(payload.reference_style, "APA"),
             "report_depth": compact_text(payload.report_depth, "Advanced"),
         },
+        _usage_event_id=usage.get("usage_event_id", ""),
     )
     asyncio.create_task(
         run_report_job(
@@ -19254,8 +19344,8 @@ async def create_mind_map(
         )
 
     validate_mind_map_depth_for_user(current_user, payload.depth_level)
-    consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     ensure_openai_key()
+    usage = consume_plan_quota(email=current_user, feature="mind_map", request=request, metadata={"route": "generate_mind_map"})
     depth_level = normalize_mind_map_depth(payload.depth_level)
     job_id = create_job("mind_map", owner_email=current_user)
     update_job(
@@ -19263,6 +19353,7 @@ async def create_mind_map(
         _output_language=output_language,
         mind_map_title=compact_text(payload.topic, "Mind Map"),
         mind_map_depth=depth_level,
+        _usage_event_id=usage.get("usage_event_id", ""),
     )
     asyncio.create_task(run_mind_map_job(job_id, payload, output_language))
     record_audit_log(
@@ -19334,15 +19425,16 @@ async def create_presentation(
         )
 
     validate_presentation_design_for_user(current_user, payload.design_id)
-    consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     ensure_openai_key()
     ensure_presentation_support()
+    usage = consume_plan_quota(email=current_user, feature="presentation", request=request, metadata={"route": "generate_presentation"})
     design_id = normalize_presentation_design_id(payload.design_id)
     job_id = create_job("presentation", owner_email=current_user)
     update_job(
         job_id,
         _output_language=output_language,
         presentation_template_name=template_file_name,
+        _usage_event_id=usage.get("usage_event_id", ""),
     )
     asyncio.create_task(
         run_presentation_job(
