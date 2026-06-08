@@ -13,13 +13,13 @@ import {
 import "@xyflow/react/dist/style.css";
 
 const nodeTypeColors = {
-  "main topic": { border: "#111827", background: "#ffffff", accent: "#111827" },
-  concept: { border: "#2563eb", background: "#eff6ff", accent: "#1d4ed8" },
-  definition: { border: "#059669", background: "#ecfdf5", accent: "#047857" },
+  "main topic": { border: "#0f172a", background: "linear-gradient(145deg,#0f2f63,#092044)", accent: "#ffffff" },
+  concept: { border: "#16a34a", background: "#f0fdf4", accent: "#15803d" },
+  definition: { border: "#2563eb", background: "#eff6ff", accent: "#1d4ed8" },
   formula: { border: "#7c3aed", background: "#f5f3ff", accent: "#6d28d9" },
   process: { border: "#d97706", background: "#fffbeb", accent: "#b45309" },
-  example: { border: "#0891b2", background: "#ecfeff", accent: "#0e7490" },
-  application: { border: "#0f766e", background: "#f0fdfa", accent: "#0f766e" },
+  example: { border: "#8b5cf6", background: "#f5f3ff", accent: "#7c3aed" },
+  application: { border: "#f97316", background: "#fff7ed", accent: "#ea580c" },
   principle: { border: "#4338ca", background: "#eef2ff", accent: "#3730a3" },
   warning: { border: "#dc2626", background: "#fef2f2", accent: "#b91c1c" },
   "key point": { border: "#475569", background: "#f8fafc", accent: "#334155" },
@@ -50,10 +50,10 @@ function getImportance(node) {
 }
 
 function getNodeSize(importance, isRoot = false) {
-  if (isRoot) return { width: 390, className: "min-w-[320px] max-w-[420px] px-6 py-5", titleClass: "text-xl" };
+  if (isRoot) return { width: 430, className: "min-w-[340px] max-w-[460px] px-7 py-6", titleClass: "text-2xl" };
   if (importance >= 90) return { width: 360, className: "min-w-[300px] max-w-[390px] px-5 py-4", titleClass: "text-lg" };
   if (importance >= 70) return { width: 320, className: "min-w-[270px] max-w-[350px] px-5 py-4", titleClass: "text-base" };
-  return { width: 290, className: "min-w-[245px] max-w-[320px] px-4 py-3.5", titleClass: "text-sm" };
+  return { width: 300, className: "min-w-[260px] max-w-[330px] px-4 py-3.5", titleClass: "text-[15px]" };
 }
 
 function countNodes(node) {
@@ -107,58 +107,43 @@ function rebalanceRootBranches(root) {
   };
 }
 
-function createMoreNode(parentId, children, depth, expandedIds, options) {
-  const moreId = `${parentId}-more-${depth}`;
-  const isExpanded = expandedIds.has(moreId);
-  const visibleChildren = isExpanded
-    ? children
-        .slice(0, options.expandAll ? children.length : options.childLimit)
-        .map((child) => buildVisibleTree(child, expandedIds, options, depth + 1))
-        .filter(Boolean)
-    : [];
-  const remainingCount = Math.max(0, children.length - visibleChildren.length);
-  return {
-    id: moreId,
-    title: isExpanded ? "Show less" : `See more (${children.length})`,
-    type: "Key Point",
-    importance: 49,
-    summary: isExpanded
-      ? "Tap minus to collapse these extra concepts again."
-      : `Tap plus to reveal ${children.length} additional concept${children.length === 1 ? "" : "s"} in this branch.`,
-    children: visibleChildren,
-    hiddenChildCount: isExpanded ? remainingCount : 0,
-    isSyntheticMoreNode: true,
-  };
-}
-
-function buildVisibleTree(node, expandedIds, options, depth = 0) {
+function buildVisibleTree(node, expandedIds, collapsedIds, options, depth = 0) {
   if (!node) return null;
   const maxDepth = options.maxVisibleDepth;
   const childLimit = depth === 0 ? options.rootBranchLimit : options.childLimit;
-  const importance = getImportance(node);
   const rawChildren = sortByImportance(Array.isArray(node.children) ? node.children : []);
-  const nodeExpanded = expandedIds.has(node.id) || depth === 0 || options.expandAll;
-  const shouldShowChildren = rawChildren.length && nodeExpanded && depth < maxDepth;
+  const forcedExpanded = expandedIds.has(node.id);
+  const forcedCollapsed = collapsedIds.has(node.id) && !options.expandAll;
+  const defaultExpanded = depth <= options.defaultExpandedDepth;
+  const nodeExpanded = rawChildren.length && !forcedCollapsed && (options.expandAll || forcedExpanded || defaultExpanded);
+  const canShowDepth = depth < maxDepth || forcedExpanded || options.expandAll;
 
   let visibleChildren = [];
   let hiddenChildren = [];
-  if (shouldShowChildren) {
-    const eligibleChildren = rawChildren.filter((child) => options.showLowPriority || getImportance(child) >= options.lowPriorityThreshold || expandedIds.has(node.id));
-    visibleChildren = eligibleChildren.slice(0, childLimit);
+  if (nodeExpanded && canShowDepth) {
+    const eligibleChildren = rawChildren.filter((child) => (
+      options.showLowPriority
+      || forcedExpanded
+      || depth <= 1
+      || getImportance(child) >= options.lowPriorityThreshold
+    ));
+    visibleChildren = eligibleChildren.slice(0, forcedExpanded || options.expandAll ? eligibleChildren.length : childLimit);
     hiddenChildren = rawChildren.filter((child) => !visibleChildren.includes(child));
-  } else if (rawChildren.length && (depth >= maxDepth || !nodeExpanded || importance < options.lowPriorityThreshold)) {
+  } else if (rawChildren.length) {
     hiddenChildren = rawChildren;
   }
 
   const mappedChildren = visibleChildren
-    .map((child) => buildVisibleTree(child, expandedIds, options, depth + 1))
+    .map((child) => buildVisibleTree(child, expandedIds, collapsedIds, options, depth + 1))
     .filter(Boolean);
 
-  if (hiddenChildren.length && depth < maxDepth) {
-    mappedChildren.push(createMoreNode(node.id, hiddenChildren, depth + 1, expandedIds, options));
-  }
-
-  return { ...node, children: mappedChildren, hiddenChildCount: hiddenChildren.length };
+  return {
+    ...node,
+    children: mappedChildren,
+    hiddenChildCount: hiddenChildren.length,
+    totalChildCount: rawChildren.length,
+    isExpandedInView: nodeExpanded && canShowDepth,
+  };
 }
 
 function flattenVisibleTree(root) {
@@ -306,19 +291,20 @@ function getProgressiveOptions(mode) {
     rootBranchLimit: exportMode ? 999 : researchMode ? 8 : 8,
     childLimit: exportMode ? 999 : researchMode ? 8 : 6,
     maxVisibleDepth: exportMode ? 999 : researchMode ? 4 : 3,
+    defaultExpandedDepth: exportMode ? 999 : 1,
     lowPriorityThreshold: exportMode ? 0 : researchMode ? 35 : 50,
     showLowPriority: exportMode || researchMode,
     expandAll: exportMode,
   };
 }
 
-function buildFlowElements(root, expandedIds, onToggle, requestedLayoutMode) {
+function buildFlowElements(root, expandedIds, collapsedIds, onToggle, requestedLayoutMode) {
   const normalizedRoot = normalizeTree(root);
   if (!normalizedRoot) return { nodes: [], edges: [], layoutMode: "radial", visibleCount: 0, totalCount: 0 };
   const balancedRoot = rebalanceRootBranches(normalizedRoot);
   const totalCount = countNodes(normalizedRoot);
   const progressiveOptions = getProgressiveOptions(requestedLayoutMode);
-  const visibleRoot = buildVisibleTree(balancedRoot, expandedIds, progressiveOptions);
+  const visibleRoot = buildVisibleTree(balancedRoot, expandedIds, collapsedIds, progressiveOptions);
   const { flatNodes, flatEdges } = flattenVisibleTree(visibleRoot);
   const layoutMode = requestedLayoutMode === "export"
     ? chooseLayoutMode("research", totalCount, flatNodes.length)
@@ -334,7 +320,8 @@ function buildFlowElements(root, expandedIds, onToggle, requestedLayoutMode) {
     const isRoot = node.id === "root";
     const size = getNodeSize(importance, isRoot);
     const position = positions.get(node.id) || { x: depth * 360, y: 0 };
-    const hasChildren = Boolean((Array.isArray(node.children) && node.children.length) || node.hiddenChildCount);
+    const hasChildren = Boolean(node.totalChildCount || (Array.isArray(node.children) && node.children.length) || node.hiddenChildCount);
+    const isCollapsed = Boolean(node.hiddenChildCount || (node.totalChildCount && !node.children?.length));
     return {
       id: node.id,
       type: "mindMapNode",
@@ -342,7 +329,8 @@ function buildFlowElements(root, expandedIds, onToggle, requestedLayoutMode) {
       data: {
         node,
         hasChildren,
-        isCollapsed: hasChildren && !expandedIds.has(node.id) && !isRoot,
+        isCollapsed,
+        hiddenChildCount: node.hiddenChildCount || 0,
         onToggle,
         size,
         layoutMode,
@@ -378,32 +366,37 @@ function MindMapNode({ data }) {
   return (
     <div
       className={`mind-map-node rounded-[18px] border-2 shadow-[0_12px_28px_rgba(15,23,42,0.14)] ${size.className}`}
-      style={{ borderColor: theme.border, background: theme.background, color: "#111827", width: size.width }}
+      style={{ borderColor: theme.border, background: theme.background, color: isRoot ? "#ffffff" : "#111827", width: size.width }}
     >
       <Handle type="target" position={targetPosition} className="!h-3 !w-3 !border-2 !bg-white" style={{ borderColor: theme.border }} />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[9px] font-bold uppercase tracking-[0.2em]" style={{ color: theme.accent }}>{compactText(node.type, isRoot ? "Main Topic" : "Concept")}</p>
-          <p className={`${size.titleClass} mt-1 font-bold leading-snug text-slate-950`}>{node.title || node.label || "Mind map node"}</p>
+          <p className={`${size.titleClass} mt-1 font-bold leading-snug ${isRoot ? "text-white" : "text-slate-950"}`}>{node.title || node.label || "Mind map node"}</p>
         </div>
         {data.hasChildren ? (
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              data.onToggle?.(node.id);
+              data.onToggle?.(node.id, data.isCollapsed);
             }}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-sm font-bold text-slate-800"
-            title={data.isCollapsed ? "Expand node" : "Collapse node"}
+            className="nodrag nopan flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-base font-bold text-slate-900 shadow-sm transition hover:scale-105 hover:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-400"
+            title={data.isCollapsed ? `Expand ${data.hiddenChildCount || "hidden"} concept${data.hiddenChildCount === 1 ? "" : "s"}` : "Collapse node"}
           >
             {data.isCollapsed ? "+" : "-"}
           </button>
         ) : null}
       </div>
-      {node.summary ? <p className="mt-3 text-xs leading-5 text-slate-700">{node.summary}</p> : null}
+      {node.summary ? <p className={`mt-3 text-sm leading-6 ${isRoot ? "text-slate-100" : "text-slate-700"}`}>{node.summary}</p> : null}
+      {data.hiddenChildCount ? (
+        <p className={`mt-3 text-xs font-semibold ${isRoot ? "text-slate-200" : "text-slate-500"}`}>
+          {data.hiddenChildCount} extra detail{data.hiddenChildCount === 1 ? "" : "s"} available. Press + to expand this node.
+        </p>
+      ) : null}
       <div className="mt-3 flex items-center justify-between gap-3">
         <span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-700">Score {importance}</span>
-        {node.source_location ? <span className="truncate text-[10px] font-semibold text-slate-500">{node.source_location}</span> : null}
+        {node.source_location ? <span className={`truncate text-[10px] font-semibold ${isRoot ? "text-slate-200" : "text-slate-500"}`}>{node.source_location}</span> : null}
       </div>
       <Handle type="source" position={sourcePosition} className="!h-3 !w-3 !border-2 !bg-white" style={{ borderColor: theme.border }} />
     </div>
@@ -412,25 +405,33 @@ function MindMapNode({ data }) {
 
 export default function MindMapFlow({ root, onSelectNode, exportMode = false }) {
   const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [collapsedIds, setCollapsedIds] = useState(() => new Set());
   const [layoutMode, setLayoutMode] = useState("auto");
 
   useEffect(() => {
     setExpandedIds(new Set());
+    setCollapsedIds(new Set());
     setLayoutMode("auto");
   }, [root]);
 
-  const handleToggle = useCallback((nodeId) => {
+  const handleToggle = useCallback((nodeId, shouldExpand) => {
     setExpandedIds((current) => {
       const next = new Set(current);
-      if (next.has(nodeId)) next.delete(nodeId);
+      if (shouldExpand) next.add(nodeId);
+      else next.delete(nodeId);
+      return next;
+    });
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (shouldExpand) next.delete(nodeId);
       else next.add(nodeId);
       return next;
     });
   }, []);
 
   const flowElements = useMemo(
-    () => buildFlowElements(root, expandedIds, handleToggle, exportMode ? "export" : layoutMode),
-    [root, expandedIds, handleToggle, layoutMode, exportMode],
+    () => buildFlowElements(root, expandedIds, collapsedIds, handleToggle, exportMode ? "export" : layoutMode),
+    [root, expandedIds, collapsedIds, handleToggle, layoutMode, exportMode],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState(flowElements.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowElements.edges);

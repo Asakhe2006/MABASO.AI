@@ -18105,6 +18105,20 @@ def sanitize_mind_map_id(value: str, fallback: str) -> str:
     return cleaned[:80] or fallback
 
 
+def is_mind_map_placeholder_node(title: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", compact_text(title).lower()).strip()
+    return normalized.startswith(("see more", "show more", "more details", "additional details", "hidden concepts"))
+
+
+def sanitize_mind_map_summary(value: Any, fallback: str) -> str:
+    summary = compact_text(value, fallback)
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
+    non_table_lines = [line for line in lines if not re.match(r"^\|?[\s:-]*\|", line)]
+    summary = " ".join(non_table_lines or lines or [summary])
+    summary = re.sub(r"\s+", " ", summary).strip()
+    return compact_text(summary, fallback)
+
+
 def normalize_mind_map_node(
     raw_node: Any,
     *,
@@ -18116,6 +18130,8 @@ def normalize_mind_map_node(
 ) -> dict[str, Any]:
     node = raw_node if isinstance(raw_node, dict) else {}
     title = compact_text(node.get("title") or node.get("label"), fallback_title)
+    if depth == 0 and is_mind_map_placeholder_node(title):
+        title = fallback_title
     node_id = sanitize_mind_map_id(node.get("id") or title, f"node-{depth}-{sibling_index}")
     node_type = compact_text(node.get("type") or node.get("node_type"), "Main Topic" if depth <= 1 else "Concept")
     if node_type.lower() not in MIND_MAP_NODE_TYPES:
@@ -18133,8 +18149,18 @@ def normalize_mind_map_node(
     if depth < max_depth:
         raw_children = node.get("children") if isinstance(node.get("children"), list) else []
         seen_titles: set[str] = set()
-        for index, child in enumerate(raw_children[:10]):
+        normalized_child_inputs: list[Any] = []
+        for child in raw_children:
+            if isinstance(child, dict):
+                child_title = compact_text(child.get("title") or child.get("label"))
+                if is_mind_map_placeholder_node(child_title):
+                    normalized_child_inputs.extend(child.get("children") if isinstance(child.get("children"), list) else [])
+                    continue
+            normalized_child_inputs.append(child)
+        for index, child in enumerate(normalized_child_inputs[:10]):
             child_title = compact_text((child or {}).get("title") or (child or {}).get("label") if isinstance(child, dict) else "")
+            if is_mind_map_placeholder_node(child_title):
+                continue
             normalized_title = child_title.lower()
             if normalized_title and normalized_title in seen_titles:
                 continue
@@ -18158,7 +18184,7 @@ def normalize_mind_map_node(
         "type": node_type,
         "importance": importance,
         "importance_score": importance,
-        "summary": compact_text(node.get("summary"), "Key concept extracted from the study material."),
+        "summary": sanitize_mind_map_summary(node.get("summary"), "Key concept extracted from the study material."),
         "parent": parent_id,
         "source_location": compact_text(node.get("source_location") or node.get("source"), "Source material"),
         "connected_topics": [
@@ -18272,6 +18298,11 @@ async def generate_mind_map_package(
         "Identify the true central topic, major concepts, sub-concepts, relationships, definitions, formulas, processes, examples, applications, principles, warnings, and key points. "
         "Preserve academic terminology, formulas, scientific laws, and important definitions. "
         "Rank concepts by importance. "
+        "Never create placeholder nodes called See more, Show more, More Details, Additional Details, Hidden Concepts, or similar. "
+        "Do not output markdown tables or table-shaped text inside summaries; convert tabular information into parent-child nodes. "
+        "Important educational content must be visible as real concept nodes, not hidden behind artificial nodes. "
+        "Prefer professional educational branches: Definition, Core Concepts, Key Components, Process or Workflow, Advantages, Limitations, Applications, Examples, Common Mistakes, and Exam or Assessment Focus when the source supports them. "
+        "Each node summary must be concise but information-rich, with factual terminology and no generic filler. "
         "Allowed node types: Main Topic, Concept, Definition, Formula, Process, Example, Application, Principle, Warning, Key Point. "
         "Return only valid JSON with shape {\"root\":{\"id\":\"root\",\"title\":\"\",\"label\":\"\",\"type\":\"Main Topic\",\"importance\":100,\"importance_score\":100,\"summary\":\"\",\"source_location\":\"\",\"connected_topics\":[],\"children\":[]}}. "
         "Every child must include id, title, label, type, importance, importance_score, summary, source_location, connected_topics, and children. "
@@ -18283,6 +18314,9 @@ async def generate_mind_map_package(
         f"Maximum hierarchy depth after root: {max_depth}.\n"
         "Importance scoring: root=100, major topics=90-99, subtopics=70-89, supporting concepts=50-69, examples=30-49.\n"
         "Hierarchy rules: Root Topic -> Major Topics -> Subtopics -> Supporting Concepts -> Examples. Do not place examples above concepts.\n"
+        "Do not use any standalone See More, More Details, Hidden, or continuation nodes. Put expandable detail under the relevant real parent concept.\n"
+        "If the source contains enough information, organize root children into 6-10 strong branches such as Core Definition, Fundamental Concepts, Detailed Explanation, Key Components, Process / Workflow, Applications, Advantages, Limitations, Common Mistakes, and Exam / Assessment Focus.\n"
+        "Exam / Assessment Focus should include frequently tested concepts, important formulas, problem-solving steps, and key revision notes when relevant.\n"
         "If Engineering, Mathematics, Science, Business, Law, or Medicine is detected, create dedicated branches for equations, laws, definitions, processes, principles, methods, examples, and applications.\n"
         "Store source locations as page, section, heading, slide, report section, or source material when exact location is unavailable.\n\n"
         "SOURCE MATERIAL:\n"
