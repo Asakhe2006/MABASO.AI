@@ -4102,6 +4102,7 @@ export default function App() {
   const [isRequestingEmailCode, setIsRequestingEmailCode] = useState(false);
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [authServerStateReady, setAuthServerStateReady] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
@@ -10385,6 +10386,7 @@ export default function App() {
     setAuthEmail("");
     setAuthSessionMode("user");
     setAuthAvailableModes([]);
+    setAuthServerStateReady(true);
     setAuthMode("login");
     setRegisterStep("email");
     setPendingRegistrationToken("");
@@ -10433,6 +10435,7 @@ export default function App() {
     let cancelled = false;
     const token = window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
     if (!token) {
+      setAuthServerStateReady(true);
       setAuthChecked(true);
       return undefined;
     }
@@ -10449,8 +10452,9 @@ export default function App() {
     setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
     setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
     setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
+    setAuthServerStateReady(false);
     setAuthChecked(true);
-    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
+    fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -10481,6 +10485,8 @@ export default function App() {
           ? "Opening your saved session while the server wakes up."
           : "Using the saved session while the server finishes reconnecting.",
       );
+    }).finally(() => {
+      if (!cancelled) setAuthServerStateReady(true);
     });
     return () => {
       cancelled = true;
@@ -10714,7 +10720,7 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
+      fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
@@ -10871,6 +10877,7 @@ export default function App() {
     setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
     setAuthSessionMode(nextMode);
     setAuthAvailableModes(nextAvailableModes);
+    setAuthServerStateReady(true);
     if (nextMode === "admin") {
       setCurrentPage("admin");
       return;
@@ -10899,7 +10906,7 @@ export default function App() {
     let transientAttempt = 0;
     while (true) {
       try {
-        const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
+        const response = await fetchWithTimeout(`${API_BASE_URL}/auth/me`, { credentials: "include", headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
         const data = await parseJsonSafe(response);
         if (response.status === 401) {
           clearSession("Your session expired. Please sign in again.");
@@ -11469,6 +11476,10 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authToken) return;
     if (browserPath === "/admin/dashboard") {
+      if (!authServerStateReady && authAvailableModes.includes("admin")) {
+        if (currentPage !== "admin") setCurrentPage("admin");
+        return;
+      }
       if (authSessionMode !== "admin") {
         if (authAvailableModes.includes("admin")) {
           if (currentPage !== "admin") setCurrentPage("admin");
@@ -11485,10 +11496,11 @@ export default function App() {
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
     setCurrentPage(routedPage);
-  }, [authAvailableModes, authChecked, authSessionMode, authToken, browserPath, currentPage]);
+  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage]);
 
   useEffect(() => {
     if (!authChecked || !authToken) return;
+    if (browserPath === "/admin/dashboard" && !authServerStateReady && authAvailableModes.includes("admin")) return;
     const targetRoute = resolveAppRouteForPage(currentPage, authSessionMode);
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (routedPage && routedPage !== "admin" && routedPage !== currentPage) return;
@@ -11498,7 +11510,7 @@ export default function App() {
       || (browserPath === "/admin/dashboard" && currentPage === "admin" && authSessionMode === "admin");
     if (!targetRoute || !routeShouldMirrorApp || browserPath === targetRoute) return;
     navigateToPath(targetRoute, { replace: true });
-  }, [authChecked, authSessionMode, authToken, browserPath, currentPage]);
+  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage]);
 
   useEffect(() => {
     if (authToken || !authChecked) return;
@@ -11583,7 +11595,7 @@ export default function App() {
     headers.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
     let response;
     try {
-      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...requestOptions, headers }, timeoutMs);
+      response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { credentials: "include", ...requestOptions, headers }, timeoutMs);
     } catch (err) {
       throw new Error(getReadableRequestError(err, path));
     }
@@ -13296,6 +13308,7 @@ export default function App() {
 
   useEffect(() => {
     if (!authChecked || !authToken || browserPath !== "/admin/dashboard") return undefined;
+    if (!authServerStateReady) return undefined;
     if (authSessionMode === "admin" || !authAvailableModes.includes("admin")) return undefined;
     const now = Date.now();
     if (adminAutoModeSwitchRef.current || now - adminAutoModeSwitchLastAtRef.current < 10000) return undefined;
@@ -13305,7 +13318,7 @@ export default function App() {
       adminAutoModeSwitchRef.current = false;
     });
     return undefined;
-  }, [authAvailableModes, authChecked, authSessionMode, authToken, browserPath]);
+  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath]);
 
   const pushHistoryToServer = async (items) => {
     const response = await authFetch("/history", {
@@ -13345,8 +13358,15 @@ export default function App() {
       if (!silent) setError(err.message || "Could not load the admin dashboard.");
       if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
         if (authAvailableModes.includes("admin")) {
-          setAuthMessage("Choose admin mode again to reopen the protected dashboard.");
-          setCurrentPage("mode-select");
+          setAuthMessage("Admin access is available. Reopening admin mode...");
+          setCurrentPage("admin");
+          if (authSessionMode !== "admin" && !adminAutoModeSwitchRef.current) {
+            adminAutoModeSwitchRef.current = true;
+            adminAutoModeSwitchLastAtRef.current = Date.now();
+            chooseSessionMode("admin", { silent: true }).finally(() => {
+              adminAutoModeSwitchRef.current = false;
+            });
+          }
         } else {
           setCurrentPage("capture");
         }
