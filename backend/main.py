@@ -1340,8 +1340,10 @@ app.add_middleware(
     allow_origins=CORS_ALLOW_ORIGINS,
     allow_origin_regex=CORS_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Mabaso-Device-Id", "X-Device-Id"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,
 )
 
 
