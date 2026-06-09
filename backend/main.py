@@ -1494,7 +1494,7 @@ class PostgresConnection:
                         "row_factory": dict_row,
                         "connect_timeout": 10,
                         "application_name": "mabaso_ai",
-                        "prepare_threshold": 0,
+                        "prepare_threshold": None,
                     },
                     min_size=1,
                     max_size=max(2, get_int_env("POSTGRES_POOL_MAX_SIZE", 6)),
