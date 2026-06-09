@@ -2303,7 +2303,12 @@ def get_available_auth_modes(email: str) -> list[str]:
 def normalize_session_mode(mode: str, email: str) -> str:
     requested_mode = (mode or "user").strip().lower() or "user"
     if requested_mode not in {"user", "admin"}:
-        raise HTTPException(status_code=400, detail="Session mode must be either user or admin.")
+        logger.warning(
+            "Unexpected session mode %r for %s; falling back to user mode.",
+            requested_mode,
+            normalize_email(email),
+        )
+        requested_mode = "user"
     if requested_mode == "admin" and not is_admin_email(email):
         raise HTTPException(status_code=403, detail="Admin access is not available for this account.")
     return requested_mode
