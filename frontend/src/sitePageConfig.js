@@ -114,12 +114,6 @@ export const footerLinkGroups = [
       { label: "Integrations", route: "/developers/integrations" },
     ],
   },
-  {
-    title: "Admin",
-    links: [
-      { label: "Admin Dashboard", route: "/admin/dashboard" },
-    ],
-  },
 ];
 
 export const sitePages = [
@@ -2512,33 +2506,33 @@ Content-Type: application/json
   }),
   page({
     route: "/admin/dashboard",
-    title: "Admin Dashboard",
-    category: "Admin",
+    title: "Protected Operations Center",
+    category: "Protected",
     access: "admin",
     metadata: {
-      title: "Admin Dashboard | Mabaso AI",
-      description: "Administrative analytics, AI usage metrics, sessions, security alerts, and platform health for authorized Mabaso AI administrators.",
+      title: "Protected Operations Center | Mabaso AI",
+      description: "Restricted analytics, AI usage metrics, sessions, security alerts, and platform health for authorized accounts.",
     },
     hero: {
-      eyebrow: "Admin / Protected",
-      headline: "Platform analytics, AI usage, security alerts, and operational controls for authorized administrators.",
-      description: "Admin Dashboard represents the protected operations center of Mabaso AI. It brings together user metrics, AI generation usage, session intelligence, security alerts, content insights, and platform health monitoring.",
+      eyebrow: "Protected / Restricted",
+      headline: "Platform analytics, AI usage, security alerts, and operational controls for authorized accounts.",
+      description: "This protected area brings together user metrics, AI generation usage, session intelligence, security alerts, content insights, and platform health monitoring.",
       ctas: [
-        primaryCta("Open Admin Dashboard", "open-admin"),
+        primaryCta("Open Protected Area", "open-admin"),
         secondaryCta("Read Security", "route", "/company/security"),
       ],
       metrics: [
-        { label: "Access", value: "Admin only" },
+        { label: "Access", value: "Restricted" },
         { label: "Focus", value: "Operations and governance" },
         { label: "Monitoring", value: "Users, AI, sessions, security" },
       ],
       preview: {
-        kicker: "Operations center preview",
+        kicker: "Restricted area preview",
         title: "Analytics, AI generation, sessions, storage, and alerts",
-        subtitle: "The admin route must feel locked down, observability-heavy, and unmistakably protected.",
+        subtitle: "This route remains locked behind server-side authorization.",
         tabs: ["Overview", "Users", "Sessions", "Security"],
         rows: [
-          { label: "Audience", value: "Authorized administrators only" },
+          { label: "Audience", value: "Authorized accounts only" },
           { label: "Signals", value: "Usage, health, alerts" },
           { label: "Protection", value: "Strict access guard" },
         ],
@@ -2546,12 +2540,12 @@ Content-Type: application/json
     },
     contains: [
       { icon: "bar-chart-3", title: "Analytics overview", description: "Platform usage, active users, AI output totals, and system health live together." },
-      { icon: "shield-alert", title: "Security visibility", description: "Alerts, suspicious activity, failed logins, and admin audit flows are central." },
-      { icon: "user-cog", title: "Administrative control", description: "User state management, force logout, and protected operations are admin scoped." },
+      { icon: "shield-alert", title: "Security visibility", description: "Alerts, suspicious activity, failed logins, and audit flows are central." },
+      { icon: "user-cog", title: "Operational control", description: "User state management, force logout, and protected operations are restricted." },
     ],
     layout: [
-      { title: "Operations hero", description: "Lead with administrative purpose and a protected-state visual, not public marketing." },
-      { title: "Signal modules", description: "Group analytics, AI metrics, sessions, content, health, and security into an enterprise admin structure." },
+      { title: "Operations hero", description: "Lead with restricted purpose and a protected-state visual, not public marketing." },
+      { title: "Signal modules", description: "Group analytics, AI metrics, sessions, content, health, and security into an enterprise structure." },
       { title: "Guard and denial states", description: "Make unauthorized access states visually strong and explicit." },
     ],
     modules: [
@@ -2570,30 +2564,30 @@ Content-Type: application/json
         title: "Access rules",
         items: [
           "Route requires login and admin authorization",
-          "Unauthorized visitors see a premium access-denied screen",
-          "Non-admin signed-in users are blocked from platform operations data",
+          "Unauthorized visitors see a restricted access screen",
+          "Non-authorized signed-in users are blocked from platform operations data",
         ],
       },
     ],
     visuals: [
-      "Observability-heavy dashboard preview with charts and control cards",
-      "Admin access-denied state with secure styling",
+      "Observability-heavy restricted-area preview with charts and control cards",
+      "Restricted access-denied state with secure styling",
       "Security alert panel and session analytics cards",
     ],
     emptyState: {
-      title: "Admin data is unavailable",
-      description: "Render a secured telemetry shell with locked cards and clear messaging that administrative data is protected.",
+      title: "Restricted data is unavailable",
+      description: "Render a secured telemetry shell with locked cards and clear messaging that this area is protected.",
     },
     designNotes: [
-      "The admin route should feel like a real operations console, not a hidden settings page.",
+      "The restricted route should feel like a real operations console, not a hidden settings page.",
       "Unauthorized and locked states must look premium and final, not like missing features.",
       "Use a lighter enterprise admin canvas to differentiate it from the student-facing dark workspace.",
     ],
     relatedPages: ["/company/security", "/developers/api-documentation", "/support/contact-support"],
     footerCrossLinks: ["/company/privacy", "/company/terms", "/company/about"],
     lockedPreview: {
-      title: "Admin access is restricted",
-      description: "Administrative analytics, security alerts, user controls, and audit data are only available to authorized Mabaso AI administrators.",
+      title: "Restricted access is required",
+      description: "Analytics, security alerts, user controls, and audit data are only available to authorized Mabaso AI accounts.",
       benefits: [
         "Monitor platform health and AI generation usage",
         "Review sessions, users, and security alerts",
@@ -2601,8 +2595,8 @@ Content-Type: application/json
       ],
     },
     adminGuard: {
-      title: "Administrative access required",
-      description: "This route is reserved for authorized Mabaso AI administrators. Sign in with an admin account or return to the student workspace.",
+      title: "Restricted access required",
+      description: "This route is reserved for authorized Mabaso AI accounts. Sign in with an approved account or return to the student workspace.",
     },
   }),
 ];

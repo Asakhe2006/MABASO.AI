@@ -649,7 +649,7 @@ const fairSubscriptionPlans = [
     paymentType: "checkout",
     audience: "Heavy academic users and research students",
     limits: "Unlimited usage, best available quality settings, priority speed, deep research mode, and large-file processing.",
-    howItWorks: "Premium Student removes daily generation limits and gives the strongest quality profile, best speed tier, and highest-depth outputs. Admin accounts are treated as Premium automatically and must never be restricted.",
+    howItWorks: "Premium Student removes daily generation limits and gives the strongest quality profile, best speed tier, and highest-depth outputs.",
     attempts: [
       "Unlimited study chat",
       "Unlimited reports and expansions",
@@ -13375,7 +13375,7 @@ export default function App() {
         },
       );
       const data = await parseJsonSafe(response);
-      if (!response.ok) throw new Error(data.detail || "Could not load the admin dashboard.");
+      if (!response.ok) throw new Error(data.detail || "Could not load the protected area.");
       hasLoadedAdminDashboardRef.current = true;
       setAdminDashboardRange(normalizeAdminDashboardRangeKey(data?.time_window?.key || selectedRange));
       setAdminDashboard(data);
@@ -13384,7 +13384,7 @@ export default function App() {
       if (cachedDashboard) {
         setAdminDashboard(cachedDashboard);
       }
-      if (!silent) setError(err.message || "Could not load the admin dashboard.");
+      if (!silent) setError(err.message || "Could not load the protected area.");
       if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
         if (authAvailableModes.includes("admin")) {
           setAuthMessage("Admin access is available. Reopening admin mode...");
@@ -18389,15 +18389,15 @@ export default function App() {
             <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Admin access</p>
             <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">
-              {isOpeningAllowedAdminDashboard ? "Opening the admin dashboard." : "Open the protected admin dashboard."}
+              {isOpeningAllowedAdminDashboard ? "Opening the protected area." : "Open the protected area."}
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">
               {isOpeningAllowedAdminDashboard
-                ? "This email is configured as an administrator. The app is switching this session into admin mode and keeping you on the protected dashboard route."
-                : "This route is protected. If this email is configured as an administrator, switch into admin mode to continue."}
+                ? "This email is configured for elevated access. The app is switching this session into protected mode and keeping you on the restricted route."
+                : "This route is protected. If this email is configured for elevated access, switch into protected mode to continue."}
             </p>
             <div className="mt-8 grid gap-5 xl:grid-cols-2">
-              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">{isOpeningAllowedAdminDashboard ? "Open admin mode now" : "Enter admin dashboard"}</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Protected mode</p><h2 className="mt-3 text-2xl font-semibold text-white">{isOpeningAllowedAdminDashboard ? "Open protected mode now" : "Enter protected area"}</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
               <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Return to student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study tools, and use the normal Mabaso workspace.</p></button>
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -18458,7 +18458,7 @@ export default function App() {
             <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">This login matches an admin account, but the admin area stays hidden unless you deliberately switch into admin mode.</p>
             <div className="mt-8 grid gap-5 xl:grid-cols-2">
               <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the normal student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study guides, and use the platform like a normal user.</p></button>
-              <button type="button" onClick={() => chooseSessionMode("admin")} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Admin mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the protected admin dashboard</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, and security alerts with server-side checks enforced.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("admin")} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Protected mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the protected area</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, and security alerts with server-side checks enforced.</p></button>
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <div className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
