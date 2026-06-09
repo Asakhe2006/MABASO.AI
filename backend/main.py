@@ -1494,7 +1494,7 @@ class PostgresConnection:
                         "row_factory": dict_row,
                         "connect_timeout": 10,
                         "application_name": "mabaso_ai",
-                        "prepare_threshold": None,
+                        "prepare_threshold": 0,
                     },
                     min_size=1,
                     max_size=max(2, get_int_env("POSTGRES_POOL_MAX_SIZE", 6)),
@@ -6262,34 +6262,60 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
         created_at = compact_text(row["created_at"], now_iso) if row else now_iso
         if not user_id:
             user_id = uuid4().hex
-        connection.execute(
-            """
-            UPDATE users
-            SET user_id = ?,
-                current_plan_id = ?,
-                subscription_status = ?,
-                subscription_start_at = ?,
-                subscription_end_at = ?,
-                usage_reset_at = ?,
-                feature_permissions_json = ?,
-                last_login_at = CASE WHEN ? THEN ? ELSE last_login_at END,
-                updated_at = ?
-            WHERE email = ?
-            """,
-            (
-                user_id,
-                compact_text(usage.get("plan_id"), "free"),
-                compact_text(subscription.get("status"), "free"),
-                compact_text(subscription.get("current_period_start")),
-                compact_text(subscription.get("current_period_end")),
-                compact_text(usage.get("reset_at")),
-                json.dumps(feature_permissions, ensure_ascii=False),
-                bool(mark_login),
-                now_iso,
-                now_iso,
-                normalized_email,
-            ),
-        )
+        if mark_login:
+            connection.execute(
+                """
+                UPDATE users
+                SET user_id = ?,
+                    current_plan_id = ?,
+                    subscription_status = ?,
+                    subscription_start_at = ?,
+                    subscription_end_at = ?,
+                    usage_reset_at = ?,
+                    feature_permissions_json = ?,
+                    last_login_at = ?,
+                    updated_at = ?
+                WHERE email = ?
+                """,
+                (
+                    user_id,
+                    compact_text(usage.get("plan_id"), "free"),
+                    compact_text(subscription.get("status"), "free"),
+                    compact_text(subscription.get("current_period_start")),
+                    compact_text(subscription.get("current_period_end")),
+                    compact_text(usage.get("reset_at")),
+                    json.dumps(feature_permissions, ensure_ascii=False),
+                    now_iso,
+                    now_iso,
+                    normalized_email,
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE users
+                SET user_id = ?,
+                    current_plan_id = ?,
+                    subscription_status = ?,
+                    subscription_start_at = ?,
+                    subscription_end_at = ?,
+                    usage_reset_at = ?,
+                    feature_permissions_json = ?,
+                    updated_at = ?
+                WHERE email = ?
+                """,
+                (
+                    user_id,
+                    compact_text(usage.get("plan_id"), "free"),
+                    compact_text(subscription.get("status"), "free"),
+                    compact_text(subscription.get("current_period_start")),
+                    compact_text(subscription.get("current_period_end")),
+                    compact_text(usage.get("reset_at")),
+                    json.dumps(feature_permissions, ensure_ascii=False),
+                    now_iso,
+                    normalized_email,
+                ),
+            )
 
     return {
         "user_id": user_id,
@@ -8061,40 +8087,65 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     time_window = build_dashboard_time_window(now, range_key)
     range_start = parse_history_datetime(time_window["started_at"], now)
     retention_lookback_days = max(int(time_window["days"]) + 35, 365)
-    logs_all = load_audit_logs(limit=ADMIN_DASHBOARD_AUDIT_LOG_LIMIT, days=retention_lookback_days)
+    dashboard_errors: list[str] = []
+    try:
+        logs_all = load_audit_logs(limit=ADMIN_DASHBOARD_AUDIT_LOG_LIMIT, days=retention_lookback_days)
+    except Exception as exc:
+        logger.exception("Admin dashboard audit log load failed range=%s", range_key)
+        dashboard_errors.append(f"audit_logs: {exc}")
+        logs_all = []
     logs = filter_admin_logs_by_start(logs_all, range_start)
-    history_items_all = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
+    try:
+        history_items_all = load_history_items_with_owners(limit=ADMIN_DASHBOARD_HISTORY_LIMIT)
+    except Exception as exc:
+        logger.exception("Admin dashboard history load failed range=%s", range_key)
+        dashboard_errors.append(f"history_items: {exc}")
+        history_items_all = []
     history_items = filter_admin_history_by_start(history_items_all, range_start)
-    support_messages_all = load_support_messages(limit=ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT)
+    try:
+        support_messages_all = load_support_messages(limit=ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT)
+    except Exception as exc:
+        logger.exception("Admin dashboard support load failed range=%s", range_key)
+        dashboard_errors.append(f"support_messages: {exc}")
+        support_messages_all = []
     support_messages = [
         message
         for message in support_messages_all
         if message["created_at_dt"] >= range_start
     ]
 
-    with get_db_connection() as connection:
-        user_rows = connection.execute(
-            "SELECT email, created_at, verified_at FROM users ORDER BY created_at DESC"
-        ).fetchall()
-        session_rows = connection.execute(
-            "SELECT email, expires_at, created_at FROM sessions WHERE expires_at > ?",
-            (now.isoformat(),),
-        ).fetchall()
-        account_state_rows = connection.execute(
-            "SELECT email, status, updated_at, updated_by FROM user_account_states"
-        ).fetchall()
-        admin_attempt_rows = connection.execute(
-            "SELECT email, ip_address, failure_count, last_failed_at, locked_until FROM admin_login_attempts"
-        ).fetchall()
-        usage_event_rows = connection.execute(
-            """
-            SELECT email, plan_id, feature, COALESCE(SUM(quantity), 0) AS total_quantity, MAX(created_at) AS last_created_at
-            FROM billing_usage_events
-            WHERE created_at >= ?
-            GROUP BY email, plan_id, feature
-            """,
-            (range_start.isoformat(),),
-        ).fetchall()
+    try:
+        with get_db_connection() as connection:
+            user_rows = connection.execute(
+                "SELECT email, created_at, verified_at FROM users ORDER BY created_at DESC"
+            ).fetchall()
+            session_rows = connection.execute(
+                "SELECT email, expires_at, created_at FROM sessions WHERE expires_at > ?",
+                (now.isoformat(),),
+            ).fetchall()
+            account_state_rows = connection.execute(
+                "SELECT email, status, updated_at, updated_by FROM user_account_states"
+            ).fetchall()
+            admin_attempt_rows = connection.execute(
+                "SELECT email, ip_address, failure_count, last_failed_at, locked_until FROM admin_login_attempts"
+            ).fetchall()
+            usage_event_rows = connection.execute(
+                """
+                SELECT email, plan_id, feature, COALESCE(SUM(quantity), 0) AS total_quantity, MAX(created_at) AS last_created_at
+                FROM billing_usage_events
+                WHERE created_at >= ?
+                GROUP BY email, plan_id, feature
+                """,
+                (range_start.isoformat(),),
+            ).fetchall()
+    except Exception as exc:
+        logger.exception("Admin dashboard base table load failed range=%s", range_key)
+        dashboard_errors.append(f"base_tables: {exc}")
+        user_rows = []
+        session_rows = []
+        account_state_rows = []
+        admin_attempt_rows = []
+        usage_event_rows = []
 
     account_state_by_email = {
         normalize_email(row["email"]): {
@@ -8203,13 +8254,32 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         feature = classify_audit_feature(log)
         feature_counts[feature] = feature_counts.get(feature, 0) + 1
 
-    session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email_all, now, window=time_window)
+    try:
+        session_analytics = compute_session_analytics(logs, session_rows, last_login_by_email_all, now, window=time_window)
+    except Exception as exc:
+        logger.exception("Admin dashboard session analytics failed range=%s", range_key)
+        dashboard_errors.append(f"session_analytics: {exc}")
+        session_analytics = {
+            "totals": {
+                "active_sessions": len(session_rows),
+                "tracked_sessions_in_range": len(session_rows),
+                "avg_session_duration_seconds": 0,
+                "bounce_rate_percent": 0,
+            },
+            "timeline": [],
+            "table_full": [],
+        }
     session_table_by_email = {
         normalize_email(item.get("email", "")): item
         for item in session_analytics.get("table_full", [])
         if normalize_email(item.get("email", ""))
     }
-    storage_usage_breakdown = compute_storage_usage_breakdown(history_items)
+    try:
+        storage_usage_breakdown = compute_storage_usage_breakdown(history_items)
+    except Exception as exc:
+        logger.exception("Admin dashboard storage breakdown failed range=%s", range_key)
+        dashboard_errors.append(f"storage_usage: {exc}")
+        storage_usage_breakdown = {"total_bytes": 0, "by_email": {}, "by_type": {}}
 
     user_row_by_email = {
         normalize_email(row["email"]): row
@@ -8723,9 +8793,64 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         device = (log["user_agent"] or "Unknown device")[:120]
         device_activity[device] = device_activity.get(device, 0) + 1
 
-    billing_snapshot = build_admin_billing_snapshot(range_start, now)
-    subscription_abuse_monitor = build_subscription_abuse_monitor()
-    database_freshness = build_admin_database_freshness()
+    try:
+        billing_snapshot = build_admin_billing_snapshot(range_start, now)
+    except Exception as exc:
+        logger.exception("Admin billing snapshot failed range=%s", range_key)
+        dashboard_errors.append(f"billing_snapshot: {exc}")
+        billing_snapshot = {
+            "overview": {
+                "total_revenue": 0.0,
+                "revenue_in_range": 0.0,
+                "monthly_revenue": 0.0,
+                "active_subscribers": 0,
+                "cancelled_subscribers": 0,
+                "failed_payments": 0,
+                "openai_cost": 0.0,
+                "hosting_cost": 0.0,
+                "profit": 0.0,
+                "currency": "ZAR",
+            },
+            "payments": [],
+            "subscriptions": [],
+            "revenue_per_plan": [],
+            "ai_costs": {"records": [], "by_feature": [], "token_totals": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}, "total_cost": 0.0},
+            "profitability": [],
+            "alerts": [],
+        }
+    try:
+        subscription_abuse_monitor = build_subscription_abuse_monitor()
+    except Exception as exc:
+        logger.exception("Subscription abuse monitor failed range=%s", range_key)
+        dashboard_errors.append(f"subscription_abuse_monitor: {exc}")
+        subscription_abuse_monitor = {
+            "limits": {
+                "premium_concurrent_sessions": ACCOUNT_SHARING_SESSION_LIMIT,
+                "premium_registered_devices": ACCOUNT_SHARING_DEVICE_LIMIT,
+                "activity_window_minutes": ACCOUNT_SHARING_ACTIVITY_WINDOW_MINUTES,
+                "thresholds": {"normal": 40, "warning": 70, "verification": 90, "suspension": 91},
+            },
+            "overview": {
+                "total_premium_users": 0,
+                "active_sessions": 0,
+                "suspicious_accounts": 0,
+                "suspended_accounts": 0,
+                "accounts_over_device_limit": 0,
+            },
+            "suspicious_accounts": [],
+            "events": [],
+        }
+    try:
+        database_freshness = build_admin_database_freshness()
+    except Exception as exc:
+        logger.exception("Admin database freshness failed range=%s", range_key)
+        dashboard_errors.append(f"database_freshness: {exc}")
+        database_freshness = {
+            "database_backend": DATABASE_BACKEND,
+            "database_url_configured": bool(DATABASE_URL),
+            "sqlite_path_configured": bool(DB_PATH),
+            "tables": {},
+        }
 
     return {
         "overview": {
@@ -8836,6 +8961,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "history_items_in_range": len(history_items),
             "virtual_usage_material_rows": len([item for item in content_items if item.get("source") == "billing_usage_events"]),
             "database_freshness": database_freshness,
+            "errors": dashboard_errors,
         },
         "analytics": {
             "session_heatmap": session_heatmap,
@@ -10124,6 +10250,7 @@ async def get_admin_dashboard(
     selected_range = normalize_admin_dashboard_range(time_range)
     snapshot = build_admin_dashboard_snapshot(selected_range)
     diagnostics = snapshot.get("diagnostics", {}) if isinstance(snapshot, dict) else {}
+    dashboard_status = "partial" if diagnostics.get("errors") else "success"
     logger.info(
         "Admin dashboard requested by %s range=%s users=%s usage_groups=%s usage_users=%s virtual_material_rows=%s ai_cost_records=%s",
         current_admin,
@@ -10136,11 +10263,12 @@ async def get_admin_dashboard(
     )
     record_audit_log(
         action="admin.dashboard.view",
+        status=dashboard_status,
         email=current_admin,
         request=request,
         resource_type="admin",
         resource_name="dashboard",
-        metadata={"time_range": selected_range},
+        metadata={"time_range": selected_range, "errors": diagnostics.get("errors", [])[:8]},
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
     return snapshot
