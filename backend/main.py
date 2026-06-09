@@ -4546,11 +4546,17 @@ def build_auth_response(email: str, token: str, *, include_account_snapshot: boo
 def run_post_auth_background_sync(
     *,
     email: str,
+    session_token: str | None = None,
     request: Request,
     action: str,
     resource_name: str,
     started_at: datetime,
 ) -> None:
+    if session_token:
+        try:
+            register_account_session(email, session_token, request, action=action)
+        except Exception:
+            logger.exception("Post-auth session registration failed for %s", email)
     try:
         sync_user_account_snapshot(email, mark_login=True)
     except Exception:
@@ -9645,16 +9651,19 @@ async def verify_login(payload: VerifyCodeRequest, request: Request):
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
     session_token = verify_login_code(email, code)
-    record_audit_log(
-        action="auth.code.verify",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="email-code",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-    )
-    register_account_session(email, session_token, request, action="auth.code.verify")
-    return build_auth_response(email, session_token)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "session_token": session_token,
+            "request": request,
+            "action": "auth.code.verify",
+            "resource_name": "email-code",
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/request-code")
@@ -9724,16 +9733,19 @@ async def complete_email_password_registration_route(payload: EmailPasswordRegis
         payload.registration_token,
         payload.password,
     )
-    record_audit_log(
-        action="auth.email_password.register_complete",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="user-register",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-    )
-    register_account_session(email, session_token, request, action="auth.email_password.register_complete")
-    return build_auth_response(email, session_token)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "session_token": session_token,
+            "request": request,
+            "action": "auth.email_password.register_complete",
+            "resource_name": "user-register",
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/login")
@@ -9790,17 +9802,19 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
 
     if is_admin_email(email):
         clear_admin_login_attempts(email, ip_address)
-
-    record_audit_log(
-        action="auth.email_password.login",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="admin-login" if is_admin_email(email) else "user-login",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-    )
-    register_account_session(email, session_token, request, action="auth.email_password.login")
-    return build_auth_response(email, session_token)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "session_token": session_token,
+            "request": request,
+            "action": "auth.email_password.login",
+            "resource_name": "admin-login" if is_admin_email(email) else "user-login",
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/register")
@@ -9812,16 +9826,19 @@ async def register_with_email_password_route(payload: EmailPasswordAuthRequest, 
         raise HTTPException(status_code=400, detail="Direct account creation is only available for register mode.")
 
     session_token = await asyncio.to_thread(register_with_email_password, email, payload.password)
-    record_audit_log(
-        action="auth.email_password.register",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name="user-register",
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-    )
-    register_account_session(email, session_token, request, action="auth.email_password.register")
-    return build_auth_response(email, session_token)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "session_token": session_token,
+            "request": request,
+            "action": "auth.email_password.register",
+            "resource_name": "user-register",
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/verify-code")
@@ -9833,16 +9850,19 @@ async def verify_email_password_login(payload: EmailPasswordVerifyRequest, reque
     if not code:
         raise HTTPException(status_code=400, detail="Verification code is required.")
     session_token = await asyncio.to_thread(verify_email_password_auth, email, payload.password, code, payload.mode)
-    record_audit_log(
-        action="auth.email_password.verify_code",
-        email=email,
-        request=request,
-        resource_type="auth",
-        resource_name=normalize_email_password_auth_mode(payload.mode),
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-    )
-    register_account_session(email, session_token, request, action="auth.email_password.verify_code")
-    return build_auth_response(email, session_token)
+    threading.Thread(
+        target=run_post_auth_background_sync,
+        kwargs={
+            "email": email,
+            "session_token": session_token,
+            "request": request,
+            "action": "auth.email_password.verify_code",
+            "resource_name": normalize_email_password_auth_mode(payload.mode),
+            "started_at": started_at,
+        },
+        daemon=True,
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/google")
@@ -9855,12 +9875,11 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
     logger.info("Google auth request started.")
     session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
     logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
-    await asyncio.to_thread(register_account_session, email, session_token, request, action="auth.google.login")
-    response = build_auth_response(email, session_token, include_account_snapshot=False)
     threading.Thread(
         target=run_post_auth_background_sync,
         kwargs={
             "email": email,
+            "session_token": session_token,
             "request": request,
             "action": "auth.google.login",
             "resource_name": "google",
@@ -9873,7 +9892,7 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
         email,
         int((utc_now() - started_at).total_seconds() * 1000),
     )
-    return response
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/apple")
@@ -9883,20 +9902,19 @@ async def apple_login(payload: AppleAuthRequest, request: Request):
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
         raise HTTPException(status_code=400, detail="Apple sign-in did not return a usable credential.")
     session_token, email = await asyncio.to_thread(create_session_from_apple_auth, payload)
-    await asyncio.to_thread(register_account_session, email, session_token, request, action="auth.apple.login")
-    response = build_auth_response(email, session_token, include_account_snapshot=False)
     threading.Thread(
         target=run_post_auth_background_sync,
         kwargs={
             "email": email,
+            "session_token": session_token,
             "request": request,
             "action": "auth.apple.login",
             "resource_name": "apple",
             "started_at": started_at,
         },
         daemon=True,
-    )
-    return response
+    ).start()
+    return build_auth_response(email, session_token, include_account_snapshot=False)
 
 
 @app.get("/auth/me")
