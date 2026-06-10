@@ -7251,6 +7251,7 @@ export default function App() {
                 <p>Pending means the payment record exists, but your plan is not active yet.</p>
                 <p>Verified means the admin matched the bank payment reference and the subscription was activated.</p>
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
+                <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:0717020081" className="font-semibold text-white underline decoration-white/30 underline-offset-4">0717020081</a> with your payment reference and bank proof of payment.</p>
               </div>
             </div>
           </div>
@@ -10314,6 +10315,21 @@ export default function App() {
                   {billingAlerts.map((alert, index) => (
                     <div key={`${alert.message}-${index}`} className="rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">{alert.message}</div>
                   ))}
+                </div>
+              ) : null}
+              {pendingManualPaymentRequests.length ? (
+                <div className="mt-5 rounded-[24px] border border-amber-200 bg-amber-50/60 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.24em] text-amber-700">Verify PayShap Payments</p>
+                      <h3 className="mt-2 text-lg font-semibold text-slate-950">Pending manual payment requests</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">Match the exact bank reference, then use VERIFY or REJECT on the user row.</p>
+                    </div>
+                    <button type="button" onClick={() => setAdminSidebarTab("payments")} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Open Full Queue</button>
+                  </div>
+                  <div className="mt-4 rounded-[20px] border border-slate-200 bg-white p-2">
+                    {renderAdminManualPaymentsTable(pendingManualPaymentRequests)}
+                  </div>
                 </div>
               ) : null}
             </article>
