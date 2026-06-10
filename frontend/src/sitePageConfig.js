@@ -138,7 +138,7 @@ export const sitePages = [
       preview: {
         kicker: "Fair billing",
         title: "Free, Student Plus, Pro Research, and Institution plans.",
-        subtitle: "Paid plans currently use PayFast secure checkout: Student Plus is R49/month and Pro Research is R149/month.",
+        subtitle: "Paid plans currently use manual PayShap references while online checkout approval is pending.",
       },
     },
     modules: [
@@ -156,11 +156,11 @@ export const sitePages = [
     ],
     emptyState: {
       title: "Billing is transparent by design.",
-      description: "Payments use PayFast secure checkout. MABASO.AI does not store customer card or bank details.",
+      description: "Payments use manual PayShap references while online checkout approval is pending. MABASO.AI does not store customer card or bank details.",
     },
     designNotes: [
       "Use calm pricing cards and strong anti-dark-pattern copy.",
-      "Do not make a paid plan active until the PayFast notification confirms payment.",
+      "Do not make a paid plan active until an admin verifies the PayShap bank reference.",
     ],
     footerCrossLinks: [
       { label: "Terms", route: "/company/terms" },
@@ -175,31 +175,31 @@ export const sitePages = [
     access: "public",
     metadata: {
       title: "Payment Success | Mabaso AI",
-      description: "Your Mabaso AI payment was received and your subscription will activate after PayFast confirms the transaction.",
+      description: "Your Mabaso AI payment request was received and your subscription activates after admin verification.",
     },
     hero: {
       eyebrow: "Billing / Payment",
-      headline: "Payment received. Activation is being confirmed.",
-      description: "PayFast has returned you to Mabaso AI. Your plan becomes active only after the secure PayFast notification reaches the backend, which protects users from fake or guessed billing states.",
+      headline: "Payment submitted. Activation is being verified.",
+      description: "Manual PayShap subscriptions stay pending until an admin matches the exact bank payment reference and verifies the request.",
       ctas: [
         primaryCta("Open Workspace", "open-app", "capture"),
         secondaryCta("View Pricing", "navigate", "/pricing"),
       ],
       preview: {
-        kicker: "Secure checkout",
+        kicker: "Manual verification",
         title: "We never store card or bank details.",
-        subtitle: "If your plan does not appear immediately, wait a short moment and refresh your usage from the Upgrade modal.",
+        subtitle: "If your plan does not appear immediately, open My Payments and check whether the reference is still pending.",
       },
     },
     modules: [
-      { icon: "shield-check", title: "PayFast confirmation", description: "The backend waits for PayFast's signed notification before marking a subscription active." },
-      { icon: "clock", title: "Short processing delay", description: "Payment redirects can arrive before the webhook, so activation may take a moment." },
-      { icon: "life-buoy", title: "Support ready", description: "If payment completed but access does not update, contact support with your PayFast payment reference." },
+      { icon: "shield-check", title: "Admin confirmation", description: "The backend marks a subscription active only after an admin verifies the matching PayShap reference." },
+      { icon: "clock", title: "Pending status", description: "Payment requests remain pending until the bank payment is reviewed." },
+      { icon: "life-buoy", title: "Support ready", description: "If payment completed but access does not update, contact support with your PayShap payment reference." },
     ],
     workflow: [
-      "PayFast redirects the user back to this page",
-      "PayFast sends the signed backend notification",
-      "Mabaso AI verifies the signature and amount",
+      "The user pays with the exact PayShap reference",
+      "The user clicks I Have Paid",
+      "An admin verifies the bank reference in the Payments dashboard",
       "The subscription is marked active only after verification",
     ],
     footerCrossLinks: [
@@ -2618,6 +2618,12 @@ export const protectedWorkspaceRoutes = [
     route: "/app/materials",
     title: "Saved Materials",
     description: "Reopen generated study packs, saved tests, and export-ready history tied to the signed-in account.",
+    access: "login",
+  },
+  {
+    route: "/app/payments",
+    title: "My Payments",
+    description: "Review manual PayShap payment references, submitted payment requests, and verification status for the signed-in account.",
     access: "login",
   },
   {

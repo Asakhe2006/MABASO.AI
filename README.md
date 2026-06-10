@@ -80,6 +80,8 @@ The backend refuses unsafe temporary SQLite storage on Render when `REQUIRE_PERS
 ## Notes
 
 - Account materials and billing usage are stored by signed-in email on the backend; browser storage is only a cache.
+- Manual PayShap subscriptions require `PAYSHAP_ACCOUNT_NAME` and `PAYSHAP_NUMBER` on the backend. The app creates pending payment references first; admins verify them from Admin Dashboard -> Payments before subscriptions activate.
 - Voice input uses the browser speech recognition API.
 - Optional voice reply playback uses browser text-to-speech.
 - Admin dashboard range controls support `1 day`, `7 days`, `1 month`, and `1 year`.
+- If Supabase Security Advisor reports `rls_disabled_in_public` or `sensitive_columns_exposed`, run `backend/sql/supabase_security_hardening.sql` in the affected Supabase project's SQL editor. The frontend does not use Supabase directly, so public `anon` and `authenticated` table access should stay blocked while backend service-role access continues.

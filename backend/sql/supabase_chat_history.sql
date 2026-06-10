@@ -55,3 +55,52 @@ create index if not exists idx_messages_user_conversation
 
 create index if not exists idx_conversations_search_document_trgm
   on public.conversations using gin (search_document gin_trgm_ops);
+
+alter table public.users enable row level security;
+alter table public.conversations enable row level security;
+alter table public.messages enable row level security;
+
+do $$
+declare
+  table_name text;
+  policy_role_clause text;
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon')
+    and exists (select 1 from pg_roles where rolname = 'authenticated') then
+    policy_role_clause := 'anon, authenticated';
+  elsif exists (select 1 from pg_roles where rolname = 'anon') then
+    policy_role_clause := 'anon';
+  elsif exists (select 1 from pg_roles where rolname = 'authenticated') then
+    policy_role_clause := 'authenticated';
+  else
+    policy_role_clause := 'public';
+  end if;
+
+  foreach table_name in array array['users', 'conversations', 'messages'] loop
+    if exists (select 1 from pg_roles where rolname = 'anon') then
+      execute format('revoke all on table public.%I from anon', table_name);
+    end if;
+
+    if exists (select 1 from pg_roles where rolname = 'authenticated') then
+      execute format('revoke all on table public.%I from authenticated', table_name);
+    end if;
+
+    if exists (select 1 from pg_roles where rolname = 'service_role') then
+      execute format('grant all on table public.%I to service_role', table_name);
+    end if;
+
+    if not exists (
+      select 1
+      from pg_policies
+      where schemaname = 'public'
+        and tablename = table_name
+        and policyname = 'Block direct client access'
+    ) then
+      execute format(
+        'create policy "Block direct client access" on public.%I for all to %s using (false) with check (false)',
+        table_name,
+        policy_role_clause
+      );
+    end if;
+  end loop;
+end $$;

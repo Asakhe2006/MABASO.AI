@@ -322,6 +322,8 @@ PAYFAST_PROCESS_URL = (
     else "https://www.payfast.co.za/eng/process"
 )
 PAYFAST_REQUIRE_SOURCE_CHECK = os.getenv("PAYFAST_REQUIRE_SOURCE_CHECK", "false").strip().lower() in {"1", "true", "yes", "on"}
+PAYSHAP_ACCOUNT_NAME = os.getenv("PAYSHAP_ACCOUNT_NAME", "").strip()
+PAYSHAP_NUMBER = os.getenv("PAYSHAP_NUMBER", "").strip()
 PAYFAST_ALLOWED_REFERER_HOSTS = {
     "www.payfast.co.za",
     "w1w.payfast.co.za",
@@ -1274,6 +1276,10 @@ class BillingCheckoutRequest(BaseModel):
     plan_id: str
 
 
+class PaymentCreateRequest(BaseModel):
+    plan_id: str
+
+
 class PdfSection(BaseModel):
     title: str
     content: str = ""
@@ -1577,6 +1583,7 @@ def init_db():
         }
         user_column_defaults = {
             "user_id": "TEXT NOT NULL DEFAULT ''",
+            "role": "TEXT NOT NULL DEFAULT 'user'",
             "current_plan_id": "TEXT NOT NULL DEFAULT 'free'",
             "subscription_status": "TEXT NOT NULL DEFAULT 'free'",
             "subscription_start_at": "TEXT NOT NULL DEFAULT ''",
@@ -2148,6 +2155,101 @@ def init_db():
             ON billing_usage_events (email, period_key, feature)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payment_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                plan_id TEXT NOT NULL DEFAULT '',
+                plan_name TEXT NOT NULL,
+                payment_reference TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                verified_at TEXT,
+                verified_by TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payment_requests_user_id
+            ON payment_requests (user_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payment_requests_reference
+            ON payment_requests (payment_reference)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payment_requests_status
+            ON payment_requests (status)
+            """
+        )
+        payment_request_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(payment_requests)").fetchall()
+        }
+        payment_request_column_defaults = {
+            "plan_id": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in payment_request_column_defaults.items():
+            if column_name not in payment_request_columns:
+                connection.execute(f"ALTER TABLE payment_requests ADD COLUMN {column_name} {column_definition}")
+        if DATABASE_BACKEND == "postgres":
+            connection.execute(
+                """
+                ALTER TABLE payment_requests ENABLE ROW LEVEL SECURITY
+                """
+            )
+            connection.execute(
+                """
+                DO $$
+                DECLARE
+                  policy_role_clause text;
+                BEGIN
+                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
+                    AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    policy_role_clause := 'anon, authenticated';
+                  ELSIF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    policy_role_clause := 'anon';
+                  ELSIF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    policy_role_clause := 'authenticated';
+                  ELSE
+                    policy_role_clause := 'public';
+                  END IF;
+
+                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    REVOKE ALL ON TABLE payment_requests FROM anon;
+                  END IF;
+
+                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    REVOKE ALL ON TABLE payment_requests FROM authenticated;
+                  END IF;
+
+                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    GRANT ALL ON TABLE payment_requests TO service_role;
+                  END IF;
+
+                  IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_policies
+                    WHERE schemaname = current_schema()
+                      AND tablename = 'payment_requests'
+                      AND policyname = 'Block direct client access'
+                  ) THEN
+                    EXECUTE format(
+                      'CREATE POLICY "Block direct client access" ON payment_requests FOR ALL TO %s USING (false) WITH CHECK (false)',
+                      policy_role_clause
+                    );
+                  END IF;
+                END $$;
+                """
+            )
 
 
 def hash_value(value: str) -> str:
@@ -2293,7 +2395,27 @@ def get_admin_email_set() -> set[str]:
 
 
 def is_admin_email(email: str) -> bool:
-    return normalize_email(email) in get_admin_email_set()
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return False
+    if normalized_email in get_admin_email_set():
+        return True
+    try:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT role FROM users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+    except Exception:
+        logger.debug("Could not read admin role for %s", normalized_email, exc_info=True)
+        return False
+    if not row:
+        return False
+    try:
+        role = row["role"]
+    except (KeyError, TypeError, IndexError):
+        role = ""
+    return compact_text(role).lower() == "admin"
 
 
 def get_available_auth_modes(email: str) -> list[str]:
@@ -3433,6 +3555,68 @@ async def deliver_collaboration_invite_emails(invited_emails: list[str], owner_e
                 resource_name=room_id,
                 metadata={"invited_email": invited_email, "delivery_status": "failed", "error": str(exc)},
             )
+
+
+def send_payment_status_email(email: str, payment: dict[str, Any], status: str):
+    smtp_settings = get_smtp_settings()
+    normalized_status = normalize_payment_request_status(status)
+    reference = compact_text(payment.get("payment_reference"))
+    plan_name = compact_text(payment.get("plan_name"), "your subscription")
+    amount = compact_text(payment.get("amount"), "0.00")
+    if normalized_status == "verified":
+        subject = "Your MABASO.AI payment was verified"
+        body = (
+            f"Your PayShap payment for {plan_name} has been verified.\n\n"
+            f"Reference: {reference}\n"
+            f"Amount: R{amount}\n\n"
+            "Your subscription is now active on MABASO.AI."
+        )
+    else:
+        subject = "Your MABASO.AI payment was rejected"
+        body = (
+            f"Your PayShap payment request for {plan_name} was rejected.\n\n"
+            f"Reference: {reference}\n"
+            f"Amount: R{amount}\n\n"
+            "If this looks incorrect, contact support with your bank proof of payment."
+        )
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = smtp_settings["from_email"]
+    message["To"] = email
+    message.set_content(body)
+    send_smtp_message(message)
+
+
+async def deliver_payment_status_email(email: str, payment: dict[str, Any], status: str):
+    try:
+        await asyncio.to_thread(send_payment_status_email, email, payment, status)
+        record_audit_log(
+            action="payment.notification.sent",
+            email=email,
+            resource_type="payment_request",
+            resource_name=compact_text(payment.get("payment_reference")),
+            metadata={"status": normalize_payment_request_status(status)},
+        )
+    except HTTPException as exc:
+        logger.warning("Payment status email failed for %s: %s", email, exc.detail)
+        record_audit_log(
+            action="payment.notification.failed",
+            status="error",
+            email=email,
+            resource_type="payment_request",
+            resource_name=compact_text(payment.get("payment_reference")),
+            metadata={"payment_status": normalize_payment_request_status(status), "error": str(exc.detail)[:300]},
+        )
+    except Exception as exc:
+        logger.exception("Unexpected payment notification failure for %s", email)
+        record_audit_log(
+            action="payment.notification.failed",
+            status="error",
+            email=email,
+            resource_type="payment_request",
+            resource_name=compact_text(payment.get("payment_reference")),
+            metadata={"payment_status": normalize_payment_request_status(status), "error": str(exc)[:300]},
+        )
 
 
 def normalize_support_context_value(value: str, max_chars: int = MAX_SUPPORT_CONTEXT_CHARS) -> str:
@@ -5666,6 +5850,241 @@ def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
     }
 
 
+def get_payshap_payment_details() -> dict[str, str]:
+    return {
+        "provider": "payshap",
+        "account_name": PAYSHAP_ACCOUNT_NAME,
+        "payshap_number": PAYSHAP_NUMBER,
+        "instructions": "Use the exact payment reference when paying from your banking app.",
+    }
+
+
+def require_payshap_configured():
+    if not PAYSHAP_ACCOUNT_NAME or not PAYSHAP_NUMBER:
+        raise HTTPException(
+            status_code=503,
+            detail="PayShap manual payments are not configured yet. Add PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER on the backend.",
+        )
+
+
+def normalize_payment_request_status(value: Any) -> str:
+    status = compact_text(value, "pending").lower()
+    if status not in {"pending", "verified", "rejected"}:
+        raise HTTPException(status_code=400, detail="Payment status must be pending, verified, or rejected.")
+    return status
+
+
+def format_payment_reference_suffix(length: int = 6) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(max(4, length)))
+
+
+def generate_unique_payment_reference(connection) -> str:
+    for _ in range(20):
+        reference = f"APP-{format_payment_reference_suffix(6)}"
+        existing = connection.execute(
+            "SELECT id FROM payment_requests WHERE payment_reference = ?",
+            (reference,),
+        ).fetchone()
+        if not existing:
+            return reference
+    raise HTTPException(status_code=500, detail="Could not generate a unique payment reference. Try again.")
+
+
+def get_or_create_user_record_for_payment(connection, email: str) -> tuple[str, str]:
+    normalized_email = validate_email_address(email)
+    now_iso = utc_now().isoformat()
+    connection.execute(
+        "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+        (normalized_email, now_iso, uuid4().hex, now_iso),
+    )
+    row = connection.execute(
+        "SELECT email, user_id FROM users WHERE email = ?",
+        (normalized_email,),
+    ).fetchone()
+    user_id = compact_text(row["user_id"] if row else "")
+    if not user_id:
+        user_id = uuid4().hex
+        connection.execute(
+            "UPDATE users SET user_id = ?, updated_at = ? WHERE email = ?",
+            (user_id, now_iso, normalized_email),
+        )
+    return user_id, normalized_email
+
+
+def serialize_payment_request(row: Any) -> dict[str, Any]:
+    if not row:
+        return {}
+    amount = compact_text(row["amount"], "0.00")
+    status = normalize_payment_request_status(row["status"])
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "email": normalize_email(row["email"]),
+        "amount": amount,
+        "amount_zar": amount,
+        "plan_id": normalize_billing_plan_id(row["plan_id"]),
+        "plan_name": row["plan_name"],
+        "payment_reference": row["payment_reference"],
+        "status": status,
+        "status_label": status.title(),
+        "created_at": row["created_at"],
+        "verified_at": compact_text(row["verified_at"]),
+        "verified_by": compact_text(row["verified_by"]),
+    }
+
+
+def get_payment_request_by_id(payment_id: str) -> dict[str, Any] | None:
+    normalized_id = compact_text(payment_id)
+    if not normalized_id:
+        return None
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (normalized_id,),
+        ).fetchone()
+    return serialize_payment_request(row) if row else None
+
+
+def list_payment_requests_for_user(email: str, limit: int = 50) -> list[dict[str, Any]]:
+    normalized_email = validate_email_address(email)
+    safe_limit = max(1, min(int(limit or 50), 100))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE email = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (normalized_email, safe_limit),
+        ).fetchall()
+    return [serialize_payment_request(row) for row in rows]
+
+
+def list_admin_payment_requests(limit: int = 200) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 200), 500))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'verified' THEN 1 ELSE 2 END, created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [serialize_payment_request(row) for row in rows]
+
+
+def create_manual_payment_request(email: str, plan_id: str) -> dict[str, Any]:
+    require_payshap_configured()
+    plan = get_billing_plan(plan_id)
+    request_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        user_id, normalized_email = get_or_create_user_record_for_payment(connection, email)
+        reference = generate_unique_payment_reference(connection)
+        connection.execute(
+            """
+            INSERT INTO payment_requests (
+                id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                status, created_at, verified_at, verified_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request_id,
+                user_id,
+                normalized_email,
+                plan["amount_zar"],
+                plan["id"],
+                plan["name"],
+                reference,
+                "pending",
+                now_iso,
+                "",
+                "",
+            ),
+        )
+        row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+    return serialize_payment_request(row)
+
+
+def upsert_billing_subscription(
+    connection,
+    *,
+    email: str,
+    plan_id: str,
+    provider: str,
+    provider_token: str = "",
+    provider_payment_id: str = "",
+    amount_zar: str,
+    raw_event_json: str = "{}",
+    now_iso: str = "",
+) -> tuple[str, str]:
+    normalized_email = validate_email_address(email)
+    normalized_plan_id = normalize_billing_plan_id(plan_id)
+    current_time = compact_text(now_iso, utc_now().isoformat())
+    period_end = (parse_billing_datetime(current_time) or utc_now()) + timedelta(days=get_billing_plan_duration_days(normalized_plan_id))
+    period_end_iso = period_end.isoformat()
+    connection.execute(
+        """
+        INSERT INTO billing_subscriptions (
+            email, plan_id, status, provider, provider_token, provider_payment_id,
+            amount_zar, current_period_start, current_period_end, cancel_at,
+            raw_event_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            plan_id = excluded.plan_id,
+            status = excluded.status,
+            provider = excluded.provider,
+            provider_token = excluded.provider_token,
+            provider_payment_id = excluded.provider_payment_id,
+            amount_zar = excluded.amount_zar,
+            current_period_start = excluded.current_period_start,
+            current_period_end = excluded.current_period_end,
+            cancel_at = excluded.cancel_at,
+            raw_event_json = excluded.raw_event_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            normalized_email,
+            normalized_plan_id,
+            "active",
+            compact_text(provider, "manual"),
+            compact_text(provider_token),
+            compact_text(provider_payment_id),
+            format_zar_amount(amount_zar),
+            current_time,
+            period_end_iso,
+            "",
+            compact_text(raw_event_json, "{}"),
+            current_time,
+            current_time,
+        ),
+    )
+    return current_time, period_end_iso
+
+
 def get_payfast_signature(fields: dict[str, Any]) -> str:
     pairs = []
     for key, value in fields.items():
@@ -6256,6 +6675,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
     usage = get_billing_usage_summary(normalized_email)
     monthly_usage = get_monthly_usage_summary(normalized_email)
     payment_history = list_user_payment_history(normalized_email)
+    payment_requests = list_payment_requests_for_user(normalized_email)
     feature_permissions = build_feature_permissions(usage)
     user_id = ""
     created_at = now_iso
@@ -6266,11 +6686,14 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
             (normalized_email, now_iso, uuid4().hex, now_iso),
         )
         row = connection.execute(
-            "SELECT user_id, created_at FROM users WHERE email = ?",
+            "SELECT user_id, role, created_at FROM users WHERE email = ?",
             (normalized_email,),
         ).fetchone()
         user_id = compact_text(row["user_id"]) if row else ""
         created_at = compact_text(row["created_at"], now_iso) if row else now_iso
+        account_role = "admin" if normalized_email in get_admin_email_set() else compact_text(row["role"] if row else "", "user").lower()
+        if account_role not in {"admin", "user"}:
+            account_role = "user"
         if not user_id:
             user_id = uuid4().hex
         if mark_login:
@@ -6278,6 +6701,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
                 """
                 UPDATE users
                 SET user_id = ?,
+                    role = ?,
                     current_plan_id = ?,
                     subscription_status = ?,
                     subscription_start_at = ?,
@@ -6290,6 +6714,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
                 """,
                 (
                     user_id,
+                    account_role,
                     compact_text(usage.get("plan_id"), "free"),
                     compact_text(subscription.get("status"), "free"),
                     compact_text(subscription.get("current_period_start")),
@@ -6306,6 +6731,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
                 """
                 UPDATE users
                 SET user_id = ?,
+                    role = ?,
                     current_plan_id = ?,
                     subscription_status = ?,
                     subscription_start_at = ?,
@@ -6317,6 +6743,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
                 """,
                 (
                     user_id,
+                    account_role,
                     compact_text(usage.get("plan_id"), "free"),
                     compact_text(subscription.get("status"), "free"),
                     compact_text(subscription.get("current_period_start")),
@@ -6331,12 +6758,19 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
     return {
         "user_id": user_id,
         "email": normalized_email,
+        "role": account_role,
         "created_at": created_at,
         "current_plan": compact_text(usage.get("plan_id"), "free"),
         "subscription": subscription,
         "usage": usage,
         "monthly_usage": monthly_usage,
         "payment_history": payment_history,
+        "payment_requests": payment_requests,
+        "manual_payment": {
+            "provider": "payshap",
+            "enabled": bool(PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER),
+            "payment_details": get_payshap_payment_details(),
+        },
         "feature_permissions": feature_permissions,
         "last_synced_at": now_iso,
     }
@@ -6671,45 +7105,206 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             next_status,
         )
         if next_status == "active":
-            connection.execute(
-                """
-                INSERT INTO billing_subscriptions (
-                    email, plan_id, status, provider, provider_token, provider_payment_id,
-                    amount_zar, current_period_start, current_period_end, cancel_at,
-                    raw_event_json, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(email) DO UPDATE SET
-                    plan_id = excluded.plan_id,
-                    status = excluded.status,
-                    provider = excluded.provider,
-                    provider_token = excluded.provider_token,
-                    provider_payment_id = excluded.provider_payment_id,
-                    amount_zar = excluded.amount_zar,
-                    current_period_start = excluded.current_period_start,
-                    current_period_end = excluded.current_period_end,
-                    cancel_at = excluded.cancel_at,
-                    raw_event_json = excluded.raw_event_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    email,
-                    plan_id,
-                    "active",
-                    "payfast",
-                    provider_token,
-                    provider_payment_id,
-                    expected_amount,
-                    now_iso,
-                    period_end,
-                    "",
-                    raw_event_json,
-                    now_iso,
-                    now_iso,
-                ),
+            upsert_billing_subscription(
+                connection,
+                email=email,
+                plan_id=plan_id,
+                provider="payfast",
+                provider_token=provider_token,
+                provider_payment_id=provider_payment_id,
+                amount_zar=expected_amount,
+                raw_event_json=raw_event_json,
+                now_iso=now_iso,
             )
     sync_user_account_snapshot(email)
     return next_status
+
+
+def verify_manual_payment_request(payment_id: str, admin_email: str) -> dict[str, Any]:
+    normalized_payment_id = compact_text(payment_id)
+    normalized_admin = validate_email_address(admin_email)
+    if not normalized_payment_id:
+        raise HTTPException(status_code=400, detail="Payment request id is required.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (normalized_payment_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Payment request not found.")
+        current_status = normalize_payment_request_status(row["status"])
+        if current_status != "pending":
+            raise HTTPException(status_code=409, detail=f"This payment request is already {current_status}.")
+        plan_id = normalize_billing_plan_id(row["plan_id"])
+        if plan_id not in BILLING_PLAN_CONFIG:
+            raise HTTPException(status_code=400, detail="The payment request plan is no longer available.")
+        amount = format_zar_amount(row["amount"])
+        payment_reference = compact_text(row["payment_reference"])
+        raw_event = {
+            "source": "manual_payshap_verification",
+            "payment_request_id": row["id"],
+            "payment_reference": payment_reference,
+            "verified_by": normalized_admin,
+            "verified_at": now_iso,
+        }
+        raw_event_json = json.dumps(raw_event, ensure_ascii=False)
+        connection.execute(
+            """
+            UPDATE payment_requests
+            SET status = 'verified', verified_at = ?, verified_by = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (now_iso, normalized_admin, normalized_payment_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_events (
+                id, email, checkout_session_id, provider, event_type, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalize_email(row["email"]),
+                row["id"],
+                "payshap",
+                "PAYSHAP_PAYMENT_VERIFIED",
+                raw_event_json,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_payments (
+                id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                amount_zar, payment_status, raw_event_json, paid_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                email = excluded.email,
+                checkout_session_id = excluded.checkout_session_id,
+                plan_id = excluded.plan_id,
+                provider = excluded.provider,
+                provider_payment_id = excluded.provider_payment_id,
+                amount_zar = excluded.amount_zar,
+                payment_status = excluded.payment_status,
+                raw_event_json = excluded.raw_event_json,
+                paid_at = excluded.paid_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                row["id"],
+                normalize_email(row["email"]),
+                row["id"],
+                plan_id,
+                "payshap",
+                payment_reference,
+                amount,
+                "PAID",
+                raw_event_json,
+                now_iso,
+                now_iso,
+                now_iso,
+            ),
+        )
+        upsert_billing_subscription(
+            connection,
+            email=row["email"],
+            plan_id=plan_id,
+            provider="payshap",
+            provider_payment_id=payment_reference,
+            amount_zar=amount,
+            raw_event_json=raw_event_json,
+            now_iso=now_iso,
+        )
+        updated_row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (normalized_payment_id,),
+        ).fetchone()
+    payment = serialize_payment_request(updated_row)
+    account = sync_user_account_snapshot(payment["email"])
+    return {"payment": payment, "account": account}
+
+
+def reject_manual_payment_request(payment_id: str, admin_email: str) -> dict[str, Any]:
+    normalized_payment_id = compact_text(payment_id)
+    normalized_admin = validate_email_address(admin_email)
+    if not normalized_payment_id:
+        raise HTTPException(status_code=400, detail="Payment request id is required.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (normalized_payment_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Payment request not found.")
+        current_status = normalize_payment_request_status(row["status"])
+        if current_status != "pending":
+            raise HTTPException(status_code=409, detail=f"This payment request is already {current_status}.")
+        raw_event_json = json.dumps(
+            {
+                "source": "manual_payshap_verification",
+                "payment_request_id": row["id"],
+                "payment_reference": row["payment_reference"],
+                "rejected_by": normalized_admin,
+                "rejected_at": now_iso,
+            },
+            ensure_ascii=False,
+        )
+        connection.execute(
+            """
+            UPDATE payment_requests
+            SET status = 'rejected', verified_at = ?, verified_by = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (now_iso, normalized_admin, normalized_payment_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_events (
+                id, email, checkout_session_id, provider, event_type, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalize_email(row["email"]),
+                row["id"],
+                "payshap",
+                "PAYSHAP_PAYMENT_REJECTED",
+                raw_event_json,
+                now_iso,
+            ),
+        )
+        updated_row = connection.execute(
+            """
+            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
+                   status, created_at, verified_at, verified_by
+            FROM payment_requests
+            WHERE id = ?
+            """,
+            (normalized_payment_id,),
+        ).fetchone()
+    return {"payment": serialize_payment_request(updated_row)}
 
 
 GENERIC_CONVERSATION_TITLES = {
@@ -7741,6 +8336,9 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             """,
             (range_start.isoformat(),),
         ).fetchall()
+    manual_payment_requests = list_admin_payment_requests(300)
+    pending_manual_payments = sum(1 for payment in manual_payment_requests if payment.get("status") == "pending")
+    rejected_manual_payments = sum(1 for payment in manual_payment_requests if payment.get("status") == "rejected")
 
     payment_records: list[dict[str, Any]] = []
     revenue_by_plan: dict[str, float] = {}
@@ -7881,6 +8479,8 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         alerts.append({"level": "warning", "message": "Estimated AI spend is above 50% of monthly revenue."})
     if failed_payments:
         alerts.append({"level": "info", "message": f"{failed_payments} failed or pending payment record(s) need review."})
+    if pending_manual_payments:
+        alerts.append({"level": "warning", "message": f"{pending_manual_payments} PayShap manual payment request(s) need verification."})
 
     return {
         "overview": {
@@ -7890,12 +8490,15 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             "active_subscribers": active_subscribers,
             "cancelled_subscribers": cancelled_subscribers,
             "failed_payments": failed_payments,
+            "pending_manual_payments": pending_manual_payments,
+            "rejected_manual_payments": rejected_manual_payments,
             "openai_cost": total_ai_cost,
             "hosting_cost": prorated_hosting_cost,
             "profit": round(revenue_in_range - total_ai_cost - prorated_hosting_cost, 2),
             "currency": "ZAR",
         },
         "payments": payment_records[:120],
+        "manual_payment_requests": manual_payment_requests,
         "subscriptions": subscriber_records[:120],
         "revenue_per_plan": [
             {"plan_id": plan_id, "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id, "amount": round(amount, 2)}
@@ -8060,6 +8663,7 @@ def build_admin_database_freshness() -> dict[str, Any]:
         "audit_logs": "created_at",
         "billing_usage_events": "created_at",
         "billing_payments": "created_at",
+        "payment_requests": "created_at",
         "billing_subscriptions": "updated_at",
         "study_history_items": "updated_at",
         "sessions": "created_at",
@@ -8128,7 +8732,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
     try:
         with get_db_connection() as connection:
             user_rows = connection.execute(
-                "SELECT email, created_at, verified_at FROM users ORDER BY created_at DESC"
+                "SELECT email, role, created_at, verified_at FROM users ORDER BY created_at DESC"
             ).fetchall()
             session_rows = connection.execute(
                 "SELECT email, expires_at, created_at FROM sessions WHERE expires_at > ?",
@@ -8313,7 +8917,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
 
     user_records: list[dict[str, Any]] = []
     for email in sorted(email for email in dashboard_user_emails if email):
-        row = user_row_by_email.get(email, {})
+        raw_user_row = user_row_by_email.get(email)
+        row = dict(raw_user_row) if raw_user_row else {}
         usage_counts = usage_counts_by_email.get(email, {})
         source_upload_count = int(usage_counts.get("source_upload", 0))
         generated_tool_count = sum(
@@ -8342,7 +8947,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         user_records.append(
             {
                 "email": email,
-                "role": "admin" if is_admin_email(email) else "user",
+                "role": "admin" if compact_text(row.get("role")).lower() == "admin" or email in get_admin_email_set() else "user",
                 "status": status,
                 "created_at": created_at,
                 "last_login_at": last_login.get("created_at", ""),
@@ -9995,6 +10600,11 @@ async def list_billing_plans():
         "sandbox": PAYFAST_SANDBOX,
         "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
         "checkout_enabled": checkout_enabled,
+        "manual_payment": {
+            "provider": "payshap",
+            "enabled": bool(PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER),
+            "payment_details": get_payshap_payment_details(),
+        },
         "plans": [serialize_billing_plan(plan_id) for plan_id in BILLING_PLAN_CONFIG],
     }
 
@@ -10011,6 +10621,7 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
     usage = get_billing_usage_summary(normalized_email)
     monthly_usage = get_monthly_usage_summary(normalized_email)
     payment_history = list_user_payment_history(normalized_email)
+    payment_requests = list_payment_requests_for_user(normalized_email)
     feature_permissions = build_feature_permissions(usage)
     return {
         "account": {
@@ -10020,6 +10631,7 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
             "usage": usage,
             "monthly_usage": monthly_usage,
             "payment_history": payment_history,
+            "payment_requests": payment_requests,
             "feature_permissions": feature_permissions,
             "last_synced_at": utc_now().isoformat(),
         },
@@ -10027,6 +10639,12 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
         "usage": usage,
         "monthly_usage": monthly_usage,
         "payment_history": payment_history,
+        "payment_requests": payment_requests,
+        "manual_payment": {
+            "provider": "payshap",
+            "enabled": bool(PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER),
+            "payment_details": get_payshap_payment_details(),
+        },
         "feature_permissions": feature_permissions,
     }
 
@@ -10092,6 +10710,140 @@ async def create_billing_checkout(
         "checkout_url": PAYFAST_PROCESS_URL,
         "fields": fields,
     }
+
+
+@app.post("/payments/create")
+@app.post("/api/payments/create")
+async def create_payment_request_endpoint(
+    payload: PaymentCreateRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    email = normalize_email(current_user)
+    payment = create_manual_payment_request(email, payload.plan_id)
+    record_audit_log(
+        action="payment.created",
+        email=email,
+        request=request,
+        resource_type="payment_request",
+        resource_name=payment["payment_reference"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "provider": "payshap",
+            "payment_request_id": payment["id"],
+            "plan_id": payment["plan_id"],
+            "amount": payment["amount"],
+        },
+    )
+    return {
+        "amount": payment["amount"],
+        "plan": payment["plan_name"],
+        "plan_id": payment["plan_id"],
+        "payment_reference": payment["payment_reference"],
+        "payment_details": get_payshap_payment_details(),
+        "payment_request": payment,
+    }
+
+
+@app.get("/payments")
+@app.get("/api/payments")
+async def list_payment_requests_endpoint(current_user: str = Depends(require_authenticated_user)):
+    return {
+        "items": list_payment_requests_for_user(current_user),
+        "payment_details": get_payshap_payment_details(),
+    }
+
+
+@app.post("/payments/{payment_id}/confirm")
+@app.post("/api/payments/{payment_id}/confirm")
+async def confirm_payment_submitted_endpoint(
+    payment_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    payment = get_payment_request_by_id(payment_id)
+    if not payment or normalize_email(payment["email"]) != normalize_email(current_user):
+        raise HTTPException(status_code=404, detail="Payment request not found.")
+    record_audit_log(
+        action="payment.submitted",
+        email=current_user,
+        request=request,
+        resource_type="payment_request",
+        resource_name=payment["payment_reference"],
+        metadata={"payment_request_id": payment["id"], "status": payment["status"]},
+    )
+    return {
+        "message": "Payment submission recorded. Your subscription will activate after admin verification.",
+        "payment_request": payment,
+    }
+
+
+@app.post("/admin/payments/{payment_id}/verify")
+async def verify_admin_payment_request(
+    payment_id: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    started_at = utc_now()
+    result = verify_manual_payment_request(payment_id, current_admin)
+    payment = result["payment"]
+    record_audit_log(
+        action="payment.verified",
+        email=current_admin,
+        request=request,
+        resource_type="payment_request",
+        resource_name=payment["payment_reference"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "payment_request_id": payment["id"],
+            "user_email": payment["email"],
+            "plan_id": payment["plan_id"],
+            "amount": payment["amount"],
+        },
+    )
+    record_audit_log(
+        action="subscription.activated",
+        email=payment["email"],
+        request=request,
+        resource_type="billing_subscription",
+        resource_name=payment["plan_id"],
+        metadata={
+            "provider": "payshap",
+            "payment_request_id": payment["id"],
+            "payment_reference": payment["payment_reference"],
+            "verified_by": current_admin,
+        },
+    )
+    asyncio.create_task(deliver_payment_status_email(payment["email"], payment, "verified"))
+    return {"message": "Payment verified and subscription activated.", **result}
+
+
+@app.post("/admin/payments/{payment_id}/reject")
+async def reject_admin_payment_request(
+    payment_id: str,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    started_at = utc_now()
+    result = reject_manual_payment_request(payment_id, current_admin)
+    payment = result["payment"]
+    record_audit_log(
+        action="payment.rejected",
+        email=current_admin,
+        request=request,
+        resource_type="payment_request",
+        resource_name=payment["payment_reference"],
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={
+            "payment_request_id": payment["id"],
+            "user_email": payment["email"],
+            "plan_id": payment["plan_id"],
+            "amount": payment["amount"],
+        },
+    )
+    asyncio.create_task(deliver_payment_status_email(payment["email"], payment, "rejected"))
+    return {"message": "Payment rejected.", **result}
 
 
 @app.post("/api/payfast/webhook")

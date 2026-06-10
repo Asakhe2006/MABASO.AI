@@ -519,7 +519,7 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
-const APP_PAGE_IDS = ["capture", "workspace", "materials", "collaboration", "voice"];
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "collaboration", "voice"];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
   "Academic Report",
@@ -2610,6 +2610,33 @@ function titleCaseWords(value = "") {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function normalizePaymentStatus(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["pending", "verified", "rejected"].includes(normalized) ? normalized : "pending";
+}
+
+function getPaymentStatusLabel(value = "") {
+  return titleCaseWords(normalizePaymentStatus(value));
+}
+
+function getPaymentStatusTone(value = "") {
+  const status = normalizePaymentStatus(value);
+  if (status === "verified") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "rejected") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-amber-200 bg-amber-50 text-amber-700";
+}
+
+function formatPaymentAmount(payment = {}) {
+  if (payment?.amount_zar) return payment.amount_zar;
+  return formatAdminCurrency(payment?.amount ?? 0);
+}
+
+function mergePaymentRequestList(current = [], nextPayment = null) {
+  if (!nextPayment?.id) return current;
+  const remaining = current.filter((item) => item.id !== nextPayment.id);
+  return [nextPayment, ...remaining].sort((left, right) => new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime());
+}
+
 function formatAdminActionLabel(action = "") {
   return titleCaseWords(String(action || "").replace(/\./g, " "));
 }
@@ -3003,15 +3030,11 @@ function getBackendConnectionTroubleshootingMessage(context = "") {
   const area = String(context || "").trim().toLowerCase();
   if (area === "study-guide") {
     return (
-      "Study source ready, but the backend could not finish the study guide request. "
-      + "This usually means the Render backend is sleeping, timed out, restarted during AI processing, or the network dropped. "
-      + "If it keeps happening, check the backend service status and logs on Render."
+      "An error occurred while generating this study guide. Please try again."
     );
   }
   return (
-    "The app could not reach the Mabaso server. This usually means the backend is sleeping, timed out, restarted while processing, "
-    + `the API URL is wrong, or there is a network issue. API: ${API_BASE_URL}. `
-    + "If it keeps happening, check the backend service status, browser Network tab, and logs on Render."
+    "An error occurred while processing your request. Please try again."
   );
 }
 
@@ -3020,20 +3043,16 @@ function getReadableRequestError(error, context = "") {
   if (isAbortError(error)) {
     if (normalizedContext.includes("extract-slide-text")) {
       return (
-        "Slide reading took too long before text could be returned. "
-        + "The backend is online, but this source may be too large, scanned, image-heavy, or slow to OCR. "
-        + "Try a smaller file, fewer slides, clearer images, or a text-based PDF/PPTX."
+        "Slide reading took too long. Please try again."
       );
     }
     if (normalizedContext.includes("upload-audio") || normalizedContext.includes("transcribe-video-url")) {
       return (
-        "Large lecture transcription is taking longer than the browser waited for the job to start. "
-        + "Keep this tab open and retry once the backend is fully awake; paid plan level does not reduce lecture file size support."
+        "Transcription took too long. Please try again."
       );
     }
     return (
-      "The Mabaso server took too long to respond. "
-      + "The backend may be sleeping on Render, timing out, or restarting while processing. Please try again in a few seconds."
+      "The request took too long. Please try again."
     );
   }
 
@@ -3042,7 +3061,7 @@ function getReadableRequestError(error, context = "") {
     return getBackendConnectionTroubleshootingMessage();
   }
 
-  return message || `${getBackendConnectionTroubleshootingMessage()} Please check the backend status.`;
+  return message || getBackendConnectionTroubleshootingMessage();
 }
 
 function isTransientServerConnectionMessage(message) {
@@ -4131,6 +4150,11 @@ export default function App() {
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
+  const [paymentRequests, setPaymentRequests] = useState([]);
+  const [manualPaymentDetails, setManualPaymentDetails] = useState(null);
+  const [manualPaymentRequest, setManualPaymentRequest] = useState(null);
+  const [confirmingPaymentId, setConfirmingPaymentId] = useState("");
+  const [adminPaymentActionId, setAdminPaymentActionId] = useState("");
   const [isBillingUsageLoading, setIsBillingUsageLoading] = useState(false);
   const billingStatusRequestRef = useRef(null);
   const [currentPage, setCurrentPage] = useState("capture");
@@ -4703,8 +4727,8 @@ export default function App() {
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Upgrade to Pro</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan. PayFast handles PayShap/card checkout securely; MABASO.AI never stores customer card or bank details. If checkout is configured as once-off, payment grants the current plan period instead of silently auto-renewing.</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayShap</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan and generate a unique PayShap reference. Your subscription activates only after an admin verifies the bank payment reference.</p>
           </div>
           <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
@@ -4715,6 +4739,19 @@ export default function App() {
         ) : upgradeLimitMessage ? (
           <div className="mt-4 rounded-2xl border border-rose-300/25 bg-rose-500/10 px-4 py-3 text-sm font-semibold leading-7 text-rose-50">
             {renderCaptureErrorMessage(upgradeLimitMessage)}
+          </div>
+        ) : null}
+        {manualPaymentRequest ? (
+          <div className="mt-5">
+            {renderPayShapInstructions(manualPaymentRequest)}
+          </div>
+        ) : manualPaymentDetails ? (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">PayShap Account</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">PayShap Number: <span className="phone-safe-copy font-semibold text-white">{manualPaymentDetails.payshap_number || "Not configured"}</span></div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">Account Name: <span className="phone-safe-copy font-semibold text-white">{manualPaymentDetails.account_name || "Not configured"}</span></div>
+            </div>
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -4756,18 +4793,30 @@ export default function App() {
                       disabled={Boolean(billingCheckoutPlanId)}
                       className="rounded-2xl bg-white px-3 py-3 text-xs font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70"
                     >
-                      {billingCheckoutPlanId === option.id ? "Opening..." : `${option.label} ${option.price}`}
+                      {billingCheckoutPlanId === option.id ? "Generating..." : `${option.label} ${option.price}`}
                     </button>
                   ))}
                 </div>
               ) : (
                 <button type="button" onClick={() => startBillingCheckout(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
-                  {billingCheckoutPlanId === plan.id ? "Opening PayFast..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Continue to Payment"}
+                  {billingCheckoutPlanId === plan.id ? "Generating..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Generate PayShap Reference"}
                 </button>
               )}
             </article>
           ))}
         </div>
+        {(paymentRequests.length || manualPaymentRequest) ? (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">My Payments</p>
+                <p className="mt-2 text-sm text-slate-300">Pending payments wait for admin verification before plan activation.</p>
+              </div>
+              <button type="button" onClick={() => { setIsUpgradeModalOpen(false); openProtectedAppPage("payments"); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Open Page</button>
+            </div>
+            <div className="mt-4">{renderPaymentRequestsTable(paymentRequests, { compact: true })}</div>
+          </div>
+        ) : null}
         <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Billing protection</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -4962,7 +5011,7 @@ export default function App() {
   const revealWorkspacePage = (tabId = "guide", { forcePage = false } = {}) => {
     const normalizedTabId = normalizeWorkspaceTabId(tabId || "guide");
     setActiveTab(normalizedTabId);
-    if (forcePage || !["materials", "about", "support", "voice"].includes(currentPageRef.current)) {
+    if (forcePage || !["materials", "payments", "about", "support", "voice"].includes(currentPageRef.current)) {
       openProtectedAppPage("workspace");
     }
   };
@@ -5276,7 +5325,7 @@ export default function App() {
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "payments", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
   const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
     const leftIsHighlighted = left.id === highlightedInviteRoomId ? 1 : 0;
@@ -5313,7 +5362,7 @@ export default function App() {
   const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const errorHint = getErrorHint(error);
   const isCurrentErrorUsageBlocked = isUsageBlockedMessage(error);
-  const captureErrorTitle = isCurrentErrorUsageBlocked ? "Access limit reached" : "Processing failed";
+  const captureErrorTitle = isCurrentErrorUsageBlocked ? "Access limit reached" : "An error occurred";
   const renderCaptureErrorMessage = (message) => {
     const rawMessage = String(message || "");
     const match = rawMessage.match(/upgrade to pro\s+to continue/i);
@@ -7041,6 +7090,142 @@ export default function App() {
     </section>
   );
 
+  const renderPaymentStatusBadge = (status) => (
+    <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getPaymentStatusTone(status)}`}>
+      {getPaymentStatusLabel(status)}
+    </span>
+  );
+
+  const renderPayShapInstructions = (payment = manualPaymentRequest) => {
+    const details = manualPaymentDetails || payment?.payment_details || {};
+    const reference = payment?.payment_reference || "";
+    return (
+      <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-5">
+        <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-100/80">PayShap Payment Instructions</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Amount</p>
+            <p className="mt-2 text-xl font-semibold text-white">{formatPaymentAmount(payment)}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Reference</p>
+            <p className="phone-safe-copy mt-2 text-xl font-semibold text-emerald-100">{reference || "Generate a reference first"}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
+            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.payshap_number || "Not configured"}</p>
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
+            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.account_name || "Not configured"}</p>
+          </div>
+        </div>
+        <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-semibold leading-7 text-amber-50">
+          IMPORTANT: Use the exact reference when making payment. Clicking I Have Paid does not activate the subscription; admin verification is still required.
+        </div>
+        {payment?.id ? (
+          <button
+            type="button"
+            onClick={() => confirmManualPaymentSubmitted(payment.id)}
+            disabled={confirmingPaymentId === payment.id || normalizePaymentStatus(payment.status) !== "pending"}
+            className="mt-4 w-full rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+          >
+            {confirmingPaymentId === payment.id ? "Confirming..." : normalizePaymentStatus(payment.status) === "pending" ? "I Have Paid" : `Payment ${getPaymentStatusLabel(payment.status)}`}
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderPaymentRequestsTable = (items = [], { emptyMessage = "No payment requests yet.", compact = false } = {}) => (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="text-xs uppercase tracking-[0.16em] text-slate-400">
+          <tr>
+            {["Reference", "Plan", "Amount", "Status", "Date"].map((heading) => (
+              <th key={heading} className="whitespace-nowrap border-b border-white/10 px-3 py-3">{heading}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.length ? items.map((payment) => (
+            <tr key={payment.id || payment.payment_reference} className="border-b border-white/10 align-top">
+              <td className="phone-safe-copy whitespace-nowrap px-3 py-3 font-semibold text-white">{payment.payment_reference || "Pending"}</td>
+              <td className="whitespace-nowrap px-3 py-3 text-slate-200">{payment.plan_name || payment.plan || payment.plan_id || "Plan"}</td>
+              <td className="whitespace-nowrap px-3 py-3 font-semibold text-white">{formatPaymentAmount(payment)}</td>
+              <td className="whitespace-nowrap px-3 py-3">{renderPaymentStatusBadge(payment.status)}</td>
+              <td className="whitespace-nowrap px-3 py-3 text-slate-300">{payment.created_at ? formatAdminDateTime(payment.created_at) : "--"}</td>
+            </tr>
+          )) : (
+            <tr><td colSpan={5} className={`px-3 text-center text-slate-400 ${compact ? "py-5" : "py-8"}`}>{emptyMessage}</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const renderPaymentsPage = () => {
+    const latestPendingPayment = paymentRequests.find((payment) => normalizePaymentStatus(payment.status) === "pending") || manualPaymentRequest;
+    return (
+      <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+        <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-start gap-4">
+            {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Payments</p>
+              <h2 className="mt-2 text-3xl font-semibold text-white">Track PayShap payment requests.</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Manual PayShap payments stay pending until an admin verifies the reference in the dashboard.</p>
+            </div>
+          </div>
+          <div className="force-mobile-stack flex flex-wrap gap-3">
+            <button type="button" onClick={openUpgradeModal} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-950">New Payment</button>
+            <button type="button" onClick={() => refreshBillingStatus().catch((err) => setBillingCheckoutMessage(getReadableRequestError(err)))} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60">{isBillingUsageLoading ? "Refreshing..." : "Refresh"}</button>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+          <div className="space-y-5">
+            {latestPendingPayment ? renderPayShapInstructions(latestPendingPayment) : (
+              <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">PayShap Details</p>
+                <div className="mt-4 grid gap-3">
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.payshap_number || "Configured after backend env vars are added"}</p>
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || "Configured after backend env vars are added"}</p>
+                  </div>
+                </div>
+                <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Generate PayShap Reference</button>
+              </div>
+            )}
+            <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Verification</p>
+              <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
+                <p>Pending means the payment record exists, but your plan is not active yet.</p>
+                <p>Verified means the admin matched the bank payment reference and the subscription was activated.</p>
+                <p>Rejected means the payment could not be matched or was not accepted.</p>
+              </div>
+            </div>
+          </div>
+
+          <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Payment History</p>
+                <h3 className="mt-2 text-2xl font-semibold text-white">Your manual payment requests</h3>
+              </div>
+              <span className="rounded-full border border-white/10 bg-slate-950/70 px-4 py-2 text-xs font-semibold text-slate-200">{paymentRequests.length} request{paymentRequests.length === 1 ? "" : "s"}</span>
+            </div>
+            <div className="mt-5">{renderPaymentRequestsTable(paymentRequests)}</div>
+          </article>
+        </div>
+      </section>
+    );
+  };
+
   const renderCollaborationPage = () => (
     <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
@@ -8211,6 +8396,7 @@ export default function App() {
       { id: "analytics", label: "Analytics", group: "Analytics" },
       { id: "health", label: "System Health", group: "System" },
       { id: "security", label: "Security", group: "System" },
+      { id: "payments", label: "Payments", group: "System" },
       { id: "billing", label: "Billing", group: "System" },
       { id: "settings", label: "Settings", group: "System" },
     ];
@@ -9093,6 +9279,7 @@ export default function App() {
     const billing = dashboard.billing || {};
     const billingOverview = billing.overview || {};
     const billingPayments = billing.payments || [];
+    const manualPaymentRequests = billing.manual_payment_requests || [];
     const billingAiCosts = billing.ai_costs || {};
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
@@ -9111,6 +9298,7 @@ export default function App() {
     const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address}`));
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
+    const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -9220,6 +9408,63 @@ export default function App() {
     const emptyPanel = (message) => (
       <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500">
         {message}
+      </div>
+    );
+
+    const renderAdminManualPaymentsTable = (items = filteredManualPaymentRequests) => (
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
+            <tr>
+              {["User Email", "Plan", "Amount", "Reference", "Status", "Date", "Actions"].map((heading) => (
+                <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.length ? items.map((payment) => {
+              const status = normalizePaymentStatus(payment.status);
+              const verifyActionId = `verify:${payment.id}`;
+              const rejectActionId = `reject:${payment.id}`;
+              return (
+                <tr key={payment.id || payment.payment_reference} className="border-b border-slate-100 align-top">
+                  <td className="phone-safe-copy whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{payment.email || "Unknown"}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.plan_name || payment.plan_id || "Plan"}</td>
+                  <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatPaymentAmount(payment)}</td>
+                  <td className="phone-safe-copy whitespace-nowrap px-3 py-3 text-slate-700">{payment.payment_reference || "Pending"}</td>
+                  <td className="whitespace-nowrap px-3 py-3">{renderPaymentStatusBadge(status)}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.created_at ? formatAdminDateTime(payment.created_at) : "Unknown"}</td>
+                  <td className="min-w-[180px] px-3 py-3">
+                    {status === "pending" ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => runAdminPaymentAction(payment.id, "verify")}
+                          disabled={adminPaymentActionId === verifyActionId || Boolean(adminPaymentActionId)}
+                          className="rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {adminPaymentActionId === verifyActionId ? "VERIFYING" : "VERIFY"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runAdminPaymentAction(payment.id, "reject")}
+                          disabled={adminPaymentActionId === rejectActionId || Boolean(adminPaymentActionId)}
+                          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 transition hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {adminPaymentActionId === rejectActionId ? "REJECTING" : "REJECT"}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{getPaymentStatusLabel(status)}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            }) : (
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No manual PayShap payment requests match the current filters.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     );
 
@@ -9923,6 +10168,50 @@ export default function App() {
         );
       }
 
+      if (adminSidebarTab === "payments") {
+        const pendingManualPayments = manualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "pending").length;
+        const verifiedManualPayments = manualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "verified").length;
+        const rejectedManualPayments = manualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "rejected").length;
+        return (
+          <div className="space-y-5">
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Manual PayShap Verification</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Payments waiting for bank-reference review</h2>
+                  <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-500">Use the search box above as an email, status, or reference filter. VERIFY activates the subscription and updates limits; REJECT records the decision without activating the plan.</p>
+                </div>
+                <button type="button" onClick={() => loadAdminDashboard(false, "", adminDashboardRange)} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Refresh Payments</button>
+              </div>
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
+                {[
+                  ["Pending", pendingManualPayments, "bg-amber-50 text-amber-700"],
+                  ["Verified", verifiedManualPayments, "bg-emerald-50 text-emerald-700"],
+                  ["Rejected", rejectedManualPayments, "bg-rose-50 text-rose-700"],
+                ].map(([label, value, tone]) => (
+                  <div key={label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</p>
+                    <p className="mt-2 text-3xl font-semibold text-slate-950">{formatAdminInteger(value)}</p>
+                    <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-bold ${tone}`}>PayShap</span>
+                  </div>
+                ))}
+              </div>
+            </article>
+
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Payments</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-950">Manual payment queue</h3>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredManualPaymentRequests.length)} visible</span>
+              </div>
+              <div className="mt-5">{renderAdminManualPaymentsTable()}</div>
+            </article>
+          </div>
+        );
+      }
+
       if (adminSidebarTab === "billing") {
         return (
           <div className="space-y-5">
@@ -9940,6 +10229,8 @@ export default function App() {
                   ["Monthly Revenue", formatAdminCurrency(billingOverview.monthly_revenue)],
                   ["Active Subscribers", formatAdminInteger(billingOverview.active_subscribers)],
                   ["Failed Payments", formatAdminInteger(billingOverview.failed_payments)],
+                  ["Pending PayShap", formatAdminInteger(billingOverview.pending_manual_payments)],
+                  ["Rejected PayShap", formatAdminInteger(billingOverview.rejected_manual_payments)],
                   ["AI Cost", formatAdminCurrency(billingOverview.openai_cost)],
                   ["Hosting Cost", formatAdminCurrency(billingOverview.hosting_cost)],
                   ["Profit This Range", formatAdminCurrency(billingOverview.profit)],
@@ -10022,7 +10313,7 @@ export default function App() {
             <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Payment History</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-950">PayFast transactions and renewal status</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Stored transactions and renewal status</h3>
                 <div className="mt-5 overflow-x-auto">
                   <table className="min-w-full text-left text-sm">
                     <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
@@ -10039,7 +10330,7 @@ export default function App() {
                           <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.user || "Unknown"}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.plan || payment.plan_id || "Plan"}</td>
                           <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatAdminCurrency(payment.amount)}</td>
-                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.payment_method || "PayFast"}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{payment.payment_method || payment.provider || "PayShap"}</td>
                           <td className="whitespace-nowrap px-3 py-3"><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{payment.status || "Unknown"}</span></td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.date ? formatAdminDateTime(payment.date) : "Unknown"}</td>
                           <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.renewal_date ? formatAdminDate(payment.renewal_date) : "None"}</td>
@@ -10063,7 +10354,7 @@ export default function App() {
                         <span className="text-sm font-bold text-emerald-700">{formatAdminCurrency(item.amount)}</span>
                       </div>
                     </div>
-                  )) : emptyPanel("Revenue per plan appears after successful PayFast notifications are stored.")}
+                  )) : emptyPanel("Revenue per plan appears after successful payment notifications or manual verifications are stored.")}
                 </div>
               </article>
             </div>
@@ -10258,7 +10549,7 @@ export default function App() {
                         value={adminSearchQuery}
                         onChange={(event) => setAdminSearchQuery(event.target.value)}
                         className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
-                        placeholder="Search users, sessions, files, or logs"
+                        placeholder="Search users, email, status, reference, files, or logs"
                       />
                       <button type="button" onClick={() => loadAdminDashboard(false, "", adminDashboardRange)} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-700">Refresh</button>
                     </div>
@@ -10422,8 +10713,13 @@ export default function App() {
     setActiveHistoryId("");
     setBillingUsage(null);
     setBillingSubscription(null);
+    setPaymentRequests([]);
+    setManualPaymentDetails(null);
+    setManualPaymentRequest(null);
     setBillingCheckoutMessage("");
     setBillingCheckoutPlanId("");
+    setConfirmingPaymentId("");
+    setAdminPaymentActionId("");
     setIsUpgradeModalOpen(false);
     setCurrentPage("capture");
     setSupportMessageDraft("");
@@ -10567,6 +10863,8 @@ export default function App() {
     if (cachedBillingStatus?.usage || cachedBillingStatus?.subscription) {
       setBillingUsage(cachedBillingStatus.usage || null);
       setBillingSubscription(cachedBillingStatus.subscription || null);
+      if (Array.isArray(cachedBillingStatus.payment_requests)) setPaymentRequests(cachedBillingStatus.payment_requests);
+      if (cachedBillingStatus.manual_payment_details) setManualPaymentDetails(cachedBillingStatus.manual_payment_details);
     }
   }, [authChecked, authEmail]);
 
@@ -10873,14 +11171,22 @@ export default function App() {
     const hasBillingPayload = Boolean(
       Object.prototype.hasOwnProperty.call(data || {}, "usage")
       || Object.prototype.hasOwnProperty.call(data || {}, "subscription")
+      || Object.prototype.hasOwnProperty.call(data || {}, "payment_requests")
+      || Object.prototype.hasOwnProperty.call(data || {}, "manual_payment")
       || Object.prototype.hasOwnProperty.call(account, "usage")
       || Object.prototype.hasOwnProperty.call(account, "subscription")
+      || Object.prototype.hasOwnProperty.call(account, "payment_requests")
+      || Object.prototype.hasOwnProperty.call(account, "manual_payment")
     );
     if (!hasBillingPayload) return;
     const nextSubscription = data?.subscription || account.subscription || null;
     const nextUsage = data?.usage || account.usage || null;
+    const nextPaymentRequests = data?.payment_requests || account.payment_requests || [];
+    const nextManualPaymentDetails = data?.manual_payment?.payment_details || account.manual_payment?.payment_details || null;
     setBillingSubscription(nextSubscription);
     setBillingUsage(nextUsage);
+    if (Array.isArray(nextPaymentRequests)) setPaymentRequests(nextPaymentRequests);
+    if (nextManualPaymentDetails) setManualPaymentDetails(nextManualPaymentDetails);
   };
 
   const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
@@ -11404,7 +11710,7 @@ export default function App() {
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
-      } else if (["capture", "workspace", "materials", "collaboration", "voice"].includes(normalizedTarget)) {
+      } else if (["capture", "workspace", "materials", "payments", "collaboration", "voice"].includes(normalizedTarget)) {
         openProtectedAppPage(normalizedTarget);
         return;
       }
@@ -11704,6 +12010,9 @@ export default function App() {
     if (!authToken) {
       setBillingUsage(null);
       setBillingSubscription(null);
+      setPaymentRequests([]);
+      setManualPaymentDetails(null);
+      setManualPaymentRequest(null);
       setIsBillingUsageLoading(false);
       return null;
     }
@@ -11715,11 +12024,17 @@ export default function App() {
       const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
       const nextUsage = data.usage || null;
       const nextSubscription = data.subscription || null;
+      const nextPaymentRequests = data.payment_requests || data.account?.payment_requests || [];
+      const nextManualPaymentDetails = data.manual_payment?.payment_details || data.account?.manual_payment?.payment_details || null;
       setBillingUsage(nextUsage);
       setBillingSubscription(nextSubscription);
+      setPaymentRequests(Array.isArray(nextPaymentRequests) ? nextPaymentRequests : []);
+      setManualPaymentDetails(nextManualPaymentDetails);
       saveBillingStatusCache(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "", {
         usage: nextUsage,
         subscription: nextSubscription,
+        payment_requests: Array.isArray(nextPaymentRequests) ? nextPaymentRequests : [],
+        manual_payment_details: nextManualPaymentDetails,
         saved_at: new Date().toISOString(),
       });
       return data;
@@ -12038,7 +12353,7 @@ export default function App() {
     setBillingCheckoutPlanId(plan.id);
     try {
       const { data } = await authJsonWithTransientRetries(
-        "/api/billing/checkout",
+        "/api/payments/create",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -12046,11 +12361,63 @@ export default function App() {
         },
         { timeoutMs: 30000, retries: 1 },
       );
-      setBillingCheckoutMessage("Redirecting to PayFast secure checkout...");
-      submitExternalCheckoutForm(data);
+      const paymentRequest = data.payment_request || null;
+      setManualPaymentRequest(paymentRequest);
+      setManualPaymentDetails(data.payment_details || manualPaymentDetails || null);
+      if (paymentRequest) {
+        setPaymentRequests((current) => mergePaymentRequestList(current, paymentRequest));
+      }
+      setBillingCheckoutMessage(paymentRequest?.payment_reference
+        ? `PayShap reference ${paymentRequest.payment_reference} created. Pay with the exact reference, then click I Have Paid.`
+        : "PayShap payment request created. Pay with the displayed reference, then click I Have Paid.");
     } catch (err) {
       setBillingCheckoutMessage(getReadableRequestError(err));
+    } finally {
       setBillingCheckoutPlanId("");
+    }
+  };
+
+  const confirmManualPaymentSubmitted = async (paymentId = "") => {
+    if (!paymentId) return;
+    setConfirmingPaymentId(paymentId);
+    setBillingCheckoutMessage("");
+    try {
+      const { data } = await authJsonWithTransientRetries(
+        `/api/payments/${encodeURIComponent(paymentId)}/confirm`,
+        { method: "POST" },
+        { timeoutMs: 15000, retries: 1 },
+      );
+      const paymentRequest = data.payment_request || null;
+      if (paymentRequest) {
+        setManualPaymentRequest(paymentRequest);
+        setPaymentRequests((current) => mergePaymentRequestList(current, paymentRequest));
+      }
+      setBillingCheckoutMessage(data.message || "Payment submitted. It remains pending until admin verification.");
+    } catch (err) {
+      setBillingCheckoutMessage(getReadableRequestError(err));
+    } finally {
+      setConfirmingPaymentId("");
+    }
+  };
+
+  const runAdminPaymentAction = async (paymentId = "", action = "") => {
+    const normalizedAction = String(action || "").trim().toLowerCase();
+    if (!paymentId || !["verify", "reject"].includes(normalizedAction)) return;
+    setAdminPaymentActionId(`${normalizedAction}:${paymentId}`);
+    setStatus(normalizedAction === "verify" ? "Verifying payment request..." : "Rejecting payment request...");
+    try {
+      const { data } = await authJsonWithTransientRetries(
+        `/admin/payments/${encodeURIComponent(paymentId)}/${normalizedAction}`,
+        { method: "POST" },
+        { timeoutMs: 30000, retries: 1 },
+      );
+      setStatus(data.message || `Payment ${normalizedAction}ed.`);
+      await loadAdminDashboard(true, "", adminDashboardRange);
+      refreshBillingStatusInBackground();
+    } catch (err) {
+      setStatus(getReadableRequestError(err));
+    } finally {
+      setAdminPaymentActionId("");
     }
   };
 
@@ -12058,6 +12425,9 @@ export default function App() {
     if (!authToken) {
       setBillingUsage(null);
       setBillingSubscription(null);
+      setPaymentRequests([]);
+      setManualPaymentDetails(null);
+      setManualPaymentRequest(null);
       return undefined;
     }
     let cancelled = false;
@@ -18491,6 +18861,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
+              <button type="button" onClick={() => openProtectedAppPage("payments")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Payments</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
@@ -18511,6 +18882,7 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
+          <button type="button" onClick={() => openProtectedAppPage("payments")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Payments</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
           <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>
@@ -18968,6 +19340,7 @@ export default function App() {
 
         {currentPage === "about" ? renderHelpAboutPage() : null}
         {currentPage === "support" ? renderSupportPage() : null}
+        {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "voice" ? renderBrowserVoicePage() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}
