@@ -388,7 +388,7 @@ BILLING_FEATURE_LABELS = {
     "podcast": "Podcasts",
     "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
-    "source_upload": "Document source processing",
+    "source_upload": "Audio/source processing",
 }
 
 
@@ -427,9 +427,9 @@ BILLING_PLAN_QUOTAS = {
     "pro_student": {
         "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
         "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
-        "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 6),
-        "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 6),
-        "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 6),
+        "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 3),
+        "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 3),
+        "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 3),
         "flashcards": get_int_env("PRO_STUDENT_FLASHCARDS_PER_DAY", 6),
         "quiz": get_int_env("PRO_STUDENT_EXAMS_PER_DAY", 6),
         "report": get_int_env("PRO_STUDENT_REPORTS_PER_DAY", 6),
@@ -858,6 +858,31 @@ MANDATORY COMPATIBILITY RULES
 - Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
 - Do not include a FLASHCARDS section in the study guide. Flashcards are generated separately only when the user presses Generate Flashcards.
 
+PREMIUM DEPTH RULES
+- Make the guide detailed enough for serious exam revision, especially when the supplied notes, slides, transcript, or past papers contain enough information.
+- In ## IMPORTANT FORMULAS, do not only list formulas. For each important formula, create a formula card with:
+  - Formula Name
+  - Formula
+  - Variables and units
+  - Used When
+  - Short Derivation or Where It Comes From
+  - Memory Aid
+  - Application Examples, including different unknowns where useful
+  - Limitations and Common Mistakes
+- In ## WORKED EXAMPLES, include beginner and exam-marker views where the source material supports problem solving:
+  - Beginner Solution with numbered steps and short explanations
+  - Exam Marker Solution with Given, Formula, Substitution, Calculation, Final Answer, and Units
+  - Alternative Method or Calculator Method when useful
+  - Common Mistakes after the solution
+- Add ## COMMON MISCONCEPTIONS when students commonly confuse terms, processes, signs, variables, units, or similar concepts.
+- Add ## EXAM FOCUS AREAS when there are obvious assessment priorities. Mark frequently tested ideas, high-probability ideas, and teacher-style warnings.
+- Add ## TEACHER NOTES with concise teacher insight about what examiners or lecturers usually look for.
+- Add ## EXAM INTELLIGENCE when past papers are supplied. Include predicted topic focus, probability labels, examiner focus, and question trends only when supported by the supplied papers. If no past papers are supplied, write likely focus areas instead of fake predictions.
+- Add ## MEMORY TRICKS for concepts that benefit from mnemonics, pattern memory, or simple recall cues.
+- Add ## GENIUS MODE for advanced students. Explain deeper reasoning, real-world applications, edge cases, and a bridge to university-level or higher-level thinking where relevant.
+- Add ## INTERACTIVE FORMULA SHEET when formulas are important. Treat every major formula as a mini lesson with variables, units, derivation, applications, limitations, common mistakes, and exam examples.
+- Add ## ADAPTIVE PRACTICE PATH with Easy, Medium, Hard, Exam Standard, and Challenge-level questions or tasks when the topic supports practice.
+
 FORMATTING AND DEPTH RULES
 - Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
 - Keep the notes concise but not shallow.
@@ -931,6 +956,7 @@ WORKED EXAMPLE ENGINE RULES
 - For statistics, explain why a method or test is selected and how to interpret the result.
 - For programming, explain algorithm thinking, execution flow, and why the code or logic works.
 - Always include a clear final answer, a final verification, a key takeaway, and one exam insight or real-world insight.
+- When appropriate, include both a Beginner Solution and an Exam Marker Solution, then add Common Mistakes, Alternative Method, and Calculator Method sections.
 - The output must feel dynamic, human-tutored, visually structured, and significantly better than a generic templated answer.
 """
 
@@ -1155,6 +1181,20 @@ class SupportMessageRequest(BaseModel):
 
 class HistorySyncRequest(BaseModel):
     items: list[dict[str, Any]] = []
+
+
+class SiteRatingRequest(BaseModel):
+    stars: int
+    comment: str = ""
+    prompt_count: int = 0
+
+
+class StudyTimetableRequest(BaseModel):
+    profile: dict[str, Any] = {}
+    subjects: list[dict[str, Any]] = []
+    availability: dict[str, Any] = {}
+    preferences: dict[str, Any] = {}
+    sessions: list[dict[str, Any]] = []
 
 
 class ChatTurn(BaseModel):
@@ -1802,6 +1842,50 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_email_updated_at
             ON study_history_items (email, updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS site_ratings (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                stars INTEGER NOT NULL,
+                comment TEXT NOT NULL DEFAULT '',
+                prompt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_ratings_created_at
+            ON site_ratings (created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_site_ratings_email_created_at
+            ON site_ratings (email, created_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS study_timetables (
+                email TEXT PRIMARY KEY,
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                subjects_json TEXT NOT NULL DEFAULT '[]',
+                availability_json TEXT NOT NULL DEFAULT '{}',
+                preferences_json TEXT NOT NULL DEFAULT '{}',
+                sessions_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_study_timetables_updated_at
+            ON study_timetables (updated_at DESC)
             """
         )
         connection.execute(
@@ -4071,6 +4155,157 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
     return normalized_items
 
 
+def clamp_word_limited_comment(value: Any, max_words: int = 50) -> str:
+    words = re.findall(r"\S+", compact_text(value))
+    return " ".join(words[:max_words])
+
+
+def create_site_rating_for_user(email: str, stars: int, comment: str = "", prompt_count: int = 0) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    safe_stars = max(1, min(5, int(stars or 0)))
+    cleaned_comment = clamp_word_limited_comment(comment, 50)
+    safe_prompt_count = max(0, min(3, int(prompt_count or 0)))
+    created_at = utc_now().isoformat()
+    rating_id = uuid4().hex
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO site_ratings (id, email, stars, comment, prompt_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (rating_id, normalized_email, safe_stars, cleaned_comment, safe_prompt_count, created_at),
+        )
+    return {
+        "id": rating_id,
+        "email": normalized_email,
+        "stars": safe_stars,
+        "comment": cleaned_comment,
+        "prompt_count": safe_prompt_count,
+        "created_at": created_at,
+    }
+
+
+def load_site_ratings(limit: int = 200) -> dict[str, Any]:
+    safe_limit = max(1, min(int(limit or 200), 500))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, email, stars, comment, prompt_count, created_at
+            FROM site_ratings
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    items = [
+        {
+            "id": row["id"],
+            "email": normalize_email(row["email"]),
+            "stars": int(row["stars"] or 0),
+            "comment": row["comment"] or "",
+            "prompt_count": int(row["prompt_count"] or 0),
+            "created_at": row["created_at"] or "",
+        }
+        for row in rows
+    ]
+    total = len(items)
+    average = round(sum(item["stars"] for item in items) / total, 2) if total else 0
+    distribution = {str(value): sum(1 for item in items if item["stars"] == value) for value in range(1, 6)}
+    return {"items": items, "total": total, "average_stars": average, "distribution": distribution}
+
+
+def ensure_paid_timetable_access(email: str):
+    if get_billing_quota_plan_id(get_effective_plan_id(email)) == "free":
+        raise HTTPException(status_code=402, detail="Study timetable is available on paid plans.")
+
+
+def ensure_json_payload_size(value: Any, *, max_chars: int, label: str) -> Any:
+    try:
+        payload = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{label} must be valid JSON data.") from exc
+    if len(payload) > max_chars:
+        raise HTTPException(status_code=413, detail=f"{label} is too large to save.")
+    return value
+
+
+def serialize_study_timetable_row(row: Any, email: str) -> dict[str, Any]:
+    if not row:
+        return {
+            "email": normalize_email(email),
+            "profile": {},
+            "subjects": [],
+            "availability": {},
+            "preferences": {},
+            "sessions": [],
+            "created_at": "",
+            "updated_at": "",
+        }
+    return {
+        "email": normalize_email(row["email"]),
+        "profile": safe_json_loads(row["profile_json"], {}),
+        "subjects": safe_json_loads(row["subjects_json"], []),
+        "availability": safe_json_loads(row["availability_json"], {}),
+        "preferences": safe_json_loads(row["preferences_json"], {}),
+        "sessions": safe_json_loads(row["sessions_json"], []),
+        "created_at": row["created_at"] or "",
+        "updated_at": row["updated_at"] or "",
+    }
+
+
+def get_study_timetable_for_user(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM study_timetables WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+    return serialize_study_timetable_row(row, normalized_email)
+
+
+def save_study_timetable_for_user(email: str, payload: StudyTimetableRequest) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    profile = ensure_json_payload_size(payload.profile if isinstance(payload.profile, dict) else {}, max_chars=12000, label="Profile")
+    subjects = ensure_json_payload_size(payload.subjects if isinstance(payload.subjects, list) else [], max_chars=24000, label="Subjects")
+    availability = ensure_json_payload_size(payload.availability if isinstance(payload.availability, dict) else {}, max_chars=24000, label="Availability")
+    preferences = ensure_json_payload_size(payload.preferences if isinstance(payload.preferences, dict) else {}, max_chars=12000, label="Preferences")
+    sessions = ensure_json_payload_size(payload.sessions if isinstance(payload.sessions, list) else [], max_chars=80000, label="Sessions")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        existing = connection.execute(
+            "SELECT created_at FROM study_timetables WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now_iso
+        connection.execute(
+            """
+            INSERT INTO study_timetables (
+                email, profile_json, subjects_json, availability_json, preferences_json,
+                sessions_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                profile_json = excluded.profile_json,
+                subjects_json = excluded.subjects_json,
+                availability_json = excluded.availability_json,
+                preferences_json = excluded.preferences_json,
+                sessions_json = excluded.sessions_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_email,
+                json.dumps(profile, ensure_ascii=False),
+                json.dumps(subjects, ensure_ascii=False),
+                json.dumps(availability, ensure_ascii=False),
+                json.dumps(preferences, ensure_ascii=False),
+                json.dumps(sessions, ensure_ascii=False),
+                created_at,
+                now_iso,
+            ),
+        )
+    return get_study_timetable_for_user(normalized_email)
+
+
 REALTIME_TUTOR_VOICE_OPTIONS = (
     "alloy",
     "ash",
@@ -5219,6 +5454,8 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "_podcast_download_file": "",
         "_presentation_download_file": "",
         "_output_language": "English",
+        "_usage_event_id": "",
+        "_usage_event_ids": [],
     }
     return job_id
 
@@ -7005,17 +7242,25 @@ def refund_usage_event(
 
 def refund_job_usage_if_failed(job_id: str, reason: str = "job_failed") -> bool:
     job = jobs.get(job_id, {})
+    usage_event_ids: list[str] = []
+    stored_usage_event_ids = job.get("_usage_event_ids")
+    if isinstance(stored_usage_event_ids, list):
+        usage_event_ids.extend(compact_text(item) for item in stored_usage_event_ids if compact_text(item))
     usage_event_id = compact_text(job.get("_usage_event_id"))
-    if not usage_event_id:
+    if usage_event_id and usage_event_id not in usage_event_ids:
+        usage_event_ids.append(usage_event_id)
+    if not usage_event_ids:
         return False
-    refunded = refund_usage_event(
-        usage_event_id=usage_event_id,
-        email=compact_text(job.get("owner_email")),
-        reason=reason,
-    )
-    if refunded:
-        update_job(job_id, _usage_event_id="")
-    return refunded
+    refunded_any = False
+    for event_id in usage_event_ids:
+        refunded_any = refund_usage_event(
+            usage_event_id=event_id,
+            email=compact_text(job.get("owner_email")),
+            reason=reason,
+        ) or refunded_any
+    if refunded_any:
+        update_job(job_id, _usage_event_id="", _usage_event_ids=[])
+    return refunded_any
 
 
 def ensure_plan_quota_available(
@@ -8825,6 +9070,12 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         for message in support_messages_all
         if message["created_at_dt"] >= range_start
     ]
+    try:
+        site_ratings = load_site_ratings(limit=250)
+    except Exception as exc:
+        logger.exception("Admin dashboard site ratings load failed range=%s", range_key)
+        dashboard_errors.append(f"site_ratings: {exc}")
+        site_ratings = {"items": [], "total": 0, "average_stars": 0, "distribution": {}}
 
     try:
         with get_db_connection() as connection:
@@ -9758,6 +10009,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "unread_count_in_range": unread_support_count_in_range,
             "latest_message_at": support_messages_all[0]["created_at"] if support_messages_all else "",
         },
+        "ratings": site_ratings,
         "billing": {**billing_snapshot, "subscription_abuse_monitor": subscription_abuse_monitor},
         "settings": {
             "available_languages": sorted(set(SUPPORTED_OUTPUT_LANGUAGES.values())),
@@ -10182,12 +10434,21 @@ def parse_quiz_marking_response(content: str, max_score: int) -> dict[str, Any]:
     mistakes = parsed_object.get("mistakes")
     if not isinstance(mistakes, list):
         mistakes = []
+    answer_breakdown = parsed_object.get("answer_breakdown")
+    if isinstance(answer_breakdown, str):
+        answer_breakdown = [answer_breakdown]
+    if not isinstance(answer_breakdown, list):
+        answer_breakdown = []
     return {
         "score": clamp_score(parsed_object.get("score"), max_score),
         "max_score": max_score,
         "extracted_answer": compact_text(parsed_object.get("extracted_answer")),
         "feedback": compact_text(parsed_object.get("feedback"), "The answer was reviewed."),
         "mistakes": [compact_text(item) for item in mistakes if compact_text(item)],
+        "answer_breakdown": [compact_text(item) for item in answer_breakdown if compact_text(item)],
+        "alternative_method": compact_text(parsed_object.get("alternative_method")),
+        "exam_method": compact_text(parsed_object.get("exam_method")),
+        "calculator_method": compact_text(parsed_object.get("calculator_method")),
     }
 
 
@@ -10213,7 +10474,8 @@ def mark_quiz_answer_with_ai(
                 "Be fair if the meaning is correct even when wording differs. "
                 "Award partial credit when some key points are correct. "
                 "Return JSON only with these keys:\n"
-                f'{{"score": 0 to {max_score}, "extracted_answer": "...", "feedback": "...", "mistakes": ["..."]}}'
+                f'{{"score": 0 to {max_score}, "extracted_answer": "...", "feedback": "...", "mistakes": ["..."], '
+                '"answer_breakdown": ["Step 1 ...", "Step 2 ..."], "alternative_method": "...", "exam_method": "...", "calculator_method": "..."}}'
             ),
         }
     ]
@@ -10224,13 +10486,14 @@ def mark_quiz_answer_with_ai(
 
     response = client.with_options(timeout=VISION_REQUEST_TIMEOUT).chat.completions.create(
         model=VISION_MODEL,
-        max_completion_tokens=500,
+        max_completion_tokens=900,
         messages=[
             {
                 "role": "system",
                 "content": (
                     "You mark student quiz answers carefully. "
                     "You may read typed answers, one answer photo, several answer photos, neat handwriting, messy handwriting, or any combination of them. "
+                    "For paid-user answer review, provide a useful Answer Breakdown Mode with step-by-step reasoning, an exam method, and alternative or calculator methods when they apply. "
                     "Return strict JSON only. "
                     "Never award more than the maximum marks provided."
                 ),
@@ -11110,6 +11373,59 @@ async def sync_study_history(
 ):
     items = payload.items if isinstance(payload.items, list) else []
     return {"items": replace_history_items_for_user(current_user, items)}
+
+
+@app.post("/site-ratings")
+async def submit_site_rating(
+    payload: SiteRatingRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    rating = await asyncio.to_thread(
+        create_site_rating_for_user,
+        current_user,
+        payload.stars,
+        payload.comment,
+        payload.prompt_count,
+    )
+    record_audit_log(
+        action="site.rating",
+        email=current_user,
+        request=request,
+        resource_type="site_rating",
+        resource_name=str(rating["stars"]),
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"rating_id": rating["id"], "stars": rating["stars"], "prompt_count": rating["prompt_count"]},
+    )
+    return {"rating": rating}
+
+
+@app.get("/study-timetable")
+async def get_study_timetable(current_user: str = Depends(require_authenticated_user)):
+    ensure_paid_timetable_access(current_user)
+    return {"timetable": get_study_timetable_for_user(current_user)}
+
+
+@app.put("/study-timetable")
+async def save_study_timetable(
+    payload: StudyTimetableRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    ensure_paid_timetable_access(current_user)
+    timetable = await asyncio.to_thread(save_study_timetable_for_user, current_user, payload)
+    record_audit_log(
+        action="study_timetable.saved",
+        email=current_user,
+        request=request,
+        resource_type="study_timetable",
+        resource_name="weekly",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"subjects": len(timetable.get("subjects") or []), "sessions": len(timetable.get("sessions") or [])},
+    )
+    return {"timetable": timetable}
 
 
 @app.get("/admin/dashboard")
@@ -18073,6 +18389,16 @@ async def generate_quiz_questions(
     return build_structured_quiz_fallback(fallback_assets["quiz_questions"], blueprint)
 
 
+def get_study_guide_generation_budget(email: str = "") -> dict[str, int]:
+    plan_id = get_effective_plan_id(email) if compact_text(email) else "free"
+    multiplier = 2 if plan_id in {"pro_student", "premium_student"} else 1
+    return {
+        "source_chars": MAX_STUDY_GUIDE_INPUT_CHARS * multiplier,
+        "transcript_chars": MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS * multiplier,
+        "completion_tokens": MAX_COMPLETION_TOKENS * multiplier,
+    }
+
+
 async def generate_study_guide(
     transcript: str,
     lecture_notes: str,
@@ -18080,29 +18406,34 @@ async def generate_study_guide(
     past_question_papers: str,
     job_id: str,
     output_language: str,
+    owner_email: str = "",
 ) -> tuple[str, bool]:
-    trimmed_transcript = transcript[:MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS].strip()
-    trimmed_notes = lecture_notes[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
-    trimmed_slides = lecture_slides[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
-    trimmed_past_papers = past_question_papers[:MAX_STUDY_GUIDE_INPUT_CHARS].strip()
+    generation_budget = get_study_guide_generation_budget(owner_email)
+    source_char_limit = generation_budget["source_chars"]
+    transcript_char_limit = generation_budget["transcript_chars"]
+    completion_token_budget = generation_budget["completion_tokens"]
+    trimmed_transcript = transcript[:transcript_char_limit].strip()
+    trimmed_notes = lecture_notes[:source_char_limit].strip()
+    trimmed_slides = lecture_slides[:source_char_limit].strip()
+    trimmed_past_papers = past_question_papers[:source_char_limit].strip()
 
-    if len(transcript) > MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS:
+    if len(transcript) > transcript_char_limit:
         trimmed_transcript += (
             "\n\nNOTE: The transcript was shortened for faster study-guide generation. "
             "Focus on the most important themes, formulas, definitions, and examples."
         )
 
-    if len(lecture_notes) > MAX_STUDY_GUIDE_INPUT_CHARS:
+    if len(lecture_notes) > source_char_limit:
         trimmed_notes += (
             "\n\nNOTE: The lecture notes were shortened. Prioritize the clearest formulas, worked examples, and lecturer definitions."
         )
 
-    if len(lecture_slides) > MAX_STUDY_GUIDE_INPUT_CHARS:
+    if len(lecture_slides) > source_char_limit:
         trimmed_slides += (
             "\n\nNOTE: The lecture slides were shortened. Prioritize slide headings, formulas, worked examples, and assessment clues."
         )
 
-    if len(past_question_papers) > MAX_STUDY_GUIDE_INPUT_CHARS:
+    if len(past_question_papers) > source_char_limit:
         trimmed_past_papers += (
             "\n\nNOTE: The past question papers were shortened. Prioritize recurring topics, command words, and mark allocations."
         )
@@ -18133,7 +18464,7 @@ async def generate_study_guide(
         update_job(job_id, status="processing", stage="Preparing study material for notes", progress=20)
         response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
             model=STUDY_GUIDE_MODEL,
-            max_completion_tokens=MAX_COMPLETION_TOKENS,
+            max_completion_tokens=completion_token_budget,
             messages=[
                 {"role": "system", "content": STUDY_GUIDE_PROMPT},
                 {"role": "user", "content": combined_user_content},
@@ -18406,6 +18737,7 @@ async def run_summary_job(
     past_question_papers: str,
     output_language: str,
     reference_images: list[str],
+    owner_email: str = "",
 ):
     try:
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
@@ -18416,6 +18748,7 @@ async def run_summary_job(
             past_question_papers,
             job_id,
             output_language,
+            owner_email,
         )
         visual_analysis = await analyze_reference_images_for_study_guide(
             reference_images,
@@ -19754,9 +20087,53 @@ async def create_study_guide(
         )
 
     ensure_openai_key()
-    usage = consume_plan_quota(email=current_user, feature="study_guide", request=request, metadata={"route": "generate_study_guide"})
+    has_audio_or_video_transcript = bool(transcript)
+    ensure_plan_quota_available(
+        email=current_user,
+        feature="study_guide",
+        request=request,
+        metadata={"route": "generate_study_guide", "stage": "study_guide"},
+    )
+    if has_audio_or_video_transcript:
+        ensure_plan_quota_available(
+            email=current_user,
+            feature="source_upload",
+            request=request,
+            metadata={"route": "generate_study_guide", "stage": "audio_source_processing"},
+        )
+    usage_event_ids: list[str] = []
+    source_usage_event_id = ""
+    if has_audio_or_video_transcript:
+        source_usage = consume_plan_quota(
+            email=current_user,
+            feature="source_upload",
+            request=request,
+            metadata={"route": "generate_study_guide", "stage": "audio_source_processing"},
+        )
+        source_usage_event_id = compact_text(source_usage.get("usage_event_id"))
+        if source_usage_event_id:
+            usage_event_ids.append(source_usage_event_id)
+    try:
+        usage = consume_plan_quota(
+            email=current_user,
+            feature="study_guide",
+            request=request,
+            metadata={"route": "generate_study_guide", "stage": "study_guide"},
+        )
+    except Exception:
+        if source_usage_event_id:
+            refund_usage_event(usage_event_id=source_usage_event_id, email=current_user, reason="study_guide_quota_consume_failed")
+        raise
+    study_usage_event_id = compact_text(usage.get("usage_event_id"))
+    if study_usage_event_id:
+        usage_event_ids.append(study_usage_event_id)
     job_id = create_job("study_guide", owner_email=current_user)
-    update_job(job_id, _output_language=output_language, _usage_event_id=usage.get("usage_event_id", ""))
+    update_job(
+        job_id,
+        _output_language=output_language,
+        _usage_event_id=study_usage_event_id,
+        _usage_event_ids=usage_event_ids,
+    )
     asyncio.create_task(
         run_summary_job(
             job_id,
@@ -19766,6 +20143,7 @@ async def create_study_guide(
             past_question_papers,
             output_language,
             reference_images,
+            current_user,
         )
     )
     record_audit_log(
@@ -19775,7 +20153,12 @@ async def create_study_guide(
         resource_type="study_guide",
         resource_name=output_language,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"job_id": job_id, "language": output_language, "reference_images": len(reference_images)},
+        metadata={
+            "job_id": job_id,
+            "language": output_language,
+            "reference_images": len(reference_images),
+            "audio_source_processing_counted": has_audio_or_video_transcript,
+        },
     )
     return {"job_id": job_id}
 

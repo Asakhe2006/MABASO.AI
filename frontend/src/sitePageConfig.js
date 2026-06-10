@@ -2628,6 +2628,12 @@ export const protectedWorkspaceRoutes = [
     access: "login",
   },
   {
+    route: "/app/timetable",
+    title: "Study Timetable",
+    description: "Build, edit, save, and track a paid-plan weekly study timetable with subjects, availability, and revision sessions.",
+    access: "login",
+  },
+  {
     route: "/app/collaboration",
     title: "Collaboration Rooms",
     description: "Access shared study rooms, room notes, synced tools, and collaborative answer visibility settings.",

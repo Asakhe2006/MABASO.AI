@@ -519,7 +519,7 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
-const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "collaboration", "voice"];
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice"];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
   "Academic Report",
@@ -603,7 +603,7 @@ const fairSubscriptionPlans = [
       "1 exam/test/day",
       "1 podcast/day",
       "1 mind map/day",
-      "1 upload or source processing/day",
+      "1 audio/source processing job/day",
       "3 voice messages/day",
     ],
     safeguards: ["No card required", "Standard accuracy", "Clear usage meter"],
@@ -625,13 +625,13 @@ const fairSubscriptionPlans = [
     attempts: [
       "20 study chat questions/day",
       "6 reports/day",
-      "6 study guides/day",
+      "3 study guides/day",
       "6 flashcard generations/day, choose 5-20 cards",
       "3 PowerPoints/day",
       "6 exams/tests/day",
       "3 podcasts/day",
       "6 mind maps/day",
-      "3 document/source processing jobs/day",
+      "3 audio/source processing jobs/day",
       "9 voice messages/day",
     ],
     safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
@@ -725,6 +725,128 @@ function normalizeWorkspaceTabId(tabId = "") {
 function normalizeAppPageId(pageId = "", fallback = "workspace") {
   const normalized = String(pageId || "").trim().toLowerCase();
   return APP_PAGE_IDS.includes(normalized) ? normalized : fallback;
+}
+
+const TIMETABLE_DAY_KEYS = [
+  { id: "monday", short: "MON" },
+  { id: "tuesday", short: "TUE" },
+  { id: "wednesday", short: "WED" },
+  { id: "thursday", short: "THU" },
+  { id: "friday", short: "FRI" },
+  { id: "saturday", short: "SAT" },
+  { id: "sunday", short: "SUN" },
+];
+const TIMETABLE_SLOTS = [
+  { start: "06:00", end: "07:30" },
+  { start: "08:00", end: "09:30" },
+  { start: "10:00", end: "11:30" },
+  { start: "12:00", end: "13:30", break: true },
+  { start: "14:00", end: "15:30" },
+  { start: "16:00", end: "17:30" },
+  { start: "18:00", end: "19:30" },
+  { start: "20:00", end: "21:30" },
+];
+
+function createDefaultTimetableProfile() {
+  return { learnerName: "", grade: "Grade 12", examDate: "", dailyGoalHours: 4 };
+}
+
+function createDefaultTimetableSubjects() {
+  return [
+    { id: "mathematics", name: "Mathematics", selected: true, priority: 5, performance: 3 },
+    { id: "physics", name: "Physics", selected: true, priority: 5, performance: 3 },
+    { id: "chemistry", name: "Chemistry", selected: true, priority: 4, performance: 3 },
+    { id: "geography", name: "Geography", selected: true, priority: 4, performance: 4 },
+    { id: "revision", name: "Revision", selected: true, priority: 3, performance: 4 },
+    { id: "past-papers", name: "Past Papers", selected: true, priority: 4, performance: 4 },
+  ];
+}
+
+function createDefaultTimetableAvailability() {
+  return TIMETABLE_DAY_KEYS.reduce((acc, day) => ({ ...acc, [day.id]: day.id !== "sunday" }), {});
+}
+
+function createDefaultTimetablePreferences() {
+  return { mode: "Balanced", sessionLengthMinutes: 90, reminders: true, includePastPapers: true };
+}
+
+function getTimetableWeekStartIso(date = new Date()) {
+  const next = new Date(date);
+  const day = next.getDay();
+  const diff = (day + 6) % 7;
+  next.setDate(next.getDate() - diff);
+  next.setHours(0, 0, 0, 0);
+  return next.toISOString();
+}
+
+function addDays(dateIso, days) {
+  const next = new Date(dateIso);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatTimetableDate(date) {
+  return date.toLocaleDateString(undefined, { day: "2-digit", month: "short" }).toUpperCase();
+}
+
+function formatTimetableWeekRange(weekStartIso) {
+  const start = new Date(weekStartIso);
+  const end = addDays(weekStartIso, 6);
+  const startDay = start.toLocaleDateString(undefined, { day: "numeric" });
+  const endLabel = end.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return `${startDay} - ${endLabel}`;
+}
+
+function normalizeTimetableSubjectName(name, fallback = "Subject") {
+  return String(name || "").trim().slice(0, 36) || fallback;
+}
+
+function buildWeightedTimetableSubjects(subjects = []) {
+  const selected = (Array.isArray(subjects) ? subjects : [])
+    .filter((subject) => subject?.selected !== false && normalizeTimetableSubjectName(subject?.name, ""))
+    .map((subject) => ({
+      ...subject,
+      name: normalizeTimetableSubjectName(subject.name),
+      weight: Math.max(1, Number(subject.priority || 3)) + Math.max(0, 5 - Number(subject.performance || 3)),
+    }));
+  const weighted = [];
+  selected.forEach((subject) => {
+    const copies = Math.max(1, Math.min(8, Math.round(subject.weight || 1)));
+    for (let index = 0; index < copies; index += 1) weighted.push(subject);
+  });
+  return weighted.length ? weighted : createDefaultTimetableSubjects().filter((subject) => subject.selected);
+}
+
+function generateStudyTimetableSessions({ subjects, availability, preferences, weekStartIso }) {
+  const weightedSubjects = buildWeightedTimetableSubjects(subjects);
+  const includePastPapers = preferences?.includePastPapers !== false;
+  let cursor = 0;
+  const sessions = [];
+  TIMETABLE_DAY_KEYS.forEach((day, dayIndex) => {
+    const date = addDays(weekStartIso, dayIndex).toISOString();
+    TIMETABLE_SLOTS.forEach((slot, slotIndex) => {
+      const id = `${day.id}-${slot.start}`;
+      if (slot.break) {
+        sessions.push({ id, dayId: day.id, date, start: slot.start, end: slot.end, title: "Break", status: "break", type: "break" });
+        return;
+      }
+      if (!availability?.[day.id]) {
+        sessions.push({ id, dayId: day.id, date, start: slot.start, end: slot.end, title: "Empty", status: "missed", type: "empty" });
+        return;
+      }
+      const subject = weightedSubjects[cursor % weightedSubjects.length];
+      cursor += 1;
+      const isPastPaperSlot = includePastPapers && slotIndex >= 6 && dayIndex < 5;
+      const title = isPastPaperSlot ? "Past Papers" : subject.name;
+      const status = (dayIndex + slotIndex) % 3 === 0 ? "completed" : "scheduled";
+      sessions.push({ id, dayId: day.id, date, start: slot.start, end: slot.end, title, status, type: isPastPaperSlot ? "past_paper" : "study" });
+    });
+  });
+  return sessions;
+}
+
+function normalizeTimetableSessions(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object") : [];
 }
 
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
@@ -4284,6 +4406,11 @@ export default function App() {
   const [quizTimeRemainingSeconds, setQuizTimeRemainingSeconds] = useState(0);
   const [quizDeadlineAtMs, setQuizDeadlineAtMs] = useState(0);
   const [quizFeedbackPrompt, setQuizFeedbackPrompt] = useState(null);
+  const [siteRatingPrompt, setSiteRatingPrompt] = useState(null);
+  const [siteRatingStars, setSiteRatingStars] = useState(0);
+  const [siteRatingComment, setSiteRatingComment] = useState("");
+  const [siteRatingMessage, setSiteRatingMessage] = useState("");
+  const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
   const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
   const [roomQuizResults, setRoomQuizResults] = useState({});
@@ -4328,6 +4455,21 @@ export default function App() {
   const [adminDashboardRange, setAdminDashboardRange] = useState(loadAdminDashboardRangePreference);
   const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache(loadAdminDashboardRangePreference()));
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
+  const [timetableProfile, setTimetableProfile] = useState(createDefaultTimetableProfile);
+  const [timetableSubjects, setTimetableSubjects] = useState(createDefaultTimetableSubjects);
+  const [timetableAvailability, setTimetableAvailability] = useState(createDefaultTimetableAvailability);
+  const [timetablePreferences, setTimetablePreferences] = useState(createDefaultTimetablePreferences);
+  const [timetableWeekStartIso, setTimetableWeekStartIso] = useState(() => getTimetableWeekStartIso());
+  const [timetableSessions, setTimetableSessions] = useState(() => generateStudyTimetableSessions({
+    subjects: createDefaultTimetableSubjects(),
+    availability: createDefaultTimetableAvailability(),
+    preferences: createDefaultTimetablePreferences(),
+    weekStartIso: getTimetableWeekStartIso(),
+  }));
+  const [isTimetableEditing, setIsTimetableEditing] = useState(false);
+  const [isLoadingTimetable, setIsLoadingTimetable] = useState(false);
+  const [isSavingTimetable, setIsSavingTimetable] = useState(false);
+  const [timetableMessage, setTimetableMessage] = useState("");
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
   const fileInputRef = useRef(null);
@@ -4373,6 +4515,7 @@ export default function App() {
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
+  const hasLoadedTimetableRef = useRef(false);
   const adminAutoModeSwitchRef = useRef(false);
   const adminAutoModeSwitchLastAtRef = useRef(0);
   const hasRestoredWorkspaceDraftRef = useRef("");
@@ -5084,7 +5227,7 @@ export default function App() {
   const revealWorkspacePage = (tabId = "guide", { forcePage = false } = {}) => {
     const normalizedTabId = normalizeWorkspaceTabId(tabId || "guide");
     setActiveTab(normalizedTabId);
-    if (forcePage || !["materials", "payments", "about", "support", "voice"].includes(currentPageRef.current)) {
+    if (forcePage || !["materials", "payments", "timetable", "about", "support", "voice"].includes(currentPageRef.current)) {
       openProtectedAppPage("workspace");
     }
   };
@@ -5400,7 +5543,7 @@ export default function App() {
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "payments", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
+  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "payments", "timetable", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
   const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
     const leftIsHighlighted = left.id === highlightedInviteRoomId ? 1 : 0;
@@ -6738,6 +6881,7 @@ export default function App() {
     const visibilityDescription = visibilityMode === "shared"
       ? "Shared test mode lets members compare synced written answers while they work through the same room test."
       : "Private test mode keeps each learner's answers hidden from the rest of the room until the owner changes it.";
+    const showPaidAnswerBreakdown = getCurrentPlanTier() !== "free";
 
     return (
       <div>
@@ -6816,6 +6960,15 @@ export default function App() {
                 })}</div> : <><textarea value={typedAnswer} onChange={(event) => onAnswerChange(item, event.target.value)} disabled={answerLocked} rows={4} className={`mt-3 w-full rounded-2xl border px-4 py-3 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-75 ${answerTone}`} placeholder="Type your answer here..." /><div className="force-mobile-stack mt-3 flex flex-wrap items-center gap-3"><label className={`inline-flex max-w-full items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 ${answerLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><span className="phone-safe-copy">Photos</span><input type="file" accept="image/*" multiple disabled={answerLocked} className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label><label className={`inline-flex max-w-full items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white ${answerLocked ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}><span className="phone-safe-copy">Camera</span><input type="file" accept="image/*" capture="environment" multiple disabled={answerLocked} className="hidden" onChange={(event) => { onImageChange(item.number, event.target.files); event.target.value = ""; }} /></label>{answerImageFiles.length ? <><span className="phone-safe-copy text-xs text-emerald-100/80">{getQuizAnswerImageLabel(answerImageFiles)}</span><div className="flex flex-wrap gap-2">{answerImageFiles.map((file) => <span key={`${scopeId}-${item.number}-${file.name}-${file.lastModified}`} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{file.name}</span>)}</div></> : null}</div></>}
                 {visibilityMode === "shared" && visibleRoomAnswers.length ? <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Team answers</p><div className="mt-3 space-y-3 text-sm text-slate-200">{visibleRoomAnswers.map((answer) => <div key={`${scopeId}-${answer.question_number}-${answer.author_email}`} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="phone-safe-copy font-semibold text-white">{answer.author_email}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words leading-7">{answer.answer_text}</p></div>)}</div></div> : null}
                 {submitted && result ? <div className="mt-4 space-y-3"><div className="rounded-2xl border border-white/10 bg-slate-950/75 p-3"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isOptionBasedQuestion(item) ? "Answer Key" : "Suggested Answer"}</p><p className="phone-safe-copy mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-300">{buildExpectedAnswerText(item)}</p></div><div className={`rounded-2xl border p-3 ${scoreRatio >= 1 ? "border-emerald-300/25 bg-emerald-300/10" : scoreRatio > 0 ? "border-amber-300/25 bg-amber-500/10" : "border-rose-300/25 bg-rose-500/10"}`}><div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.24em] text-slate-200">Marked Result</p><span className={`rounded-full px-3 py-1 text-xs font-semibold ${resultBadgeTone}`}>{resultBadge}</span></div><p className="mt-3 text-sm font-semibold text-white">{questionScore} / {Number(result.max_score || maxMarks)}</p>{result.extracted_answer ? <p className="phone-safe-copy mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-100">Detected answer: {result.extracted_answer}</p> : null}<p className="phone-safe-copy mt-2 text-sm leading-7 text-slate-200">{result.feedback}</p>{Array.isArray(result.mistakes) && result.mistakes.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-100">{result.mistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul> : null}</div></div> : null}
+                {submitted && result && showPaidAnswerBreakdown && (Array.isArray(result.answer_breakdown) && result.answer_breakdown.length || result.alternative_method || result.exam_method || result.calculator_method) ? (
+                  <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3">
+                    <p className="text-xs uppercase tracking-[0.24em] text-emerald-100">Answer Breakdown Mode</p>
+                    {Array.isArray(result.answer_breakdown) && result.answer_breakdown.length ? <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-7 text-slate-100">{result.answer_breakdown.map((step, stepIndex) => <li key={`${scopeId}-${item.number}-breakdown-${stepIndex}`}>{step}</li>)}</ol> : null}
+                    {result.exam_method ? <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 p-3 text-sm leading-7 text-slate-100"><p className="font-semibold text-white">Exam Method</p><p className="mt-1 whitespace-pre-wrap">{result.exam_method}</p></div> : null}
+                    {result.alternative_method ? <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 p-3 text-sm leading-7 text-slate-100"><p className="font-semibold text-white">Alternative Method</p><p className="mt-1 whitespace-pre-wrap">{result.alternative_method}</p></div> : null}
+                    {result.calculator_method ? <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 p-3 text-sm leading-7 text-slate-100"><p className="font-semibold text-white">Calculator Method</p><p className="mt-1 whitespace-pre-wrap">{result.calculator_method}</p></div> : null}
+                  </div>
+                ) : null}
               </div>
             );
           }) : <div className="text-sm text-slate-300">{emptyMessage}</div>}
@@ -7166,6 +7319,151 @@ export default function App() {
       </div>
     </section>
   );
+
+  const renderStudyTimetablePage = () => {
+    const paidAllowed = isPaidStudyTimetableAllowed();
+    const selectedSubjects = timetableSubjects.filter((subject) => subject.selected !== false);
+    const completedCount = timetableSessions.filter((session) => session.status === "completed").length;
+    const trackableCount = timetableSessions.filter((session) => !["break", "empty"].includes(session.status)).length;
+    const weeklyProgress = trackableCount ? Math.round((completedCount / trackableCount) * 100) : 0;
+    const sessionsByCell = timetableSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}`]: session }), {});
+    const subjectOptions = Array.from(new Set([...selectedSubjects.map((subject) => subject.name), "Revision", "Past Papers", "Notes / Flashcards"]));
+
+    if (!paidAllowed) {
+      return (
+        <section className="min-h-[70vh] rounded-[32px] border border-emerald-300/20 bg-slate-950/72 p-6 shadow-[0_24px_80px_rgba(2,8,23,0.4)] backdrop-blur">
+          <div className="flex items-start gap-4">
+            {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Timetable</p>
+              <h2 className="mt-3 text-4xl font-semibold text-white">Premium timetable planning is for paid plans.</h2>
+              <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">Upgrade to create weekly study plans, track sessions, edit subjects, and save a timetable across devices.</p>
+              <button type="button" onClick={openUpgradeModal} className="mt-6 rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-5 py-3 text-sm font-semibold text-white">Upgrade to Pro</button>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6">
+        <div className="flex flex-col gap-5 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-4">
+            {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-300/80">Premium</p>
+              <h2 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Study Timetable</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Plan subjects, availability, revision blocks, past-paper sessions, and weekly progress.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button type="button" onClick={() => setIsTimetableEditing((current) => !current)} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">{isTimetableEditing ? "Close Editor" : "Create / Edit Timetable"}</button>
+            <button type="button" onClick={regenerateStudyTimetable} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Generate</button>
+            <button type="button" onClick={() => saveStudyTimetable()} disabled={isSavingTimetable} className="rounded-[14px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">{isSavingTimetable ? "Saving..." : "Save Timetable"}</button>
+          </div>
+        </div>
+
+        {timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
+
+        {isTimetableEditing ? (
+          <div className="mt-5 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
+              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Profile</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="block"><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Name</span><input value={timetableProfile.learnerName || ""} onChange={(event) => setTimetableProfile((current) => ({ ...current, learnerName: event.target.value }))} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none" placeholder="Learner name" /></label>
+                <label className="block"><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Grade / Course</span><input value={timetableProfile.grade || ""} onChange={(event) => setTimetableProfile((current) => ({ ...current, grade: event.target.value }))} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none" placeholder="Grade 12" /></label>
+                <label className="block"><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Exam date</span><input type="date" value={timetableProfile.examDate || ""} onChange={(event) => setTimetableProfile((current) => ({ ...current, examDate: event.target.value }))} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none" /></label>
+                <label className="block"><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Focus mode</span><select value={timetablePreferences.mode || "Balanced"} onChange={(event) => setTimetablePreferences((current) => ({ ...current, mode: event.target.value }))} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white outline-none"><option>Balanced</option><option>Intensive</option><option>Exam Prep</option></select></label>
+              </div>
+              <div className="mt-5">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Available days</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {TIMETABLE_DAY_KEYS.map((day) => <button key={day.id} type="button" onClick={() => toggleTimetableAvailability(day.id)} className={`rounded-full border px-4 py-2 text-sm ${timetableAvailability?.[day.id] ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-300"}`}>{day.short}</button>)}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Subjects</p>
+                <button type="button" onClick={addTimetableSubject} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Add Subject</button>
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {timetableSubjects.map((subject) => (
+                  <div key={subject.id} className="rounded-2xl border border-white/10 bg-black/35 p-3">
+                    <div className="flex items-center gap-3">
+                      <input type="checkbox" checked={subject.selected !== false} onChange={(event) => updateTimetableSubject(subject.id, "selected", event.target.checked)} className="h-4 w-4 accent-emerald-400" />
+                      <input value={subject.name || ""} onChange={(event) => updateTimetableSubject(subject.id, "name", event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-white outline-none" />
+                    </div>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="text-xs text-slate-400">Priority <input type="range" min="1" max="5" value={subject.priority || 3} onChange={(event) => updateTimetableSubject(subject.id, "priority", Number(event.target.value))} className="mt-2 w-full accent-emerald-400" /></label>
+                      <label className="text-xs text-slate-400">Performance <input type="range" min="1" max="5" value={subject.performance || 3} onChange={(event) => updateTimetableSubject(subject.id, "performance", Number(event.target.value))} className="mt-2 w-full accent-emerald-400" /></label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" onClick={() => shiftTimetableWeek(-1)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white" aria-label="Previous week">‹</button>
+            <button type="button" onClick={() => { const nextWeek = getTimetableWeekStartIso(); setTimetableWeekStartIso(nextWeek); setTimetableSessions(generateStudyTimetableSessions({ subjects: timetableSubjects, availability: timetableAvailability, preferences: timetablePreferences, weekStartIso: nextWeek })); }} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white">Today</button>
+            <button type="button" onClick={() => shiftTimetableWeek(1)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white" aria-label="Next week">›</button>
+          </div>
+          <div className="text-center">
+            <p className="text-2xl font-semibold text-white">{formatTimetableWeekRange(timetableWeekStartIso)}</p>
+            <p className="mt-2 text-sm text-slate-400">{isLoadingTimetable ? "Loading saved timetable..." : `${selectedSubjects.length} active subject${selectedSubjects.length === 1 ? "" : "s"}`}</p>
+          </div>
+          <div className="flex min-w-[240px] items-center gap-3">
+            <span className="whitespace-nowrap text-sm text-slate-200">Weekly Progress:</span>
+            <span className="font-semibold text-emerald-300">{weeklyProgress}%</span>
+            <div className="h-2 flex-1 rounded-full bg-white/10"><div className="h-full rounded-full bg-[linear-gradient(90deg,#16a34a,#22c55e)]" style={{ width: `${weeklyProgress}%` }} /></div>
+          </div>
+        </div>
+
+        <div className="mt-5 overflow-x-auto rounded-[24px] border border-white/10 bg-black">
+          <div className="min-w-[980px]">
+            <div className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/10 text-center text-sm text-white">
+              <div className="px-3 py-4 text-xs uppercase tracking-[0.18em] text-slate-400">Time</div>
+              {TIMETABLE_DAY_KEYS.map((day, index) => <div key={day.id} className="border-l border-white/10 px-3 py-4"><p className="font-semibold">{day.short}</p><p className="mt-1 text-xs text-slate-300">{formatTimetableDate(addDays(timetableWeekStartIso, index))}</p></div>)}
+            </div>
+            {TIMETABLE_SLOTS.map((slot) => (
+              <div key={slot.start} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
+                <div className="px-3 py-3 text-sm text-white">{slot.start} - {slot.end}</div>
+                {TIMETABLE_DAY_KEYS.map((day) => {
+                  const session = sessionsByCell[`${day.id}-${slot.start}`] || { id: `${day.id}-${slot.start}`, title: "Empty", status: "missed" };
+                  const tone = session.status === "completed" ? "border-emerald-400/40 bg-emerald-600/55 text-white" : session.status === "scheduled" ? "border-emerald-400/30 bg-white/[0.04] text-white" : session.status === "break" ? "border-white/10 bg-white/[0.03] text-slate-300" : "border-rose-400/35 bg-rose-700/55 text-white";
+                  return (
+                    <div key={`${day.id}-${slot.start}`} className="border-l border-white/5 p-1.5">
+                      <button type="button" onClick={() => toggleTimetableSessionStatus(session.id)} className={`min-h-[46px] w-full rounded-lg border px-2 py-2 text-center text-sm transition ${tone}`}>
+                        {isTimetableEditing && !["break", "missed"].includes(session.status) ? (
+                          <select value={session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(session.id, event.target.value)} className="w-full bg-transparent text-center text-sm text-white outline-none">
+                            {subjectOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
+                          </select>
+                        ) : (
+                          <span className="phone-safe-copy">{session.status === "completed" ? "✓ " : session.status === "missed" ? "× " : ""}{session.title}</span>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-3">
+          {[
+            ["Completed", "bg-emerald-600/70", "Tick tasks as you complete them."],
+            ["Scheduled", "bg-white/5", "Planned sessions still waiting."],
+            ["Missed / Empty", "bg-rose-700/60", "Tap missed cells to reschedule or mark done."],
+          ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
+        </div>
+      </section>
+    );
+  };
 
   const renderPaymentStatusBadge = (status) => (
     <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold ${getPaymentStatusTone(status)}`}>
@@ -8486,6 +8784,7 @@ export default function App() {
       { id: "overview", label: "Dashboard", group: "Overview" },
       { id: "users", label: "Users", group: "Users" },
       { id: "activity", label: "Activity Log", group: "Users" },
+      { id: "ratings", label: "Ratings", group: "Users" },
       { id: "content", label: "Content Library", group: "Content & Tools" },
       { id: "ai", label: "AI Generation", group: "Content & Tools" },
       { id: "analytics", label: "Analytics", group: "Analytics" },
@@ -9346,6 +9645,7 @@ export default function App() {
       { id: "overview", label: "Dashboard", group: "Overview" },
       { id: "users", label: "Users", group: "Users" },
       { id: "activity", label: "User Activity", group: "Users" },
+      { id: "ratings", label: "Ratings", group: "Users" },
       { id: "sessions", label: "Sessions", group: "Users" },
       { id: "content", label: "Study Materials", group: "Content & Tools" },
       { id: "ai", label: "AI Generation", group: "Content & Tools" },
@@ -9379,6 +9679,8 @@ export default function App() {
     const billingAiCosts = billing.ai_costs || {};
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
+    const ratings = dashboard.ratings || {};
+    const ratingItems = Array.isArray(ratings.items) ? ratings.items : [];
     const subscriptionAbuseMonitor = billing.subscription_abuse_monitor || security.subscription_abuse_monitor || {};
     const subscriptionAbuseOverview = subscriptionAbuseMonitor.overview || {};
     const suspiciousSubscriptionAccounts = subscriptionAbuseMonitor.suspicious_accounts || [];
@@ -9394,6 +9696,7 @@ export default function App() {
     const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address}`));
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
+    const filteredRatings = ratingItems.filter((item) => matchesSearch(`${item.email} ${item.stars} ${item.comment}`));
     const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
     const pendingManualPaymentRequests = filteredManualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "pending");
     const filteredBillingSubscriptions = billingSubscriptions.filter((subscription) => matchesSearch(`${subscription.user} ${subscription.status} ${subscription.plan} ${subscription.plan_id} ${subscription.payment_reference}`));
@@ -9874,6 +10177,53 @@ export default function App() {
               "No logs match the current search.",
             )}
           </article>
+        );
+      }
+
+      if (adminSidebarTab === "ratings") {
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-5 lg:grid-cols-3">
+              <article className={sectionCardClass}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Average Rating</p>
+                <p className="mt-3 text-4xl font-semibold text-slate-950">{Number(ratings.average_stars || 0).toFixed(2)}</p>
+                <p className="mt-2 text-sm text-slate-500">{formatAdminInteger(ratings.total || 0)} submitted rating{Number(ratings.total || 0) === 1 ? "" : "s"}</p>
+              </article>
+              <article className={`${sectionCardClass} lg:col-span-2`}>
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Star Distribution</p>
+                <div className="mt-4 grid gap-2 sm:grid-cols-5">
+                  {[5, 4, 3, 2, 1].map((star) => (
+                    <div key={star} className="rounded-2xl bg-slate-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-900">{star} ★</p>
+                      <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminInteger(ratings.distribution?.[String(star)] || 0)}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </div>
+            <article className={sectionCardClass}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Website Ratings</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Stars and comments from generated study guides</h2>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredRatings.length)} visible</span>
+              </div>
+              {renderSimpleTable(
+                ["User", "Stars", "Comment", "Prompt", "Submitted"],
+                filteredRatings.map((rating) => (
+                  <tr key={rating.id} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
+                    <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">{rating.email || "Unknown"}</td>
+                    <td className="px-3 py-4 text-sm font-semibold text-amber-600">{Array.from({ length: Number(rating.stars || 0) }).map((_, index) => <span key={`${rating.id}-star-${index}`}>★</span>)}</td>
+                    <td className="phone-safe-copy px-3 py-4 text-sm leading-7 text-slate-700">{rating.comment || "No comment"}</td>
+                    <td className="px-3 py-4 text-sm text-slate-700">{formatAdminInteger(rating.prompt_count || 0)} / 3</td>
+                    <td className="rounded-r-[24px] px-3 py-4 text-sm text-slate-700">{formatAdminDateTime(rating.created_at)}</td>
+                  </tr>
+                )),
+                "No ratings match the current search.",
+              )}
+            </article>
+          </div>
         );
       }
 
@@ -10865,6 +11215,7 @@ export default function App() {
     stopTeacherPlayback({ resetIndex: true });
     historyOwnerEmailRef.current = "";
     hasLoadedAdminDashboardRef.current = false;
+    hasLoadedTimetableRef.current = false;
     setAuthToken("");
     setAuthEmail("");
     setAuthSessionMode("user");
@@ -11029,6 +11380,7 @@ export default function App() {
     if (!authChecked || !authEmail) return;
     const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
     historyOwnerEmailRef.current = normalizedEmail;
+    hasLoadedTimetableRef.current = false;
     skipNextHistorySyncRef.current = true;
     const cachedHistoryItems = loadHistoryItems(normalizedEmail);
     setHistoryItems(cachedHistoryItems);
@@ -11884,7 +12236,7 @@ export default function App() {
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
-      } else if (["capture", "workspace", "materials", "payments", "collaboration", "voice"].includes(normalizedTarget)) {
+      } else if (["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice"].includes(normalizedTarget)) {
         openProtectedAppPage(normalizedTarget);
         return;
       }
@@ -12421,6 +12773,172 @@ export default function App() {
   const getAllowedPodcastSpeakerCount = () => (getCurrentPlanTier() === "free" ? 2 : 3);
   const isPodcastSpeakerCountAllowed = (count = podcastSpeakerCount) => Number(count || 2) <= getAllowedPodcastSpeakerCount();
 
+  const getSiteRatingPromptStorageKey = () => `mabaso-site-rating-prompts-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const getStoredSiteRatingPromptCount = () => {
+    const value = Number(window.localStorage.getItem(getSiteRatingPromptStorageKey()) || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.min(3, value)) : 0;
+  };
+  const setStoredSiteRatingPromptCount = (count) => {
+    window.localStorage.setItem(getSiteRatingPromptStorageKey(), String(Math.max(0, Math.min(3, Number(count || 0)))));
+  };
+  const limitSiteRatingComment = (value) => String(value || "").trimStart().split(/\s+/).filter(Boolean).slice(0, 50).join(" ");
+  const maybeShowSiteRatingPrompt = () => {
+    if (!authToken || authSessionMode === "admin") return;
+    const shownCount = getStoredSiteRatingPromptCount();
+    const generatedGuideCount = historyItems.filter((item) => String(item.summary || "").trim()).length;
+    if (shownCount >= 3 || generatedGuideCount >= 3) return;
+    const nextCount = shownCount + 1;
+    setStoredSiteRatingPromptCount(nextCount);
+    setSiteRatingStars(0);
+    setSiteRatingComment("");
+    setSiteRatingMessage("");
+    setSiteRatingPrompt({ promptCount: nextCount });
+  };
+  const closeSiteRatingPrompt = () => {
+    setSiteRatingPrompt(null);
+    setSiteRatingMessage("");
+    setIsSubmittingSiteRating(false);
+  };
+  const submitSiteRating = async () => {
+    if (!siteRatingStars) {
+      setSiteRatingMessage("Choose a star rating first.");
+      return;
+    }
+    setIsSubmittingSiteRating(true);
+    setSiteRatingMessage("");
+    try {
+      const response = await authFetch("/site-ratings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stars: siteRatingStars,
+          comment: limitSiteRatingComment(siteRatingComment),
+          prompt_count: siteRatingPrompt?.promptCount || getStoredSiteRatingPromptCount(),
+        }),
+        timeoutMs: 15000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Rating could not be saved.");
+      closeSiteRatingPrompt();
+    } catch (err) {
+      setSiteRatingMessage(getReadableRequestError(err));
+    } finally {
+      setIsSubmittingSiteRating(false);
+    }
+  };
+
+  const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
+  const applyTimetablePayload = (timetable = {}) => {
+    const profile = timetable.profile && typeof timetable.profile === "object" ? timetable.profile : createDefaultTimetableProfile();
+    const subjects = Array.isArray(timetable.subjects) && timetable.subjects.length ? timetable.subjects : createDefaultTimetableSubjects();
+    const availability = timetable.availability && typeof timetable.availability === "object" ? timetable.availability : createDefaultTimetableAvailability();
+    const preferences = timetable.preferences && typeof timetable.preferences === "object" ? timetable.preferences : createDefaultTimetablePreferences();
+    const sessions = normalizeTimetableSessions(timetable.sessions);
+    setTimetableProfile({ ...createDefaultTimetableProfile(), ...profile });
+    setTimetableSubjects(subjects);
+    setTimetableAvailability({ ...createDefaultTimetableAvailability(), ...availability });
+    setTimetablePreferences({ ...createDefaultTimetablePreferences(), ...preferences });
+    setTimetableSessions(sessions.length ? sessions : generateStudyTimetableSessions({
+      subjects,
+      availability: { ...createDefaultTimetableAvailability(), ...availability },
+      preferences: { ...createDefaultTimetablePreferences(), ...preferences },
+      weekStartIso: timetableWeekStartIso,
+    }));
+  };
+  const loadStudyTimetable = async ({ force = false } = {}) => {
+    if (!authToken || !isPaidStudyTimetableAllowed()) return;
+    if (hasLoadedTimetableRef.current && !force) return;
+    hasLoadedTimetableRef.current = true;
+    setIsLoadingTimetable(true);
+    setTimetableMessage("");
+    try {
+      const response = await authFetch("/study-timetable", { timeoutMs: 20000 });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
+      applyTimetablePayload(data.timetable || {});
+    } catch (err) {
+      hasLoadedTimetableRef.current = false;
+      setTimetableMessage(getReadableRequestError(err));
+    } finally {
+      setIsLoadingTimetable(false);
+    }
+  };
+  const saveStudyTimetable = async (sessionsOverride = null) => {
+    if (!isPaidStudyTimetableAllowed()) {
+      openUpgradeModal();
+      return;
+    }
+    setIsSavingTimetable(true);
+    setTimetableMessage("");
+    try {
+      const response = await authFetch("/study-timetable", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: 20000,
+        body: JSON.stringify({
+          profile: timetableProfile,
+          subjects: timetableSubjects,
+          availability: timetableAvailability,
+          preferences: timetablePreferences,
+          sessions: sessionsOverride || timetableSessions,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not save your study timetable.");
+      applyTimetablePayload(data.timetable || {});
+      setTimetableMessage("Study timetable saved.");
+    } catch (err) {
+      setTimetableMessage(getReadableRequestError(err));
+    } finally {
+      setIsSavingTimetable(false);
+    }
+  };
+  const regenerateStudyTimetable = () => {
+    const nextSessions = generateStudyTimetableSessions({
+      subjects: timetableSubjects,
+      availability: timetableAvailability,
+      preferences: timetablePreferences,
+      weekStartIso: timetableWeekStartIso,
+    });
+    setTimetableSessions(nextSessions);
+    setTimetableMessage("Timetable regenerated. Save it when you are happy with the changes.");
+  };
+  const updateTimetableSubject = (subjectId, field, value) => {
+    setTimetableSubjects((current) => current.map((subject) => (
+      subject.id === subjectId ? { ...subject, [field]: value } : subject
+    )));
+  };
+  const addTimetableSubject = () => {
+    const id = `subject-${Date.now()}`;
+    setTimetableSubjects((current) => [...current, { id, name: "New Subject", selected: true, priority: 3, performance: 3 }]);
+    setIsTimetableEditing(true);
+  };
+  const toggleTimetableAvailability = (dayId) => {
+    setTimetableAvailability((current) => ({ ...current, [dayId]: !current?.[dayId] }));
+  };
+  const updateTimetableSessionTitle = (sessionId, title) => {
+    setTimetableSessions((current) => current.map((session) => (
+      session.id === sessionId ? { ...session, title: normalizeTimetableSubjectName(title, "Study"), status: session.status === "break" ? "break" : "scheduled" } : session
+    )));
+  };
+  const toggleTimetableSessionStatus = (sessionId) => {
+    setTimetableSessions((current) => current.map((session) => {
+      if (session.id !== sessionId || session.status === "break") return session;
+      const nextStatus = session.status === "scheduled" ? "completed" : session.status === "completed" ? "missed" : "scheduled";
+      return { ...session, status: nextStatus };
+    }));
+  };
+  const shiftTimetableWeek = (direction) => {
+    const nextDate = addDays(timetableWeekStartIso, direction * 7).toISOString();
+    setTimetableWeekStartIso(nextDate);
+    setTimetableSessions(generateStudyTimetableSessions({
+      subjects: timetableSubjects,
+      availability: timetableAvailability,
+      preferences: timetablePreferences,
+      weekStartIso: nextDate,
+    }));
+  };
+
   useEffect(() => {
     if (!billingUsage && !billingSubscription) return;
     const allowedCount = getAllowedPodcastSpeakerCount();
@@ -12429,6 +12947,11 @@ export default function App() {
       setPodcastSpeakerProfiles((profiles) => normalizePodcastSpeakerProfiles(profiles, allowedCount));
     }
   }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
+
+  useEffect(() => {
+    if (currentPage !== "timetable" || !authToken || !authChecked || !isPaidStudyTimetableAllowed()) return;
+    loadStudyTimetable().catch(() => {});
+  }, [authAvailableModes, authChecked, authSessionMode, authToken, billingSubscription?.plan_id, billingUsage?.plan_id, currentPage]);
 
   const buildPlanLockedMessage = (itemLabel, requiredPlan = "a higher plan") => (
     `${itemLabel} is locked on your current ${getCurrentPlanEntitlements().label} plan. Upgrade to ${requiredPlan} to use it.`
@@ -14841,7 +15364,7 @@ export default function App() {
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
       return !isTextFile;
     });
-    if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document source processing"))) {
+    if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Audio/source processing"))) {
       throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
     files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, "source materials"));
@@ -15504,8 +16027,8 @@ export default function App() {
         await waitUnlessAborted(JOB_POLL_INTERVAL_MS, signal, "Transcription cancelled.");
       } catch (err) {
         const message = String(err?.message || "");
-        if (isAbortError(err) || err?.aborted) throw err;
-        const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
+        if (signal?.aborted && (isAbortError(err) || err?.aborted)) throw err;
+        const isTransient = isAbortError(err) || Boolean(err?.aborted) || Boolean(err?.transient) || isTransientServerConnectionMessage(message);
         if (!isTransient || transientFailureCount >= 5) throw err;
         transientFailureCount += 1;
         setStatus(`Connection dropped while checking ${jobType.replace(/_/g, " ")}. Retrying...`);
@@ -15533,6 +16056,7 @@ export default function App() {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
+    if (resolvedTranscript.trim() && !(await ensurePremiumFeatureAvailable("source_upload", "Audio/source processing"))) return false;
     setIsGeneratingSummary(true);
     setError("");
     setUsedFallbackSummary(false);
@@ -15653,6 +16177,7 @@ export default function App() {
       revealWorkspacePage("guide");
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
+      maybeShowSiteRatingPrompt();
     } catch (err) {
       const message = String(err?.message || "").trim();
       const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
@@ -18765,6 +19290,55 @@ export default function App() {
       </div>
     </div>
   ) : null;
+
+  const siteRatingModal = siteRatingPrompt ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-[28px] border border-emerald-300/25 bg-slate-950 p-6 text-white shadow-[0_30px_90px_rgba(2,8,23,0.55)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">Quick rating</p>
+            <h3 className="mt-2 text-3xl font-semibold text-white">How was this study guide?</h3>
+          </div>
+          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">
+            Close
+          </button>
+        </div>
+        <div className="mt-6 flex flex-wrap gap-2" aria-label="Choose a star rating">
+          {[1, 2, 3, 4, 5].map((star) => (
+            <button
+              key={star}
+              type="button"
+              onClick={() => setSiteRatingStars(star)}
+              className={`flex h-12 w-12 items-center justify-center rounded-2xl border text-2xl transition ${siteRatingStars >= star ? "border-amber-300/60 bg-amber-300/20 text-amber-200" : "border-white/10 bg-white/5 text-slate-500 hover:text-amber-100"}`}
+              aria-label={`${star} star${star === 1 ? "" : "s"}`}
+            >
+              ★
+            </button>
+          ))}
+        </div>
+        <label className="mt-5 block">
+          <span className="text-xs uppercase tracking-[0.22em] text-slate-400">Optional comment</span>
+          <textarea
+            value={siteRatingComment}
+            onChange={(event) => setSiteRatingComment(limitSiteRatingComment(event.target.value))}
+            rows={4}
+            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm leading-7 text-white outline-none"
+            placeholder="Tell us what was missing or confusing."
+          />
+        </label>
+        <p className="mt-2 text-xs text-slate-400">{siteRatingComment.split(/\s+/).filter(Boolean).length}/50 words</p>
+        {siteRatingMessage ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">{siteRatingMessage}</p> : null}
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white">
+            Not now
+          </button>
+          <button type="button" onClick={submitSiteRating} disabled={isSubmittingSiteRating} className="rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60">
+            {isSubmittingSiteRating ? "Saving..." : "Submit rating"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -19088,7 +19662,8 @@ export default function App() {
         <div className="hero-grid" />
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
-      <main className="relative mx-auto max-w-7xl overflow-x-clip px-3 py-6 sm:px-6 lg:px-8">
+      {siteRatingModal}
+      <main className={`relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
@@ -19097,6 +19672,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
+              <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}>Study Timetable</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
@@ -19118,6 +19694,7 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
           <button type="button" onClick={openPaymentsNavigationTarget} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
+          <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"}`}>Timetable</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
           <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>
@@ -19585,6 +20162,7 @@ export default function App() {
         {currentPage === "about" ? renderHelpAboutPage() : null}
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
+        {currentPage === "timetable" ? renderStudyTimetablePage() : null}
         {currentPage === "voice" ? renderBrowserVoicePage() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}

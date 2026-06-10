@@ -9,6 +9,7 @@ export const APP_ROUTE_BY_PAGE = {
   workspace: "/app/workspace",
   materials: "/app/materials",
   payments: "/app/payments",
+  timetable: "/app/timetable",
   collaboration: "/app/collaboration",
   voice: "/app/voice-study",
   admin: "/admin/dashboard",
