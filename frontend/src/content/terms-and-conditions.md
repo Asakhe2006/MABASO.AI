@@ -74,7 +74,7 @@ For support, feedback, or inquiries regarding Mabaso AI, users may contact the p
 
 # Terms and Conditions
 
-Effective Date: February 2026
+Effective Date: June 2026
 
 Welcome to Mabaso AI. These Terms and Conditions govern your access to and use of the Mabaso AI platform, including all AI-powered study tools, transcription systems, collaboration features, downloadable materials, and educational services provided through the website.
 
@@ -104,13 +104,16 @@ The platform may include:
 - AI-generated tests and marking feedback
 - PowerPoint presentation generation
 - AI-generated podcasts
+- AI-generated academic reports
+- AI-generated mind maps
 - Study chat assistance
+- Browser voice study practice
 - PDF exports and downloads
 - Collaboration rooms
 - Saved study history
 - Lecture recording tools
 - YouTube and public video processing
-- Admin management systems
+- Account usage limits, subscription status, and payment-request history
 
 The platform may evolve over time, and features may be modified, added, restricted, or removed without prior notice.
 
@@ -138,6 +141,10 @@ Users must not share accounts or impersonate other individuals.
 
 Mabaso AI reserves the right to suspend, restrict, or terminate accounts that violate these Terms.
 
+Paid plans may unlock higher usage limits, larger source-material limits, more advanced output settings, or unlimited access for selected tools. Free-plan limits may reset daily or on another period shown inside the platform. When a paid subscription period ends, the account returns to the Free Plan unless a new payment is verified and a new subscription period is activated.
+
+Manual PayShap payments require users to use the exact payment reference shown by the platform. Clicking **I Have Paid** only records that the user submitted payment; it does not activate a subscription. A plan becomes active only after an authorized administrator verifies the matching bank payment reference.
+
 ---
 
 ## 4. Acceptable Use Policy
@@ -155,6 +162,7 @@ Users agree not to:
 - Misuse collaboration features or harass other users
 - Attempt to overload or disrupt system performance
 - Generate deceptive or fraudulent educational content intentionally
+- Submit false payment confirmations or attempt to activate a paid plan without a verified payment
 
 Violation of these rules may result in:
 
@@ -262,6 +270,8 @@ The platform may allow users to download:
 - PowerPoint presentations
 - Generated tests
 - Podcast audio files
+- Mind map exports
+- Academic reports
 - Other generated educational outputs
 
 Downloaded files are provided for personal educational use.
@@ -285,6 +295,7 @@ Mabaso AI may store:
 - Saved history
 - Support requests
 - AI interaction records
+- Payment requests, payment references, subscription records, and usage-limit records
 
 This storage allows users to reopen and continue previous study sessions.
 
@@ -328,7 +339,21 @@ Unauthorized attempts to access protected systems may result in legal action.
 
 ---
 
-## 12. Admin Dashboard and Monitoring
+## 12. Billing, Payments, Subscriptions, and Admin Monitoring
+
+Mabaso AI may offer free and paid plans. Paid plans may be monthly, semester-based, annual, or another period shown before payment.
+
+Manual PayShap payment requests may include:
+
+- The selected plan
+- The amount due
+- A unique payment reference
+- Payment status such as pending, verified, or rejected
+- Verification timestamps and related subscription status
+
+Users must use the exact payment reference when paying. If the payment cannot be matched, is not received, is reversed, or appears fraudulent, Mabaso AI may reject the request or remove paid access.
+
+When a paid subscription expires, the user's access returns to the Free Plan automatically unless a new payment is verified. Remaining subscription time may be shown inside the user's account or upgrade area.
 
 Admin users may have access to management systems including:
 
@@ -338,10 +363,13 @@ Admin users may have access to management systems including:
 - System health monitoring
 - Security alerts
 - Moderation controls
+- Billing and payment verification controls
 
 Administrative access is restricted to authorized platform administrators only.
 
 Unauthorized access attempts are strictly prohibited.
+
+Normal users cannot access admin-only dashboards, verification controls, audit logs, or private operational records.
 
 ---
 

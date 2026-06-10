@@ -2239,26 +2239,26 @@ Data is used to:
     access: "public",
     metadata: {
       title: "Terms & Conditions | Mabaso AI",
-      description: "Read the Mabaso AI terms covering accounts, AI limitations, uploads, acceptable use, collaboration, downloads, privacy, and service policies.",
+      description: "Read the Mabaso AI terms covering accounts, AI limitations, uploads, manual PayShap payments, subscription expiry, study tools, collaboration, downloads, privacy, and service policies.",
     },
     hero: {
       eyebrow: "Company / Terms",
-      headline: "Clear platform rules for AI study generation, uploads, collaboration, and account use.",
-      description: "Terms & Conditions lays out the rules that govern Mabaso AI: platform access, acceptable use, AI limitations, media uploads, collaboration, downloads, storage, privacy, and account policy.",
+      headline: "Clear platform rules for AI study generation, uploads, payments, collaboration, and account use.",
+      description: "Terms & Conditions lays out the rules that govern Mabaso AI: platform access, acceptable use, AI limitations, media uploads, manual payments, subscription expiry, study tools, collaboration, downloads, storage, privacy, and account policy.",
       ctas: [
         primaryCta("Read Privacy Policy", "route", "/company/privacy"),
         secondaryCta("View Security", "route", "/company/security"),
       ],
       metrics: [
-        { label: "Effective date", value: "February 2026" },
-        { label: "Scope", value: "Accounts to AI outputs" },
+        { label: "Effective date", value: "June 2026" },
+        { label: "Scope", value: "Accounts, AI outputs, payments" },
         { label: "Access", value: "Public" },
       ],
       preview: {
         kicker: "Legal overview",
-        title: "Accounts, uploads, AI limitations, and platform rules",
+        title: "Accounts, uploads, AI limitations, payments, and platform rules",
         subtitle: "A premium legal page should still feel readable and product-native, with strong hierarchy and calm enterprise polish.",
-        tabs: ["Accounts", "Uploads", "AI", "Platform Rules"],
+        tabs: ["Accounts", "Uploads", "AI", "Payments"],
         rows: [
           { label: "Audience", value: "All visitors and users" },
           { label: "Purpose", value: "Platform governance" },
@@ -2270,6 +2270,7 @@ Data is used to:
     contains: [
       { icon: "scale", title: "Platform rules", description: "Covers acceptable use, account responsibility, uploads, and collaboration behavior." },
       { icon: "brain", title: "AI limitation framing", description: "Clarifies that AI outputs are supplementary and should be verified when important." },
+      { icon: "credit-card", title: "Payment and plan terms", description: "Explains manual PayShap verification, pending status, expiry to Free, and usage limits." },
       { icon: "file-warning", title: "Upload and ownership terms", description: "Explains what users may upload and the rights needed to do so." },
     ],
     layout: [

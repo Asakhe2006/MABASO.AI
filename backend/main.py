@@ -6218,9 +6218,18 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
             "updated_at": "",
             "active": False,
             "renewal_status": "free",
+            "days_remaining": 0,
+            "seconds_remaining": 0,
+            "time_remaining_label": "",
+            "expires_at": "",
+            "expired": False,
         }
     normalized_status = compact_text(row["status"]).lower()
     normalized_plan_id = normalize_billing_plan_id(row["plan_id"])
+    period_state = build_subscription_period_state(
+        row["current_period_end"],
+        active=normalized_status == "active",
+    )
     return {
         "status": normalized_status,
         "plan_id": normalized_plan_id if normalized_status == "active" else "free",
@@ -6233,6 +6242,7 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
         "updated_at": row["updated_at"],
         "active": normalized_status == "active",
         "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("renews" if normalized_status == "active" else normalized_status),
+        **period_state,
         "message": (
             "Your subscription has expired and your account has been returned to the Free Plan."
             if normalized_status == "expired"
@@ -6252,6 +6262,45 @@ def parse_billing_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def build_subscription_period_state(period_end_value: Any, *, active: bool = False, now: datetime | None = None) -> dict[str, Any]:
+    period_end = parse_billing_datetime(period_end_value)
+    current_time = now or utc_now()
+    if not period_end:
+        return {
+            "days_remaining": 0,
+            "seconds_remaining": 0,
+            "time_remaining_label": "",
+            "expires_at": "",
+            "expired": False,
+        }
+    seconds_remaining = max(0, int((period_end - current_time).total_seconds()))
+    days_remaining = 0 if seconds_remaining <= 0 else (seconds_remaining + 86399) // 86400
+    if not active or seconds_remaining <= 0:
+        label = "Expired"
+    elif seconds_remaining >= 86400:
+        days = seconds_remaining // 86400
+        hours = (seconds_remaining % 86400) // 3600
+        day_part = f"{days} day{'s' if days != 1 else ''}"
+        hour_part = f" {hours} hour{'s' if hours != 1 else ''}" if hours else ""
+        label = f"{day_part}{hour_part} left"
+    elif seconds_remaining >= 3600:
+        hours = seconds_remaining // 3600
+        minutes = (seconds_remaining % 3600) // 60
+        hour_part = f"{hours} hour{'s' if hours != 1 else ''}"
+        minute_part = f" {minutes} minute{'s' if minutes != 1 else ''}" if minutes else ""
+        label = f"{hour_part}{minute_part} left"
+    else:
+        minutes = max(1, seconds_remaining // 60)
+        label = f"{minutes} minute{'s' if minutes != 1 else ''} left"
+    return {
+        "days_remaining": days_remaining,
+        "seconds_remaining": seconds_remaining,
+        "time_remaining_label": label,
+        "expires_at": period_end.isoformat(),
+        "expired": seconds_remaining <= 0,
+    }
 
 
 def expire_subscription_if_needed(email: str, row: sqlite3.Row | None = None) -> sqlite3.Row | None:
@@ -6337,6 +6386,11 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             "updated_at": now_iso,
             "active": True,
             "renewal_status": "admin",
+            "days_remaining": 0,
+            "seconds_remaining": 0,
+            "time_remaining_label": "Admin access",
+            "expires_at": "",
+            "expired": False,
         }
     with get_db_connection() as connection:
         row = connection.execute(
@@ -8389,6 +8443,10 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         period_end = parse_billing_datetime(row["current_period_end"])
         status = compact_text(row["status"]).lower()
         is_active = status == "active" and (period_end is None or period_end > now)
+        period_state = build_subscription_period_state(row["current_period_end"], active=is_active, now=now)
+        effective_status = status or "unknown"
+        if status == "active" and period_state.get("expired"):
+            effective_status = "expired"
         if is_active:
             active_subscribers += 1
         if status in {"cancelled", "canceled", "expired"} or compact_text(row["cancel_at"]):
@@ -8399,11 +8457,16 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "user": normalize_email(row["email"]),
                 "plan_id": plan_id,
                 "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id.replace("_", " ").title(),
-                "status": status or "unknown",
+                "status": effective_status,
                 "provider": row["provider"],
                 "amount": parse_zar_amount(row["amount_zar"]),
                 "start_date": row["current_period_start"],
                 "end_date": row["current_period_end"],
+                "days_remaining": period_state["days_remaining"],
+                "seconds_remaining": period_state["seconds_remaining"],
+                "time_remaining_label": period_state["time_remaining_label"],
+                "expires_at": period_state["expires_at"],
+                "expired": period_state["expired"],
                 "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("active" if is_active else "expired"),
                 "payment_reference": row["provider_payment_id"],
             }

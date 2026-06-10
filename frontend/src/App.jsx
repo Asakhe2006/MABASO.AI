@@ -2631,6 +2631,16 @@ function formatPaymentAmount(payment = {}) {
   return formatAdminCurrency(payment?.amount ?? 0);
 }
 
+function getSubscriptionCountdownText(subscription = null) {
+  if (!subscription || typeof subscription !== "object") return "";
+  const status = String(subscription.status || "").toLowerCase();
+  const planId = String(subscription.plan_id || "free").toLowerCase();
+  if (subscription.renewal_status === "admin") return "Admin access";
+  if (status === "expired" || subscription.expired) return subscription.message || "Subscription expired. Account is on the Free Plan.";
+  if (!subscription.active || planId === "free") return "";
+  return subscription.time_remaining_label || "";
+}
+
 function mergePaymentRequestList(current = [], nextPayment = null) {
   if (!nextPayment?.id) return current;
   const remaining = current.filter((item) => item.id !== nextPayment.id);
@@ -4823,6 +4833,23 @@ export default function App() {
             {fairBillingGuardrails.map((rule) => <div key={rule} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">{rule}</div>)}
           </div>
         </div>
+        {billingSubscription ? (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Current Subscription Period</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  Plan: {(billingSubscription.plan_id || "free").replaceAll("_", " ")}
+                  {billingSubscription.current_period_end ? ` · Ends ${formatAdminDateTime(billingSubscription.current_period_end)}` : ""}
+                </p>
+              </div>
+              <span className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] ${billingSubscription.active ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-800 text-slate-300"}`}>
+                {getSubscriptionCountdownText(billingSubscription) || "Free Plan"}
+              </span>
+            </div>
+            {billingSubscription.message ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">{billingSubscription.message}</p> : null}
+          </div>
+        ) : null}
         {billingUsage?.features?.length ? (
           <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -9280,6 +9307,7 @@ export default function App() {
     const billingOverview = billing.overview || {};
     const billingPayments = billing.payments || [];
     const manualPaymentRequests = billing.manual_payment_requests || [];
+    const billingSubscriptions = billing.subscriptions || [];
     const billingAiCosts = billing.ai_costs || {};
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
@@ -9299,6 +9327,7 @@ export default function App() {
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
     const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
+    const filteredBillingSubscriptions = billingSubscriptions.filter((subscription) => matchesSearch(`${subscription.user} ${subscription.status} ${subscription.plan} ${subscription.plan_id} ${subscription.payment_reference}`));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -10249,6 +10278,47 @@ export default function App() {
                   ))}
                 </div>
               ) : null}
+            </article>
+
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Subscription Periods</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-950">Paid users and time left before expiry</h3>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredBillingSubscriptions.length)} visible</span>
+              </div>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
+                    <tr>
+                      {["User Email", "Plan", "Status", "Provider", "Time Left", "End Date", "Reference"].map((heading) => (
+                        <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredBillingSubscriptions.length ? filteredBillingSubscriptions.slice(0, 80).map((subscription) => {
+                      const isActiveSubscription = String(subscription.status || "").toLowerCase() === "active" && !subscription.expired;
+                      return (
+                        <tr key={`${subscription.user}-${subscription.plan_id}-${subscription.end_date}`} className="border-b border-slate-100 align-top">
+                          <td className="phone-safe-copy whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{subscription.user}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{subscription.plan || subscription.plan_id || "Plan"}</td>
+                          <td className="whitespace-nowrap px-3 py-3">
+                            <span className={`rounded-full px-3 py-1 text-xs font-bold ${isActiveSubscription ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>{titleCaseWords(subscription.status || "unknown")}</span>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">{titleCaseWords(subscription.provider || "manual")}</td>
+                          <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{subscription.time_remaining_label || (subscription.expired ? "Expired" : "No end date")}</td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-600">{subscription.end_date ? formatAdminDateTime(subscription.end_date) : "None"}</td>
+                          <td className="phone-safe-copy whitespace-nowrap px-3 py-3 text-slate-600">{subscription.payment_reference || "--"}</td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No subscription rows match the current filters.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </article>
 
             <article className={sectionCardClass}>
