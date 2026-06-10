@@ -9327,6 +9327,7 @@ export default function App() {
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
     const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
+    const pendingManualPaymentRequests = filteredManualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "pending");
     const filteredBillingSubscriptions = billingSubscriptions.filter((subscription) => matchesSearch(`${subscription.user} ${subscription.status} ${subscription.plan} ${subscription.plan_id} ${subscription.payment_reference}`));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
@@ -10226,6 +10227,20 @@ export default function App() {
                 ))}
               </div>
             </article>
+
+            {pendingManualPaymentRequests.length ? (
+              <article className={sectionCardClass}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-amber-600">PayShap Verification Required</p>
+                    <h3 className="mt-2 text-xl font-semibold text-slate-950">Pending manual payments</h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">Match the exact bank payment reference, then click VERIFY to activate the user's subscription. REJECT leaves the user on their current plan.</p>
+                  </div>
+                  <button type="button" onClick={() => setAdminSidebarTab("payments")} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Open Payments Tab</button>
+                </div>
+                <div className="mt-5">{renderAdminManualPaymentsTable(pendingManualPaymentRequests)}</div>
+              </article>
+            ) : null}
 
             <article className={sectionCardClass}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
