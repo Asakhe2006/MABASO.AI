@@ -388,7 +388,7 @@ BILLING_FEATURE_LABELS = {
     "podcast": "Podcasts",
     "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
-    "source_upload": "Document/audio source processing",
+    "source_upload": "Document source processing",
 }
 
 
@@ -19553,14 +19553,6 @@ async def upload_audio(
             jobs.pop(job_id, None)
             raise
 
-        try:
-            usage = consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "upload_audio"})
-            update_job(job_id, _usage_event_id=usage.get("usage_event_id", ""))
-        except HTTPException:
-            if file_path.exists():
-                file_path.unlink()
-            jobs.pop(job_id, None)
-            raise
         asyncio.create_task(run_transcription_job(job_id, file_path))
         record_audit_log(
             action="lecture.upload.request",
@@ -19593,9 +19585,8 @@ async def transcribe_video_url(
     if not can_process_video_url(video_url):
         raise HTTPException(status_code=500, detail="Video-link transcription is not configured on the backend yet.")
 
-    usage = consume_plan_quota(email=current_user, feature="source_upload", request=request, metadata={"route": "transcribe_video_url"})
     job_id = create_job("video_transcription", owner_email=current_user)
-    update_job(job_id, status="processing", stage="Preparing video link", progress=1, _usage_event_id=usage.get("usage_event_id", ""))
+    update_job(job_id, status="processing", stage="Preparing video link", progress=1)
     asyncio.create_task(run_video_transcription_job(job_id, video_url))
     record_audit_log(
         action="lecture.video_link.request",

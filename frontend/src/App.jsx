@@ -631,7 +631,7 @@ const fairSubscriptionPlans = [
       "6 exams/tests/day",
       "3 podcasts/day",
       "6 mind maps/day",
-      "3 uploads or source processing jobs/day",
+      "3 document/source processing jobs/day",
       "9 voice messages/day",
     ],
     safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
@@ -659,7 +659,7 @@ const fairSubscriptionPlans = [
       "Unlimited PowerPoints",
       "Unlimited podcasts",
       "Unlimited mind maps",
-      "Unlimited transcription and slide analysis",
+      "Unlimited slide and document analysis",
     ],
     safeguards: ["Best quality tier", "Highest priority", "Premium features included"],
   },
@@ -1967,6 +1967,38 @@ function wait(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function createAbortError(message = "Request aborted.") {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfSignalAborted(signal, message = "Request aborted.") {
+  if (signal?.aborted) throw createAbortError(message);
+}
+
+function waitUnlessAborted(ms, signal, message = "Request aborted.") {
+  if (!signal) return wait(ms);
+  return new Promise((resolve, reject) => {
+    try {
+      throwIfSignalAborted(signal, message);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    let timeoutId = 0;
+    const abortHandler = () => {
+      window.clearTimeout(timeoutId);
+      reject(createAbortError(message));
+    };
+    timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", abortHandler);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abortHandler, { once: true });
+  });
+}
+
 function getFileExtension(fileName = "") {
   const parts = (fileName || "").toLowerCase().split(".");
   return parts.length > 1 ? `.${parts.pop()}` : "";
@@ -2990,7 +3022,17 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const startedAt = Date.now();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-  const nextOptions = { ...options, signal: options.signal || controller.signal };
+  const providedSignal = options.signal;
+  let providedAbortHandler = null;
+  if (providedSignal) {
+    if (providedSignal.aborted) {
+      controller.abort();
+    } else {
+      providedAbortHandler = () => controller.abort();
+      providedSignal.addEventListener("abort", providedAbortHandler, { once: true });
+    }
+  }
+  const nextOptions = { ...options, signal: controller.signal };
 
   try {
     const response = await fetch(resource, nextOptions);
@@ -3018,6 +3060,9 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
     });
     throw error;
   } finally {
+    if (providedSignal && providedAbortHandler) {
+      providedSignal.removeEventListener("abort", providedAbortHandler);
+    }
     window.clearTimeout(timeoutId);
   }
 }
@@ -4300,6 +4345,7 @@ export default function App() {
   const presentationViewerRef = useRef(null);
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
+  const transcriptionAbortControllerRef = useRef(null);
   const recordingStreamRef = useRef(null);
   const recordingOwnedStreamsRef = useRef([]);
   const recordingAudioContextRef = useRef(null);
@@ -5277,6 +5323,7 @@ export default function App() {
   const canShareSystemAudio = typeof navigator !== "undefined" && typeof navigator.mediaDevices?.getDisplayMedia === "function";
   const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
+  const canCancelTranscription = (isTranscribing || isTranscribingVideo) && ["transcription", "video"].includes(currentJobType) && !isGeneratingSummary && !isProcessingLectureBundle;
   const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
@@ -5284,6 +5331,7 @@ export default function App() {
     : slidesReadyForGuide
       ? "Slide read successful. You can now generate the study guide."
       : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
+  const captureStatusMessage = status || "Ready for your next lecture. Add lecture material if available, such as slides, notes, or past papers.";
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script || (reportData && (reportData.body || (reportData.sections || []).length)) || mindMapData.root);
   const selectedQuizQuestions = quizQuestions;
   const quizTotalMarks = getTotalQuizMarks(selectedQuizQuestions);
@@ -6485,13 +6533,15 @@ export default function App() {
         };
       }
       if (currentJobType === "transcription" || currentJobType === "video") {
+        const activeTranscriptionLabel = currentJobType === "video" ? "Transcribing video link 1 of 1" : "Transcribing lecture 1 of 1";
+        const activeTranscriptionStatus = status || "Preparing the lecture transcript.";
         return {
           eyebrow: currentJobType === "video" ? "Reading video link" : "Transcribing lecture",
           badge: progressLabel || "Working",
-          detail: status || "Preparing the lecture transcript.",
+          detail: `${activeTranscriptionLabel}. ${activeTranscriptionStatus}`,
           showProgress: true,
           progressValue,
-          statusLine: status || "Preparing the lecture transcript.",
+          statusLine: `${activeTranscriptionLabel}. ${activeTranscriptionStatus}`,
         };
       }
       if (isProcessingLectureBundle) {
@@ -12058,7 +12108,10 @@ export default function App() {
     try {
       response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
     } catch (err) {
-      throw new Error(getReadableRequestError(err, path));
+      const requestError = new Error(getReadableRequestError(err, path));
+      requestError.aborted = isAbortError(err);
+      if (requestError.aborted) requestError.name = "AbortError";
+      throw requestError;
     }
     if (response.status === 401) {
       const latestToken = authTokenRef.current || window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
@@ -12075,8 +12128,6 @@ export default function App() {
       && requestMethod !== "GET"
       && !String(path || "").startsWith("/api/billing/")
       && [
-        "/upload-audio/",
-        "/transcribe-video-url/",
         "/extract-slide-text/",
         "/generate-study-guide/",
         "/generate-flashcards/",
@@ -14487,6 +14538,33 @@ export default function App() {
     setActiveHistoryId("");
   };
 
+  const isTranscriptionAbortForSignal = (error, signal) => Boolean(
+    signal?.aborted && (isAbortError(error) || error?.aborted),
+  );
+
+  const clearCancelledTranscriptionState = () => {
+    clearPendingJob();
+    clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
+    resetGeneratedOutputs();
+    startTransition(() => {
+      setFile(null);
+      setVideoUrl("");
+    });
+    setIsTranscribing(false);
+    setIsTranscribingVideo(false);
+    setCurrentJobType("");
+    setProgress(0);
+    setError("");
+    setStatus("Transcription cancelled. The old lecture audio or video was removed. Add lecture material if available, such as slides, notes, or past papers, then transcribe again when ready.");
+  };
+
+  const cancelActiveTranscription = () => {
+    if (!canCancelTranscription) return;
+    transcriptionAbortControllerRef.current?.abort();
+    transcriptionAbortControllerRef.current = null;
+    clearCancelledTranscriptionState();
+  };
+
   const logout = async () => {
     try {
       if (authToken) await authFetch("/auth/logout", { method: "POST" });
@@ -14763,7 +14841,7 @@ export default function App() {
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
       return !isTextFile;
     });
-    if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
+    if (requiresServerExtraction && !(await ensurePremiumFeatureAvailable("source_upload", "Document source processing"))) {
       throw createUsageBlockedError("You have used all free source-processing attempts for today.");
     }
     files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, "source materials"));
@@ -14904,11 +14982,10 @@ export default function App() {
     if (!selectedFile) {
       throw new Error("Upload or record a lecture first.");
     }
-    if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) {
-      throw createUsageBlockedError("You have used all free source-processing attempts for today.");
-    }
     assertSourceMaterialFileSizeAllowed(selectedFile, "lecture files");
 
+    const abortController = new AbortController();
+    transcriptionAbortControllerRef.current = abortController;
     setIsTranscribing(true);
     if (surfaceError) setError("");
     setStatus(initialStatus);
@@ -14931,6 +15008,7 @@ export default function App() {
           minMs: 5 * 60 * 1000,
           maxMs: LARGE_LECTURE_UPLOAD_TIMEOUT_MS,
         }),
+        signal: abortController.signal,
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || failureStatus);
@@ -14940,7 +15018,7 @@ export default function App() {
         autoGenerateGuide,
         savedAt: new Date().toISOString(),
       });
-      const job = await pollJob(data.job_id, "transcription");
+      const job = await pollJob(data.job_id, "transcription", { signal: abortController.signal });
       const transcriptText = job.transcript || "";
       startTransition(() => {
         setTranscript(transcriptText);
@@ -14960,14 +15038,21 @@ export default function App() {
       return transcriptText;
     } catch (err) {
       clearPendingJob();
+      if (isTranscriptionAbortForSignal(err, abortController.signal)) {
+        throw createAbortError("Transcription cancelled.");
+      }
       if (surfaceError) {
         setError(err.message || failureStatus);
         setStatus(failureStatus);
       }
       throw err;
     } finally {
-      setIsTranscribing(false);
-      setCurrentJobType("");
+      const isLatestTranscription = transcriptionAbortControllerRef.current === abortController;
+      if (isLatestTranscription) {
+        transcriptionAbortControllerRef.current = null;
+        setIsTranscribing(false);
+        setCurrentJobType("");
+      }
     }
   };
 
@@ -15371,9 +15456,9 @@ export default function App() {
             // transcribeLectureFile already updates the UI error state when auto-processing fails.
           }
         } else if (stopReason === "source-ended") {
-          setStatus("Recording source ended. The saved recording is ready. Add slides, notes, or past papers, then transcribe when you are ready.");
+          setStatus("Recording source ended. The saved recording is ready. Add lecture material if available, such as slides, notes, or past papers, then transcribe when you are ready.");
         } else {
-          setStatus("Recording saved. Add slides, notes, or past papers, then transcribe when you are ready.");
+          setStatus("Recording saved. Add lecture material if available, such as slides, notes, or past papers, then transcribe when you are ready.");
         }
       };
       recorder.start(1000);
@@ -15397,11 +15482,13 @@ export default function App() {
     setStatus("Saving the recording so you can keep adding lecture material...");
   };
 
-  const pollJob = async (jobId, jobType) => {
+  const pollJob = async (jobId, jobType, options = {}) => {
+    const { signal } = options;
     let transientFailureCount = 0;
     while (true) {
       try {
-        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS });
+        throwIfSignalAborted(signal, "Transcription cancelled.");
+        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, signal });
         const data = await parseJsonSafe(response);
         if (!response.ok) {
           const requestError = new Error(data.detail || "Could not read job status.");
@@ -15414,15 +15501,16 @@ export default function App() {
         setProgress(Number(data.progress || 0));
         if (data.status === "failed") throw new Error(data.error || `${jobType} failed.`);
         if (data.status === "completed") return data;
-        await wait(JOB_POLL_INTERVAL_MS);
+        await waitUnlessAborted(JOB_POLL_INTERVAL_MS, signal, "Transcription cancelled.");
       } catch (err) {
         const message = String(err?.message || "");
+        if (isAbortError(err) || err?.aborted) throw err;
         const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
         if (!isTransient || transientFailureCount >= 5) throw err;
         transientFailureCount += 1;
         setStatus(`Connection dropped while checking ${jobType.replace(/_/g, " ")}. Retrying...`);
         await warmBackendServer();
-        await wait(JOB_POLL_INTERVAL_MS * transientFailureCount);
+        await waitUnlessAborted(JOB_POLL_INTERVAL_MS * transientFailureCount, signal, "Transcription cancelled.");
       }
     }
   };
@@ -16670,6 +16758,7 @@ export default function App() {
     try {
       await transcribeLectureFile(file);
     } catch (err) {
+      if (isAbortError(err) || err?.aborted) return;
       setError(err.message || "Transcription failed.");
       setStatus("Transcription failed.");
     }
@@ -16677,7 +16766,8 @@ export default function App() {
 
   const transcribeVideoLink = async () => {
     if (!videoUrl.trim()) return setError("Paste a video link first.");
-    if (!(await ensurePremiumFeatureAvailable("source_upload", "Document/audio source processing"))) return false;
+    const abortController = new AbortController();
+    transcriptionAbortControllerRef.current = abortController;
     setIsTranscribingVideo(true);
     setError("");
     setStatus("Submitting video link for transcription...");
@@ -16692,6 +16782,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: STUDY_SOURCE_EXTRACT_TIMEOUT_MS,
         body: JSON.stringify({ video_url: videoUrl.trim() }),
+        signal: abortController.signal,
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Video-link transcription failed.");
@@ -16701,7 +16792,7 @@ export default function App() {
         autoGenerateGuide: true,
         savedAt: new Date().toISOString(),
       });
-      const job = await pollJob(data.job_id, "video");
+      const job = await pollJob(data.job_id, "video", { signal: abortController.signal });
       startTransition(() => {
         setTranscript(job.transcript || "");
       });
@@ -16711,11 +16802,18 @@ export default function App() {
       await generateStudyGuide(job.transcript || "");
     } catch (err) {
       clearPendingJob();
+      if (isTranscriptionAbortForSignal(err, abortController.signal)) {
+        return;
+      }
       setError(err.message || "Video-link transcription failed.");
       setStatus("Video-link transcription failed.");
     } finally {
-      setIsTranscribingVideo(false);
-      setCurrentJobType("");
+      const isLatestVideoTranscription = transcriptionAbortControllerRef.current === abortController;
+      if (isLatestVideoTranscription) {
+        transcriptionAbortControllerRef.current = null;
+        setIsTranscribingVideo(false);
+        setCurrentJobType("");
+      }
     }
   };
 
@@ -19079,25 +19177,34 @@ export default function App() {
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
-                    <p className="mt-3 text-sm font-semibold text-white">{status || "Ready for your next lecture."}</p>
+                    <p className="mt-3 text-sm font-semibold text-white">{captureStatusMessage}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
                     {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{renderCaptureErrorMessage(error)}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-4 text-left text-white disabled:opacity-50">
-                      <span className="block text-base font-semibold">Transcribe Lecture</span>
-                      {transcribeActionMeta.showProgress ? (
-                        <div className="mt-4">
-                          <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
-                            <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#dcfce7,#bbf7d0,#86efac)]" style={{ width: `${transcribeActionMeta.progressValue}%` }} />
+                    <div className={`rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] text-white ${!canCancelTranscription && (loading || !file) ? "opacity-50" : ""}`}>
+                      <button type="button" onClick={upload} disabled={loading || !file} className="min-h-[124px] w-full px-5 py-4 text-left disabled:cursor-not-allowed">
+                        <span className="block text-base font-semibold">Transcribe Lecture</span>
+                        {transcribeActionMeta.showProgress ? (
+                          <div className="mt-4">
+                            <div className="h-1.5 overflow-hidden rounded-full bg-black/20">
+                              <div className="progress-bar h-full rounded-full bg-[linear-gradient(90deg,#dcfce7,#bbf7d0,#86efac)]" style={{ width: `${transcribeActionMeta.progressValue}%` }} />
+                            </div>
+                            <p className="mt-3 text-xs leading-6 text-emerald-50/90">{transcribeActionMeta.statusLine}</p>
+                            <div className="mt-3 space-y-2">
+                              {transcribeActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-emerald-200/25 bg-emerald-200/10 text-emerald-50" : step.tone === "current" ? "border-emerald-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-emerald-50/70"}`}>{step.label}</div>)}
+                            </div>
                           </div>
-                          <p className="mt-3 text-xs leading-6 text-emerald-50/90">{transcribeActionMeta.statusLine}</p>
-                          <div className="mt-3 space-y-2">
-                            {transcribeActionSteps.map((step) => <div key={step.label} className={`rounded-2xl border px-3 py-2 text-xs ${step.tone === "done" ? "border-emerald-200/25 bg-emerald-200/10 text-emerald-50" : step.tone === "current" ? "border-emerald-100/20 bg-black/15 text-white" : "border-white/10 bg-black/10 text-emerald-50/70"}`}>{step.label}</div>)}
-                          </div>
+                        ) : null}
+                      </button>
+                      {canCancelTranscription ? (
+                        <div className="border-t border-white/10 px-5 pb-4 pt-3">
+                          <button type="button" onClick={cancelActiveTranscription} className="rounded-full border border-white/20 bg-black/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-black/30">
+                            Cancel transcription
+                          </button>
                         </div>
                       ) : null}
-                    </button>
+                    </div>
                     <div>
                       <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
                         <span className="block text-base font-semibold">Generate Study Guide</span>
