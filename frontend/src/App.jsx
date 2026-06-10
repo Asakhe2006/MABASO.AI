@@ -7193,6 +7193,23 @@ export default function App() {
 
   const renderPaymentsPage = () => {
     const latestPendingPayment = paymentRequests.find((payment) => normalizePaymentStatus(payment.status) === "pending") || manualPaymentRequest;
+    if (isAdminAccount) {
+      return (
+        <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-start gap-4">
+              {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Payments</p>
+                <h2 className="mt-2 text-3xl font-semibold text-white">Open protected payment verification.</h2>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Admin payment verification is protected. Open the Payments dashboard to view all user references, amounts paid, remaining subscription time, and VERIFY or REJECT actions.</p>
+              </div>
+            </div>
+            <button type="button" onClick={openAdminPaymentsQueue} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Open Payments Dashboard</button>
+          </div>
+        </section>
+      );
+    }
     return (
       <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
@@ -9446,7 +9463,7 @@ export default function App() {
         <table className="min-w-full text-left text-sm">
           <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
             <tr>
-              {["User Email", "Plan", "Amount", "Reference", "Status", "Date", "Actions"].map((heading) => (
+              {["User Email", "Plan", "Amount Paid", "Reference", "Status", "Time Left", "Date", "Actions"].map((heading) => (
                 <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
               ))}
             </tr>
@@ -9456,6 +9473,8 @@ export default function App() {
               const status = normalizePaymentStatus(payment.status);
               const verifyActionId = `verify:${payment.id}`;
               const rejectActionId = `reject:${payment.id}`;
+              const subscriptionTimeLeft = payment.subscription_time_remaining_label
+                || (status === "pending" ? "Pending verification" : status === "rejected" ? "Not activated" : "No paid subscription");
               return (
                 <tr key={payment.id || payment.payment_reference} className="border-b border-slate-100 align-top">
                   <td className="phone-safe-copy whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{payment.email || "Unknown"}</td>
@@ -9463,6 +9482,10 @@ export default function App() {
                   <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatPaymentAmount(payment)}</td>
                   <td className="phone-safe-copy whitespace-nowrap px-3 py-3 text-slate-700">{payment.payment_reference || "Pending"}</td>
                   <td className="whitespace-nowrap px-3 py-3">{renderPaymentStatusBadge(status)}</td>
+                  <td className="whitespace-nowrap px-3 py-3">
+                    <p className="font-semibold text-slate-900">{subscriptionTimeLeft}</p>
+                    {payment.subscription_expires_at ? <p className="mt-1 text-xs text-slate-500">Ends {formatAdminDateTime(payment.subscription_expires_at)}</p> : null}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-3 text-slate-600">{payment.created_at ? formatAdminDateTime(payment.created_at) : "Unknown"}</td>
                   <td className="min-w-[180px] px-3 py-3">
                     {status === "pending" ? (
@@ -9491,7 +9514,7 @@ export default function App() {
                 </tr>
               );
             }) : (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No manual PayShap payment requests match the current filters.</td></tr>
+              <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">No manual PayShap payment requests match the current filters.</td></tr>
             )}
           </tbody>
         </table>
@@ -11804,6 +11827,19 @@ export default function App() {
       rememberExplicitProtectedPreviewPath(nextPath);
     }
     navigateToPath(nextPath);
+  };
+
+  const openAdminPaymentsQueue = () => {
+    setAdminSidebarTab("payments");
+    openProtectedAppRoute("admin");
+  };
+
+  const openPaymentsNavigationTarget = () => {
+    if (isAdminAccount) {
+      openAdminPaymentsQueue();
+      return;
+    }
+    openProtectedAppPage("payments");
   };
 
   const startAppleLogin = async () => {
@@ -18946,7 +18982,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
-              <button type="button" onClick={() => openProtectedAppPage("payments")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Payments</button>
+              <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
@@ -18967,7 +19003,7 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
-          <button type="button" onClick={() => openProtectedAppPage("payments")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Payments</button>
+          <button type="button" onClick={openPaymentsNavigationTarget} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
           <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>

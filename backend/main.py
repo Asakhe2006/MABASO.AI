@@ -5917,7 +5917,7 @@ def serialize_payment_request(row: Any) -> dict[str, Any]:
         return {}
     amount = compact_text(row["amount"], "0.00")
     status = normalize_payment_request_status(row["status"])
-    return {
+    data = {
         "id": row["id"],
         "user_id": row["user_id"],
         "email": normalize_email(row["email"]),
@@ -5932,6 +5932,35 @@ def serialize_payment_request(row: Any) -> dict[str, Any]:
         "verified_at": compact_text(row["verified_at"]),
         "verified_by": compact_text(row["verified_by"]),
     }
+    row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+    if "subscription_status" in row_keys:
+        subscription_status = compact_text(row["subscription_status"], "free").lower()
+        subscription_plan_id = normalize_billing_plan_id(compact_text(row["subscription_plan_id"], "free")) or "free"
+        subscription_period_state = build_subscription_period_state(
+            row["subscription_current_period_end"],
+            active=subscription_status == "active",
+        )
+        if subscription_period_state["time_remaining_label"]:
+            subscription_time_label = subscription_period_state["time_remaining_label"]
+        elif subscription_status in {"active", "renews"}:
+            subscription_time_label = "Active"
+        elif subscription_status == "expired" or subscription_period_state["expired"]:
+            subscription_time_label = "Expired"
+        else:
+            subscription_time_label = "No paid subscription"
+        data.update(
+            {
+                "subscription_status": subscription_status,
+                "subscription_plan_id": subscription_plan_id,
+                "subscription_provider": compact_text(row["subscription_provider"]),
+                "subscription_days_remaining": subscription_period_state["days_remaining"],
+                "subscription_seconds_remaining": subscription_period_state["seconds_remaining"],
+                "subscription_time_remaining_label": subscription_time_label,
+                "subscription_expires_at": subscription_period_state["expires_at"],
+                "subscription_expired": subscription_period_state["expired"],
+            }
+        )
+    return data
 
 
 def get_payment_request_by_id(payment_id: str) -> dict[str, Any] | None:
@@ -5974,10 +6003,15 @@ def list_admin_payment_requests(limit: int = 200) -> list[dict[str, Any]]:
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, user_id, email, amount, plan_id, plan_name, payment_reference,
-                   status, created_at, verified_at, verified_by
-            FROM payment_requests
-            ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'verified' THEN 1 ELSE 2 END, created_at DESC
+            SELECT pr.id, pr.user_id, pr.email, pr.amount, pr.plan_id, pr.plan_name,
+                   pr.payment_reference, pr.status, pr.created_at, pr.verified_at, pr.verified_by,
+                   bs.status AS subscription_status,
+                   bs.plan_id AS subscription_plan_id,
+                   bs.provider AS subscription_provider,
+                   bs.current_period_end AS subscription_current_period_end
+            FROM payment_requests pr
+            LEFT JOIN billing_subscriptions bs ON lower(bs.email) = lower(pr.email)
+            ORDER BY CASE pr.status WHEN 'pending' THEN 0 WHEN 'verified' THEN 1 ELSE 2 END, pr.created_at DESC
             LIMIT ?
             """,
             (safe_limit,),
