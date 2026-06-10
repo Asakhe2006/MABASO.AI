@@ -2243,7 +2243,7 @@ def init_db():
                       AND policyname = 'Block direct client access'
                   ) THEN
                     EXECUTE format(
-                      'CREATE POLICY "Block direct client access" ON payment_requests FOR ALL TO %s USING (false) WITH CHECK (false)',
+                      'CREATE POLICY "Block direct client access" ON payment_requests FOR ALL TO %%s USING (false) WITH CHECK (false)',
                       policy_role_clause
                     );
                   END IF;
