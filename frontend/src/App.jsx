@@ -4128,6 +4128,48 @@ function extractGuideSections(markdown) {
   return sections;
 }
 
+const WORKED_EXAMPLE_SOURCE_LEAK_HEADING_PATTERNS = [
+  /^lecturer notes?\b/i,
+  /^lecture notes?\b/i,
+  /^notes? files? added\b/i,
+  /^uploaded notes?\b/i,
+  /^additional notes?\b/i,
+  /^source materials?\b/i,
+  /^source files?\b/i,
+  /^uploaded source files?\b/i,
+  /^lecture slides?\b/i,
+  /^slide notes?\b/i,
+  /^past question papers?\b/i,
+  /^past papers?\b/i,
+  /^lecture transcript\b/i,
+  /^raw transcript\b/i,
+  /^transcript\b/i,
+  /^files added\b/i,
+];
+
+function stripWorkedExampleSourceLeaks(markdown = "") {
+  const text = String(markdown || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return "";
+  const keptLines = [];
+  for (const line of text.split("\n")) {
+    const normalizedLine = line
+      .trim()
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/^\*\*/, "")
+      .replace(/\*\*$/, "")
+      .replace(/:+$/, "")
+      .trim();
+    if (WORKED_EXAMPLE_SOURCE_LEAK_HEADING_PATTERNS.some((pattern) => pattern.test(normalizedLine))) break;
+    if (/^(?:file|source)\s*\d*\s*[:\-].+\.(?:pdf|docx?|pptx?|txt|md)\b/i.test(normalizedLine)) break;
+    keptLines.push(line);
+  }
+  return keptLines
+    .join("\n")
+    .trim()
+    .replace(/\n\s*(?:sources?|uploaded files?|file used)\s*:\s*[\s\S]*$/i, "")
+    .trim();
+}
+
 function getGuideSectionByHeading(sections, heading) {
   const normalizedHeading = normalizeGuideHeading(getGuideCanonicalHeading(heading) || heading);
   return (sections || []).find((section) => section.normalizedHeading === normalizedHeading) || null;
@@ -5961,10 +6003,14 @@ export default function App() {
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
   const activeRoomGuideSections = extractGuideSections(activeRoomFormattedGuide || activeRoom?.summary || "");
-  const rawExampleSections = extractGuideSections(formattedExample || example);
-  const exampleSections = rawExampleSections.length === 1 && rawExampleSections[0]?.normalizedHeading === "study guide" && compactGuideVisualText(formattedExample || example)
+  const cleanedExampleContent = stripWorkedExampleSourceLeaks(formattedExample || example);
+  const rawExampleSections = extractGuideSections(cleanedExampleContent);
+  const exampleSections = rawExampleSections.length === 1 && rawExampleSections[0]?.normalizedHeading === "study guide" && compactGuideVisualText(cleanedExampleContent)
     ? [toGuideSectionRecord("WORKED EXAMPLES", rawExampleSections[0].content, "WORKED EXAMPLES")]
-    : rawExampleSections;
+    : rawExampleSections.map((section) => ({
+      ...section,
+      content: stripWorkedExampleSourceLeaks(section.content),
+    })).filter((section) => section.content);
   const guideTitleSection = getGuideSectionByHeading(guideSections, "LECTURE TITLE");
   const guideSummarySection = getGuideSectionByHeading(guideSections, "SHORT SUMMARY");
   const visibleGuideSections = guideSections.filter(
@@ -6590,8 +6636,7 @@ export default function App() {
     transcript,
     formattedFormula,
     formula,
-    formattedExample,
-    example,
+    cleanedExampleContent,
     lectureNotes,
     lectureSlides,
     pastQuestionPapers,
@@ -6705,7 +6750,7 @@ export default function App() {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeTab, activeTeacherSegment?.sectionHeading, activeTeacherSegmentIndex, formattedExample, isTeacherPaused, isTeacherPlaying]);
+  }, [activeTab, activeTeacherSegment?.sectionHeading, activeTeacherSegmentIndex, cleanedExampleContent, isTeacherPaused, isTeacherPlaying]);
 
   useEffect(() => {
     setSelectedPresentationSlideIndex(0);
@@ -13935,7 +13980,7 @@ export default function App() {
     transcript,
     summary,
     formulas: formattedFormula || formula,
-    workedExamples: formattedExample || example,
+    workedExamples: cleanedExampleContent,
     lectureNotes,
     lectureSlides,
     pastQuestionPapers,
@@ -13948,7 +13993,7 @@ export default function App() {
     summary,
     transcript,
     formulas: formattedFormula || formula,
-    worked_examples: formattedExample || example,
+    worked_examples: cleanedExampleContent,
     lecture_notes: lectureNotes,
     lecture_slides: lectureSlides,
     past_question_papers: pastQuestionPapers,
@@ -15508,7 +15553,7 @@ export default function App() {
     if (activeTab === "guide") return formattedGuide || "No study guide generated yet.";
     if (activeTab === "transcript") return transcript || "No transcript generated yet.";
     if (activeTab === "formulas") return formattedFormula || "No formulas generated yet.";
-    if (activeTab === "examples") return formattedExample || "No worked examples generated yet.";
+    if (activeTab === "examples") return cleanedExampleContent || "No worked examples generated yet.";
     if (activeTab === "flashcards") return flashcardsToText(flashcards) || "No flashcards generated yet.";
     if (activeTab === "quiz") return buildQuizExportText(selectedQuizQuestions, quizAnswers, quizResults) || "No test generated yet.";
     if (activeTab === "presentation") return presentationToText(presentationData) || "No PowerPoint presentation generated yet.";
@@ -15524,7 +15569,7 @@ export default function App() {
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
-    { title: "Worked Examples", content: formattedExample || example },
+    { title: "Worked Examples", content: cleanedExampleContent },
     { title: "Flashcards", content: flashcardsToText(flashcards) },
     { title: "Test", content: quizToText(quizQuestions) },
     { title: "PowerPoint Presentation", content: presentationToText(presentationData) },
@@ -17842,7 +17887,7 @@ export default function App() {
           transcript,
           summary,
           formulas: formattedFormula || formula,
-          worked_examples: formattedExample || example,
+          worked_examples: cleanedExampleContent,
           lecture_notes: lectureNotes,
           lecture_slides: lectureSlides,
           past_question_papers: pastQuestionPapers,
@@ -18282,7 +18327,7 @@ export default function App() {
         transcript,
         summary,
         formulas: formattedFormula || formula,
-        worked_examples: formattedExample || example,
+        worked_examples: cleanedExampleContent,
         lecture_notes: lectureNotes,
         lecture_slides: lectureSlides,
         past_question_papers: pastQuestionPapers,
@@ -18319,8 +18364,7 @@ export default function App() {
       || String(summary || "").trim()
       || String(formattedFormula || "").trim()
       || String(formula || "").trim()
-      || String(formattedExample || "").trim()
-      || String(example || "").trim()
+      || String(cleanedExampleContent || "").trim()
       || String(lectureNotes || "").trim()
       || String(lectureSlides || "").trim()
       || String(pastQuestionPapers || "").trim()
@@ -19387,7 +19431,7 @@ export default function App() {
     const previewContent = teacherPreviewTab === "transcript"
       ? deferredTranscript || "Transcript moments will appear here after transcription."
       : teacherPreviewTab === "examples"
-        ? formattedExample || example || "Worked examples will appear here after study guide generation."
+        ? cleanedExampleContent || "Worked examples will appear here after study guide generation."
         : formattedGuide || summary || "Study guide content will appear here after generation.";
     const previewActionLabel = teacherPreviewTab === "transcript"
       ? "Open Transcript"
@@ -19949,7 +19993,9 @@ export default function App() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">Quick rating</p>
-            <h3 className="mt-2 text-3xl font-semibold text-white">How was this study guide?</h3>
+            <h3 className="mt-2 text-3xl font-semibold text-white">
+              {Number(siteRatingPrompt?.promptCount || 0) >= 3 ? "How has our service been for you?" : "How was this study guide?"}
+            </h3>
           </div>
           <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">
             Close
@@ -19975,7 +20021,7 @@ export default function App() {
             onChange={(event) => setSiteRatingComment(limitSiteRatingComment(event.target.value))}
             rows={4}
             className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm leading-7 text-white outline-none"
-            placeholder="Tell us what was missing or confusing."
+            placeholder={Number(siteRatingPrompt?.promptCount || 0) >= 3 ? "Tell us what has worked well or what we should improve." : "Tell us what was missing or confusing."}
           />
         </label>
         <p className="mt-2 text-xs text-slate-400">{siteRatingComment.split(/\s+/).filter(Boolean).length}/50 words</p>
@@ -20605,7 +20651,7 @@ export default function App() {
                       );
                     }) : (
                       <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                        <MobileFirstMarkdown>{formattedExample || "Worked examples will appear here after study guide generation."}</MobileFirstMarkdown>
+                        <MobileFirstMarkdown>{cleanedExampleContent || "Worked examples will appear here after study guide generation."}</MobileFirstMarkdown>
                       </div>
                     )}
                   </div>

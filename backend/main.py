@@ -5286,7 +5286,15 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                     return None
                 image_bytes = base64.b64decode(encoded, validate=False)
             elif cleaned.startswith(("http://", "https://")):
-                response = requests.get(cleaned, timeout=10)
+                response = requests.get(
+                    cleaned,
+                    timeout=15,
+                    headers={
+                        "User-Agent": YOUTUBE_USER_AGENT,
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                        "Referer": "https://www.google.com/",
+                    },
+                )
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "").lower()
                 if not content_type.startswith("image/"):
@@ -5303,11 +5311,20 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
 
     def append_pdf_images(images: list[dict[str, Any]]) -> None:
         for image in images or []:
-            image_url = compact_text(image.get("image_url") or image.get("source_url"))
-            image_buffer = load_pdf_image_bytes(image_url)
+            image_sources: list[str] = []
+            for candidate in (image.get("image_url"), image.get("source_url")):
+                cleaned_candidate = compact_text(candidate)
+                if cleaned_candidate and cleaned_candidate not in image_sources:
+                    image_sources.append(cleaned_candidate)
+            image_buffer = None
+            for image_source in image_sources:
+                image_buffer = load_pdf_image_bytes(image_source)
+                if image_buffer is not None:
+                    break
             if image_buffer is None:
                 continue
             try:
+                image_buffer.seek(0)
                 pdf_image = ReportLabImage(image_buffer)
                 max_width = document.width
                 max_height = 260
@@ -11990,11 +12007,18 @@ def build_webshare_proxy_url() -> str:
     if not (YOUTUBE_WEBSHARE_PROXY_USERNAME and YOUTUBE_WEBSHARE_PROXY_PASSWORD):
         return ""
 
-    host = YOUTUBE_WEBSHARE_PROXY_HOST or "p.webshare.io"
-    port = YOUTUBE_WEBSHARE_PROXY_PORT or "80"
+    raw_host = compact_text(YOUTUBE_WEBSHARE_PROXY_HOST, "p.webshare.io")
+    parsed_host = urlparse(raw_host if "://" in raw_host else f"http://{raw_host}")
+    try:
+        parsed_port = parsed_host.port
+    except ValueError:
+        parsed_port = None
+    host = parsed_host.hostname or raw_host.split("/")[0].split(":")[0] or "p.webshare.io"
+    port = str(parsed_port or compact_text(YOUTUBE_WEBSHARE_PROXY_PORT, "80"))
+    scheme = parsed_host.scheme if parsed_host.scheme in {"http", "https"} else "http"
     username = quote(YOUTUBE_WEBSHARE_PROXY_USERNAME, safe="")
     password = quote(YOUTUBE_WEBSHARE_PROXY_PASSWORD, safe="")
-    return f"http://{username}:{password}@{host}:{port}"
+    return f"{scheme}://{username}:{password}@{host}:{port}"
 
 
 def has_youtube_proxy_source() -> bool:
@@ -12040,6 +12064,16 @@ def is_proxy_auth_error(exc: Exception) -> bool:
         "response 407" in lowered
         or "proxy authentication required" in lowered
         or ("connect tunnel failed" in lowered and "407" in lowered)
+    )
+
+
+def is_youtube_rate_limit_error(value: Any) -> bool:
+    lowered = str(value or "").strip().lower()
+    return (
+        "too many 429" in lowered
+        or "http error 429" in lowered
+        or "429 too many requests" in lowered
+        or "too many requests" in lowered
     )
 
 
@@ -12864,6 +12898,8 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
     update_job(job_id, status="processing", stage="Connecting to the video link", progress=3)
     candidate_paths: list[Path] = []
     last_error = ""
+    saw_proxy_auth_error = False
+    saw_youtube_rate_limit = False
     download_attempts = [
         {
             "format": "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best",
@@ -12963,6 +12999,10 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
                 break
             except Exception as exc:
                 last_error = str(exc).strip()
+                if is_proxy_auth_error(exc):
+                    saw_proxy_auth_error = True
+                if is_youtube_rate_limit_error(exc):
+                    saw_youtube_rate_limit = True
                 logger.info(
                     "Video download attempt %s failed for %s with format %s (use_cookiefile=%s, use_proxy=%s): %s",
                     attempt_index,
@@ -12995,6 +13035,21 @@ def download_audio_from_video_url(video_url: str, job_id: str) -> Path:
         )
 
     if not candidates:
+        if saw_proxy_auth_error and saw_youtube_rate_limit:
+            raise RuntimeError(
+                "YouTube rate-limited the hosted backend (HTTP 429), and the configured YouTube proxy rejected authentication (HTTP 407). "
+                "Recheck the proxy URL and credentials on Render, or upload the lecture file directly."
+            )
+        if saw_proxy_auth_error:
+            raise RuntimeError(
+                "The configured YouTube proxy rejected authentication (HTTP 407), so the backend could not download audio from this link. "
+                "Recheck the proxy URL and credentials on Render, or upload the lecture file directly."
+            )
+        if saw_youtube_rate_limit:
+            raise RuntimeError(
+                "YouTube rate-limited the hosted backend (HTTP 429) before audio could be downloaded. "
+                "Use working YouTube cookies or a proxy on Render, or upload the lecture file directly."
+            )
         raise RuntimeError("The video link was reachable, but no downloadable audio file was produced.")
 
     file_path = candidates[0]
@@ -13052,6 +13107,23 @@ def format_job_error(exc: Exception, source_url: str = "") -> str:
         return (
             "The configured outbound proxy rejected authentication (HTTP 407). "
             "Recheck the proxy URL or credentials configured on the backend."
+        )
+    if is_youtube_rate_limit_error(exc):
+        return (
+            "YouTube is rate-limiting the hosted backend (HTTP 429). "
+            "Use working YouTube cookies or a working proxy on Render, try a different public YouTube link, or upload the lecture file directly."
+        )
+    if is_youtube_source and ("no downloadable audio file was produced" in lowered or "video link was reachable" in lowered):
+        if has_youtube_proxy_source():
+            return (
+                "The backend could not get captions or downloadable audio from this YouTube link. "
+                "Your logs show YouTube rate-limiting direct requests (HTTP 429) and the configured proxy rejecting authentication (HTTP 407), "
+                "so recheck the proxy URL and credentials on Render or upload the lecture file directly."
+            )
+        return (
+            "The backend could not get captions or downloadable audio from this YouTube link. "
+            "YouTube may be rate-limiting the hosted server, so try another public link, configure working YouTube cookies or a proxy, "
+            "or upload the lecture file directly."
         )
     if "impersonate target" in lowered and "not available" in lowered:
         return (
@@ -14871,6 +14943,36 @@ def extract_study_assets(
     }
 
 
+WORKED_EXAMPLE_SOURCE_LEAK_HEADING_RE = re.compile(
+    r"^(?:#{1,6}\s*)?(?:"
+    r"lecturer notes?|lecture notes?|notes? files? added|uploaded notes?|additional notes?|"
+    r"source materials?|source files?|uploaded source files?|lecture slides?|slide notes?|"
+    r"past question papers?|past papers?|lecture transcript|raw transcript|transcript|files added"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def strip_worked_example_source_leaks(value: str) -> str:
+    text = (value or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    kept_lines: list[str] = []
+    for line in text.split("\n"):
+        normalized = re.sub(r"^[#*\-\s]+", "", line.strip())
+        normalized = normalized.replace("**", "").strip().rstrip(":").strip()
+        if WORKED_EXAMPLE_SOURCE_LEAK_HEADING_RE.match(normalized):
+            break
+        if re.match(r"(?i)^(?:file|source)\s*\d*\s*[:\-].+\.(?:pdf|docx?|pptx?|txt|md)\b", normalized):
+            break
+        kept_lines.append(line)
+
+    cleaned = "\n".join(kept_lines).strip()
+    cleaned = re.sub(r"(?ims)\n\s*(?:sources?|uploaded files?|file used)\s*:\s*\n?.*$", "", cleaned).strip()
+    return cleaned
+
+
 def build_worked_example_asset(
     summary: str,
     generated_worked_example: str = "",
@@ -14879,9 +14981,9 @@ def build_worked_example_asset(
     transcript: str = "",
     past_question_papers: str = "",
 ) -> str:
-    example_section = compact_text(extract_section(summary, "WORKED EXAMPLES"))
-    step_section = compact_text(extract_section(summary, "STEP-BY-STEP EXPLANATIONS"))
-    generated_section = compact_text(generated_worked_example)
+    example_section = strip_worked_example_source_leaks(compact_text(extract_section(summary, "WORKED EXAMPLES")))
+    step_section = strip_worked_example_source_leaks(compact_text(extract_section(summary, "STEP-BY-STEP EXPLANATIONS")))
+    generated_section = strip_worked_example_source_leaks(compact_text(generated_worked_example))
     derivation_section = recover_derivation_excerpt(
         summary,
         lecture_notes=lecture_notes,
@@ -14910,9 +15012,9 @@ def build_worked_example_asset(
             sections.append(f"**FORMULA DERIVATION**\n\n{derivation_section}")
 
     if sections:
-        return "\n\n".join(section.strip() for section in sections if section.strip()).strip()
+        return strip_worked_example_source_leaks("\n\n".join(section.strip() for section in sections if section.strip()))
 
-    return generated_section or "No worked example section was detected in the notes."
+    return strip_worked_example_source_leaks(generated_section) or "No worked example section was detected in the notes."
 
 
 def clamp_podcast_speaker_count(value: int) -> int:
