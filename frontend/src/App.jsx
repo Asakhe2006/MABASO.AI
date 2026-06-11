@@ -1092,6 +1092,27 @@ function getTimetableSlotDate(weekStartIso = "", dayId = "", timeValue = "") {
   return date;
 }
 
+function getTimetableSessionWindow(session) {
+  const startDate = getTimetableSessionStartDate(session);
+  const endDate = getTimetableSessionEndDate(session);
+  if (!startDate || !endDate) return null;
+  return { startDate, endDate };
+}
+
+function isTimetableSessionActiveNow(session, now = new Date()) {
+  const window = getTimetableSessionWindow(session);
+  if (!window) return false;
+  const currentTime = now.getTime();
+  return currentTime >= window.startDate.getTime() && currentTime < window.endDate.getTime();
+}
+
+function formatTimetableSessionWindow(session) {
+  const window = getTimetableSessionWindow(session);
+  if (!window) return `${session?.start || "the scheduled start"} - ${session?.end || "the scheduled end"}`;
+  const dateLabel = window.startDate.toLocaleDateString(undefined, { weekday: "long", day: "2-digit", month: "short" });
+  return `${dateLabel}, ${session.start} - ${session.end}`;
+}
+
 function getTimetableMinutesForDate(date = new Date()) {
   return (date.getHours() * 60) + date.getMinutes() + (date.getSeconds() / 60);
 }
@@ -5301,6 +5322,7 @@ export default function App() {
   const [timetableMessage, setTimetableMessage] = useState("");
   const [timetableCoachPrompt, setTimetableCoachPrompt] = useState(null);
   const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
+  const [timetableCompletionPrompt, setTimetableCompletionPrompt] = useState(null);
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
@@ -8257,6 +8279,26 @@ export default function App() {
         </div>
 
         {timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
+        {timetableCompletionPrompt ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-[28px] border border-white/10 bg-slate-950 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.5)]">
+              <p className="text-xs uppercase tracking-[0.3em] text-amber-100/80">Completion Locked</p>
+              <h3 className="mt-4 text-2xl font-semibold leading-tight text-white">This study period cannot be marked done yet.</h3>
+              <p className="mt-4 text-sm leading-7 text-slate-300">
+                To keep your weekly progress accurate and honest, you can mark a session as completed only while its scheduled time is currently in progress.
+              </p>
+              <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-50">
+                <p className="font-semibold">{timetableCompletionPrompt.title}</p>
+                <p className="mt-1 text-amber-100/80">Scheduled for {timetableCompletionPrompt.windowLabel}.</p>
+              </div>
+              <div className="mt-6 flex justify-end">
+                <button type="button" onClick={() => setTimetableCompletionPrompt(null)} className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
+                  I understand
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {timetableTransitionPrompt ? (
           <div className="mt-5 rounded-2xl border border-sky-300/30 bg-sky-400/12 px-4 py-3 text-sm text-sky-50">
             <div className="force-mobile-stack flex items-start justify-between gap-3">
@@ -14303,6 +14345,15 @@ export default function App() {
     });
   };
   const toggleTimetableSessionStatus = (sessionId, derivedSession = null) => {
+    const candidateSession = derivedSession || timetableSessions.find((session) => session.id === sessionId) || null;
+    if (!candidateSession || ["break", "empty", "missed"].includes(candidateSession.status) || candidateSession.type === "exam") return;
+    if (!isTimetableSessionActiveNow(candidateSession, timetableNow)) {
+      setTimetableCompletionPrompt({
+        title: normalizeTimetableSubjectName(candidateSession.title, "This session"),
+        windowLabel: formatTimetableSessionWindow(candidateSession),
+      });
+      return;
+    }
     let nextSessionsSnapshot = null;
     setTimetableSessions((current) => {
       const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
