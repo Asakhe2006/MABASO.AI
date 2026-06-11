@@ -528,7 +528,7 @@ const collaborationMaterialTabs = [
   { id: "flashcards", label: "Flashcards" },
   { id: "quiz", label: "Test" },
 ];
-const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice"];
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
   "Academic Report",
@@ -1167,6 +1167,62 @@ function formatTimetableCountdown(ms) {
   return `${minutes}m ${String(seconds).padStart(2, "0")}s left`;
 }
 
+function formatActiveStudySessionTimer(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function getStudySessionRouteSlug(value = "") {
+  return normalizeTimetableSubjectName(value, "study")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "study";
+}
+
+function getStudySessionSlugFromPath(path = "") {
+  const normalized = normalizeRoutePath(path);
+  const match = normalized.match(/^\/study-session\/([^/]+)$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1] || "");
+  } catch {
+    return match[1] || "";
+  }
+}
+
+function calculateStudySessionFocusScore(session, now = new Date()) {
+  if (!session) return 0;
+  const window = getTimetableSessionWindow(session);
+  const notesLength = String(session.studyNotes || "").trim().length;
+  const messages = Array.isArray(session.studyMessages) ? session.studyMessages : [];
+  const questionCount = messages.filter((message) => message?.role === "user").length;
+  const storedScore = Number(session.focusScore || 0);
+  const completionBonus = session.status === "completed" ? 20 : 0;
+  let timeScore = 0;
+  if (window) {
+    const durationMs = Math.max(1, window.endDate.getTime() - window.startDate.getTime());
+    const openedAtMs = session.studyStartedAt ? new Date(session.studyStartedAt).getTime() : window.startDate.getTime();
+    const effectiveStart = Math.max(window.startDate.getTime(), Number.isFinite(openedAtMs) ? openedAtMs : window.startDate.getTime());
+    const effectiveEnd = Math.min(now.getTime(), window.endDate.getTime());
+    timeScore = Math.max(0, Math.min(35, Math.round(((effectiveEnd - effectiveStart) / durationMs) * 35)));
+  }
+  const notesScore = Math.min(20, Math.floor(notesLength / 35));
+  const questionScore = Math.min(20, questionCount * 5);
+  const score = Math.max(storedScore, 35 + timeScore + notesScore + questionScore + completionBonus);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getFocusScoreLabel(score = 0) {
+  if (score >= 90) return "Excellent";
+  if (score >= 70) return "Good";
+  if (score >= 50) return "Average";
+  return "Needs focus";
+}
+
 function shouldAutoMissTimetableSession(session, now = new Date()) {
   if (!session || ["break", "empty", "exam"].includes(session.type)) return false;
   if (["break", "empty", "completed", "missed"].includes(session.status)) return false;
@@ -1174,9 +1230,33 @@ function shouldAutoMissTimetableSession(session, now = new Date()) {
   return Boolean(endDate && endDate.getTime() < now.getTime());
 }
 
+function shouldAutoCompleteTimetableExam(session, now = new Date()) {
+  if (!session || session.type !== "exam" || session.status === "completed") return false;
+  const endDate = getTimetableSessionEndDate(session);
+  return Boolean(endDate && endDate.getTime() < now.getTime());
+}
+
+function shouldAutoCompleteOpenedStudySession(session, now = new Date()) {
+  if (!session || ["break", "empty", "exam"].includes(session.type)) return false;
+  if (["break", "empty", "completed", "missed"].includes(session.status)) return false;
+  if (!session.studyStartedAt && !session.lastOpenedAt) return false;
+  const endDate = getTimetableSessionEndDate(session);
+  return Boolean(endDate && endDate.getTime() < now.getTime());
+}
+
 function applyTimetableAutoMisses(sessions = [], now = new Date()) {
   return (Array.isArray(sessions) ? sessions : []).map((session) => (
-    shouldAutoMissTimetableSession(session, now) ? { ...session, status: "missed" } : session
+    shouldAutoCompleteTimetableExam(session, now)
+      ? { ...session, status: "completed", completedAt: session.completedAt || getTimetableSessionEndDate(session)?.toISOString?.() || new Date(now).toISOString() }
+      : shouldAutoCompleteOpenedStudySession(session, now)
+        ? {
+          ...session,
+          status: "completed",
+          completedAt: session.completedAt || getTimetableSessionEndDate(session)?.toISOString?.() || new Date(now).toISOString(),
+          studyEndedAt: session.studyEndedAt || getTimetableSessionEndDate(session)?.toISOString?.() || new Date(now).toISOString(),
+          focusScore: calculateStudySessionFocusScore({ ...session, status: "completed" }, now),
+        }
+      : shouldAutoMissTimetableSession(session, now) ? { ...session, status: "missed" } : session
   ));
 }
 
@@ -5500,6 +5580,10 @@ export default function App() {
   const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
   const [timetableCompletionPrompt, setTimetableCompletionPrompt] = useState(null);
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
+  const [activeStudySessionId, setActiveStudySessionId] = useState("");
+  const [activeStudySessionQuestion, setActiveStudySessionQuestion] = useState("");
+  const [isAskingActiveStudySession, setIsAskingActiveStudySession] = useState(false);
+  const [activeStudySessionMessage, setActiveStudySessionMessage] = useState("");
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
   const fileInputRef = useRef(null);
@@ -5511,6 +5595,7 @@ export default function App() {
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
+  const activeStudySessionSaveTimerRef = useRef(null);
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -8388,6 +8473,152 @@ export default function App() {
     </section>
   );
 
+  const renderActiveStudySessionPage = () => {
+    const session = getActiveStudySession();
+    const sessionWindow = getTimetableSessionWindow(session);
+    const isCompleted = session?.status === "completed";
+    const isMissed = session?.status === "missed";
+    const remainingMs = sessionWindow ? sessionWindow.endDate.getTime() - timetableNow.getTime() : 0;
+    const durationMs = sessionWindow ? Math.max(1, sessionWindow.endDate.getTime() - sessionWindow.startDate.getTime()) : 1;
+    const elapsedMs = sessionWindow ? Math.max(0, Math.min(durationMs, timetableNow.getTime() - sessionWindow.startDate.getTime())) : 0;
+    const progressPercent = isCompleted ? 100 : Math.max(0, Math.min(100, Math.round((elapsedMs / durationMs) * 100)));
+    const focusScore = calculateStudySessionFocusScore(session, timetableNow);
+    const focusLabel = getFocusScoreLabel(focusScore);
+    const messages = Array.isArray(session?.studyMessages) ? session.studyMessages : [];
+    const timerTone = isCompleted
+      ? "text-emerald-100 drop-shadow-[0_0_32px_rgba(34,197,94,0.62)]"
+      : remainingMs <= 60 * 1000
+        ? "animate-pulse text-rose-100 drop-shadow-[0_0_30px_rgba(244,63,94,0.72)]"
+        : remainingMs <= 5 * 60 * 1000
+          ? "text-amber-100 drop-shadow-[0_0_30px_rgba(251,191,36,0.62)]"
+          : "text-cyan-50 drop-shadow-[0_0_34px_rgba(34,211,238,0.66)]";
+    const focusTone = focusScore >= 90 ? "#22c55e" : focusScore >= 70 ? "#22d3ee" : focusScore >= 50 ? "#f59e0b" : "#fb7185";
+
+    if (!session) {
+      return (
+        <div className="min-h-screen bg-black px-4 py-6 text-white sm:px-6 lg:px-8">
+          <div className="mx-auto flex min-h-[70vh] max-w-3xl flex-col items-center justify-center text-center">
+            <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Active Study Session</p>
+            <h1 className="mt-4 text-3xl font-semibold">No timetable session is selected.</h1>
+            <p className="mt-3 max-w-xl text-sm leading-7 text-slate-300">Open a subject from the study timetable to start a focused session.</p>
+            <button type="button" onClick={closeActiveStudySession} className="mt-6 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 py-3 text-sm font-semibold text-cyan-50">Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_34%),radial-gradient(circle_at_bottom,rgba(34,197,94,0.12),transparent_28%),#050505] px-4 py-5 text-white sm:px-6 lg:px-8">
+        {isUpgradeModalOpen ? renderUpgradeModal() : null}
+        {siteRatingModal}
+        <main className="mx-auto max-w-6xl">
+          <div className="flex items-center justify-between gap-3">
+            <button type="button" onClick={closeActiveStudySession} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-white shadow-[0_12px_35px_rgba(0,0,0,0.35)]">
+              <span aria-hidden="true">&lt;</span>
+              <span>Close</span>
+            </button>
+            <div className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${isCompleted ? "border-emerald-300/35 bg-emerald-500/20 text-emerald-50" : isMissed ? "border-rose-300/35 bg-rose-500/15 text-rose-50" : "border-cyan-300/25 bg-cyan-300/10 text-cyan-50"}`}>
+              {isCompleted ? "Done" : isMissed ? "Missed" : "In progress"}
+            </div>
+          </div>
+
+          <section className="py-10 text-center sm:py-14">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 shadow-[0_0_36px_rgba(34,211,238,0.24)]">
+              <svg viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
+                <path d="M12 3a4 4 0 0 1 4 4v2h1a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3h1V7a4 4 0 0 1 4-4Zm-2 6h4V7a2 2 0 1 0-4 0v2Z" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+              </svg>
+            </div>
+            <h1 className="phone-safe-copy mt-5 text-4xl font-black uppercase tracking-[0.08em] text-white sm:text-6xl">{normalizeTimetableSubjectName(session.title, "Study")}</h1>
+            <p className="mt-3 text-sm uppercase tracking-[0.24em] text-cyan-100/75">{isCompleted ? "Finished study session" : "Active study session"}</p>
+            <div className={`mt-8 text-7xl font-black leading-none sm:text-8xl ${timerTone}`}>
+              {isCompleted ? "Done" : remainingMs > 0 ? formatActiveStudySessionTimer(remainingMs) : "Finished"}
+            </div>
+            <p className="mt-4 text-sm uppercase tracking-[0.28em] text-slate-300">{isCompleted ? "Session complete" : "Time left"}</p>
+            <div className="mx-auto mt-7 flex max-w-3xl items-center gap-4">
+              <div className="h-4 flex-1 overflow-hidden rounded-full bg-white/10 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
+                <div className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#22c55e)] transition-all duration-700" style={{ width: `${progressPercent}%` }} />
+              </div>
+              <span className="w-14 text-left text-lg font-bold text-emerald-200">{progressPercent}%</span>
+            </div>
+            <p className="mt-5 text-sm font-semibold text-emerald-200">{focusScore}% focus - {focusLabel}</p>
+            <div className="mt-7 flex flex-wrap justify-center gap-3">
+              <button type="button" onClick={() => completeActiveStudySession(session.id)} disabled={isCompleted || isMissed} className={`rounded-2xl px-5 py-3 text-sm font-bold transition disabled:cursor-default disabled:opacity-80 ${isCompleted ? "bg-emerald-500 text-white shadow-[0_0_28px_rgba(34,197,94,0.34)]" : "bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white shadow-[0_16px_38px_rgba(34,197,94,0.22)]"}`}>
+                {isCompleted ? "Done" : "Mark Session Done"}
+              </button>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-3 text-sm text-slate-200">
+                {formatTimetableSessionWindow(session)}
+              </div>
+            </div>
+            {activeStudySessionMessage ? <p className="mx-auto mt-4 max-w-2xl rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-50">{activeStudySessionMessage}</p> : null}
+          </section>
+
+          <section className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="rounded-[28px] border border-cyan-300/15 bg-black/45 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.28)] backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/70">Quick Notes</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-cyan-50">Session notes</h2>
+                </div>
+                <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-100">Auto-saved</span>
+              </div>
+              <textarea value={session.studyNotes || ""} onChange={(event) => updateActiveStudySessionNotes(event.target.value)} rows={10} className="mt-5 min-h-[260px] w-full resize-y rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50" placeholder="Write formulas, reminders, definitions, mistakes, or questions from this study period..." />
+              <p className="mt-3 text-right text-xs text-slate-400">{String(session.studyNotes || "").length}/4000</p>
+            </div>
+
+            <div className="rounded-[28px] border border-emerald-300/15 bg-black/45 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.28)] backdrop-blur">
+              <p className="text-xs uppercase tracking-[0.28em] text-emerald-100/70">Focus Score</p>
+              <h2 className="mt-2 text-2xl font-semibold text-emerald-50">Study quality</h2>
+              <div className="mt-8 flex flex-col items-center">
+                <div className="flex h-48 w-48 items-center justify-center rounded-full p-3" style={{ background: `conic-gradient(${focusTone} ${focusScore}%, rgba(255,255,255,0.09) 0)` }}>
+                  <div className="flex h-full w-full flex-col items-center justify-center rounded-full bg-black text-center shadow-[inset_0_0_30px_rgba(34,211,238,0.12)]">
+                    <span className="text-5xl font-black text-white">{focusScore}%</span>
+                    <span className="mt-2 text-sm font-semibold" style={{ color: focusTone }}>{focusLabel}</span>
+                  </div>
+                </div>
+                <p className="mt-6 max-w-sm text-center text-sm leading-7 text-slate-300">Focus improves when you stay in the session, write useful notes, and ask study questions during the period.</p>
+                <div className="mt-6 grid w-full grid-cols-3 gap-3 text-center text-xs text-slate-300">
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{messages.filter((message) => message.role === "user").length}</p><p className="mt-1">Questions</p></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{String(session.studyNotes || "").trim().split(/\s+/).filter(Boolean).length}</p><p className="mt-1">Words</p></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{isCompleted ? "Done" : `${progressPercent}%`}</p><p className="mt-1">Progress</p></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="mt-5 rounded-[30px] border border-cyan-300/15 bg-black/50 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] backdrop-blur">
+            <div className="flex flex-col gap-3 border-b border-white/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/70">AI Study Assistant</p>
+                <h2 className="mt-2 text-2xl font-semibold text-cyan-50">Ask a short study question</h2>
+              </div>
+              <span className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-slate-200">Uses study chat attempts</span>
+            </div>
+            <div className="mt-5 space-y-4">
+              {messages.length ? messages.map((message, index) => (
+                <div key={message.id || `${message.role}-${index}`} className={`max-w-[92%] rounded-2xl border px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border-cyan-300/20 bg-cyan-300/10 text-slate-100" : "ml-auto border-emerald-300/20 bg-emerald-300/10 text-white"}`}>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+                  <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words">{message.content}</p>
+                </div>
+              )) : (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Ask a question about this subject, a definition, a calculation, or anything else you need clarified.</div>
+              )}
+            </div>
+            <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/80 p-3">
+              <div className="flex items-end gap-3">
+                <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Ask anything..." />
+                <button type="button" onClick={askActiveStudySessionAssistant} disabled={isAskingActiveStudySession} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#06b6d4,#22c55e)] text-white disabled:opacity-50" aria-label="Send study session question">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                    <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  };
+
   const renderStudyTimetablePage = () => {
     const paidAllowed = isPaidStudyTimetableAllowed();
     const timetableAllowed = canUseStudyTimetable();
@@ -8705,16 +8936,17 @@ export default function App() {
                   const isRecoveryCell = Boolean(session?.recovery);
                   const isDerivedReviewCell = session?.type === "review" || session?.derived;
                   const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
+                  const isCompletedCell = session?.status === "completed";
                   const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
                   const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
                   const showCompletionPromptHere = Boolean(timetableCompletionPrompt?.id && session?.id === timetableCompletionPrompt.id);
                   const baseTone = isEmptyCell
                     ? "border-white/5 bg-black text-white"
-                    : isExamCell
-                      ? "border-amber-300/40 bg-amber-400/15 text-amber-50"
-                      : session.status === "completed"
-                        ? "border-emerald-400/40 bg-emerald-600/55 text-white"
+                    : isCompletedCell
+                      ? "border-emerald-300/70 bg-emerald-600/80 text-white shadow-[0_0_24px_rgba(34,197,94,0.22)]"
+                      : isExamCell
+                        ? "border-amber-300/40 bg-amber-400/15 text-amber-50"
                         : session.status === "missed"
                           ? "border-rose-400/35 bg-rose-700/55 text-white"
                           : isBreakCell
@@ -8727,7 +8959,18 @@ export default function App() {
                   const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
                     <div key={`${day.id}-${slot.start}-${slot.end}`} className="relative border-l border-white/5 p-1.5">
-                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(isRecoveryCell ? session.id : (session.sourceSessionId || session.id), session); }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
+                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => {
+                        if (isTimetableEditing || !session?.id || isReadOnlyCell) return;
+                        if (session.status === "completed" || isTimetableSessionActiveNow(session, timetableNow)) {
+                          openActiveStudySession(session);
+                          return;
+                        }
+                        setTimetableCompletionPrompt({
+                          id: session.id,
+                          title: normalizeTimetableSubjectName(session.title, "This session"),
+                          windowLabel: formatTimetableSessionWindow(session),
+                        });
+                      }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
                         {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
                           <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
@@ -8739,6 +8982,11 @@ export default function App() {
                           <span className="phone-safe-copy flex flex-col items-center justify-center gap-1 leading-5">
                             <span>{session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : ""}{session.title}</span>
                             <span className="text-xs font-semibold text-sky-100">{currentSlotCountdownLabel}</span>
+                          </span>
+                        ) : isCompletedCell && Number(session.focusScore || 0) > 0 ? (
+                          <span className="phone-safe-copy flex flex-col items-center justify-center gap-1 leading-5">
+                            <span>Done: {session.title}</span>
+                            <span className="text-xs font-semibold text-emerald-100">{Math.round(Number(session.focusScore || 0))}% focus</span>
                           </span>
                         ) : (
                           <span className="phone-safe-copy">{session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : ""}{session.title}</span>
@@ -12954,6 +13202,10 @@ export default function App() {
     stopBrowserVoicePlayback();
   }, []);
 
+  useEffect(() => () => {
+    if (activeStudySessionSaveTimerRef.current) window.clearTimeout(activeStudySessionSaveTimerRef.current);
+  }, []);
+
   useEffect(() => {
     if (!recording) return undefined;
     const handleBeforeUnload = (event) => {
@@ -13582,12 +13834,14 @@ export default function App() {
       ? "/admin/dashboard"
       : normalizedTarget === "voice"
         ? "/app/voice-study"
-        : `/app/${normalizedTarget}`;
+        : normalizedTarget === "study-session"
+          ? "/study-session"
+          : `/app/${normalizedTarget}`;
     persistPostAuthRedirectPath(authToken ? "" : nextPath);
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
-      } else if (["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice"].includes(normalizedTarget)) {
+      } else if (["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"].includes(normalizedTarget)) {
         openProtectedAppPage(normalizedTarget);
         return;
       }
@@ -14333,6 +14587,152 @@ export default function App() {
       if (!silent) setIsSavingTimetable(false);
     }
   };
+  const getActiveStudySession = () => timetableSessions.find((session) => session.id === activeStudySessionId) || null;
+  const queueActiveStudySessionSave = (sessionsSnapshot, delayMs = 700) => {
+    if (!sessionsSnapshot) return;
+    if (activeStudySessionSaveTimerRef.current) window.clearTimeout(activeStudySessionSaveTimerRef.current);
+    activeStudySessionSaveTimerRef.current = window.setTimeout(() => {
+      saveStudyTimetable(sessionsSnapshot, { silent: true, exitEditing: false }).catch(() => {});
+    }, delayMs);
+  };
+  const updateActiveStudySessionRecord = (sessionId, updater, { save = true, delayMs = 700 } = {}) => {
+    if (!sessionId) return null;
+    setTimetableSessions((current) => {
+      const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
+      const updated = normalized.map((session) => (
+        session.id === sessionId ? updater(session) : session
+      ));
+      if (save) {
+        window.setTimeout(() => queueActiveStudySessionSave(updated, delayMs), 0);
+      }
+      return updated;
+    });
+    return null;
+  };
+  const openActiveStudySession = (session) => {
+    if (!session || ["break", "empty"].includes(session.status) || ["break", "empty", "exam"].includes(session.type)) return;
+    const nowIso = new Date().toISOString();
+    const sessionToOpen = {
+      ...session,
+      type: session.type === "review" ? "study" : session.type || "study",
+      status: session.status || "scheduled",
+      derived: false,
+      lastOpenedAt: nowIso,
+      studyStartedAt: session.studyStartedAt || nowIso,
+      studyMessages: Array.isArray(session.studyMessages) ? session.studyMessages : [],
+      studyNotes: session.studyNotes || "",
+      focusScore: calculateStudySessionFocusScore(session, timetableNow),
+    };
+    setTimetableCompletionPrompt(null);
+    setActiveStudySessionMessage("");
+    setTimetableSessions((current) => {
+      const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
+      const existingIndex = normalized.findIndex((item) => item.id === sessionToOpen.id);
+      const updated = existingIndex >= 0
+        ? normalized.map((item) => (item.id === sessionToOpen.id ? { ...item, ...sessionToOpen, status: item.status === "completed" ? "completed" : sessionToOpen.status } : item))
+        : [...normalized, sessionToOpen];
+      window.setTimeout(() => queueActiveStudySessionSave(updated, 250), 0);
+      return updated;
+    });
+    setActiveStudySessionId(sessionToOpen.id);
+    currentPageRef.current = "study-session";
+    setCurrentPage("study-session");
+    navigateToPath(`/study-session/${encodeURIComponent(getStudySessionRouteSlug(sessionToOpen.title))}`);
+  };
+  const closeActiveStudySession = () => {
+    setActiveStudySessionQuestion("");
+    setActiveStudySessionMessage("");
+    openProtectedAppPage("timetable");
+  };
+  const completeActiveStudySession = (sessionId = activeStudySessionId, { automatic = false } = {}) => {
+    const candidateSession = timetableSessions.find((session) => session.id === sessionId) || null;
+    if (!candidateSession || ["break", "empty", "missed"].includes(candidateSession.status) || candidateSession.type === "exam") return;
+    const sessionWindow = getTimetableSessionWindow(candidateSession);
+    const isActiveOrEnded = sessionWindow
+      ? timetableNow.getTime() >= sessionWindow.startDate.getTime()
+      : isTimetableSessionActiveNow(candidateSession, timetableNow);
+    if (!automatic && !isActiveOrEnded) {
+      setTimetableCompletionPrompt({
+        id: candidateSession.id,
+        title: normalizeTimetableSubjectName(candidateSession.title, "This session"),
+        windowLabel: formatTimetableSessionWindow(candidateSession),
+      });
+      return;
+    }
+    if (candidateSession.status === "completed") return;
+    const completedAt = new Date().toISOString();
+    const focusScore = calculateStudySessionFocusScore({ ...candidateSession, status: "completed", completedAt }, timetableNow);
+    updateActiveStudySessionRecord(sessionId, (session) => ({
+      ...session,
+      status: "completed",
+      completedAt,
+      focusScore,
+      studyEndedAt: session.studyEndedAt || completedAt,
+    }), { save: true, delayMs: 100 });
+    setActiveStudySessionMessage("Session marked done. Your notes and focus score were saved.");
+  };
+  const updateActiveStudySessionNotes = (value) => {
+    const sessionId = activeStudySessionId;
+    const notes = String(value || "").slice(0, 4000);
+    updateActiveStudySessionRecord(sessionId, (session) => ({
+      ...session,
+      studyNotes: notes,
+      notesUpdatedAt: new Date().toISOString(),
+      focusScore: calculateStudySessionFocusScore({ ...session, studyNotes: notes }, timetableNow),
+    }), { save: true, delayMs: 900 });
+  };
+  const askActiveStudySessionAssistant = async () => {
+    const session = getActiveStudySession();
+    const question = activeStudySessionQuestion.trim();
+    if (!session) {
+      setActiveStudySessionMessage("Open an active study session first.");
+      return;
+    }
+    if (!question) {
+      setActiveStudySessionMessage("Type a question first.");
+      return;
+    }
+    const existingMessages = Array.isArray(session.studyMessages) ? session.studyMessages : [];
+    const turnId = `active-study-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userMessage = { id: `${turnId}-user`, role: "user", content: question };
+    const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "Thinking..." };
+    const pendingMessages = [...existingMessages, userMessage, pendingAssistantMessage].slice(-20);
+    setActiveStudySessionQuestion("");
+    setActiveStudySessionMessage("MABASO is answering from your study session.");
+    setIsAskingActiveStudySession(true);
+    updateActiveStudySessionRecord(session.id, (item) => ({
+      ...item,
+      studyMessages: pendingMessages,
+      focusScore: calculateStudySessionFocusScore({ ...item, studyMessages: pendingMessages }, timetableNow),
+    }), { save: true, delayMs: 200 });
+    try {
+      const answer = await requestStudyAssistantAnswer({
+        question,
+        history: [...existingMessages, userMessage].slice(-6),
+        deliveryMode: "study_session",
+        currentSection: `Active study session: ${normalizeTimetableSubjectName(session.title, "Subject")}`,
+        responseLength: "concise",
+      });
+      const completedMessages = pendingMessages.map((message) => (
+        message.id === pendingAssistantMessage.id ? { ...message, content: answer } : message
+      ));
+      updateActiveStudySessionRecord(session.id, (item) => ({
+        ...item,
+        studyMessages: completedMessages,
+        focusScore: calculateStudySessionFocusScore({ ...item, studyMessages: completedMessages }, timetableNow),
+      }), { save: true, delayMs: 150 });
+      setActiveStudySessionMessage("Answer ready.");
+    } catch (err) {
+      const failedMessages = pendingMessages.map((message) => (
+        message.id === pendingAssistantMessage.id ? { ...message, content: err.message || "Study assistant could not answer right now." } : message
+      ));
+      updateActiveStudySessionRecord(session.id, (item) => ({ ...item, studyMessages: failedMessages }), { save: true, delayMs: 150 });
+      setActiveStudySessionMessage(err.message || "Study assistant failed.");
+      setError(err.message || "Study assistant failed.");
+    } finally {
+      setIsAskingActiveStudySession(false);
+    }
+  };
   const rescheduleMissedTimetableRecovery = async () => {
     if (isTimetableEditing) return;
     if (!canUseStudyTimetable()) {
@@ -14533,6 +14933,7 @@ export default function App() {
   const toggleTimetableSessionStatus = (sessionId, derivedSession = null) => {
     const candidateSession = derivedSession || timetableSessions.find((session) => session.id === sessionId) || null;
     if (!candidateSession || ["break", "empty", "missed"].includes(candidateSession.status) || candidateSession.type === "exam") return;
+    if (candidateSession.status === "completed") return;
     if (!isTimetableSessionActiveNow(candidateSession, timetableNow)) {
       setTimetableCompletionPrompt({
         id: candidateSession.id,
@@ -14560,8 +14961,8 @@ export default function App() {
       const updated = normalized.map((session) => {
         if (!sessionId || session.id !== sessionId || ["break", "empty", "missed"].includes(session.status) || session.type === "exam") return session;
         if (shouldAutoMissTimetableSession(session, timetableNow)) return { ...session, status: "missed" };
-        const nextStatus = session.status === "completed" ? "scheduled" : "completed";
-        return { ...session, status: nextStatus };
+        if (session.status === "completed") return session;
+        return { ...session, status: "completed" };
       });
       nextSessionsSnapshot = updated;
       return updated;
@@ -14809,9 +15210,28 @@ export default function App() {
     setTimetableSessions((current) => {
       const next = applyTimetableAutoMisses(current, timetableNow);
       const changed = next.some((session, index) => session.status !== current[index]?.status);
+      if (changed) {
+        window.setTimeout(() => {
+          saveStudyTimetable(next, { silent: true, exitEditing: false }).catch(() => {});
+        }, 0);
+      }
       return changed ? next : current;
     });
   }, [timetableNow]);
+
+  useEffect(() => {
+    if (currentPage !== "study-session") return;
+    if (activeStudySessionId && timetableSessions.some((session) => session.id === activeStudySessionId)) return;
+    const routeSlug = getStudySessionSlugFromPath(browserPath);
+    const visiblePreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
+    const visibleSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(timetableSessions, timetableNow), visiblePreferences)
+      .filter((session) => isTimetableStudyLikeSession(session) || session.status === "completed");
+    const matchingSession = visibleSessions.find((session) => getStudySessionRouteSlug(session.title) === routeSlug)
+      || visibleSessions.find((session) => isTimetableSessionActiveNow(session, timetableNow))
+      || visibleSessions[0]
+      || null;
+    if (matchingSession) openActiveStudySession(matchingSession);
+  }, [activeStudySessionId, browserPath, currentPage, timetableNow, timetableSessions, timetablePreferences, timetableProfile]);
 
   useEffect(() => {
     if (currentPage !== "timetable" || isTimetableEditing || !timetableWeekStartIso || timetableLoadVersion <= 0) {
@@ -14880,7 +15300,7 @@ export default function App() {
   }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
 
   useEffect(() => {
-    if (currentPage !== "timetable" || !authToken || !authChecked) return;
+    if (!["timetable", "study-session"].includes(currentPage) || !authToken || !authChecked) return;
     if (!isPaidStudyTimetableAllowed()) {
       loadFreeStudyTimetable();
       return;
@@ -19588,6 +20008,7 @@ export default function App() {
     referenceImages = [],
     deliveryMode = "chat",
     currentSection = "",
+    responseLength = teacherResponseLength,
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
@@ -19611,7 +20032,7 @@ export default function App() {
         delivery_mode: deliveryMode,
         current_section: currentSection,
         teaching_style: teacherTeachingStyle,
-        response_length: teacherResponseLength,
+        response_length: responseLength,
         voice_emotion: teacherVoiceEmotion,
         auto_simplify: teacherAutoSimplify,
         exam_mode: teacherExamMode,
@@ -21832,6 +22253,10 @@ export default function App() {
 
   if (authToken && currentPage === "admin" && authSessionMode === "admin") {
     return renderAdminDashboardPage();
+  }
+
+  if (authToken && currentPage === "study-session") {
+    return renderActiveStudySessionPage();
   }
 
   return (

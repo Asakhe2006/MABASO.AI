@@ -12,6 +12,7 @@ export const APP_ROUTE_BY_PAGE = {
   timetable: "/app/timetable",
   collaboration: "/app/collaboration",
   voice: "/app/voice-study",
+  "study-session": "/study-session",
   admin: "/admin/dashboard",
 };
 
@@ -51,6 +52,7 @@ export function resolveAppRouteForPage(currentPage = "", authSessionMode = "user
 
 export function resolveCurrentPageFromRoute(route = "/") {
   const normalized = normalizeRoutePath(route);
+  if (normalized === "/study-session" || normalized.startsWith("/study-session/")) return "study-session";
   const match = Object.entries(APP_ROUTE_BY_PAGE).find(([, value]) => value === normalized);
   return match?.[0] || "";
 }

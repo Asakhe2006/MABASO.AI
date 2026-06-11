@@ -2645,6 +2645,12 @@ export const protectedWorkspaceRoutes = [
     description: "Speak about your lecture with a browser-powered voice page that searches your guide, transcript, formulas, and examples without paid model calls.",
     access: "login",
   },
+  {
+    route: "/study-session",
+    title: "Active Study Session",
+    description: "Open a focused full-screen study session with timer, notes, focus score, and text-only AI study help.",
+    access: "login",
+  },
 ];
 
 export function findSitePageByRoute(route = "/") {
@@ -2658,5 +2664,8 @@ export function findFooterLinksByRoutes(routes = []) {
 
 export function findProtectedWorkspaceRoute(route = "/") {
   const normalized = route === "/" ? "/" : route.replace(/\/+$/, "") || "/";
+  if (normalized === "/study-session" || normalized.startsWith("/study-session/")) {
+    return protectedWorkspaceRoutes.find((entry) => entry.route === "/study-session") || null;
+  }
   return protectedWorkspaceRoutes.find((entry) => entry.route === normalized) || null;
 }

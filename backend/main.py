@@ -5655,6 +5655,16 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "Avoid heavy markdown and avoid sounding like a chatbot. "
             f"Reply in {output_language}."
         )
+    elif delivery_mode == "study_session":
+        system_prompt = (
+            "You are MABASO.AI inside a focused active study session. "
+            "Answer exactly what the student asked. "
+            "Use the lecture context when it is relevant, but you may also answer general subject, calculation, definition, and study-help questions. "
+            "Keep answers short, accurate, and direct: maximum 2 to 3 short paragraphs. "
+            "Avoid long essays, diagrams, ASCII art, mind maps, and unnecessary formatting. "
+            "Do not ask a follow-up question at the end. "
+            f"Reply in {output_language}."
+        )
     else:
         system_prompt = (
             "You are MABASO.AI, a lecture study assistant. "
@@ -6027,7 +6037,7 @@ def build_sse_event(event: str, data: dict[str, Any]) -> str:
 
 def ensure_study_chat_follow_up(answer: str, question: str, delivery_mode: str = "chat") -> str:
     cleaned = (answer or "").strip()
-    if compact_text(delivery_mode, "chat").lower() == "teacher_interrupt":
+    if compact_text(delivery_mode, "chat").lower() in {"teacher_interrupt", "study_session"}:
         return cleaned or "That exact point was not clearly covered in the lecture material."
     if not cleaned:
         return "I could not form a clear answer from the lecture context.\n\nWould you like me to narrow it down and walk through that exact part step by step?"
@@ -21446,7 +21456,16 @@ async def ask_study_assistant(
     enforce_rate_limit(scope="study_chat", request=request, limit=60, window_seconds=10 * 60, identity=current_user)
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="A question is required.")
-    consume_plan_quota(email=current_user, feature="study_chat", request=request, metadata={"route": "ask_study_assistant"})
+    consume_plan_quota(
+        email=current_user,
+        feature="study_chat",
+        request=request,
+        metadata={
+            "route": "ask_study_assistant",
+            "delivery_mode": compact_text(payload.delivery_mode, "chat"),
+            "current_section": compact_text(payload.current_section),
+        },
+    )
     ensure_openai_key()
     reference_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
 
