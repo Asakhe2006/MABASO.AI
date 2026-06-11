@@ -5633,6 +5633,7 @@ export default function App() {
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
   const hasLoadedTimetableRef = useRef(false);
+  const loadedTimetableModeRef = useRef("");
   const timetablePlanningStateRef = useRef({ isEditing: false, hasPlanPreview: false });
   const timetableExportRef = useRef(null);
   const adminAutoModeSwitchRef = useRef(false);
@@ -13007,6 +13008,7 @@ export default function App() {
     const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
     historyOwnerEmailRef.current = normalizedEmail;
     hasLoadedTimetableRef.current = false;
+    loadedTimetableModeRef.current = "";
     skipNextHistorySyncRef.current = true;
     const cachedHistoryItems = loadHistoryItems(normalizedEmail);
     setHistoryItems(cachedHistoryItems);
@@ -14466,6 +14468,11 @@ export default function App() {
   };
 
   const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
+  const hasResolvedBillingPlan = () => {
+    if (!authToken) return true;
+    if (authSessionMode === "admin" || authAvailableModes.includes("admin")) return true;
+    return Boolean(billingUsage || billingSubscription);
+  };
   const getFreeStudyTimetableStorageKey = () => `mabaso-free-study-timetable-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getStudyTimetableCacheStorageKey = () => `${TIMETABLE_CACHE_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getTimetableCoachPromptStorageKey = () => `${TIMETABLE_COACH_PROMPT_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
@@ -14660,8 +14667,10 @@ export default function App() {
     setTimetableLoadVersion((current) => current + 1);
   };
   const loadFreeStudyTimetable = ({ force = false } = {}) => {
-    if (hasLoadedTimetableRef.current && !force) return;
+    const loadMode = "free";
+    if (hasLoadedTimetableRef.current && loadedTimetableModeRef.current === loadMode && !force) return;
     hasLoadedTimetableRef.current = true;
+    loadedTimetableModeRef.current = loadMode;
     const payload = mergeStudyTimetablePayloads(readFreeStudyTimetablePayload(), readCachedStudyTimetablePayload());
     if (payload?.sessions?.length || payload?.subjects?.length) {
       applyTimetablePayload(payload);
@@ -14672,8 +14681,10 @@ export default function App() {
   };
   const loadStudyTimetable = async ({ force = false } = {}) => {
     if (!authToken || !isPaidStudyTimetableAllowed()) return;
-    if (hasLoadedTimetableRef.current && !force) return;
+    const loadMode = "paid";
+    if (hasLoadedTimetableRef.current && loadedTimetableModeRef.current === loadMode && !force) return;
     hasLoadedTimetableRef.current = true;
+    loadedTimetableModeRef.current = loadMode;
     const cachedPayload = readCachedStudyTimetablePayload();
     if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload)) {
       applyTimetablePayload(cachedPayload);
@@ -14685,15 +14696,28 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
       if (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview) return;
-      const nextPayload = mergeStudyTimetablePayloads(data.timetable || {}, cachedPayload);
+      const serverPayload = data.timetable || {};
+      const serverHasSavedSessions = Array.isArray(serverPayload.sessions) && serverPayload.sessions.length > 0;
+      const cachedHasSavedSessions = Array.isArray(cachedPayload?.sessions) && cachedPayload.sessions.length > 0;
+      const nextPayload = mergeStudyTimetablePayloads(serverPayload, cachedPayload);
       if (hasStudyTimetablePayloadContent(nextPayload)) {
         applyTimetablePayload(nextPayload);
         writeCachedStudyTimetablePayload(nextPayload);
+        if (!serverHasSavedSessions && cachedHasSavedSessions) {
+          window.setTimeout(() => {
+            saveStudyTimetable(nextPayload.sessions, {
+              silent: true,
+              exitEditing: false,
+              payloadOverrides: nextPayload,
+            }).catch(() => {});
+          }, 0);
+        }
       } else if (!hasStudyTimetablePayloadContent(cachedPayload)) {
-        applyTimetablePayload(data.timetable || {});
+        applyTimetablePayload(serverPayload);
       }
     } catch (err) {
       hasLoadedTimetableRef.current = false;
+      loadedTimetableModeRef.current = "";
       setTimetableMessage(getReadableRequestError(err));
     } finally {
       setIsLoadingTimetable(false);
@@ -14703,6 +14727,13 @@ export default function App() {
     const { silent = false, exitEditing = true, payloadOverrides = {} } = options || {};
     if (silent && !exitEditing && (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview)) {
       return;
+    }
+    if (authToken && !hasResolvedBillingPlan()) {
+      try {
+        await refreshBillingStatus();
+      } catch (err) {
+        if (!silent) setTimetableMessage(getReadableRequestError(err));
+      }
     }
     if (!canUseStudyTimetable()) {
       setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
@@ -15546,6 +15577,13 @@ export default function App() {
 
   useEffect(() => {
     if (!["timetable", "study-session"].includes(currentPage) || !authToken || !authChecked) return;
+    if (!hasResolvedBillingPlan()) {
+      const cachedPayload = readCachedStudyTimetablePayload();
+      if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload)) {
+        applyTimetablePayload(cachedPayload);
+      }
+      return;
+    }
     if (!isPaidStudyTimetableAllowed()) {
       loadFreeStudyTimetable();
       return;
