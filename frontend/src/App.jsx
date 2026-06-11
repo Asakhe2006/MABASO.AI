@@ -520,6 +520,13 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
+const collaborationMaterialTabs = [
+  { id: "guide", label: "Study Guide" },
+  { id: "formulas", label: "Formulas" },
+  { id: "examples", label: "Worked Examples" },
+  { id: "flashcards", label: "Flashcards" },
+  { id: "quiz", label: "Test" },
+];
 const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice"];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
@@ -4919,6 +4926,7 @@ export default function App() {
   const [collaborationRooms, setCollaborationRooms] = useState([]);
   const [activeRoomId, setActiveRoomId] = useState("");
   const [activeRoom, setActiveRoom] = useState(null);
+  const [generatingRoomMaterial, setGeneratingRoomMaterial] = useState("");
   const [roomTitleInput, setRoomTitleInput] = useState("");
   const [roomInviteInput, setRoomInviteInput] = useState("");
   const [newRoomVisibility, setNewRoomVisibility] = useState("private");
@@ -8272,32 +8280,31 @@ export default function App() {
         </div>
       </div>
 
-      {collaborationInviteSpotlight ? (
+      {invitedCollaborationRooms.length ? (
         <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Shared study room</p>
-              <h3 className="phone-safe-copy mt-3 text-2xl font-semibold text-white">{collaborationInviteSpotlight.title}</h3>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-                {collaborationInviteSpotlight.owner_email} added you to this room. Open it to see the notes area, room chat, and synced study focus for the lecture.
-              </p>
+              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Class requests</p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">Rooms shared with you</h3>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Join a class request to open the owner&apos;s shared study guide, formulas, worked examples, flashcards, test, notes, and room chat.</p>
             </div>
-            <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => openCollaborationRoom(collaborationInviteSpotlight.id)}
-                className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-5 py-3 text-sm font-semibold text-white"
-              >
-                Open Room
-              </button>
-              <button
-                type="button"
-                onClick={() => persistDismissedRoomInviteList([...dismissedRoomInviteIds, collaborationInviteSpotlight.id])}
-                className="rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm text-white transition hover:bg-white/10"
-              >
-                Hide Prompt
-              </button>
-            </div>
+            <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-cyan-50">{invitedCollaborationRooms.length} request{invitedCollaborationRooms.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="mt-5 grid gap-3 lg:grid-cols-2">
+            {invitedCollaborationRooms.map((room) => (
+              <article key={room.id} className="rounded-2xl border border-cyan-300/15 bg-slate-950/70 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
+                    <p className="phone-safe-copy mt-2 text-xs leading-6 text-slate-300">{room.owner_email} invited you to join this class.</p>
+                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-cyan-100/75">{room.member_count} member{room.member_count === 1 ? "" : "s"} - {room.test_visibility === "shared" ? "shared test answers" : "private test answers"}</p>
+                  </div>
+                  <button type="button" onClick={() => joinCollaborationRequest(room.id)} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-4 py-2 text-sm font-semibold text-white">
+                    Join Class
+                  </button>
+                </div>
+              </article>
+            ))}
           </div>
         </div>
       ) : null}
@@ -8307,7 +8314,7 @@ export default function App() {
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture and add the member emails that should see it after they sign in.</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture. Added members receive an email invitation and see the class request when they sign in.</p>
             <div className="mt-5 space-y-4">
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
@@ -8428,7 +8435,7 @@ export default function App() {
                   <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
                 </div>
                 <div className="force-mobile-stack flex flex-wrap gap-3">
-                  <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button>
+                  {activeRoom.is_owner ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button> : null}
                   <button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button>
                 </div>
               </div>
@@ -8441,7 +8448,7 @@ export default function App() {
                 <div className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-5">
                   <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">Add members</p>
                   <h4 className="mt-2 text-2xl font-semibold text-white">Add more people to this room</h4>
-                  <p className="mt-3 text-sm leading-7 text-slate-100">Use email addresses here and those people will see this room prompt when they sign in.</p>
+                  <p className="mt-3 text-sm leading-7 text-slate-100">Use email addresses here. New members receive an email invitation and see this class request when they sign in.</p>
                   <textarea
                     value={roomMembersInput}
                     onChange={(event) => setRoomMembersInput(event.target.value)}
@@ -8469,9 +8476,36 @@ export default function App() {
                     <p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room's shared revision focus.</p>
                   </div>
                   <div className="force-mobile-stack flex flex-wrap gap-2">
-                    {[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => (
-                      <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>
+                    {collaborationMaterialTabs.map((tab) => (
+                      <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(Boolean(activeRoom.is_owner)); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>
                     ))}
+                  </div>
+                </div>
+                <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Generate room materials</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-300">{activeRoom.is_owner ? "Use these buttons to generate or refresh the owner materials shown to every room member." : "Only the room owner can generate or refresh these shared class materials."}</p>
+                    </div>
+                    <div className="force-mobile-stack flex flex-wrap gap-2">
+                      {[
+                        { id: "guide", label: "Generate Study Guide" },
+                        { id: "formulas", label: "Generate Formulas" },
+                        { id: "examples", label: "Generate Worked Examples" },
+                        { id: "flashcards", label: "Generate Flashcards" },
+                        { id: "quiz", label: "Generate Test" },
+                      ].map((tool) => (
+                        <button
+                          key={tool.id}
+                          type="button"
+                          onClick={() => generateCollaborationMaterial(tool.id)}
+                          disabled={!activeRoom.is_owner || Boolean(generatingRoomMaterial)}
+                          className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {generatingRoomMaterial === tool.id ? "Generating..." : tool.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 <div className="mt-4">
@@ -15764,6 +15798,28 @@ export default function App() {
     await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true, ...options });
   };
 
+  const joinCollaborationRequest = async (roomId) => {
+    const normalizedRoomId = normalizeCollaborationRoomId(roomId);
+    if (!normalizedRoomId) return;
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/invitations/${normalizedRoomId}/accept`, { method: "POST" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not join this class room.");
+      handleCollaborationRoomActivity(data.room ? [data.room] : []);
+      persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
+      setActiveRoomId(normalizedRoomId);
+      setActiveRoom(data.room || null);
+      syncRoomNotesDraftFromRoom(data.room, { force: true });
+      refreshCollaborationRooms(true);
+      openCollaborationPage({ refresh: false });
+      setStatus(`Joined ${data.room?.title || "the class room"}.`);
+    } catch (err) {
+      await openCollaborationRoom(normalizedRoomId);
+      if (err?.message) setStatus("Opened the class room from your requests.");
+    }
+  };
+
   useEffect(() => {
     if (!authToken) {
       setCollaborationRooms([]);
@@ -19532,6 +19588,11 @@ export default function App() {
       setError("Podcast and PowerPoint tools stay personal for now, so they cannot be synced into the collaboration room yet.");
       return;
     }
+    if (activeRoom && !activeRoom.is_owner) {
+      setActiveRoom((current) => (current ? { ...current, active_tab: tabId } : current));
+      setFollowRoomView(false);
+      return;
+    }
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/active-tab`, {
         method: "POST",
@@ -19551,6 +19612,206 @@ export default function App() {
 
   const syncCurrentTabToRoom = async () => {
     await shareTabToRoom(activeTab);
+  };
+
+  const updateActiveRoomMaterials = async (payload = {}) => {
+    if (!activeRoomId) return null;
+    if (!activeRoom?.is_owner) {
+      setError("Only the room owner can generate or update the shared room materials.");
+      return null;
+    }
+    const response = await authFetch(`/collaboration/rooms/${activeRoomId}/materials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || "Could not update the room materials.");
+    handleCollaborationRoomActivity(data.room ? [data.room] : []);
+    setActiveRoom(data.room || null);
+    syncRoomNotesDraftFromRoom(data.room);
+    refreshCollaborationRooms(true);
+    return data.room || null;
+  };
+
+  const generateCollaborationStudyGuide = async (targetTab = "guide") => {
+    const roomSnapshot = activeRoom;
+    if (!roomSnapshot?.is_owner) {
+      setError("Only the room owner can generate shared room materials.");
+      return false;
+    }
+    const hasRoomSource = Boolean(
+      (roomSnapshot.transcript || "").trim()
+      || (roomSnapshot.lecture_notes || "").trim()
+      || (roomSnapshot.lecture_slides || "").trim()
+    );
+    if (!hasRoomSource) {
+      setError("This room needs a transcript, notes, or slides before the owner can generate materials.");
+      return false;
+    }
+    if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
+    setGeneratingRoomMaterial(targetTab);
+    setError("");
+    setCurrentJobType("study_guide");
+    setStatus("Generating shared room study materials...");
+    setProgress(0);
+    try {
+      const response = await authFetch("/generate-study-guide/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: roomSnapshot.transcript || "",
+          lecture_notes: roomSnapshot.lecture_notes || "",
+          lecture_slides: roomSnapshot.lecture_slides || "",
+          past_question_papers: "",
+          language: outputLanguage,
+          reference_images: getSafeAiReferenceImageUrls(roomSnapshot.study_images || []),
+        }),
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Room study guide generation failed.");
+      const job = await pollJob(data.job_id, "study_guide");
+      await updateActiveRoomMaterials({
+        transcript: job.transcript || roomSnapshot.transcript || "",
+        summary: job.summary || "",
+        formula: job.formula || "",
+        example: job.worked_example || "",
+        lecture_notes: roomSnapshot.lecture_notes || "",
+        lecture_slides: roomSnapshot.lecture_slides || "",
+        study_images: Array.isArray(job.study_images) ? job.study_images : roomSnapshot.study_images || [],
+        flashcards: job.flashcards || roomSnapshot.flashcards || [],
+        active_tab: targetTab,
+      });
+      setProgress(100);
+      setStatus("Shared room study materials are ready.");
+      return true;
+    } catch (err) {
+      setError(err.message || "Room study guide generation failed.");
+      setStatus("Room study guide generation failed.");
+      return false;
+    } finally {
+      setGeneratingRoomMaterial("");
+      setCurrentJobType("");
+    }
+  };
+
+  const generateCollaborationFlashcards = async () => {
+    const roomSnapshot = activeRoom;
+    if (!roomSnapshot?.is_owner) {
+      setError("Only the room owner can generate shared room flashcards.");
+      return false;
+    }
+    if (!((roomSnapshot.summary || "").trim() || (roomSnapshot.transcript || "").trim() || (roomSnapshot.lecture_notes || "").trim() || (roomSnapshot.lecture_slides || "").trim())) {
+      setError("Generate the room study guide or add room source material before creating shared flashcards.");
+      return false;
+    }
+    const requestedCount = clampFlashcardCountForPlan(flashcardCount);
+    if (!(await ensurePremiumFeatureAvailable("flashcards", "Flashcards"))) return false;
+    setGeneratingRoomMaterial("flashcards");
+    setError("");
+    setCurrentJobType("flashcards");
+    setStatus(`Generating ${requestedCount} shared flashcards...`);
+    setProgress(15);
+    try {
+      const response = await authFetch("/generate-flashcards/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+          transcript: roomSnapshot.transcript || "",
+          summary: roomSnapshot.summary || "",
+          lecture_notes: roomSnapshot.lecture_notes || "",
+          lecture_slides: roomSnapshot.lecture_slides || "",
+          past_question_papers: "",
+          language: outputLanguage,
+          count: requestedCount,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Room flashcard generation failed.");
+      const job = await pollJob(data.job_id, "flashcards");
+      await updateActiveRoomMaterials({
+        flashcards: job.flashcards || [],
+        active_tab: "flashcards",
+      });
+      setProgress(100);
+      setStatus("Shared room flashcards are ready.");
+      return true;
+    } catch (err) {
+      setError(err.message || "Room flashcard generation failed.");
+      setStatus("Room flashcard generation failed.");
+      return false;
+    } finally {
+      setGeneratingRoomMaterial("");
+      setCurrentJobType("");
+      setProgress(0);
+    }
+  };
+
+  const generateCollaborationQuiz = async () => {
+    const roomSnapshot = activeRoom;
+    if (!roomSnapshot?.is_owner) {
+      setError("Only the room owner can generate the shared room test.");
+      return false;
+    }
+    if (!((roomSnapshot.summary || "").trim() || (roomSnapshot.transcript || "").trim() || (roomSnapshot.lecture_notes || "").trim() || (roomSnapshot.lecture_slides || "").trim())) {
+      setError("Generate the room study guide or add room source material before creating the shared test.");
+      return false;
+    }
+    if (!(await ensurePremiumFeatureAvailable("quiz", "Quizzes"))) return false;
+    setGeneratingRoomMaterial("quiz");
+    setError("");
+    setCurrentJobType("quiz");
+    setStatus("Generating the shared room test...");
+    setProgress(0);
+    try {
+      const response = await authFetch("/generate-quiz/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+          transcript: roomSnapshot.transcript || "",
+          summary: roomSnapshot.summary || "",
+          lecture_notes: roomSnapshot.lecture_notes || "",
+          lecture_slides: roomSnapshot.lecture_slides || "",
+          past_question_papers: "",
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Room test generation failed.");
+      const job = await pollJob(data.job_id, "quiz");
+      const nextQuizQuestions = job.quiz_questions || [];
+      await updateActiveRoomMaterials({
+        quiz_questions: nextQuizQuestions,
+        active_tab: "quiz",
+      });
+      setRoomQuizAnswers({});
+      setRoomQuizAnswerImages({});
+      setRoomQuizResults({});
+      setRoomQuizSubmitted(false);
+      setProgress(100);
+      setStatus("Shared room test is ready.");
+      return true;
+    } catch (err) {
+      setError(err.message || "Room test generation failed.");
+      setStatus("Room test generation failed.");
+      return false;
+    } finally {
+      setGeneratingRoomMaterial("");
+      setCurrentJobType("");
+      setProgress(0);
+    }
+  };
+
+  const generateCollaborationMaterial = async (toolId) => {
+    if (["guide", "formulas", "examples"].includes(toolId)) {
+      return generateCollaborationStudyGuide(toolId);
+    }
+    if (toolId === "flashcards") return generateCollaborationFlashcards();
+    if (toolId === "quiz") return generateCollaborationQuiz();
+    return false;
   };
 
   const changeRoomTestVisibility = async (value) => {

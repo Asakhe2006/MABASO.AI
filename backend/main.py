@@ -1376,6 +1376,19 @@ class CollaborationSharedNotesRequest(BaseModel):
     shared_notes: str = ""
 
 
+class CollaborationRoomMaterialsRequest(BaseModel):
+    transcript: str | None = None
+    summary: str | None = None
+    formula: str | None = None
+    example: str | None = None
+    lecture_notes: str | None = None
+    lecture_slides: str | None = None
+    study_images: list[dict[str, Any]] | None = None
+    flashcards: list[dict[str, Any]] | None = None
+    quiz_questions: list[dict[str, Any]] | None = None
+    active_tab: str | None = None
+
+
 class CollaborationRoomMembersRequest(BaseModel):
     emails: list[str] = []
 
@@ -3610,15 +3623,17 @@ def send_collaboration_invite_email(invited_email: str, owner_email: str, room_t
     smtp_settings = get_smtp_settings()
     room_url = f"{APP_PUBLIC_URL}/app/collaboration?room={quote(room_id)}"
     message = EmailMessage()
-    message["Subject"] = f"You were invited to a MABASO.AI study room"
+    message["Subject"] = "You have been invited to join a MABASO.AI class"
     message["From"] = smtp_settings["from_email"]
     message["To"] = invited_email
     message.set_content(
         (
-            f"{owner_email} invited you to join a MABASO.AI collaboration room.\n\n"
-            f"Room: {room_title}\n"
-            f"Join link: {room_url}\n\n"
-            "Sign in with this email address to see the room prompt inside MABASO.AI."
+            "Hello,\n\n"
+            f"{owner_email} has invited you to join the MABASO.AI study room \"{room_title}\".\n\n"
+            "Open the link below, sign in with this email address, and join the class from the Collaboration page:\n"
+            f"{room_url}\n\n"
+            "Inside the room you can view the shared study guide, formulas, worked examples, flashcards, tests, notes, and class messages.\n\n"
+            "MABASO.AI"
         )
     )
     send_smtp_message(message)
@@ -22949,6 +22964,64 @@ async def save_collaboration_notes(
     return {"room": serialize_collaboration_room(updated_room, current_user)}
 
 
+@app.post("/collaboration/rooms/{room_id}/materials")
+async def update_collaboration_room_materials(
+    room_id: str,
+    payload: CollaborationRoomMaterialsRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if room["owner_email"] != current_user:
+        raise HTTPException(status_code=403, detail="Only the room owner can generate or update room materials.")
+
+    next_transcript = room["transcript"] if payload.transcript is None else payload.transcript.strip()
+    next_summary = room["summary"] if payload.summary is None else payload.summary.strip()
+    next_formula = room["formula"] if payload.formula is None else payload.formula.strip()
+    next_example = room["example"] if payload.example is None else payload.example.strip()
+    next_lecture_notes = room["lecture_notes"] if payload.lecture_notes is None else payload.lecture_notes.strip()
+    next_lecture_slides = room["lecture_slides"] if payload.lecture_slides is None else payload.lecture_slides.strip()
+    next_study_images = (
+        normalize_collaboration_study_images(load_json_list(room["study_images_json"]))
+        if payload.study_images is None
+        else normalize_collaboration_study_images(payload.study_images)
+    )
+    next_flashcards = load_json_list(room["flashcards_json"]) if payload.flashcards is None else (payload.flashcards or [])
+    next_quiz_questions = load_json_list(room["quiz_questions_json"]) if payload.quiz_questions is None else (payload.quiz_questions or [])
+    next_active_tab = sanitize_collaboration_tab(payload.active_tab or room["active_tab"])
+
+    if not any([next_transcript, next_summary, next_lecture_notes, next_lecture_slides]):
+        raise HTTPException(status_code=400, detail="Room materials need a transcript, study guide, notes, or slides.")
+
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET transcript = ?, summary = ?, formula = ?, example = ?,
+                lecture_notes = ?, lecture_slides = ?, study_images_json = ?,
+                flashcards_json = ?, quiz_questions_json = ?, active_tab = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                next_transcript,
+                next_summary,
+                next_formula,
+                next_example,
+                next_lecture_notes,
+                next_lecture_slides,
+                dump_json(next_study_images),
+                dump_json(next_flashcards),
+                dump_json(next_quiz_questions),
+                next_active_tab,
+                now_iso,
+                room["id"],
+            ),
+        )
+
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
 @app.post("/collaboration/rooms/{room_id}/board-images")
 async def upload_collaboration_board_image(
     room_id: str,
@@ -23050,6 +23123,9 @@ async def update_collaboration_active_tab(
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_accessible_collaboration_room(room_id, current_user)
+    if room["owner_email"] != current_user:
+        raise HTTPException(status_code=403, detail="Only the room owner can change the room focus.")
+
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
         connection.execute(
