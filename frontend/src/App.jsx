@@ -742,6 +742,8 @@ const TIMETABLE_DEFAULT_END = "21:30";
 const TIMETABLE_DEFAULT_SESSION_MINUTES = 90;
 const TIMETABLE_MIN_SESSION_MINUTES = 30;
 const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
+const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
 function createDefaultTimetableProfile() {
   return { learnerName: "", grade: "Grade 12", examDate: "", dailyGoalHours: 4 };
@@ -831,14 +833,23 @@ function normalizeTimetableSubjectName(name, fallback = "Subject") {
   return String(name || "").trim().slice(0, 36) || fallback;
 }
 
-function buildWeightedTimetableSubjects(subjects = []) {
+function buildWeightedTimetableSubjects(subjects = [], examDates = []) {
+  const examSubjectNames = new Set((Array.isArray(examDates) ? examDates : [])
+    .map((exam) => normalizeTimetableSubjectName(exam?.subject, "").toLowerCase())
+    .filter(Boolean));
   const selected = (Array.isArray(subjects) ? subjects : [])
     .filter((subject) => subject?.selected !== false && normalizeTimetableSubjectName(subject?.name, ""))
-    .map((subject) => ({
-      ...subject,
-      name: normalizeTimetableSubjectName(subject.name),
-      weight: Math.max(1, Number(subject.priority || 3)) + Math.max(0, 5 - Number(subject.performance || 3)),
-    }));
+    .map((subject) => {
+      const name = normalizeTimetableSubjectName(subject.name);
+      const priorityWeight = Math.max(1, Number(subject.priority || 3));
+      const weaknessWeight = Math.max(0, 5 - Number(subject.performance || 3));
+      const examWeight = examSubjectNames.has(name.toLowerCase()) ? 2 : 0;
+      return {
+        ...subject,
+        name,
+        weight: priorityWeight + weaknessWeight + examWeight,
+      };
+    });
   const weighted = [];
   selected.forEach((subject) => {
     const copies = Math.max(1, Math.min(8, Math.round(subject.weight || 1)));
@@ -971,10 +982,33 @@ function createEmptyTimetableSession({ dayId, date, start, end, idSuffix = "empt
   };
 }
 
+function getTimetableSessionEndDate(session) {
+  if (!session?.date || !session?.end) return null;
+  const date = new Date(session.date);
+  if (Number.isNaN(date.getTime())) return null;
+  const endMinutes = timetableTimeToMinutes(session.end, -1);
+  if (endMinutes < 0) return null;
+  date.setHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
+  return date;
+}
+
+function shouldAutoMissTimetableSession(session, now = new Date()) {
+  if (!session || ["break", "empty", "exam"].includes(session.type)) return false;
+  if (["break", "empty", "completed", "missed"].includes(session.status)) return false;
+  const endDate = getTimetableSessionEndDate(session);
+  return Boolean(endDate && endDate.getTime() < now.getTime());
+}
+
+function applyTimetableAutoMisses(sessions = [], now = new Date()) {
+  return (Array.isArray(sessions) ? sessions : []).map((session) => (
+    shouldAutoMissTimetableSession(session, now) ? { ...session, status: "missed" } : session
+  ));
+}
+
 function generateStudyTimetableSessions({ subjects, availability, preferences, weekStartIso }) {
   const normalizedAvailability = normalizeTimetableAvailability(availability);
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
-  const weightedSubjects = buildWeightedTimetableSubjects(subjects);
+  const weightedSubjects = buildWeightedTimetableSubjects(subjects, normalizedPreferences.examDates);
   const sessionLength = normalizedPreferences.sessionLengthMinutes || TIMETABLE_DEFAULT_SESSION_MINUTES;
   let cursor = 0;
   const sessions = [];
@@ -1073,8 +1107,8 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
   return sessions;
 }
 
-function normalizeTimetableSessions(value) {
-  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").map((item, index) => {
+function normalizeTimetableSessions(value, now = new Date()) {
+  const normalized = Array.isArray(value) ? value.filter((item) => item && typeof item === "object").map((item, index) => {
     const range = normalizeTimetableRange(item.start, item.end);
     const type = item.type || (item.status === "break" ? "break" : item.status === "empty" ? "empty" : "study");
     const status = type === "empty" ? "empty" : type === "break" ? "break" : item.status || "scheduled";
@@ -1088,6 +1122,42 @@ function normalizeTimetableSessions(value) {
       type,
     };
   }) : [];
+  return applyTimetableAutoMisses(normalized, now);
+}
+
+function normalizeTimetablePickerTime(value) {
+  const minutes = timetableTimeToMinutes(value, timetableTimeToMinutes(TIMETABLE_DEFAULT_START));
+  return minutesToTimetableTime(Math.max(0, Math.min((23 * 60) + 59, minutes)));
+}
+
+function TimetableTimePicker({ value, onChange, disabled = false }) {
+  const safeValue = normalizeTimetablePickerTime(value);
+  const [hour, minute] = safeValue.split(":");
+  const minuteOptions = TIMETABLE_MINUTE_OPTIONS.includes(minute)
+    ? TIMETABLE_MINUTE_OPTIONS
+    : [...TIMETABLE_MINUTE_OPTIONS, minute].sort((a, b) => Number(a) - Number(b));
+  const setTime = (nextHour, nextMinute) => onChange?.(`${nextHour}:${nextMinute}`);
+  const adjustTime = (deltaMinutes) => {
+    const currentMinutes = timetableTimeToMinutes(safeValue, 0);
+    const nextMinutes = Math.max(0, Math.min((23 * 60) + 59, currentMinutes + deltaMinutes));
+    onChange?.(minutesToTimetableTime(nextMinutes));
+  };
+
+  return (
+    <div className={`mt-2 flex min-w-0 items-stretch overflow-hidden rounded-xl border border-white/10 bg-black/45 text-sm text-white ${disabled ? "opacity-40" : ""}`}>
+      <select value={hour} disabled={disabled} onChange={(event) => setTime(event.target.value, minute)} aria-label="Hour" className="min-w-0 flex-1 bg-transparent px-2 py-2 outline-none disabled:cursor-not-allowed">
+        {TIMETABLE_HOUR_OPTIONS.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
+      </select>
+      <span className="flex items-center px-1 text-slate-400">:</span>
+      <select value={minute} disabled={disabled} onChange={(event) => setTime(hour, event.target.value)} aria-label="Minutes" className="min-w-0 flex-1 bg-transparent px-2 py-2 outline-none disabled:cursor-not-allowed">
+        {minuteOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
+      </select>
+      <div className="flex w-8 flex-col border-l border-white/10">
+        <button type="button" disabled={disabled} onClick={() => adjustTime(5)} title="Increase time" className="flex flex-1 items-center justify-center text-xs text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed">^</button>
+        <button type="button" disabled={disabled} onClick={() => adjustTime(-5)} title="Decrease time" className="flex flex-1 items-center justify-center border-t border-white/10 text-xs text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed">v</button>
+      </div>
+    </div>
+  );
 }
 
 const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
@@ -4747,6 +4817,8 @@ export default function App() {
     preferences: createDefaultTimetablePreferences(),
     weekStartIso: getTimetableWeekStartIso(),
   }));
+  const [hasTimetablePlanPreview, setHasTimetablePlanPreview] = useState(false);
+  const [timetableNow, setTimetableNow] = useState(() => new Date());
   const [isTimetableEditing, setIsTimetableEditing] = useState(false);
   const [isLoadingTimetable, setIsLoadingTimetable] = useState(false);
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
@@ -7590,11 +7662,13 @@ export default function App() {
     const normalizedAvailability = normalizeTimetableAvailability(timetableAvailability);
     const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
     const selectedSubjects = timetableSubjects.filter((subject) => subject.selected !== false);
-    const completedCount = timetableSessions.filter((session) => session.status === "completed").length;
-    const trackableCount = timetableSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
+    const visibleTimetableSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+    const completedCount = visibleTimetableSessions.filter((session) => session.status === "completed").length;
+    const trackableCount = visibleTimetableSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
     const weeklyProgress = trackableCount ? Math.round((completedCount / trackableCount) * 100) : 0;
-    const timetableRows = buildTimetableRows(timetableSessions);
-    const sessionsByCell = timetableSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
+    const shouldShowTimetableGrid = !isTimetableEditing || hasTimetablePlanPreview;
+    const timetableRows = shouldShowTimetableGrid ? buildTimetableRows(visibleTimetableSessions) : [];
+    const sessionsByCell = visibleTimetableSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
     const subjectOptions = Array.from(new Set(selectedSubjects.map((subject) => normalizeTimetableSubjectName(subject.name, "")).filter(Boolean)));
 
     if (!paidAllowed) {
@@ -7625,14 +7699,9 @@ export default function App() {
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
-            {isTimetableEditing ? (
-              <>
-                <button type="button" onClick={regenerateStudyTimetable} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Plan</button>
-                <button type="button" onClick={() => saveStudyTimetable()} disabled={isSavingTimetable} className="rounded-[14px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">{isSavingTimetable ? "Saving..." : "Save My Timetable"}</button>
-              </>
-            ) : (
-              <button type="button" onClick={() => setIsTimetableEditing(true)} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">Re-edit Timetable</button>
-            )}
+            {!isTimetableEditing ? (
+              <button type="button" onClick={startReEditingTimetable} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">Re-edit Timetable</button>
+            ) : null}
           </div>
         </div>
 
@@ -7659,8 +7728,8 @@ export default function App() {
                     return (
                       <div key={day.id} className="grid gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 sm:grid-cols-[110px_1fr_1fr] sm:items-end">
                         <button type="button" onClick={() => toggleTimetableAvailability(day.id)} className={`rounded-xl border px-3 py-3 text-sm font-semibold ${dayAvailability.enabled ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-white/5 text-slate-300"}`}>{day.short} {dayAvailability.enabled ? "On" : "Off"}</button>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">From<input type="time" value={dayAvailability.start} disabled={!dayAvailability.enabled} onChange={(event) => updateTimetableAvailability(day.id, "start", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none disabled:opacity-40" /></label>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Until<input type="time" value={dayAvailability.end} disabled={!dayAvailability.enabled} onChange={(event) => updateTimetableAvailability(day.id, "end", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none disabled:opacity-40" /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">From<TimetableTimePicker value={dayAvailability.start} disabled={!dayAvailability.enabled} onChange={(value) => updateTimetableAvailability(day.id, "start", value)} /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Until<TimetableTimePicker value={dayAvailability.end} disabled={!dayAvailability.enabled} onChange={(value) => updateTimetableAvailability(day.id, "end", value)} /></label>
                       </div>
                     );
                   })}
@@ -7675,10 +7744,10 @@ export default function App() {
                 <div className="mt-4 space-y-3">
                   {normalizedPreferences.breaks.length ? normalizedPreferences.breaks.map((breakItem) => (
                     <div key={breakItem.id} className="rounded-2xl border border-white/10 bg-black/35 p-3">
-                      <div className="grid gap-3 sm:grid-cols-[1fr_120px_120px_auto] sm:items-end">
+                      <div className="grid gap-3 sm:grid-cols-[1fr_160px_160px_auto] sm:items-end">
                         <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Label<input value={breakItem.label} onChange={(event) => updateTimetableBreak(breakItem.id, "label", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<input type="time" value={breakItem.start} onChange={(event) => updateTimetableBreak(breakItem.id, "start", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<input type="time" value={breakItem.end} onChange={(event) => updateTimetableBreak(breakItem.id, "end", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<TimetableTimePicker value={breakItem.start} onChange={(value) => updateTimetableBreak(breakItem.id, "start", value)} /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<TimetableTimePicker value={breakItem.end} onChange={(value) => updateTimetableBreak(breakItem.id, "end", value)} /></label>
                         <button type="button" onClick={() => removeTimetableBreak(breakItem.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Remove</button>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -7698,11 +7767,11 @@ export default function App() {
                   {normalizedPreferences.examDates.length ? normalizedPreferences.examDates.map((exam) => {
                     const examSubjectOptions = Array.from(new Set([...subjectOptions, exam.subject].filter(Boolean)));
                     return (
-                      <div key={exam.id} className="grid gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 sm:grid-cols-[1fr_150px_110px_110px_auto] sm:items-end">
+                      <div key={exam.id} className="grid gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 sm:grid-cols-[1fr_150px_160px_160px_auto] sm:items-end">
                         <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Subject<select value={exam.subject} onChange={(event) => updateTimetableExamDate(exam.id, "subject", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">{examSubjectOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}</select></label>
                         <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Date<input type="date" value={exam.date || ""} onChange={(event) => updateTimetableExamDate(exam.id, "date", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<input type="time" value={exam.start} onChange={(event) => updateTimetableExamDate(exam.id, "start", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
-                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<input type="time" value={exam.end} onChange={(event) => updateTimetableExamDate(exam.id, "end", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<TimetableTimePicker value={exam.start} onChange={(value) => updateTimetableExamDate(exam.id, "start", value)} /></label>
+                        <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<TimetableTimePicker value={exam.end} onChange={(value) => updateTimetableExamDate(exam.id, "end", value)} /></label>
                         <button type="button" onClick={() => removeTimetableExamDate(exam.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Remove</button>
                       </div>
                     );
@@ -7728,6 +7797,17 @@ export default function App() {
                       <label className="text-xs text-slate-400">Priority {subject.priority || 3}<input type="range" min="1" max="5" value={subject.priority || 3} onChange={(event) => updateTimetableSubject(subject.id, "priority", Number(event.target.value))} className="mt-2 w-full accent-emerald-400" /></label>
                       <label className="text-xs text-slate-400">Performance {subject.performance || 3}<input type="range" min="1" max="5" value={subject.performance || 3} onChange={(event) => updateTimetableSubject(subject.id, "performance", Number(event.target.value))} className="mt-2 w-full accent-emerald-400" /></label>
                     </div>
+                    {timetableSubjectRemovalPrompt?.id === subject.id ? (
+                      <div className="mt-3 rounded-2xl border border-rose-300/25 bg-rose-500/10 p-3">
+                        <p className="text-xs uppercase tracking-[0.2em] text-rose-100">Remove Subject</p>
+                        <p className="mt-2 text-sm font-semibold text-white">Are you sure you want to remove this subject?</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-300">{normalizeTimetableSubjectName(subject.name, "This subject")} will also be removed from the timetable.</p>
+                        <div className="mt-3 flex flex-wrap justify-end gap-2">
+                          <button type="button" onClick={() => setTimetableSubjectRemovalPrompt(null)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white">Cancel</button>
+                          <button type="button" onClick={confirmRemoveTimetableSubject} className="rounded-xl bg-rose-500 px-3 py-2 text-xs font-semibold text-white">Remove</button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -7735,6 +7815,27 @@ export default function App() {
           </div>
         ) : null}
 
+        {isTimetableEditing ? (
+          <div className="mt-5 flex flex-col gap-4 rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-emerald-50">
+                {hasTimetablePlanPreview ? "You can now edit the timetable the way you want, then save it." : "Choose your subjects, available times, breaks, and exam dates, then press Plan."}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                {hasTimetablePlanPreview ? "Tick a subject only after you have actually completed it; be honest with yourself so the timetable helps you pass." : "The planner will use your subject priority, performance, exam dates, breaks, and available time range."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={regenerateStudyTimetable} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">{hasTimetablePlanPreview ? "Plan Again" : "Plan"}</button>
+              {hasTimetablePlanPreview ? (
+                <button type="button" onClick={() => saveStudyTimetable()} disabled={isSavingTimetable} className="rounded-[14px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">{isSavingTimetable ? "Saving..." : "Save My Timetable"}</button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {shouldShowTimetableGrid ? (
+          <>
         <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => shiftTimetableWeek(-1)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white" aria-label="Previous week">‹</button>
@@ -7766,6 +7867,8 @@ export default function App() {
                   const isEmptyCell = !session || session.status === "empty" || session.type === "empty";
                   const isBreakCell = session?.status === "break" || session?.type === "break";
                   const isExamCell = session?.type === "exam";
+                  const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
+                  const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
                   const fallback = { dayId: day.id, date: addDays(timetableWeekStartIso, dayIndex).toISOString(), start: slot.start, end: slot.end };
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
                   const tone = isEmptyCell
@@ -7778,11 +7881,11 @@ export default function App() {
                           ? "border-rose-400/35 bg-rose-700/55 text-white"
                           : isBreakCell
                             ? "border-white/10 bg-white/[0.03] text-slate-300"
-                            : "border-emerald-400/30 bg-white/[0.04] text-white";
+                            : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
                   return (
                     <div key={`${day.id}-${slot.start}-${slot.end}`} className="border-l border-white/5 p-1.5">
-                      <button type="button" disabled={!isTimetableEditing && isEmptyCell} onClick={() => { if (!isTimetableEditing && session?.id) toggleTimetableSessionStatus(session.id); }} className={`min-h-[46px] w-full rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
-                        {isTimetableEditing && !isBreakCell && !isExamCell ? (
+                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(session.id); }} className={`min-h-[46px] w-full rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
+                        {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
                           <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
                             {cellOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
@@ -7805,6 +7908,8 @@ export default function App() {
           </div>
         </div>
 
+        <p className="mt-3 text-sm leading-6 text-slate-300">Tick each subject once you have actually completed it. Be honest with yourself so your progress reflects the work you really did.</p>
+
         <div className="mt-5 grid gap-4 lg:grid-cols-4">
           {[
             ["Completed", "bg-emerald-600/70", "Tick tasks as you complete them."],
@@ -7813,18 +7918,7 @@ export default function App() {
             ["Empty", "bg-black", "Black spaces mean no subject was selected."],
           ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
         </div>
-        {timetableSubjectRemovalPrompt ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-            <div className="w-full max-w-md rounded-[24px] border border-white/10 bg-slate-950 p-5 shadow-2xl">
-              <p className="text-xs uppercase tracking-[0.24em] text-rose-200/80">Remove Subject</p>
-              <h3 className="mt-3 text-2xl font-semibold text-white">Are you sure you want to remove this subject?</h3>
-              <p className="mt-3 text-sm leading-6 text-slate-300">{normalizeTimetableSubjectName(timetableSubjectRemovalPrompt.name, "This subject")} will also be removed from the timetable.</p>
-              <div className="mt-5 flex flex-wrap justify-end gap-3">
-                <button type="button" onClick={() => setTimetableSubjectRemovalPrompt(null)} className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Cancel</button>
-                <button type="button" onClick={confirmRemoveTimetableSubject} className="rounded-xl bg-rose-500 px-4 py-2 text-sm font-semibold text-white">Remove</button>
-              </div>
-            </div>
-          </div>
+          </>
         ) : null}
       </section>
     );
@@ -13200,17 +13294,19 @@ export default function App() {
     const subjects = Array.isArray(timetable.subjects) && timetable.subjects.length ? timetable.subjects : createDefaultTimetableSubjects();
     const availability = normalizeTimetableAvailability(timetable.availability);
     const preferences = normalizeTimetablePreferences(timetable.preferences, profile);
-    const sessions = normalizeTimetableSessions(timetable.sessions);
-    setTimetableProfile(profile);
-    setTimetableSubjects(subjects);
-    setTimetableAvailability(availability);
-    setTimetablePreferences(preferences);
-    setTimetableSessions(sessions.length ? sessions : generateStudyTimetableSessions({
+    const sessions = normalizeTimetableSessions(timetable.sessions, timetableNow);
+    const generatedSessions = applyTimetableAutoMisses(generateStudyTimetableSessions({
       subjects,
       availability,
       preferences,
       weekStartIso: timetableWeekStartIso,
-    }));
+    }), timetableNow);
+    setTimetableProfile(profile);
+    setTimetableSubjects(subjects);
+    setTimetableAvailability(availability);
+    setTimetablePreferences(preferences);
+    setTimetableSessions(sessions.length ? sessions : generatedSessions);
+    setHasTimetablePlanPreview(false);
   };
   const loadStudyTimetable = async ({ force = false } = {}) => {
     if (!authToken || !isPaidStudyTimetableAllowed()) return;
@@ -13219,7 +13315,7 @@ export default function App() {
     setIsLoadingTimetable(true);
     setTimetableMessage("");
     try {
-      const response = await authFetch("/study-timetable", { timeoutMs: 20000 });
+      const response = await authFetch("/study-timetable", { timeoutMs: 60000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
       applyTimetablePayload(data.timetable || {});
@@ -13230,21 +13326,24 @@ export default function App() {
       setIsLoadingTimetable(false);
     }
   };
-  const saveStudyTimetable = async (sessionsOverride = null) => {
+  const saveStudyTimetable = async (sessionsOverride = null, options = {}) => {
+    const { silent = false, exitEditing = true } = options || {};
     if (!isPaidStudyTimetableAllowed()) {
       openUpgradeModal();
       return;
     }
-    setIsSavingTimetable(true);
-    setTimetableMessage("");
+    if (!silent) {
+      setIsSavingTimetable(true);
+      setTimetableMessage("");
+    }
     try {
       const nextAvailability = normalizeTimetableAvailability(timetableAvailability);
       const nextPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
-      const nextSessions = normalizeTimetableSessions(sessionsOverride || timetableSessions);
+      const nextSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow);
       const response = await authFetch("/study-timetable", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        timeoutMs: 20000,
+        timeoutMs: 60000,
         body: JSON.stringify({
           profile: timetableProfile,
           subjects: timetableSubjects,
@@ -13255,13 +13354,20 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your study timetable.");
-      applyTimetablePayload(data.timetable || {});
-      setIsTimetableEditing(false);
-      setTimetableMessage("Study timetable saved. Use Re-edit Timetable when you want to change subjects, times, breaks, or exams.");
+      if (silent) {
+        setTimetableSessions(nextSessions);
+      } else {
+        applyTimetablePayload(data.timetable || {});
+      }
+      if (exitEditing) {
+        setIsTimetableEditing(false);
+        setHasTimetablePlanPreview(false);
+      }
+      if (!silent) setTimetableMessage("Study timetable saved. Use Re-edit Timetable when you want to change subjects, times, breaks, or exams.");
     } catch (err) {
-      setTimetableMessage(getReadableRequestError(err));
+      if (!silent) setTimetableMessage(getReadableRequestError(err));
     } finally {
-      setIsSavingTimetable(false);
+      if (!silent) setIsSavingTimetable(false);
     }
   };
   const regenerateStudyTimetable = () => {
@@ -13277,7 +13383,14 @@ export default function App() {
     setTimetablePreferences(nextPreferences);
     setTimetableSessions(nextSessions);
     setIsTimetableEditing(true);
-    setTimetableMessage("Your timetable plan is ready. You can now choose the subjects in the table the way you want, then press Save My Timetable.");
+    setHasTimetablePlanPreview(true);
+    setTimetableMessage("Your timetable plan is ready. You can now edit the timetable the way you want, then press Save My Timetable.");
+  };
+  const startReEditingTimetable = () => {
+    setIsTimetableEditing(true);
+    setHasTimetablePlanPreview(false);
+    setTimetableSubjectRemovalPrompt(null);
+    setTimetableMessage("Update your subjects, available times, breaks, and exam dates, then press Plan.");
   };
   const updateTimetableSubject = (subjectId, field, value) => {
     const previousSubject = timetableSubjects.find((subject) => subject.id === subjectId);
@@ -13423,11 +13536,23 @@ export default function App() {
     });
   };
   const toggleTimetableSessionStatus = (sessionId) => {
-    setTimetableSessions((current) => current.map((session) => {
-      if (!sessionId || session.id !== sessionId || ["break", "empty"].includes(session.status)) return session;
-      const nextStatus = session.status === "scheduled" ? "completed" : session.status === "completed" ? "missed" : "scheduled";
-      return { ...session, status: nextStatus };
-    }));
+    let nextSessionsSnapshot = null;
+    setTimetableSessions((current) => {
+      const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
+      const updated = normalized.map((session) => {
+        if (!sessionId || session.id !== sessionId || ["break", "empty", "missed"].includes(session.status) || session.type === "exam") return session;
+        if (shouldAutoMissTimetableSession(session, timetableNow)) return { ...session, status: "missed" };
+        const nextStatus = session.status === "completed" ? "scheduled" : "completed";
+        return { ...session, status: nextStatus };
+      });
+      nextSessionsSnapshot = updated;
+      return updated;
+    });
+    if (nextSessionsSnapshot) {
+      window.setTimeout(() => {
+        saveStudyTimetable(nextSessionsSnapshot, { silent: true, exitEditing: false }).catch(() => {});
+      }, 0);
+    }
   };
   const rebuildTimetableForWeek = (nextDate) => {
     const nextAvailability = normalizeTimetableAvailability(timetableAvailability);
@@ -13448,6 +13573,19 @@ export default function App() {
   const shiftTimetableWeek = (direction) => {
     rebuildTimetableForWeek(addDays(timetableWeekStartIso, direction * 7).toISOString());
   };
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setTimetableNow(new Date()), 60000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    setTimetableSessions((current) => {
+      const next = applyTimetableAutoMisses(current, timetableNow);
+      const changed = next.some((session, index) => session.status !== current[index]?.status);
+      return changed ? next : current;
+    });
+  }, [timetableNow]);
 
   useEffect(() => {
     if (!billingUsage && !billingSubscription) return;
