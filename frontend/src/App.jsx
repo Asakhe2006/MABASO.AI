@@ -742,6 +742,7 @@ const TIMETABLE_DEFAULT_END = "21:30";
 const TIMETABLE_DEFAULT_SESSION_MINUTES = 90;
 const TIMETABLE_MIN_SESSION_MINUTES = 30;
 const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
+const TIMETABLE_FREE_ACCESS_MS = 7 * 24 * 60 * 60 * 1000;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
@@ -850,11 +851,22 @@ function buildWeightedTimetableSubjects(subjects = [], examDates = []) {
         weight: priorityWeight + weaknessWeight + examWeight,
       };
     });
+  const weightedMeta = selected
+    .map((subject) => ({
+      subject,
+      copies: Math.max(1, Math.min(8, Math.round(subject.weight || 1))),
+    }))
+    .sort((left, right) => right.subject.weight - left.subject.weight || left.subject.name.localeCompare(right.subject.name));
   const weighted = [];
-  selected.forEach((subject) => {
-    const copies = Math.max(1, Math.min(8, Math.round(subject.weight || 1)));
-    for (let index = 0; index < copies; index += 1) weighted.push(subject);
-  });
+  const maxCopies = Math.max(0, ...weightedMeta.map((item) => item.copies));
+  for (let copyIndex = 0; copyIndex < maxCopies; copyIndex += 1) {
+    weightedMeta.forEach((item) => {
+      if (copyIndex < item.copies) weighted.push(item.subject);
+    });
+  }
+  selected
+    .filter((subject) => !weighted.some((item) => item.name.toLowerCase() === subject.name.toLowerCase()))
+    .forEach((subject) => weighted.push(subject));
   return weighted;
 }
 
@@ -990,6 +1002,36 @@ function getTimetableSessionEndDate(session) {
   if (endMinutes < 0) return null;
   date.setHours(Math.floor(endMinutes / 60), endMinutes % 60, 0, 0);
   return date;
+}
+
+function getTimetableSessionStartDate(session) {
+  if (!session?.date || !session?.start) return null;
+  const date = new Date(session.date);
+  if (Number.isNaN(date.getTime())) return null;
+  const startMinutes = timetableTimeToMinutes(session.start, -1);
+  if (startMinutes < 0) return null;
+  date.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+  return date;
+}
+
+function getTimetableMinutesForDate(date = new Date()) {
+  return (date.getHours() * 60) + date.getMinutes() + (date.getSeconds() / 60);
+}
+
+function isCurrentTimetableSlot(slot, weekStartIso, now = new Date()) {
+  if (!slot?.start || !slot?.end || !weekStartIso) return false;
+  if (getTimetableWeekStartIso(now) !== getTimetableWeekStartIso(new Date(weekStartIso))) return false;
+  const currentMinutes = getTimetableMinutesForDate(now);
+  return currentMinutes >= slot.startM && currentMinutes < slot.endM;
+}
+
+function formatTimetableCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m left`;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s left`;
 }
 
 function shouldAutoMissTimetableSession(session, now = new Date()) {
@@ -4864,6 +4906,7 @@ export default function App() {
   const [isTimetableEditing, setIsTimetableEditing] = useState(false);
   const [isLoadingTimetable, setIsLoadingTimetable] = useState(false);
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
+  const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
   const [timetableMessage, setTimetableMessage] = useState("");
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
@@ -4912,6 +4955,7 @@ export default function App() {
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
   const hasLoadedTimetableRef = useRef(false);
+  const timetableExportRef = useRef(null);
   const adminAutoModeSwitchRef = useRef(false);
   const adminAutoModeSwitchLastAtRef = useRef(0);
   const hasRestoredWorkspaceDraftRef = useRef("");
@@ -7704,6 +7748,7 @@ export default function App() {
 
   const renderStudyTimetablePage = () => {
     const paidAllowed = isPaidStudyTimetableAllowed();
+    const timetableAllowed = canUseStudyTimetable();
     const normalizedAvailability = normalizeTimetableAvailability(timetableAvailability);
     const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
     const selectedSubjects = timetableSubjects.filter((subject) => subject.selected !== false);
@@ -7716,15 +7761,15 @@ export default function App() {
     const sessionsByCell = visibleTimetableSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
     const subjectOptions = Array.from(new Set(selectedSubjects.map((subject) => normalizeTimetableSubjectName(subject.name, "")).filter(Boolean)));
 
-    if (!paidAllowed) {
+    if (!timetableAllowed) {
       return (
         <section className="min-h-[70vh] rounded-[32px] border border-emerald-300/20 bg-slate-950/72 p-6 shadow-[0_24px_80px_rgba(2,8,23,0.4)] backdrop-blur">
           <div className="flex items-start gap-4">
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Timetable</p>
-              <h2 className="mt-3 text-4xl font-semibold text-white">Premium timetable planning is for paid plans.</h2>
-              <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">Upgrade to create weekly study plans, track sessions, edit subjects, and save a timetable across devices.</p>
+              <h2 className="mt-3 text-4xl font-semibold text-white">Upgrade to keep your study timetable active.</h2>
+              <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">Your first timetable week has ended. Upgrade to Pro to continue viewing, editing, and tracking your saved study timetable.</p>
               <button type="button" onClick={openUpgradeModal} className="mt-6 rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-5 py-3 text-sm font-semibold text-white">Upgrade to Pro</button>
             </div>
           </div>
@@ -7738,12 +7783,17 @@ export default function App() {
           <div className="flex items-start gap-4">
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.3em] text-emerald-300/80">Premium</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-emerald-300/80">{paidAllowed ? "Premium" : "Study Planner"}</p>
               <h2 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Study Timetable</h2>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Plan subjects, availability, revision blocks, past-paper sessions, and weekly progress.</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
+            {shouldShowTimetableGrid && timetableRows.length ? (
+              <button type="button" onClick={downloadTimetableWeekImage} disabled={isDownloadingTimetableImage} className="rounded-[14px] border border-sky-300/35 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-50 disabled:opacity-60">
+                {isDownloadingTimetableImage ? "Downloading..." : "Download Week Image"}
+              </button>
+            ) : null}
             {!isTimetableEditing ? (
               <button type="button" onClick={startReEditingTimetable} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">Re-edit Timetable</button>
             ) : null}
@@ -7881,7 +7931,8 @@ export default function App() {
 
         {shouldShowTimetableGrid ? (
           <>
-        <div className="mt-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div ref={timetableExportRef} className="mt-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => shiftTimetableWeek(-1)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white" aria-label="Previous week">‹</button>
             <button type="button" onClick={goToCurrentTimetableWeek} className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white">Today</button>
@@ -7904,9 +7955,14 @@ export default function App() {
               <div className="px-3 py-4 text-xs uppercase tracking-[0.18em] text-slate-400">Time</div>
               {TIMETABLE_DAY_KEYS.map((day, index) => <div key={day.id} className="border-l border-white/10 px-3 py-4"><p className="font-semibold">{day.short}</p><p className="mt-1 text-xs text-slate-300">{formatTimetableDate(addDays(timetableWeekStartIso, index))}</p></div>)}
             </div>
-            {timetableRows.length ? timetableRows.map((slot) => (
+            {timetableRows.length ? timetableRows.map((slot) => {
+              const currentSlotActive = !isTimetableEditing && isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow);
+              const slotEndDate = new Date(timetableNow);
+              slotEndDate.setHours(Math.floor(slot.endM / 60), slot.endM % 60, 0, 0);
+              const slotLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : `${slot.start} - ${slot.end}`;
+              return (
               <div key={`${slot.start}-${slot.end}`} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
-                <div className="px-3 py-3 text-sm text-white">{slot.start} - {slot.end}</div>
+                <div className={`px-3 py-3 text-sm font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
                 {TIMETABLE_DAY_KEYS.map((day, dayIndex) => {
                   const session = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
                   const isEmptyCell = !session || session.status === "empty" || session.type === "empty";
@@ -7915,8 +7971,9 @@ export default function App() {
                   const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
                   const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
                   const fallback = { dayId: day.id, date: addDays(timetableWeekStartIso, dayIndex).toISOString(), start: slot.start, end: slot.end };
+                  const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
-                  const tone = isEmptyCell
+                  const baseTone = isEmptyCell
                     ? "border-white/5 bg-black text-white"
                     : isExamCell
                       ? "border-amber-300/40 bg-amber-400/15 text-amber-50"
@@ -7925,8 +7982,9 @@ export default function App() {
                         : session.status === "missed"
                           ? "border-rose-400/35 bg-rose-700/55 text-white"
                           : isBreakCell
-                            ? "border-white/10 bg-white/[0.03] text-slate-300"
+                            ? "border-yellow-300/45 bg-yellow-400/20 text-yellow-50"
                             : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
+                  const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
                     <div key={`${day.id}-${slot.start}-${slot.end}`} className="border-l border-white/5 p-1.5">
                       <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(session.id); }} className={`min-h-[46px] w-full rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
@@ -7945,7 +8003,8 @@ export default function App() {
                   );
                 })}
               </div>
-            )) : (
+              );
+            }) : (
               <div className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))]">
                 <div className="col-span-8 px-4 py-6 text-center text-sm text-slate-400">Press Re-edit Timetable, add available times, then press Plan.</div>
               </div>
@@ -7955,13 +8014,15 @@ export default function App() {
 
         <p className="mt-3 text-sm leading-6 text-slate-300">Tick each subject once you have actually completed it. Be honest with yourself so your progress reflects the work you really did.</p>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-4">
+        <div className="mt-5 grid gap-4 lg:grid-cols-5">
           {[
             ["Completed", "bg-emerald-600/70", "Tick tasks as you complete them."],
             ["Scheduled / Exam", "bg-white/5", "Planned study sessions and exam dates."],
-            ["Break", "bg-white/[0.03]", "Breaks use the times you selected."],
+            ["Break", "bg-yellow-400/40", "Breaks use the times you selected."],
+            ["Current Time", "bg-sky-500/50", "The active time interval counts down until it ends."],
             ["Empty", "bg-black", "Black spaces mean no subject was selected."],
           ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
+        </div>
         </div>
           </>
         ) : null}
@@ -13333,6 +13394,55 @@ export default function App() {
   };
 
   const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
+  const getFreeStudyTimetableStorageKey = () => `mabaso-free-study-timetable-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const readFreeStudyTimetablePayload = () => {
+    if (typeof window === "undefined") return null;
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(getFreeStudyTimetableStorageKey()) || "null");
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const getFreeStudyTimetableFirstSavedAt = () => {
+    const payload = readFreeStudyTimetablePayload();
+    const raw = payload?.firstSavedAt || payload?.created_at || payload?.createdAt || "";
+    const timestamp = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  };
+  const isFreeStudyTimetableExpired = () => {
+    if (getCurrentPlanTier() !== "free") return false;
+    const firstSavedAt = getFreeStudyTimetableFirstSavedAt();
+    return Boolean(firstSavedAt && timetableNow.getTime() - firstSavedAt >= TIMETABLE_FREE_ACCESS_MS);
+  };
+  const canUseStudyTimetable = () => isPaidStudyTimetableAllowed() || !isFreeStudyTimetableExpired();
+  const buildStudyTimetablePayload = (sessionsOverride = null) => {
+    const nextAvailability = normalizeTimetableAvailability(timetableAvailability);
+    const nextPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
+    const nextSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow);
+    return {
+      profile: timetableProfile,
+      subjects: timetableSubjects,
+      availability: nextAvailability,
+      preferences: nextPreferences,
+      sessions: nextSessions,
+      weekStartIso: timetableWeekStartIso,
+    };
+  };
+  const writeFreeStudyTimetablePayload = (payload = {}) => {
+    if (typeof window === "undefined") return payload;
+    const existing = readFreeStudyTimetablePayload();
+    const nowIso = new Date().toISOString();
+    const firstSavedAt = existing?.firstSavedAt || existing?.created_at || existing?.createdAt || nowIso;
+    const nextPayload = {
+      ...payload,
+      firstSavedAt,
+      createdAt: firstSavedAt,
+      updatedAt: nowIso,
+    };
+    window.localStorage.setItem(getFreeStudyTimetableStorageKey(), JSON.stringify(nextPayload));
+    return nextPayload;
+  };
   const applyTimetablePayload = (timetable = {}) => {
     const rawProfile = timetable.profile && typeof timetable.profile === "object" ? timetable.profile : {};
     const profile = { ...createDefaultTimetableProfile(), ...rawProfile };
@@ -13340,18 +13450,26 @@ export default function App() {
     const availability = normalizeTimetableAvailability(timetable.availability);
     const preferences = normalizeTimetablePreferences(timetable.preferences, profile);
     const sessions = normalizeTimetableSessions(timetable.sessions, timetableNow);
+    const nextWeekStartIso = timetable.weekStartIso || timetable.week_start_iso || timetableWeekStartIso || getTimetableWeekStartIso();
     const generatedSessions = applyTimetableAutoMisses(generateStudyTimetableSessions({
       subjects,
       availability,
       preferences,
-      weekStartIso: timetableWeekStartIso,
+      weekStartIso: nextWeekStartIso,
     }), timetableNow);
     setTimetableProfile(profile);
     setTimetableSubjects(subjects);
     setTimetableAvailability(availability);
     setTimetablePreferences(preferences);
+    setTimetableWeekStartIso(nextWeekStartIso);
     setTimetableSessions(sessions.length ? sessions : generatedSessions);
     setHasTimetablePlanPreview(false);
+  };
+  const loadFreeStudyTimetable = ({ force = false } = {}) => {
+    if (hasLoadedTimetableRef.current && !force) return;
+    hasLoadedTimetableRef.current = true;
+    const payload = readFreeStudyTimetablePayload();
+    if (payload?.sessions?.length || payload?.subjects?.length) applyTimetablePayload(payload);
   };
   const loadStudyTimetable = async ({ force = false } = {}) => {
     if (!authToken || !isPaidStudyTimetableAllowed()) return;
@@ -13373,7 +13491,8 @@ export default function App() {
   };
   const saveStudyTimetable = async (sessionsOverride = null, options = {}) => {
     const { silent = false, exitEditing = true } = options || {};
-    if (!isPaidStudyTimetableAllowed()) {
+    if (!canUseStudyTimetable()) {
+      setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
       openUpgradeModal();
       return;
     }
@@ -13382,20 +13501,23 @@ export default function App() {
       setTimetableMessage("");
     }
     try {
-      const nextAvailability = normalizeTimetableAvailability(timetableAvailability);
-      const nextPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
-      const nextSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow);
+      const payload = buildStudyTimetablePayload(sessionsOverride);
+      const nextSessions = payload.sessions;
+      if (!isPaidStudyTimetableAllowed()) {
+        const localPayload = writeFreeStudyTimetablePayload(payload);
+        applyTimetablePayload(localPayload);
+        if (exitEditing) {
+          setIsTimetableEditing(false);
+          setHasTimetablePlanPreview(false);
+        }
+        if (!silent) setTimetableMessage("Study timetable saved. Use Re-edit Timetable when you want to change subjects, times, breaks, or exams.");
+        return;
+      }
       const response = await authFetch("/study-timetable", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         timeoutMs: 60000,
-        body: JSON.stringify({
-          profile: timetableProfile,
-          subjects: timetableSubjects,
-          availability: nextAvailability,
-          preferences: nextPreferences,
-          sessions: nextSessions,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your study timetable.");
@@ -13618,9 +13740,70 @@ export default function App() {
   const shiftTimetableWeek = (direction) => {
     rebuildTimetableForWeek(addDays(timetableWeekStartIso, direction * 7).toISOString());
   };
+  const inlineTimetableExportStyles = (sourceNode, cloneNode) => {
+    if (!sourceNode || !cloneNode || typeof window === "undefined") return;
+    const computed = window.getComputedStyle(sourceNode);
+    const styleText = Array.from(computed)
+      .map((property) => `${property}:${computed.getPropertyValue(property)};`)
+      .join("");
+    cloneNode.setAttribute("style", `${styleText}${cloneNode.getAttribute("style") || ""}`);
+    Array.from(sourceNode.children || []).forEach((sourceChild, index) => {
+      inlineTimetableExportStyles(sourceChild, cloneNode.children?.[index]);
+    });
+  };
+  const downloadTimetableWeekImage = async () => {
+    const sourceNode = timetableExportRef.current;
+    if (!sourceNode || isDownloadingTimetableImage) return;
+    setIsDownloadingTimetableImage(true);
+    setTimetableMessage("");
+    try {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      const rect = sourceNode.getBoundingClientRect();
+      const width = Math.max(1, Math.ceil(rect.width));
+      const height = Math.max(1, Math.ceil(rect.height));
+      const clone = sourceNode.cloneNode(true);
+      inlineTimetableExportStyles(sourceNode, clone);
+      clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+      clone.style.width = `${width}px`;
+      clone.style.height = `${height}px`;
+      clone.style.margin = "0";
+      clone.style.background = "#000000";
+      const serialized = new XMLSerializer().serializeToString(clone);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%">${serialized}</foreignObject></svg>`;
+      const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+      const image = new Image();
+      const imageLoaded = new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+      });
+      image.src = svgUrl;
+      await imageLoaded;
+      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas export is not available.");
+      context.scale(scale, scale);
+      context.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(svgUrl);
+      const pngUrl = canvas.toDataURL("image/png");
+      const link = document.createElement("a");
+      link.href = pngUrl;
+      link.download = `${sanitizeFileName(`study-timetable-${formatTimetableWeekRange(timetableWeekStartIso)}`)}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimetableMessage("Study timetable image downloaded.");
+    } catch (err) {
+      setTimetableMessage("Could not download the timetable image. Try again in a modern browser.");
+    } finally {
+      setIsDownloadingTimetableImage(false);
+    }
+  };
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => setTimetableNow(new Date()), 60000);
+    const intervalId = window.setInterval(() => setTimetableNow(new Date()), 1000);
     return () => window.clearInterval(intervalId);
   }, []);
 
@@ -13642,7 +13825,11 @@ export default function App() {
   }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
 
   useEffect(() => {
-    if (currentPage !== "timetable" || !authToken || !authChecked || !isPaidStudyTimetableAllowed()) return;
+    if (currentPage !== "timetable" || !authToken || !authChecked) return;
+    if (!isPaidStudyTimetableAllowed()) {
+      loadFreeStudyTimetable();
+      return;
+    }
     loadStudyTimetable().catch(() => {});
   }, [authAvailableModes, authChecked, authSessionMode, authToken, billingSubscription?.plan_id, billingUsage?.plan_id, currentPage]);
 
