@@ -5197,7 +5197,7 @@ export default function App() {
   const chatImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
-  const timetableTransitionPromptKeyRef = useRef("");
+  const timetableDismissedTransitionPromptKeyRef = useRef("");
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -8094,7 +8094,7 @@ export default function App() {
                 <p className="font-semibold">Prepare for {timetableTransitionPrompt.title}</p>
                 <p className="mt-1 text-sky-100/80">This starts at {timetableTransitionPrompt.start}. You have about {formatTimetableCountdown(timetableTransitionPrompt.remainingMs)} in the current period.</p>
               </div>
-              <button type="button" onClick={() => setTimetableTransitionPrompt(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">Close</button>
+              <button type="button" onClick={() => { timetableDismissedTransitionPromptKeyRef.current = timetableTransitionPrompt.key; setTimetableTransitionPrompt(null); }} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">Close</button>
             </div>
           </div>
         ) : null}
@@ -8296,9 +8296,7 @@ export default function App() {
             </div>
             {timetableRows.length ? timetableRows.map((slot) => {
               const currentSlotActive = !isTimetableEditing && isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow);
-              const slotEndDate = new Date(timetableNow);
-              slotEndDate.setHours(Math.floor(slot.endM / 60), slot.endM % 60, 0, 0);
-              const slotLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : `${slot.start} - ${slot.end}`;
+              const slotLabel = `${slot.start} - ${slot.end}`;
               return (
               <div key={`${slot.start}-${slot.end}`} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
                 <div className={`flex min-h-[70px] items-center justify-center px-3 py-3 text-center text-sm font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
@@ -8373,7 +8371,7 @@ export default function App() {
             ["Completed", "bg-emerald-600/70", "Tick tasks as you complete them."],
             ["Scheduled / Exam", "bg-white/5", "Planned study sessions and exam dates."],
             ["Break", "bg-yellow-400/40", "Breaks use the times you selected."],
-            ["Current Time", "bg-sky-500/50", "The active time interval counts down until it ends."],
+            ["Current Time", "bg-sky-500/50", "The active time interval is highlighted while it is in progress."],
             ["Empty", "bg-black", "Black spaces mean no subject was selected."],
           ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
         </div>
@@ -14360,9 +14358,13 @@ export default function App() {
       setTimetableTransitionPrompt(null);
       return;
     }
-    if (timetableTransitionPromptKeyRef.current === nextPrompt.key) return;
-    timetableTransitionPromptKeyRef.current = nextPrompt.key;
-    setTimetableTransitionPrompt(nextPrompt);
+    if (timetableDismissedTransitionPromptKeyRef.current === nextPrompt.key) {
+      setTimetableTransitionPrompt(null);
+      return;
+    }
+    setTimetableTransitionPrompt((current) => (
+      current?.key === nextPrompt.key ? { ...current, ...nextPrompt } : nextPrompt
+    ));
   }, [currentPage, isTimetableEditing, timetableLoadVersion, timetableNow, timetableSessions, timetableSubjects, timetableWeekStartIso]);
 
   useEffect(() => {
