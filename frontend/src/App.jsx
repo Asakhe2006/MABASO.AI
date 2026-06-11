@@ -750,6 +750,7 @@ const TIMETABLE_DEFAULT_SESSION_MINUTES = 90;
 const TIMETABLE_MIN_SESSION_MINUTES = 30;
 const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
 const TIMETABLE_FREE_ACCESS_MS = 7 * 24 * 60 * 60 * 1000;
+const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
@@ -841,21 +842,79 @@ function normalizeTimetableSubjectName(name, fallback = "Subject") {
   return String(name || "").trim().slice(0, 36) || fallback;
 }
 
-function buildWeightedTimetableSubjects(subjects = [], examDates = []) {
-  const examSubjectNames = new Set((Array.isArray(examDates) ? examDates : [])
-    .map((exam) => normalizeTimetableSubjectName(exam?.subject, "").toLowerCase())
-    .filter(Boolean));
+function getTimetableSubjectPriority(subject = {}) {
+  return Math.max(1, Math.min(5, Number(subject.priority || 3)));
+}
+
+function getTimetableSubjectPerformance(subject = {}) {
+  return Math.max(1, Math.min(5, Number(subject.performance || 3)));
+}
+
+function isTimetablePoorPerformanceSubject(subject = {}) {
+  const priority = getTimetableSubjectPriority(subject);
+  const performance = getTimetableSubjectPerformance(subject);
+  return performance <= 2 || (priority >= 4 && performance <= 3);
+}
+
+function shouldTimetableDoublePeriod(subject = {}) {
+  return getTimetableSubjectPriority(subject) >= 4 && getTimetableSubjectPerformance(subject) <= 3;
+}
+
+function getExamUrgencyWeight(daysRemaining) {
+  if (!Number.isFinite(daysRemaining) || daysRemaining < 0) return 0;
+  if (daysRemaining <= 7) return 4;
+  if (daysRemaining <= 14) return 3;
+  if (daysRemaining <= 30) return 2;
+  if (daysRemaining <= 60) return 1;
+  return 0;
+}
+
+function getTimetableExamCountdowns(preferences = {}, now = new Date()) {
+  const normalizedPreferences = normalizeTimetablePreferences(preferences);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return normalizedPreferences.examDates
+    .map((exam) => {
+      const examDate = exam.date ? new Date(`${exam.date}T00:00:00`) : null;
+      if (!examDate || Number.isNaN(examDate.getTime())) return null;
+      const daysRemaining = Math.ceil((examDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+      if (daysRemaining < 0) return null;
+      return {
+        ...exam,
+        daysRemaining,
+        urgencyWeight: getExamUrgencyWeight(daysRemaining),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.daysRemaining - right.daysRemaining || left.subject.localeCompare(right.subject));
+}
+
+function buildWeightedTimetableSubjects(subjects = [], examDates = [], referenceDate = new Date()) {
+  const examCountdowns = getTimetableExamCountdowns({ examDates }, referenceDate);
+  const examUrgencyBySubject = new Map();
+  examCountdowns.forEach((exam) => {
+    const key = normalizeTimetableSubjectName(exam.subject, "").toLowerCase();
+    if (!key) return;
+    examUrgencyBySubject.set(key, Math.max(examUrgencyBySubject.get(key) || 0, exam.urgencyWeight || 0));
+  });
+  const globalExamUrgency = Math.max(0, ...examCountdowns.map((exam) => exam.urgencyWeight || 0));
   const selected = (Array.isArray(subjects) ? subjects : [])
     .filter((subject) => subject?.selected !== false && normalizeTimetableSubjectName(subject?.name, ""))
     .map((subject) => {
       const name = normalizeTimetableSubjectName(subject.name);
-      const priorityWeight = Math.max(1, Number(subject.priority || 3));
-      const weaknessWeight = Math.max(0, 5 - Number(subject.performance || 3));
-      const examWeight = examSubjectNames.has(name.toLowerCase()) ? 2 : 0;
+      const priorityWeight = getTimetableSubjectPriority(subject);
+      const weaknessWeight = Math.max(0, 5 - getTimetableSubjectPerformance(subject));
+      const normalizedName = name.toLowerCase();
+      const examWeight = examUrgencyBySubject.get(normalizedName) || 0;
+      const examPracticeWeight = /past\s*papers?|exam\s*practice|question\s*papers?/i.test(name)
+        ? Math.min(3, globalExamUrgency)
+        : /revision|revise|weak\s*topics?/i.test(name)
+          ? Math.min(2, globalExamUrgency)
+          : 0;
       return {
         ...subject,
         name,
-        weight: priorityWeight + weaknessWeight + examWeight,
+        weight: priorityWeight + weaknessWeight + examWeight + examPracticeWeight,
       };
     });
   const weightedMeta = selected
@@ -1057,7 +1116,7 @@ function applyTimetableAutoMisses(sessions = [], now = new Date()) {
 function getTimetableComparableTitle(value = "") {
   return normalizeTimetableSubjectName(value, "")
     .replace(/^Exam:\s*/i, "")
-    .replace(/\s+(revise|recap)$/i, "")
+    .replace(/\s+(revise|recap|recovery)$/i, "")
     .trim()
     .toLowerCase();
 }
@@ -1086,6 +1145,7 @@ function isTimetableStudyLikeSession(session) {
 function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions = [], subjects = [], allowDerived = true }) {
   if (session || !allowDerived || !slot?.start || !slot?.end || !dayId) return session || null;
   const slotStartM = timetableTimeToMinutes(slot.start, -1);
+  const slotEndM = timetableTimeToMinutes(slot.end, -1);
   if (slotStartM < 0) return null;
   const previousSession = (Array.isArray(sessions) ? sessions : [])
     .filter((item) => item?.dayId === dayId && isTimetableStudyLikeSession(item))
@@ -1093,11 +1153,13 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
       session: item,
       range: normalizeTimetableRange(item.start, item.end),
     }))
-    .filter((item) => item.range.endM <= slotStartM)
-    .sort((left, right) => right.range.endM - left.range.endM)[0]?.session || null;
+    .filter((item) => item.range.startM < slotStartM && (!Number.isFinite(slotEndM) || item.range.startM < slotEndM))
+    .sort((left, right) => right.range.startM - left.range.startM || right.range.endM - left.range.endM)[0]?.session || null;
   if (!previousSession) return null;
   const subject = findTimetableSubjectForTitle(subjects, previousSession.title) || { name: previousSession.title, priority: 3, performance: 3 };
-  const action = getTimetableReviewAction(subject);
+  const isRecovery = previousSession.status === "missed" && isTimetablePoorPerformanceSubject(subject);
+  const action = isRecovery ? "Recovery" : getTimetableReviewAction(subject);
+  const baseSubjectName = normalizeTimetableSubjectName(previousSession.title, "Subject");
   return {
     id: `review-${previousSession.id}-${slot.start}-${slot.end}`,
     sourceSessionId: previousSession.id,
@@ -1105,21 +1167,164 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
     date,
     start: slot.start,
     end: slot.end,
-    title: `${normalizeTimetableSubjectName(previousSession.title, "Subject")} ${action}`,
-    status: previousSession.status === "completed" ? "completed" : previousSession.status === "missed" ? "missed" : "scheduled",
+    title: `${baseSubjectName} ${action}`,
+    status: isRecovery ? "scheduled" : previousSession.status === "completed" ? "completed" : previousSession.status === "missed" ? "missed" : "scheduled",
     type: "review",
     derived: true,
+    recovery: isRecovery,
     reviewAction: action.toLowerCase(),
+  };
+}
+
+function getTimetableRecoveryMoves({ sessions = [], subjects = [], weekStartIso = "", now = new Date() }) {
+  const visibleSessions = applyTimetableAutoMisses(sessions, now);
+  const rows = buildTimetableRows(visibleSessions);
+  const sessionsByCell = visibleSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
+  const moves = [];
+  visibleSessions
+    .filter((session) => session.status === "missed" && isTimetableStudyLikeSession(session))
+    .forEach((missedSession) => {
+      const subject = findTimetableSubjectForTitle(subjects, missedSession.title);
+      if (!subject || !isTimetablePoorPerformanceSubject(subject)) return;
+      const missedRange = normalizeTimetableRange(missedSession.start, missedSession.end);
+      for (const day of TIMETABLE_DAY_KEYS) {
+        const dayIndex = TIMETABLE_DAY_KEYS.findIndex((item) => item.id === day.id);
+        const dayDate = addDays(weekStartIso, dayIndex).toISOString();
+        for (const slot of rows) {
+          if (day.id === missedSession.dayId && slot.startM <= missedRange.endM) continue;
+          const rawSession = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
+          const recoverySession = resolveTimetableDisplaySession({
+            session: rawSession,
+            slot,
+            dayId: day.id,
+            date: dayDate,
+            sessions: visibleSessions,
+            subjects,
+            allowDerived: true,
+          });
+          if (recoverySession?.recovery && recoverySession.sourceSessionId === missedSession.id) {
+            moves.push({
+              sourceSession: missedSession,
+              recoverySession,
+              movedToDay: day.short,
+              movedToTime: slot.start,
+            });
+            return;
+          }
+        }
+      }
+    });
+  return moves;
+}
+
+function buildTimetableTransitionPrompt({ sessions = [], subjects = [], weekStartIso = "", now = new Date() }) {
+  if (getTimetableWeekStartIso(now) !== getTimetableWeekStartIso(new Date(weekStartIso))) return null;
+  const rows = buildTimetableRows(sessions);
+  const currentSlotIndex = rows.findIndex((slot) => isCurrentTimetableSlot(slot, weekStartIso, now));
+  if (currentSlotIndex < 0) return null;
+  const currentSlot = rows[currentSlotIndex];
+  const slotEndDate = new Date(now);
+  slotEndDate.setHours(Math.floor(currentSlot.endM / 60), currentSlot.endM % 60, 0, 0);
+  const remainingMs = slotEndDate.getTime() - now.getTime();
+  if (remainingMs <= 0 || remainingMs > 5 * 60 * 1000) return null;
+  const dayIndex = (now.getDay() + 6) % 7;
+  const day = TIMETABLE_DAY_KEYS[dayIndex];
+  if (!day) return null;
+  const sessionsByCell = sessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
+  const date = addDays(weekStartIso, dayIndex).toISOString();
+  for (let index = currentSlotIndex + 1; index < rows.length; index += 1) {
+    const slot = rows[index];
+    const rawSession = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
+    const nextSession = resolveTimetableDisplaySession({
+      session: rawSession,
+      slot,
+      dayId: day.id,
+      date,
+      sessions,
+      subjects,
+      allowDerived: true,
+    });
+    if (!nextSession || nextSession.status === "empty" || nextSession.type === "empty") continue;
+    return {
+      key: `${formatTimetableDateInput(now)}-${currentSlot.start}-${currentSlot.end}-${nextSession.title}`,
+      title: nextSession.title,
+      start: slot.start,
+      remainingMs,
+    };
+  }
+  return null;
+}
+
+function formatTimetableCount(value, singular, plural = `${singular}s`) {
+  const count = Math.max(0, Number(value || 0));
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function buildTimetableCoachPrompt({ sessions = [], subjects = [], preferences = {}, weekStartIso = "", now = new Date() }) {
+  const visibleSessions = applyTimetableAutoMisses(sessions, now);
+  const selectedSubjects = (Array.isArray(subjects) ? subjects : []).filter((subject) => subject?.selected !== false);
+  const missedBySubject = new Map();
+  visibleSessions
+    .filter((session) => session.status === "missed" && isTimetableStudyLikeSession(session))
+    .forEach((session) => {
+      const subject = findTimetableSubjectForTitle(selectedSubjects, session.title);
+      const name = normalizeTimetableSubjectName(subject?.name || session.title, "");
+      if (!name) return;
+      missedBySubject.set(name, (missedBySubject.get(name) || 0) + 1);
+    });
+  const weakestSubject = [...selectedSubjects]
+    .sort((left, right) => (
+      getTimetableSubjectPerformance(left) - getTimetableSubjectPerformance(right)
+      || getTimetableSubjectPriority(right) - getTimetableSubjectPriority(left)
+      || normalizeTimetableSubjectName(left.name, "").localeCompare(normalizeTimetableSubjectName(right.name, ""))
+    ))[0] || null;
+  const weakestName = normalizeTimetableSubjectName(weakestSubject?.name, "your weakest subject");
+  const weakestMissedCount = missedBySubject.get(weakestName) || 0;
+  const mostMissed = [...missedBySubject.entries()].sort((left, right) => right[1] - left[1])[0] || null;
+  const examCountdowns = getTimetableExamCountdowns(preferences, now);
+  const nearestExam = examCountdowns[0] || null;
+  const recoveryMoves = getTimetableRecoveryMoves({ sessions: visibleSessions, subjects: selectedSubjects, weekStartIso, now });
+  const recommendedHours = Math.max(1, Math.min(4, (weakestMissedCount >= 2 || getTimetableSubjectPerformance(weakestSubject) <= 2) ? 2 : 1));
+  const missedLine = mostMissed
+    ? `You missed ${formatTimetableCount(mostMissed[1], mostMissed[0] === "Past Papers" ? "Past Papers session" : `${mostMissed[0]} session`)}.`
+    : "You have no missed study sessions recorded today.";
+  return {
+    title: "AI Study Coach",
+    missedLine,
+    weakestLine: `${weakestName} is currently your weakest subject.`,
+    recommendationLine: `Recommended: +${recommendedHours} hour${recommendedHours === 1 ? "" : "s"} this weekend for ${weakestName}.`,
+    examLine: nearestExam ? `${nearestExam.subject} exam: ${nearestExam.daysRemaining} day${nearestExam.daysRemaining === 1 ? "" : "s"} remaining.` : "",
+    recoveryLine: recoveryMoves[0]
+      ? `${normalizeTimetableSubjectName(recoveryMoves[0].sourceSession.title, "Missed work")} recovery moved to ${recoveryMoves[0].movedToDay} ${recoveryMoves[0].movedToTime}.`
+      : "",
   };
 }
 
 function generateStudyTimetableSessions({ subjects, availability, preferences, weekStartIso }) {
   const normalizedAvailability = normalizeTimetableAvailability(availability);
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
-  const weightedSubjects = buildWeightedTimetableSubjects(subjects, normalizedPreferences.examDates);
+  const weightedSubjects = buildWeightedTimetableSubjects(subjects, normalizedPreferences.examDates, weekStartIso || new Date());
   const sessionLength = normalizedPreferences.sessionLengthMinutes || TIMETABLE_DEFAULT_SESSION_MINUTES;
   let cursor = 0;
+  let repeatSubject = null;
+  let repeatRemaining = 0;
   const sessions = [];
+  const chooseNextSubject = () => {
+    if (!weightedSubjects.length) return null;
+    if (repeatSubject && repeatRemaining > 0) {
+      repeatRemaining -= 1;
+      const nextSubject = repeatSubject;
+      if (repeatRemaining <= 0) repeatSubject = null;
+      return nextSubject;
+    }
+    const subject = weightedSubjects[cursor % weightedSubjects.length];
+    cursor += 1;
+    if (shouldTimetableDoublePeriod(subject)) {
+      repeatSubject = subject;
+      repeatRemaining = 1;
+    }
+    return subject;
+  };
   TIMETABLE_DAY_KEYS.forEach((day, dayIndex) => {
     const dayDate = addDays(weekStartIso, dayIndex);
     const date = dayDate.toISOString();
@@ -1164,8 +1369,11 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
         sessions.push(createEmptyTimetableSession({ dayId: day.id, date, start, end, idSuffix: `slot-${slotIndex}` }));
         return;
       }
-      const subject = weightedSubjects[cursor % weightedSubjects.length];
-      cursor += 1;
+      const subject = chooseNextSubject();
+      if (!subject) {
+        sessions.push(createEmptyTimetableSession({ dayId: day.id, date, start, end, idSuffix: `slot-${slotIndex}` }));
+        return;
+      }
       sessions.push({ id: `${day.id}-${start}-${end}-study`, dayId: day.id, date, start, end, title: subject.name, status: "scheduled", type: "study" });
     };
 
@@ -4972,9 +5180,12 @@ export default function App() {
   const [timetableNow, setTimetableNow] = useState(() => new Date());
   const [isTimetableEditing, setIsTimetableEditing] = useState(false);
   const [isLoadingTimetable, setIsLoadingTimetable] = useState(false);
+  const [timetableLoadVersion, setTimetableLoadVersion] = useState(0);
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
   const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
   const [timetableMessage, setTimetableMessage] = useState("");
+  const [timetableCoachPrompt, setTimetableCoachPrompt] = useState(null);
+  const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
@@ -4986,6 +5197,7 @@ export default function App() {
   const chatImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
+  const timetableTransitionPromptKeyRef = useRef("");
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -7827,6 +8039,13 @@ export default function App() {
     const timetableRows = shouldShowTimetableGrid ? buildTimetableRows(visibleTimetableSessions) : [];
     const sessionsByCell = visibleTimetableSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
     const subjectOptions = Array.from(new Set(selectedSubjects.map((subject) => normalizeTimetableSubjectName(subject.name, "")).filter(Boolean)));
+    const examCountdowns = getTimetableExamCountdowns(normalizedPreferences, timetableNow);
+    const timetableRecoveryMoves = getTimetableRecoveryMoves({
+      sessions: visibleTimetableSessions,
+      subjects: timetableSubjects,
+      weekStartIso: timetableWeekStartIso,
+      now: timetableNow,
+    });
 
     if (!timetableAllowed) {
       return (
@@ -7868,6 +8087,59 @@ export default function App() {
         </div>
 
         {timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
+        {timetableTransitionPrompt ? (
+          <div className="mt-5 rounded-2xl border border-sky-300/30 bg-sky-400/12 px-4 py-3 text-sm text-sky-50">
+            <div className="force-mobile-stack flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold">Prepare for {timetableTransitionPrompt.title}</p>
+                <p className="mt-1 text-sky-100/80">This starts at {timetableTransitionPrompt.start}. You have about {formatTimetableCountdown(timetableTransitionPrompt.remainingMs)} in the current period.</p>
+              </div>
+              <button type="button" onClick={() => setTimetableTransitionPrompt(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">Close</button>
+            </div>
+          </div>
+        ) : null}
+        {timetableCoachPrompt ? (
+          <div className="mt-5 rounded-[24px] border border-cyan-300/25 bg-cyan-400/10 p-4 text-sm text-cyan-50">
+            <div className="force-mobile-stack flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">{timetableCoachPrompt.title}</p>
+                <h3 className="mt-2 text-xl font-semibold text-white">Daily feedback</h3>
+                <div className="mt-3 space-y-2 leading-6 text-slate-100">
+                  <p>{timetableCoachPrompt.missedLine}</p>
+                  <p>{timetableCoachPrompt.weakestLine}</p>
+                  <p>{timetableCoachPrompt.recommendationLine}</p>
+                  {timetableCoachPrompt.examLine ? <p>{timetableCoachPrompt.examLine}</p> : null}
+                  {timetableCoachPrompt.recoveryLine ? <p>{timetableCoachPrompt.recoveryLine}</p> : null}
+                </div>
+              </div>
+              <button type="button" onClick={() => setTimetableCoachPrompt(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white">Close</button>
+            </div>
+          </div>
+        ) : null}
+        {examCountdowns.length ? (
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {examCountdowns.slice(0, 3).map((exam) => (
+              <div key={exam.id || `${exam.subject}-${exam.date}`} className="rounded-2xl border border-amber-300/25 bg-amber-400/10 p-4">
+                <p className="text-xs uppercase tracking-[0.22em] text-amber-100/80">Exam Countdown</p>
+                <p className="mt-2 text-lg font-semibold text-white">{exam.subject} Exam</p>
+                <p className="mt-2 text-2xl font-semibold text-amber-100">{exam.daysRemaining} Day{exam.daysRemaining === 1 ? "" : "s"} Remaining</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">The planner increases revision, past papers, and weak-topic sessions as this exam gets closer.</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {timetableRecoveryMoves.length ? (
+          <div className="mt-5 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-50">
+            <p className="font-semibold">Missed work recovery</p>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              {timetableRecoveryMoves.slice(0, 4).map((move) => (
+                <p key={`${move.sourceSession.id}-${move.recoverySession.id}`} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                  {normalizeTimetableSubjectName(move.sourceSession.title, "Missed work")} missed. Moved to {move.movedToDay} {move.movedToTime}.
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {isTimetableEditing ? (
           <div className="mt-5 grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
@@ -8045,6 +8317,7 @@ export default function App() {
                   const isEmptyCell = !session || session.status === "empty" || session.type === "empty";
                   const isBreakCell = session?.status === "break" || session?.type === "break";
                   const isExamCell = session?.type === "exam";
+                  const isRecoveryCell = Boolean(session?.recovery);
                   const isDerivedReviewCell = session?.type === "review" || session?.derived;
                   const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
                   const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
@@ -8060,13 +8333,15 @@ export default function App() {
                           ? "border-rose-400/35 bg-rose-700/55 text-white"
                           : isBreakCell
                             ? "border-yellow-300/45 bg-yellow-400/20 text-yellow-50"
+                            : isRecoveryCell
+                              ? "border-orange-300/40 border-l-4 border-l-orange-300 bg-orange-400/14 text-orange-50"
                             : isDerivedReviewCell
                               ? "border-cyan-300/30 border-l-4 border-l-cyan-300 bg-cyan-300/10 text-cyan-50"
                               : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
                   const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
                     <div key={`${day.id}-${slot.start}-${slot.end}`} className="border-l border-white/5 p-1.5">
-                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(session.sourceSessionId || session.id); }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
+                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(isRecoveryCell ? session.id : (session.sourceSessionId || session.id), session); }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
                         {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
                           <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
@@ -13500,6 +13775,7 @@ export default function App() {
 
   const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
   const getFreeStudyTimetableStorageKey = () => `mabaso-free-study-timetable-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const getTimetableCoachPromptStorageKey = () => `${TIMETABLE_COACH_PROMPT_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const readFreeStudyTimetablePayload = () => {
     if (typeof window === "undefined") return null;
     try {
@@ -13569,12 +13845,17 @@ export default function App() {
     setTimetableWeekStartIso(nextWeekStartIso);
     setTimetableSessions(sessions.length ? sessions : generatedSessions);
     setHasTimetablePlanPreview(false);
+    setTimetableLoadVersion((current) => current + 1);
   };
   const loadFreeStudyTimetable = ({ force = false } = {}) => {
     if (hasLoadedTimetableRef.current && !force) return;
     hasLoadedTimetableRef.current = true;
     const payload = readFreeStudyTimetablePayload();
-    if (payload?.sessions?.length || payload?.subjects?.length) applyTimetablePayload(payload);
+    if (payload?.sessions?.length || payload?.subjects?.length) {
+      applyTimetablePayload(payload);
+    } else {
+      setTimetableLoadVersion((current) => current + 1);
+    }
   };
   const loadStudyTimetable = async ({ force = false } = {}) => {
     if (!authToken || !isPaidStudyTimetableAllowed()) return;
@@ -13807,10 +14088,23 @@ export default function App() {
       ];
     });
   };
-  const toggleTimetableSessionStatus = (sessionId) => {
+  const toggleTimetableSessionStatus = (sessionId, derivedSession = null) => {
     let nextSessionsSnapshot = null;
     setTimetableSessions((current) => {
       const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
+      if (derivedSession?.derived && derivedSession?.recovery && !normalized.some((session) => session.id === derivedSession.id)) {
+        const materializedRecovery = {
+          ...derivedSession,
+          id: derivedSession.id,
+          sourceSessionId: "",
+          derived: false,
+          type: "study",
+          status: "completed",
+        };
+        const updated = [...normalized, materializedRecovery];
+        nextSessionsSnapshot = updated;
+        return updated;
+      }
       const updated = normalized.map((session) => {
         if (!sessionId || session.id !== sessionId || ["break", "empty", "missed"].includes(session.status) || session.type === "exam") return session;
         if (shouldAutoMissTimetableSession(session, timetableNow)) return { ...session, status: "missed" };
@@ -13931,6 +14225,7 @@ export default function App() {
         if (session.status === "completed") return { fill: "#166534", stroke: "#4ade80", text: "#ffffff", lineWidth: 1.6 };
         if (session.status === "missed") return { fill: "#7f1230", stroke: "#fb7185", text: "#ffffff", lineWidth: 1.6 };
         if (session.status === "break" || session.type === "break") return { fill: "#4c4206", stroke: isTodayCell ? "#38bdf8" : "#facc15", text: "#fef9c3", lineWidth: isTodayCell ? 3 : 1.4 };
+        if (session.recovery) return { fill: "#3b2106", stroke: isTodayCell ? "#38bdf8" : "#fb923c", text: "#ffedd5", lineWidth: isTodayCell ? 3 : 1.6 };
         if (session.type === "review" || session.derived) return { fill: "#062b32", stroke: isTodayCell ? "#38bdf8" : "#67e8f9", text: "#ecfeff", lineWidth: isTodayCell ? 3 : 1.4 };
         return { fill: "#07130f", stroke: isTodayCell ? "#38bdf8" : "#34d399", text: "#ffffff", lineWidth: isTodayCell ? 3 : 1.4 };
       };
@@ -14048,6 +14343,53 @@ export default function App() {
       return changed ? next : current;
     });
   }, [timetableNow]);
+
+  useEffect(() => {
+    if (currentPage !== "timetable" || isTimetableEditing || !timetableWeekStartIso || timetableLoadVersion <= 0) {
+      setTimetableTransitionPrompt(null);
+      return;
+    }
+    const visibleSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+    const nextPrompt = buildTimetableTransitionPrompt({
+      sessions: visibleSessions,
+      subjects: timetableSubjects,
+      weekStartIso: timetableWeekStartIso,
+      now: timetableNow,
+    });
+    if (!nextPrompt) {
+      setTimetableTransitionPrompt(null);
+      return;
+    }
+    if (timetableTransitionPromptKeyRef.current === nextPrompt.key) return;
+    timetableTransitionPromptKeyRef.current = nextPrompt.key;
+    setTimetableTransitionPrompt(nextPrompt);
+  }, [currentPage, isTimetableEditing, timetableLoadVersion, timetableNow, timetableSessions, timetableSubjects, timetableWeekStartIso]);
+
+  useEffect(() => {
+    if (currentPage !== "timetable" || !authChecked || !authToken || isLoadingTimetable || timetableLoadVersion <= 0) return;
+    const todayKey = formatTimetableDateInput(timetableNow);
+    try {
+      const storageKey = getTimetableCoachPromptStorageKey();
+      if (window.localStorage.getItem(storageKey) === todayKey) return;
+      const prompt = buildTimetableCoachPrompt({
+        sessions: timetableSessions,
+        subjects: timetableSubjects,
+        preferences: timetablePreferences,
+        weekStartIso: timetableWeekStartIso,
+        now: timetableNow,
+      });
+      setTimetableCoachPrompt(prompt);
+      window.localStorage.setItem(storageKey, todayKey);
+    } catch {
+      setTimetableCoachPrompt(buildTimetableCoachPrompt({
+        sessions: timetableSessions,
+        subjects: timetableSubjects,
+        preferences: timetablePreferences,
+        weekStartIso: timetableWeekStartIso,
+        now: timetableNow,
+      }));
+    }
+  }, [authChecked, authToken, currentPage, isLoadingTimetable, timetableLoadVersion, timetableSessions, timetableSubjects, timetablePreferences, timetableWeekStartIso]);
 
   useEffect(() => {
     if (!billingUsage && !billingSubscription) return;
