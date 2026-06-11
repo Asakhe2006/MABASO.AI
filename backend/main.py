@@ -1210,6 +1210,8 @@ class StudyTimetableRequest(BaseModel):
     availability: dict[str, Any] = {}
     preferences: dict[str, Any] = {}
     sessions: list[dict[str, Any]] = []
+    weekStartIso: str = ""
+    week_start_iso: str = ""
 
 
 class ChatTurn(BaseModel):
@@ -1906,11 +1908,18 @@ def init_db():
                 availability_json TEXT NOT NULL DEFAULT '{}',
                 preferences_json TEXT NOT NULL DEFAULT '{}',
                 sessions_json TEXT NOT NULL DEFAULT '[]',
+                week_start_iso TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        study_timetable_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(study_timetables)").fetchall()
+        }
+        if "week_start_iso" not in study_timetable_columns:
+            connection.execute("ALTER TABLE study_timetables ADD COLUMN week_start_iso TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_study_timetables_updated_at
@@ -4269,9 +4278,13 @@ def serialize_study_timetable_row(row: Any, email: str) -> dict[str, Any]:
             "availability": {},
             "preferences": {},
             "sessions": [],
+            "weekStartIso": "",
+            "week_start_iso": "",
             "created_at": "",
             "updated_at": "",
         }
+    row_keys = set(row.keys()) if hasattr(row, "keys") else set()
+    week_start_iso = row["week_start_iso"] if "week_start_iso" in row_keys else ""
     return {
         "email": normalize_email(row["email"]),
         "profile": safe_json_loads(row["profile_json"], {}),
@@ -4279,6 +4292,8 @@ def serialize_study_timetable_row(row: Any, email: str) -> dict[str, Any]:
         "availability": safe_json_loads(row["availability_json"], {}),
         "preferences": safe_json_loads(row["preferences_json"], {}),
         "sessions": safe_json_loads(row["sessions_json"], []),
+        "weekStartIso": week_start_iso or "",
+        "week_start_iso": week_start_iso or "",
         "created_at": row["created_at"] or "",
         "updated_at": row["updated_at"] or "",
     }
@@ -4301,6 +4316,7 @@ def save_study_timetable_for_user(email: str, payload: StudyTimetableRequest) ->
     availability = ensure_json_payload_size(payload.availability if isinstance(payload.availability, dict) else {}, max_chars=24000, label="Availability")
     preferences = ensure_json_payload_size(payload.preferences if isinstance(payload.preferences, dict) else {}, max_chars=12000, label="Preferences")
     sessions = ensure_json_payload_size(payload.sessions if isinstance(payload.sessions, list) else [], max_chars=80000, label="Sessions")
+    week_start_iso = compact_text(payload.weekStartIso or payload.week_start_iso or "", "")[:80]
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
         existing = connection.execute(
@@ -4312,15 +4328,16 @@ def save_study_timetable_for_user(email: str, payload: StudyTimetableRequest) ->
             """
             INSERT INTO study_timetables (
                 email, profile_json, subjects_json, availability_json, preferences_json,
-                sessions_json, created_at, updated_at
+                sessions_json, week_start_iso, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 profile_json = excluded.profile_json,
                 subjects_json = excluded.subjects_json,
                 availability_json = excluded.availability_json,
                 preferences_json = excluded.preferences_json,
                 sessions_json = excluded.sessions_json,
+                week_start_iso = excluded.week_start_iso,
                 updated_at = excluded.updated_at
             """,
             (
@@ -4330,6 +4347,7 @@ def save_study_timetable_for_user(email: str, payload: StudyTimetableRequest) ->
                 json.dumps(availability, ensure_ascii=False),
                 json.dumps(preferences, ensure_ascii=False),
                 json.dumps(sessions, ensure_ascii=False),
+                week_start_iso,
                 created_at,
                 now_iso,
             ),

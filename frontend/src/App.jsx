@@ -751,6 +751,7 @@ const TIMETABLE_DEFAULT_SESSION_MINUTES = 90;
 const TIMETABLE_MIN_SESSION_MINUTES = 30;
 const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
 const TIMETABLE_FREE_ACCESS_MS = 7 * 24 * 60 * 60 * 1000;
+const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
@@ -8498,7 +8499,7 @@ export default function App() {
     const focusScore = calculateStudySessionFocusScore(session, timetableNow);
     const focusLabel = getFocusScoreLabel(focusScore);
     const messages = Array.isArray(session?.studyMessages) ? session.studyMessages : [];
-    const timerTone = isCompleted
+    const timerTone = isCompleted && remainingMs <= 0
       ? "text-emerald-100 drop-shadow-[0_0_32px_rgba(34,197,94,0.62)]"
       : remainingMs <= 60 * 1000
         ? "animate-pulse text-rose-100 drop-shadow-[0_0_30px_rgba(244,63,94,0.72)]"
@@ -8542,11 +8543,11 @@ export default function App() {
               </svg>
             </div>
             <h1 className="phone-safe-copy mt-5 text-4xl font-black uppercase tracking-[0.08em] text-white sm:text-6xl">{normalizeTimetableSubjectName(session.title, "Study")}</h1>
-            <p className="mt-3 text-sm uppercase tracking-[0.24em] text-cyan-100/75">{isCompleted ? "Finished study session" : "Active study session"}</p>
+            <p className="mt-3 text-sm uppercase tracking-[0.24em] text-cyan-100/75">{isCompleted && remainingMs <= 0 ? "Finished study session" : "Active study session"}</p>
             <div className={`mt-8 text-7xl font-black leading-none sm:text-8xl ${timerTone}`}>
-              {isCompleted ? "Done" : remainingMs > 0 ? formatActiveStudySessionTimer(remainingMs) : "Finished"}
+              {remainingMs > 0 ? formatActiveStudySessionTimer(remainingMs) : isCompleted ? "Done" : "Finished"}
             </div>
-            <p className="mt-4 text-sm uppercase tracking-[0.28em] text-slate-300">{isCompleted ? "Session complete" : "Time left"}</p>
+            <p className="mt-4 text-sm uppercase tracking-[0.28em] text-slate-300">{remainingMs > 0 ? "Time left" : isCompleted ? "Session complete" : "Time left"}</p>
             <div className="mx-auto mt-7 flex max-w-3xl items-center gap-4">
               <div className="h-4 flex-1 overflow-hidden rounded-full bg-white/10 shadow-[0_0_24px_rgba(34,211,238,0.12)]">
                 <div className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#22c55e)] transition-all duration-700" style={{ width: `${progressPercent}%` }} />
@@ -14448,7 +14449,42 @@ export default function App() {
 
   const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
   const getFreeStudyTimetableStorageKey = () => `mabaso-free-study-timetable-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const getStudyTimetableCacheStorageKey = () => `${TIMETABLE_CACHE_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getTimetableCoachPromptStorageKey = () => `${TIMETABLE_COACH_PROMPT_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const hasStudyTimetablePayloadContent = (payload = {}) => Boolean(
+    payload
+    && typeof payload === "object"
+    && ((Array.isArray(payload.sessions) && payload.sessions.length)
+      || (Array.isArray(payload.subjects) && payload.subjects.length)),
+  );
+  const getStudyTimetablePayloadUpdatedAtMs = (payload = {}) => {
+    const raw = payload?.updatedAt || payload?.updated_at || payload?.savedAt || payload?.createdAt || payload?.created_at || "";
+    const timestamp = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  };
+  const readCachedStudyTimetablePayload = () => {
+    if (typeof window === "undefined") return null;
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(getStudyTimetableCacheStorageKey()) || "null");
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const writeCachedStudyTimetablePayload = (payload = {}) => {
+    if (typeof window === "undefined") return payload;
+    const nowIso = new Date().toISOString();
+    const sourceUpdatedAt = payload.updatedAt || payload.updated_at || payload.savedAt || payload.createdAt || payload.created_at || nowIso;
+    const nextPayload = {
+      ...payload,
+      weekStartIso: payload.weekStartIso || payload.week_start_iso || timetableWeekStartIso,
+      week_start_iso: payload.week_start_iso || payload.weekStartIso || timetableWeekStartIso,
+      updatedAt: sourceUpdatedAt,
+      cachedAt: nowIso,
+    };
+    window.localStorage.setItem(getStudyTimetableCacheStorageKey(), JSON.stringify(nextPayload));
+    return nextPayload;
+  };
   const readFreeStudyTimetablePayload = () => {
     if (typeof window === "undefined") return null;
     try {
@@ -14474,13 +14510,15 @@ export default function App() {
     const nextAvailability = normalizeTimetableAvailability(overrides.availability || timetableAvailability);
     const nextPreferences = normalizeTimetablePreferences(overrides.preferences || timetablePreferences, timetableProfile);
     const nextSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow), nextPreferences);
+    const nextWeekStartIso = overrides.weekStartIso || overrides.week_start_iso || timetableWeekStartIso;
     return {
       profile: overrides.profile || timetableProfile,
       subjects: sanitizeTimetableSubjects(overrides.subjects || timetableSubjects),
       availability: nextAvailability,
       preferences: nextPreferences,
       sessions: nextSessions,
-      weekStartIso: timetableWeekStartIso,
+      weekStartIso: nextWeekStartIso,
+      week_start_iso: nextWeekStartIso,
     };
   };
   const writeFreeStudyTimetablePayload = (payload = {}) => {
@@ -14496,6 +14534,85 @@ export default function App() {
     };
     window.localStorage.setItem(getFreeStudyTimetableStorageKey(), JSON.stringify(nextPayload));
     return nextPayload;
+  };
+  const writeStudyTimetableLocalSnapshot = (payload = {}) => {
+    const cachedPayload = writeCachedStudyTimetablePayload(payload);
+    if (!isPaidStudyTimetableAllowed()) return writeFreeStudyTimetablePayload(cachedPayload);
+    return cachedPayload;
+  };
+  const getTimetableSessionCacheKeys = (session = {}) => {
+    if (!session || typeof session !== "object") return [];
+    const range = normalizeTimetableRange(session.start, session.end);
+    const keys = [];
+    if (session.id) keys.push(`id:${session.id}`);
+    if (session.dayId && range.start && range.end) {
+      keys.push(`slot:${session.dayId}:${range.start}:${range.end}:${getTimetableComparableTitle(session.title || session.subject)}`);
+      keys.push(`time:${session.dayId}:${range.start}:${range.end}`);
+    }
+    if (session.date && range.start && range.end) {
+      keys.push(`date:${formatTimetableDateInput(session.date)}:${range.start}:${range.end}:${getTimetableComparableTitle(session.title || session.subject)}`);
+    }
+    return keys.filter(Boolean);
+  };
+  const hasTimetableSessionProgress = (session = {}) => Boolean(
+    session?.status === "completed"
+    || session?.completedAt
+    || session?.studyStartedAt
+    || session?.lastOpenedAt
+    || session?.studyEndedAt
+    || String(session?.studyNotes || "").trim()
+    || (Array.isArray(session?.studyMessages) && session.studyMessages.length)
+    || Number(session?.focusScore || 0) > 0,
+  );
+  const mergeTimetableSessionProgress = (baseSessions = [], progressSessions = []) => {
+    const progressByKey = new Map();
+    (Array.isArray(progressSessions) ? progressSessions : []).forEach((session) => {
+      if (!hasTimetableSessionProgress(session)) return;
+      getTimetableSessionCacheKeys(session).forEach((key) => progressByKey.set(key, session));
+    });
+    const usedKeys = new Set();
+    const merged = (Array.isArray(baseSessions) ? baseSessions : []).map((session) => {
+      const keys = getTimetableSessionCacheKeys(session);
+      const progressSession = keys.map((key) => progressByKey.get(key)).find(Boolean);
+      keys.forEach((key) => usedKeys.add(key));
+      if (!progressSession) return session;
+      const progressCompleted = progressSession.status === "completed";
+      const progressMessages = Array.isArray(progressSession.studyMessages) ? progressSession.studyMessages : session.studyMessages;
+      return {
+        ...session,
+        studyStartedAt: progressSession.studyStartedAt || session.studyStartedAt,
+        lastOpenedAt: progressSession.lastOpenedAt || session.lastOpenedAt,
+        studyEndedAt: progressSession.studyEndedAt || session.studyEndedAt,
+        completedAt: progressCompleted ? (progressSession.completedAt || session.completedAt || progressSession.studyEndedAt) : session.completedAt,
+        studyNotes: progressSession.studyNotes || session.studyNotes,
+        studyMessages: progressMessages,
+        notesUpdatedAt: progressSession.notesUpdatedAt || session.notesUpdatedAt,
+        focusScore: Math.max(Number(session.focusScore || 0), Number(progressSession.focusScore || 0)),
+        status: progressCompleted ? "completed" : session.status,
+      };
+    });
+    const additions = (Array.isArray(progressSessions) ? progressSessions : []).filter((session) => (
+      hasTimetableSessionProgress(session)
+      && !getTimetableSessionCacheKeys(session).some((key) => usedKeys.has(key))
+    ));
+    return [...merged, ...additions];
+  };
+  const mergeStudyTimetablePayloads = (serverPayload = {}, cachedPayload = null) => {
+    const serverHasContent = hasStudyTimetablePayloadContent(serverPayload);
+    const cachedHasContent = hasStudyTimetablePayloadContent(cachedPayload);
+    if (!cachedHasContent) return serverPayload || {};
+    if (!serverHasContent) return cachedPayload || {};
+    const cachedIsNewer = getStudyTimetablePayloadUpdatedAtMs(cachedPayload) > getStudyTimetablePayloadUpdatedAtMs(serverPayload);
+    const basePayload = cachedIsNewer ? cachedPayload : serverPayload;
+    const progressPayload = cachedIsNewer ? serverPayload : cachedPayload;
+    const weekStartIso = basePayload.weekStartIso || basePayload.week_start_iso || progressPayload.weekStartIso || progressPayload.week_start_iso || timetableWeekStartIso;
+    return {
+      ...progressPayload,
+      ...basePayload,
+      weekStartIso,
+      week_start_iso: weekStartIso,
+      sessions: mergeTimetableSessionProgress(basePayload.sessions, progressPayload.sessions),
+    };
   };
   const applyTimetablePayload = (timetable = {}) => {
     const rawProfile = timetable.profile && typeof timetable.profile === "object" ? timetable.profile : {};
@@ -14527,9 +14644,10 @@ export default function App() {
   const loadFreeStudyTimetable = ({ force = false } = {}) => {
     if (hasLoadedTimetableRef.current && !force) return;
     hasLoadedTimetableRef.current = true;
-    const payload = readFreeStudyTimetablePayload();
+    const payload = mergeStudyTimetablePayloads(readFreeStudyTimetablePayload(), readCachedStudyTimetablePayload());
     if (payload?.sessions?.length || payload?.subjects?.length) {
       applyTimetablePayload(payload);
+      writeStudyTimetableLocalSnapshot(payload);
     } else {
       setTimetableLoadVersion((current) => current + 1);
     }
@@ -14538,13 +14656,23 @@ export default function App() {
     if (!authToken || !isPaidStudyTimetableAllowed()) return;
     if (hasLoadedTimetableRef.current && !force) return;
     hasLoadedTimetableRef.current = true;
+    const cachedPayload = readCachedStudyTimetablePayload();
+    if (hasStudyTimetablePayloadContent(cachedPayload)) {
+      applyTimetablePayload(cachedPayload);
+    }
     setIsLoadingTimetable(true);
     setTimetableMessage("");
     try {
       const response = await authFetch("/study-timetable", { timeoutMs: 60000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
-      applyTimetablePayload(data.timetable || {});
+      const nextPayload = mergeStudyTimetablePayloads(data.timetable || {}, cachedPayload);
+      if (hasStudyTimetablePayloadContent(nextPayload)) {
+        applyTimetablePayload(nextPayload);
+        writeCachedStudyTimetablePayload(nextPayload);
+      } else if (!hasStudyTimetablePayloadContent(cachedPayload)) {
+        applyTimetablePayload(data.timetable || {});
+      }
     } catch (err) {
       hasLoadedTimetableRef.current = false;
       setTimetableMessage(getReadableRequestError(err));
@@ -14565,9 +14693,9 @@ export default function App() {
     }
     try {
       const payload = buildStudyTimetablePayload(sessionsOverride, payloadOverrides);
-      const nextSessions = payload.sessions;
+      const localPayload = writeStudyTimetableLocalSnapshot(payload);
+      const nextSessions = localPayload.sessions;
       if (!isPaidStudyTimetableAllowed()) {
-        const localPayload = writeFreeStudyTimetablePayload(payload);
         applyTimetablePayload(localPayload);
         if (exitEditing) {
           setIsTimetableEditing(false);
@@ -14584,10 +14712,12 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your study timetable.");
+      const savedPayload = mergeStudyTimetablePayloads(data.timetable || {}, localPayload);
+      writeCachedStudyTimetablePayload(savedPayload);
       if (silent) {
-        setTimetableSessions(nextSessions);
+        setTimetableSessions(savedPayload.sessions || nextSessions);
       } else {
-        applyTimetablePayload(data.timetable || {});
+        applyTimetablePayload(savedPayload);
       }
       if (exitEditing) {
         setIsTimetableEditing(false);
@@ -14666,6 +14796,7 @@ export default function App() {
         session.id === sessionId ? updater(session) : session
       ));
       if (save) {
+        writeStudyTimetableLocalSnapshot(buildStudyTimetablePayload(updated));
         window.setTimeout(() => queueActiveStudySessionSave(updated, delayMs), 0);
       }
       return updated;
@@ -14675,7 +14806,8 @@ export default function App() {
   const openActiveStudySession = (session) => {
     if (!session || ["break", "empty"].includes(session.status) || ["break", "empty", "exam"].includes(session.type)) return;
     const nowIso = new Date().toISOString();
-    const sessionToOpen = {
+    const shouldCompleteOnOpen = session.status === "completed" || isTimetableSessionActiveNow(session, timetableNow);
+    const baseSessionToOpen = {
       ...session,
       type: session.type === "review" ? "study" : session.type || "study",
       status: session.status || "scheduled",
@@ -14684,7 +14816,13 @@ export default function App() {
       studyStartedAt: session.studyStartedAt || nowIso,
       studyMessages: Array.isArray(session.studyMessages) ? session.studyMessages : [],
       studyNotes: session.studyNotes || "",
-      focusScore: calculateStudySessionFocusScore(session, timetableNow),
+    };
+    const sessionToOpen = {
+      ...baseSessionToOpen,
+      status: shouldCompleteOnOpen ? "completed" : baseSessionToOpen.status,
+      completedAt: shouldCompleteOnOpen ? (baseSessionToOpen.completedAt || nowIso) : baseSessionToOpen.completedAt,
+      studyEndedAt: shouldCompleteOnOpen ? (baseSessionToOpen.studyEndedAt || nowIso) : baseSessionToOpen.studyEndedAt,
+      focusScore: calculateStudySessionFocusScore({ ...baseSessionToOpen, status: shouldCompleteOnOpen ? "completed" : baseSessionToOpen.status }, timetableNow),
     };
     setTimetableCompletionPrompt(null);
     setActiveStudySessionMessage("");
@@ -14692,8 +14830,9 @@ export default function App() {
       const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
       const existingIndex = normalized.findIndex((item) => item.id === sessionToOpen.id);
       const updated = existingIndex >= 0
-        ? normalized.map((item) => (item.id === sessionToOpen.id ? { ...item, ...sessionToOpen, status: item.status === "completed" ? "completed" : sessionToOpen.status } : item))
+        ? normalized.map((item) => (item.id === sessionToOpen.id ? { ...item, ...sessionToOpen, status: item.status === "completed" || sessionToOpen.status === "completed" ? "completed" : sessionToOpen.status } : item))
         : [...normalized, sessionToOpen];
+      writeStudyTimetableLocalSnapshot(buildStudyTimetablePayload(updated));
       window.setTimeout(() => queueActiveStudySessionSave(updated, 250), 0);
       return updated;
     });
@@ -14841,8 +14980,16 @@ export default function App() {
     setTimetablePreferences(nextPreferences);
     setTimetableSessions(nextSessions);
     setIsTimetableEditing(true);
-    setHasTimetablePlanPreview(true);
-    setTimetableMessage("Your timetable plan is ready. You can now edit the timetable the way you want, then press Save My Timetable.");
+    const hasPlannedSlots = nextSessions.length > 0;
+    setHasTimetablePlanPreview(hasPlannedSlots);
+    setTimetableMessage(hasPlannedSlots
+      ? "Your timetable plan is ready below. You can now edit the timetable the way you want, then press Save My Timetable."
+      : "No timetable slots were created. Check your available days and time ranges, then press Plan again.");
+    if (hasPlannedSlots && typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        timetableExportRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+      });
+    }
   };
   const startReEditingTimetable = () => {
     setIsTimetableEditing(true);
