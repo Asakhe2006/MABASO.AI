@@ -126,6 +126,7 @@ const MAX_STORAGE_SOURCE_TEXT_CHARS = 18000;
 const MAX_STORAGE_IMAGE_URL_LENGTH = 2400;
 const MAX_AI_REFERENCE_IMAGES = 4;
 const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
+const MAX_INLINE_STUDY_IMAGE_CHARS = 1800000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
 const RECORDING_SILENCE_MONITOR_INTERVAL_MS = 1250;
@@ -1979,11 +1980,11 @@ function truncateStoredText(value = "", limit = MAX_STORAGE_SECTION_TEXT_CHARS) 
   return `${text.slice(0, Math.max(0, limit)).trimEnd()}\n\n[Stored copy shortened to keep this workspace stable on the device.]`;
 }
 
-function sanitizeStoredImageUrl(value = "", { allowInlineDataUrl = false } = {}) {
+function sanitizeStoredImageUrl(value = "", { allowInlineDataUrl = false, maxInlineChars = MAX_INLINE_REFERENCE_IMAGE_CHARS } = {}) {
   const cleaned = String(value || "").trim();
   if (!cleaned) return "";
   if (isInlineDataUrl(cleaned)) {
-    return allowInlineDataUrl && cleaned.length <= MAX_INLINE_REFERENCE_IMAGE_CHARS ? cleaned : "";
+    return allowInlineDataUrl && cleaned.length <= maxInlineChars ? cleaned : "";
   }
   return cleaned.length <= MAX_STORAGE_IMAGE_URL_LENGTH ? cleaned : "";
 }
@@ -2689,8 +2690,8 @@ function sanitizeStudyImagesForStorage(images) {
     .map((image) => ({
       title: image?.title || "",
       query: image?.query || "",
-      image_url: sanitizeStoredImageUrl(image?.image_url || ""),
-      source_url: sanitizeStoredImageUrl(image?.source_url || ""),
+      image_url: sanitizeStoredImageUrl(image?.image_url || "", { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
+      source_url: sanitizeStoredImageUrl(image?.source_url || "", { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
       source_type: image?.source_type || "",
       visual_type: image?.visual_type || "",
       matched_section: image?.matched_section || "",
@@ -4412,6 +4413,46 @@ function StudyGuideVisualGallery({ sectionHeading = "", content = "" }) {
           <MobileFirstMarkdown>{markdown}</MobileFirstMarkdown>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function doesStudyImageMatchSection(image = {}, section = {}) {
+  const heading = normalizeGuideHeading(section.displayHeading || section.heading || section.normalizedHeading || "");
+  const matched = normalizeGuideHeading(image.matched_section || image.query || image.diagram_label || image.title || "");
+  if (heading && matched && (heading.includes(matched) || matched.includes(heading))) return true;
+  return false;
+}
+
+function getStudyImagesForSection(images = [], section = {}, sectionIndex = 0, sections = []) {
+  return (images || []).filter((image, imageIndex) => {
+    const directSectionIndex = (sections || []).findIndex((candidate) => doesStudyImageMatchSection(image, candidate));
+    if (directSectionIndex >= 0) return directSectionIndex === sectionIndex;
+    return imageIndex === sectionIndex;
+  }).slice(0, 3);
+}
+
+function StudyGuideImageCards({ images = [] }) {
+  if (!images.length) return null;
+  return (
+    <div className="mt-4 grid gap-4 md:grid-cols-2">
+      {images.map((image, index) => (
+        <figure key={`${image.image_url || image.title || "study-image"}-${index}`} className="overflow-hidden rounded-[22px] border border-slate-200 bg-slate-950 shadow-[0_16px_34px_rgba(15,23,42,0.14)]" onContextMenu={(event) => event.preventDefault()}>
+          <img
+            src={image.image_url}
+            alt={image.title || image.query || `Study visual ${index + 1}`}
+            className="h-56 w-full select-none object-cover"
+            draggable={false}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
+          <figcaption className="space-y-2 p-4">
+            <p className="text-sm font-semibold text-white">{image.title || image.query || `Study visual ${index + 1}`}</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Visual learning"}</p>
+            <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor for this explanation."}</p>
+          </figcaption>
+        </figure>
+      ))}
     </div>
   );
 }
@@ -6813,6 +6854,7 @@ export default function App() {
   }) => {
     const introKeys = [titleSection?.normalizedHeading, summarySection?.normalizedHeading].filter(Boolean);
     const isIntroActive = Boolean(showTeacherActivity && activeSectionKey && introKeys.includes(activeSectionKey));
+    const visibleStudyImageList = getVisibleStudyImages(studyImageList);
     const titleCardRef = registerTeacherRefs
       ? (node) => {
         if (node && titleSection) teacherSectionRefs.current[titleSection.normalizedHeading] = node;
@@ -6842,27 +6884,6 @@ export default function App() {
           ) : null}
         </div>
 
-        {studyImageList.length ? (
-          <div className="space-y-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Study Photos</p>
-              <p className="mt-2 text-sm leading-7 text-slate-300">Visual references matched to the guide so the notes can feel closer to the lecture material.</p>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {studyImageList.map((image, index) => (
-                <article key={`${image.image_url || image.source_url || image.title}-${index}`} className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/75">
-                  <img src={image.image_url} alt={image.title || image.query || `Study photo ${index + 1}`} className="h-48 w-full object-cover" loading="lazy" />
-                  <div className="space-y-2 p-4">
-                    <p className="text-sm font-semibold text-white">{image.title || image.query || `Study photo ${index + 1}`}</p>
-                    <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Study reference"}</p>
-                    <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor while revising this section."}</p>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
         {visibleSections.length ? (
           <div className="space-y-4">
             {visibleSections.map((section, index) => {
@@ -6871,6 +6892,7 @@ export default function App() {
                   || activeSectionKey.includes(section.normalizedHeading)
                   || section.normalizedHeading.includes(activeSectionKey)
                 : false;
+              const sectionStudyImages = getStudyImagesForSection(visibleStudyImageList, section, index, visibleSections);
               const sectionRef = registerTeacherRefs
                 ? (node) => {
                   if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
@@ -6888,6 +6910,7 @@ export default function App() {
                   <div className="phone-safe-copy mt-3 max-w-none">
                     <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                   </div>
+                  <StudyGuideImageCards images={sectionStudyImages} />
                 </article>
               );
             })}
@@ -6895,6 +6918,7 @@ export default function App() {
         ) : (
           <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
             <MobileFirstMarkdown>{formattedContent || emptyMessage}</MobileFirstMarkdown>
+            <StudyGuideImageCards images={visibleStudyImageList} />
           </div>
         )}
       </div>
@@ -13111,6 +13135,8 @@ export default function App() {
   };
 
   const getCurrentPlanEntitlements = () => planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
+  const canUsePremiumStudyImages = () => getCurrentPlanTier() !== "free";
+  const getVisibleStudyImages = (images = studyImages) => (canUsePremiumStudyImages() ? (images || []) : []);
   const getAllowedPodcastSpeakerCount = () => (getCurrentPlanTier() === "free" ? 2 : 3);
   const isPodcastSpeakerCountAllowed = (count = podcastSpeakerCount) => Number(count || 2) <= getAllowedPodcastSpeakerCount();
 
@@ -13126,8 +13152,7 @@ export default function App() {
   const maybeShowSiteRatingPrompt = () => {
     if (!authToken || authSessionMode === "admin") return;
     const shownCount = getStoredSiteRatingPromptCount();
-    const generatedGuideCount = historyItems.filter((item) => String(item.summary || "").trim()).length;
-    if (shownCount >= 3 || generatedGuideCount >= 3) return;
+    if (shownCount >= 3) return;
     const nextCount = shownCount + 1;
     setStoredSiteRatingPromptCount(nextCount);
     setSiteRatingStars(0);
@@ -15357,7 +15382,7 @@ export default function App() {
   };
 
   const buildCurrentStudyPackSections = () => [
-    { title: "Study Guide", content: formattedGuide || summary },
+    { title: "Study Guide", content: formattedGuide || summary, images: sanitizeStudyImagesForStorage(getVisibleStudyImages(studyImages)) },
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
@@ -19080,7 +19105,11 @@ export default function App() {
   const downloadActiveContent = async () => {
     try {
       const baseTitle = extractHistoryTitle(summary, file?.name || workspaceFileLabel || currentTabLabel);
-      await exportPdf(`${baseTitle} - ${currentTabLabel}`, [{ title: currentTabLabel, content: getActiveContent() }]);
+      await exportPdf(`${baseTitle} - ${currentTabLabel}`, [{
+        title: currentTabLabel,
+        content: getActiveContent(),
+        images: activeTab === "guide" ? sanitizeStudyImagesForStorage(getVisibleStudyImages(studyImages)) : [],
+      }]);
       setStatus(`${currentTabLabel} PDF downloaded.`);
     } catch (err) {
       setError(err.message || "PDF download failed.");
@@ -19157,7 +19186,7 @@ export default function App() {
   const downloadHistoryItemPdf = async (item) => {
     try {
       await exportPdf(item.title || item.fileName || "Saved lecture", [
-        { title: "Study Guide", content: item.summary || "" },
+        { title: "Study Guide", content: item.summary || "", images: sanitizeStudyImagesForStorage(getVisibleStudyImages(item.studyImages || [])) },
         { title: "Transcript", content: item.transcript || "" },
         { title: "Past Question Paper References", content: item.pastQuestionPapers || "" },
         { title: "Formulas", content: item.formula || "" },
@@ -20370,27 +20399,6 @@ export default function App() {
                       ) : null}
                     </div>
 
-                    {studyImages.length ? (
-                      <div className="space-y-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Study Photos</p>
-                          <p className="mt-2 text-sm leading-7 text-slate-300">Visual references matched to the guide so the notes can feel closer to the lecture material.</p>
-                        </div>
-                        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                          {studyImages.map((image, index) => (
-                            <article key={`${image.image_url || image.source_url || image.title}-${index}`} className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/75">
-                              <img src={image.image_url} alt={image.title || image.query || `Study photo ${index + 1}`} className="h-48 w-full object-cover" loading="lazy" />
-                              <div className="space-y-2 p-4">
-                                <p className="text-sm font-semibold text-white">{image.title || image.query || `Study photo ${index + 1}`}</p>
-                                <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Study reference"}</p>
-                                <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor while revising this section."}</p>
-                              </div>
-                            </article>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
                     {visibleGuideSections.length ? (
                       <div className="space-y-4">
                         {visibleGuideSections.map((section, index) => {
@@ -20399,6 +20407,7 @@ export default function App() {
                               || activeTeacherSectionKey.includes(section.normalizedHeading)
                               || section.normalizedHeading.includes(activeTeacherSectionKey)
                             : false;
+                          const sectionStudyImages = getStudyImagesForSection(getVisibleStudyImages(studyImages), section, index, visibleGuideSections);
                           return (
                             <article
                               key={`${section.heading}-${index}`}
@@ -20413,6 +20422,7 @@ export default function App() {
                               <div className="phone-safe-copy mt-3 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                               </div>
+                              <StudyGuideImageCards images={sectionStudyImages} />
                             </article>
                           );
                         })}
@@ -20420,6 +20430,7 @@ export default function App() {
                     ) : (
                       <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
                         <MobileFirstMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</MobileFirstMarkdown>
+                        <StudyGuideImageCards images={getVisibleStudyImages(studyImages)} />
                       </div>
                     )}
 

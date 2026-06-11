@@ -83,6 +83,7 @@ try:
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Image as ReportLabImage
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 except ImportError:
     A4 = None
@@ -128,6 +129,14 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 client = OpenAI()
 chat_history_store = SupabaseChatHistoryStore.from_env()
+
+
+def get_early_int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
@@ -296,6 +305,12 @@ PRESENTATION_REQUEST_TIMEOUT = float(os.getenv("PRESENTATION_REQUEST_TIMEOUT", "
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
 STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
 MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "6"))
+STUDY_IMAGE_MODEL = (os.getenv("STUDY_IMAGE_MODEL", "gpt-image-1") or "gpt-image-1").strip()
+STUDY_IMAGE_SIZE = (os.getenv("STUDY_IMAGE_SIZE", "1024x1024") or "1024x1024").strip()
+STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "medium") or "medium").strip()
+STUDY_IMAGE_GENERATION_TIMEOUT = float(os.getenv("STUDY_IMAGE_GENERATION_TIMEOUT", "120"))
+PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", 2))
+PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", 3))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
@@ -1323,6 +1338,7 @@ class PaymentCreateRequest(BaseModel):
 class PdfSection(BaseModel):
     title: str
     content: str = ""
+    images: list[dict[str, Any]] = []
 
 
 class PdfExportRequest(BaseModel):
@@ -5237,6 +5253,14 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         firstLineIndent=-10,
         spaceAfter=5,
     )
+    caption_style = ParagraphStyle(
+        "MabasoImageCaption",
+        parent=body_style,
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#475569"),
+        spaceAfter=10,
+    )
 
     buffer = BytesIO()
     document = SimpleDocTemplate(
@@ -5249,6 +5273,64 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     )
 
     story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
+    max_pdf_image_bytes = 8 * 1024 * 1024
+
+    def load_pdf_image_bytes(image_url: str) -> BytesIO | None:
+        cleaned = compact_text(image_url)
+        if not cleaned:
+            return None
+        try:
+            if cleaned.startswith("data:image/") and "," in cleaned:
+                header, encoded = cleaned.split(",", 1)
+                if "base64" not in header.lower():
+                    return None
+                image_bytes = base64.b64decode(encoded, validate=False)
+            elif cleaned.startswith(("http://", "https://")):
+                response = requests.get(cleaned, timeout=10)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").lower()
+                if not content_type.startswith("image/"):
+                    return None
+                image_bytes = response.content
+            else:
+                return None
+            if not image_bytes or len(image_bytes) > max_pdf_image_bytes:
+                return None
+            return BytesIO(image_bytes)
+        except Exception as exc:
+            logger.warning("Skipping PDF study image: %s", exc)
+            return None
+
+    def append_pdf_images(images: list[dict[str, Any]]) -> None:
+        for image in images or []:
+            image_url = compact_text(image.get("image_url") or image.get("source_url"))
+            image_buffer = load_pdf_image_bytes(image_url)
+            if image_buffer is None:
+                continue
+            try:
+                pdf_image = ReportLabImage(image_buffer)
+                max_width = document.width
+                max_height = 260
+                scale = min(max_width / max(1, pdf_image.drawWidth), max_height / max(1, pdf_image.drawHeight), 1)
+                pdf_image.drawWidth *= scale
+                pdf_image.drawHeight *= scale
+                story.append(pdf_image)
+                caption = compact_text(
+                    " - ".join(
+                        part
+                        for part in [
+                            compact_text(image.get("title") or image.get("query")),
+                            compact_text(image.get("matched_section")),
+                            compact_text(image.get("key_highlight") or image.get("diagram_label")),
+                        ]
+                        if part
+                    )
+                )
+                if caption:
+                    story.append(Paragraph(build_pdf_markup(caption), caption_style))
+                story.append(Spacer(1, 8))
+            except Exception as exc:
+                logger.warning("Could not embed study image in PDF: %s", exc)
 
     def flush_paragraph_lines(paragraph_lines: list[str]) -> None:
         text = "\n".join(paragraph_lines).strip()
@@ -5336,10 +5418,11 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         flush_paragraph_lines(paragraph_lines)
 
     for section in sections:
-        if not section.content.strip():
+        if not section.content.strip() and not section.images:
             continue
         story.append(Paragraph(section.title, heading_style))
         append_structured_pdf_content(section.content)
+        append_pdf_images(section.images)
         story.append(Spacer(1, 6))
 
     document.build(story)
@@ -14340,6 +14423,232 @@ async def generate_study_images(
     return images
 
 
+def get_study_image_plan_limit(email: str = "") -> int:
+    plan_id = get_effective_plan_id(email) if compact_text(email) else "free"
+    if plan_id == "premium_student":
+        return min(MAX_STUDY_IMAGES, PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE)
+    if plan_id == "pro_student":
+        return min(MAX_STUDY_IMAGES, PRO_STUDENT_STUDY_IMAGES_PER_GUIDE)
+    return 0
+
+
+def normalize_ai_study_image_specs(value: Any, limit: int) -> list[dict[str, str]]:
+    raw_items = value if isinstance(value, list) else parse_json_list(value)
+    normalized: list[dict[str, str]] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            continue
+        subtopic = compact_text(item.get("subtopic") or item.get("matched_section") or item.get("title"))
+        explanation = compact_text(item.get("explanation") or item.get("key_highlight") or item.get("purpose"))
+        prompt = compact_text(item.get("prompt") or item.get("image_prompt"))
+        if not subtopic or not explanation:
+            continue
+        if not prompt:
+            prompt = (
+                f"Educational textbook illustration for the subtopic '{subtopic}'. "
+                f"Show the exact idea: {explanation}. Clear classroom context, accurate subject details, "
+                "realistic where appropriate, age appropriate, no branding, no decorative fantasy style."
+            )
+        normalized.append(
+            {
+                "title": compact_text(item.get("title"), subtopic),
+                "subtopic": subtopic,
+                "matched_section": compact_text(item.get("matched_section"), subtopic),
+                "explanation": explanation,
+                "prompt": prompt[:1600],
+                "purpose": compact_text(item.get("purpose"), "Help students visualize and remember this concept."),
+            }
+        )
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def build_fallback_ai_study_image_specs(summary: str, limit: int) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for section in parse_study_guide_sections(summary):
+        heading = compact_text(section.get("displayHeading") or section.get("heading"))
+        normalized_heading = normalize_guide_heading(heading)
+        if normalized_heading in {"lecture title", "short summary"}:
+            continue
+        content = compact_text(section.get("content"))
+        if len(content) < 80:
+            continue
+        explanation = content[:420]
+        specs.append(
+            {
+                "title": heading,
+                "subtopic": heading,
+                "matched_section": heading,
+                "explanation": explanation,
+                "prompt": (
+                    f"Premium educational textbook illustration for '{heading}'. "
+                    f"Visualize this explanation accurately: {explanation}. "
+                    "Make it curriculum-aligned, clear, age appropriate, realistic or diagrammatic as the subject requires, "
+                    "with a clean classroom textbook style and no unrelated stock-photo elements."
+                ),
+                "purpose": "Make the explanation easier to visualize and remember.",
+            }
+        )
+        if len(specs) >= limit:
+            break
+    return specs
+
+
+async def build_ai_study_image_specs(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    output_language: str,
+    limit: int,
+) -> list[dict[str, str]]:
+    if limit <= 0:
+        return []
+    context = "\n\n".join(
+        part
+        for part in [
+            trimmed_context_block("STUDY GUIDE", summary, 4500),
+            trimmed_context_block("LECTURE NOTES", lecture_notes, 1600),
+            trimmed_context_block("LECTURE SLIDES", lecture_slides, 1600),
+            trimmed_context_block("LECTURE TRANSCRIPT", transcript, 1600),
+        ]
+        if part
+    )
+    if not context:
+        return []
+
+    def _build() -> list[dict[str, str]]:
+        response = client.with_options(timeout=STUDY_IMAGE_QUERY_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=900,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You design prompts for AI-generated educational images inside a premium study guide. "
+                        "Return strict JSON only in this shape: "
+                        "{\"images\":[{\"title\":\"...\",\"subtopic\":\"...\",\"matched_section\":\"...\",\"explanation\":\"...\",\"prompt\":\"...\",\"purpose\":\"...\"}]}.\n\n"
+                        "Rules:\n"
+                        f"- Return {limit} image specs or fewer.\n"
+                        "- Choose only major subtopics where a visual will directly improve understanding.\n"
+                        "- The prompt must match the exact subtopic and explanation, never a random stock image.\n"
+                        "- Prefer textbook illustrations, scientific diagrams, legal classroom scenes, real-world simulations, or concept visualizations.\n"
+                        "- Include the subject-specific details that must appear in the image.\n"
+                        "- Keep prompts classroom appropriate, accurate, and curriculum-aligned.\n"
+                        "- Write labels and captions in the requested study-guide language where useful.\n"
+                        "- Do not request logos, copyrighted characters, gore, nudity, weapons glamorization, or sensational scenes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Output language: {output_language}\n\n"
+                        "Create premium visual learning image prompts from this study-guide context:\n\n"
+                        f"{context}"
+                    ),
+                },
+            ],
+        )
+        parsed = parse_json_object(response.choices[0].message.content or "")
+        return normalize_ai_study_image_specs(parsed.get("images"), limit)
+
+    try:
+        specs = await asyncio.to_thread(_build)
+    except Exception as exc:
+        logger.warning("AI study image prompt planning failed: %s", exc)
+        specs = []
+    return specs or build_fallback_ai_study_image_specs(summary, limit)
+
+
+def generate_openai_study_image_url(prompt: str) -> str:
+    safe_prompt = compact_text(prompt)
+    if not safe_prompt:
+        return ""
+    request_args: dict[str, Any] = {
+        "model": STUDY_IMAGE_MODEL,
+        "prompt": safe_prompt,
+        "size": STUDY_IMAGE_SIZE,
+        "n": 1,
+    }
+    if STUDY_IMAGE_QUALITY:
+        request_args["quality"] = STUDY_IMAGE_QUALITY
+
+    try:
+        response = client.with_options(timeout=STUDY_IMAGE_GENERATION_TIMEOUT).images.generate(**request_args)
+    except (TypeError, APIStatusError) as exc:
+        if "quality" not in request_args:
+            raise
+        message = str(exc).lower()
+        if isinstance(exc, TypeError) or "quality" in message or "unsupported" in message:
+            request_args.pop("quality", None)
+            response = client.with_options(timeout=STUDY_IMAGE_GENERATION_TIMEOUT).images.generate(**request_args)
+        else:
+            raise
+
+    data = getattr(response, "data", None) or []
+    image = data[0] if data else None
+    if not image:
+        return ""
+    b64_json = getattr(image, "b64_json", "") or (image.get("b64_json", "") if isinstance(image, dict) else "")
+    if b64_json:
+        return f"data:image/png;base64,{b64_json}"
+    return getattr(image, "url", "") or (image.get("url", "") if isinstance(image, dict) else "")
+
+
+async def generate_ai_study_images(
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    job_id: str,
+    owner_email: str,
+    output_language: str,
+) -> list[dict[str, str]]:
+    image_limit = get_study_image_plan_limit(owner_email)
+    if image_limit <= 0:
+        return []
+
+    update_job(job_id, status="processing", stage="Planning premium study visuals", progress=90)
+    specs = await build_ai_study_image_specs(
+        summary,
+        transcript,
+        lecture_notes,
+        lecture_slides,
+        output_language,
+        image_limit,
+    )
+    if not specs:
+        return []
+
+    images: list[dict[str, str]] = []
+    for spec in specs[:image_limit]:
+        try:
+            update_job(job_id, status="processing", stage=f"Generating visual: {compact_text(spec.get('subtopic'), 'study concept')[:42]}", progress=92)
+            image_url = await asyncio.to_thread(generate_openai_study_image_url, spec.get("prompt", ""))
+        except Exception as exc:
+            logger.warning("AI study image generation failed for %s: %s", compact_text(spec.get("subtopic")), exc)
+            continue
+        if not image_url:
+            continue
+        images.append(
+            {
+                "query": compact_text(spec.get("subtopic"), "AI educational image"),
+                "title": compact_text(spec.get("title"), compact_text(spec.get("subtopic"), "AI educational image")),
+                "image_url": image_url,
+                "source_url": "",
+                "source_type": "ai_generated",
+                "visual_type": "educational_illustration",
+                "matched_section": compact_text(spec.get("matched_section"), compact_text(spec.get("subtopic"), "Key concept")),
+                "key_highlight": compact_text(spec.get("explanation"), compact_text(spec.get("purpose"), "Use this image as a visual anchor for the explanation.")),
+                "diagram_label": compact_text(spec.get("subtopic"), compact_text(spec.get("title"), "AI visual")),
+            }
+        )
+        if len(images) >= image_limit:
+            break
+    return images
+
+
 def parse_visual_analysis_items(content: str) -> list[dict[str, str]]:
     parsed = parse_json_object(content)
     items = parsed.get("items") if isinstance(parsed.get("items"), list) else parsed if isinstance(parsed, list) else []
@@ -18750,14 +19059,17 @@ async def run_summary_job(
             output_language,
             owner_email,
         )
-        visual_analysis = await analyze_reference_images_for_study_guide(
-            reference_images,
-            summary,
-            lecture_notes,
-            lecture_slides,
-            output_language,
-        )
-        uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)
+        study_image_limit = get_study_image_plan_limit(owner_email)
+        uploaded_visuals: list[dict[str, str]] = []
+        if study_image_limit > 0:
+            visual_analysis = await analyze_reference_images_for_study_guide(
+                reference_images,
+                summary,
+                lecture_notes,
+                lecture_slides,
+                output_language,
+            )
+            uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)[:study_image_limit]
         assets = await generate_structured_study_assets(
             summary,
             transcript,
@@ -18767,14 +19079,16 @@ async def run_summary_job(
             job_id,
             output_language,
         )
-        generated_study_images = await generate_study_images(
+        generated_study_images = await generate_ai_study_images(
             summary,
             transcript,
             lecture_notes,
             lecture_slides,
             job_id,
+            owner_email,
+            output_language,
         )
-        study_images = merge_study_image_results(uploaded_visuals, generated_study_images)
+        study_images = merge_study_image_results(uploaded_visuals, generated_study_images)[:study_image_limit]
         update_job(
             job_id,
             status="completed",
