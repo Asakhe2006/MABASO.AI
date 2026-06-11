@@ -6517,6 +6517,15 @@ export default function App() {
     const normalizedRoomId = normalizeCollaborationRoomId(roomId);
     if (!normalizedRoomId) return;
 
+    if (currentPageRef.current === "timetable" && (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview)) {
+      setCollaborationMessagePrompt({
+        roomId: normalizedRoomId,
+        authorEmail: "Collaboration room",
+        content: "A class-room update is ready. Save or close the timetable planner before opening the reply space.",
+      });
+      return;
+    }
+
     pendingCollaborationReplyRoomIdRef.current = normalizedRoomId;
     setCollaborationMessagePrompt(null);
 
@@ -7178,7 +7187,10 @@ export default function App() {
       setVideoUrl(snapshot.videoUrl || "");
       setActiveHistoryId(snapshot.activeHistoryId || "");
       setActiveTab(restoredActiveTab);
-      setCurrentPage(restoredCurrentPage);
+      const shouldKeepTimetablePage = currentPageRef.current === "timetable"
+        || timetablePlanningStateRef.current.isEditing
+        || timetablePlanningStateRef.current.hasPlanPreview;
+      setCurrentPage(shouldKeepTimetablePage ? "timetable" : restoredCurrentPage);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
       setActiveTeacherSegmentIndex(-1);
@@ -13978,6 +13990,11 @@ export default function App() {
     }
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
+    if (currentPage === "timetable" && timetablePlanningStateRef.current.isEditing && routedPage !== "timetable") {
+      const timetableRoute = resolveAppRouteForPage("timetable", authSessionMode);
+      if (timetableRoute && browserPath !== timetableRoute) navigateToPath(timetableRoute, { replace: true });
+      return;
+    }
     setCurrentPage(routedPage);
   }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage]);
 
@@ -14684,6 +14701,9 @@ export default function App() {
   };
   const saveStudyTimetable = async (sessionsOverride = null, options = {}) => {
     const { silent = false, exitEditing = true, payloadOverrides = {} } = options || {};
+    if (silent && !exitEditing && (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview)) {
+      return;
+    }
     if (!canUseStudyTimetable()) {
       setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
       openUpgradeModal();
@@ -15431,6 +15451,7 @@ export default function App() {
   }, [isTimetableEditing, hasTimetablePlanPreview]);
 
   useEffect(() => {
+    if (isTimetableEditing || hasTimetablePlanPreview) return;
     setTimetableSessions((current) => {
       const next = applyTimetableAutoMisses(current, timetableNow);
       const changed = next.some((session, index) => session.status !== current[index]?.status);
@@ -15441,7 +15462,7 @@ export default function App() {
       }
       return changed ? next : current;
     });
-  }, [timetableNow]);
+  }, [timetableNow, isTimetableEditing, hasTimetablePlanPreview]);
 
   useEffect(() => {
     if (currentPage !== "study-session") return;
@@ -20240,7 +20261,7 @@ export default function App() {
           });
           clearPendingJob();
           setStatus("Recovered study audio after refresh.");
-          if (pendingJob.autoplay && !["materials", "about", "support", "voice"].includes(currentPageRef.current)) {
+          if (pendingJob.autoplay && !["materials", "timetable", "about", "support", "voice"].includes(currentPageRef.current)) {
             window.setTimeout(() => {
               playTeacherLesson(nextTeacherLessonData);
             }, 0);
