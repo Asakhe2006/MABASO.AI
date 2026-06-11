@@ -890,16 +890,29 @@ function getExamUrgencyWeight(daysRemaining) {
   return 0;
 }
 
+function getTimetableExamStartDate(exam = {}) {
+  if (!exam?.date) return null;
+  const examDate = new Date(`${exam.date}T00:00:00`);
+  if (Number.isNaN(examDate.getTime())) return null;
+  const startMinutes = timetableTimeToMinutes(exam.start, 8 * 60);
+  examDate.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+  return examDate;
+}
+
 function getTimetableExamCountdowns(preferences = {}, now = new Date()) {
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
-  const today = new Date(now);
+  let referenceDate = new Date(now || Date.now());
+  if (Number.isNaN(referenceDate.getTime())) referenceDate = new Date();
+  const today = new Date(referenceDate);
   today.setHours(0, 0, 0, 0);
   return normalizedPreferences.examDates
     .map((exam) => {
-      const examDate = exam.date ? new Date(`${exam.date}T00:00:00`) : null;
-      if (!examDate || Number.isNaN(examDate.getTime())) return null;
-      const daysRemaining = Math.ceil((examDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
-      if (daysRemaining < 0) return null;
+      const examDate = getTimetableExamStartDate(exam);
+      if (!examDate) return null;
+      if (examDate.getTime() <= referenceDate.getTime()) return null;
+      const examDay = new Date(examDate);
+      examDay.setHours(0, 0, 0, 0);
+      const daysRemaining = Math.max(0, Math.ceil((examDay.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)));
       return {
         ...exam,
         daysRemaining,
@@ -1182,6 +1195,18 @@ function findTimetableSubjectForTitle(subjects = [], title = "") {
   )) || null;
 }
 
+function isTimetableSubjectPastFinalExam(subjectName = "", examDates = [], referenceDate = new Date()) {
+  const comparableTitle = getTimetableComparableTitle(subjectName);
+  if (!comparableTitle) return false;
+  const currentDate = new Date(referenceDate || Date.now());
+  if (Number.isNaN(currentDate.getTime())) return false;
+  const subjectExamStarts = (Array.isArray(examDates) ? examDates : [])
+    .filter((exam) => getTimetableComparableTitle(exam?.subject) === comparableTitle)
+    .map((exam) => getTimetableExamStartDate(exam))
+    .filter((examStartDate) => examStartDate && !Number.isNaN(examStartDate.getTime()));
+  return Boolean(subjectExamStarts.length && subjectExamStarts.every((examStartDate) => examStartDate.getTime() <= currentDate.getTime()));
+}
+
 function getTimetableReviewAction(subject = {}, context = {}) {
   const priority = Math.max(1, Math.min(5, Number(subject.priority || 3)));
   const performance = Math.max(1, Math.min(5, Number(subject.performance || 3)));
@@ -1214,12 +1239,22 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
   if (!previousSession) return null;
   const subject = findTimetableSubjectForTitle(subjects, previousSession.title) || { name: previousSession.title, priority: 3, performance: 3 };
   const isRecovery = previousSession.status === "missed" && isTimetablePoorPerformanceSubject(subject);
+  const normalizedPreferences = normalizeTimetablePreferences(preferences);
+  const slotStartDate = getTimetableSlotDate(weekStartIso, dayId, slot.start) || (() => {
+    if (!date || !slot.start) return null;
+    const fallbackDate = new Date(date);
+    if (Number.isNaN(fallbackDate.getTime())) return null;
+    const minutes = timetableTimeToMinutes(slot.start, -1);
+    if (minutes < 0) return null;
+    fallbackDate.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    return fallbackDate;
+  })();
+  if (slotStartDate && isTimetableSubjectPastFinalExam(subject.name, normalizedPreferences.examDates, slotStartDate)) return session || null;
   if (isRecovery) {
     const slotEndDate = getTimetableSlotDate(weekStartIso, dayId, slot.end);
     if (slotEndDate && slotEndDate.getTime() <= now.getTime()) return session || null;
   }
-  const normalizedPreferences = normalizeTimetablePreferences(preferences);
-  const subjectExam = getTimetableExamCountdowns(normalizedPreferences, now)
+  const subjectExam = getTimetableExamCountdowns(normalizedPreferences, slotStartDate || now)
     .find((exam) => getTimetableComparableTitle(exam.subject) === getTimetableComparableTitle(subject.name));
   const action = isRecovery
     ? "Recovery"
@@ -1249,9 +1284,9 @@ function getTimetableRecoveryMoves({ sessions = [], subjects = [], availability 
 }
 
 function buildTimetableRecoveryReschedule({ sessions = [], subjects = [], availability = null, preferences = {}, weekStartIso = "", now = new Date() }) {
-  const visibleSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessions, now), now);
   const normalizedAvailability = normalizeTimetableAvailability(availability);
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
+  const visibleSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(normalizeTimetableSessions(sessions, now), now), normalizedPreferences);
   const sanitizedSubjects = sanitizeTimetableSubjects(subjects);
   const nextAvailability = { ...normalizedAvailability };
   const rows = buildTimetableRows(visibleSessions);
@@ -1512,7 +1547,8 @@ function formatTimetableCount(value, singular, plural = `${singular}s`) {
 }
 
 function buildTimetableCoachPrompt({ sessions = [], subjects = [], availability = null, preferences = {}, weekStartIso = "", now = new Date() }) {
-  const visibleSessions = applyTimetableAutoMisses(sessions, now);
+  const normalizedPreferences = normalizeTimetablePreferences(preferences);
+  const visibleSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(sessions, now), normalizedPreferences);
   const selectedSubjects = sanitizeTimetableSubjects(subjects).filter((subject) => subject?.selected !== false);
   const missedBySubject = new Map();
   visibleSessions
@@ -1532,7 +1568,7 @@ function buildTimetableCoachPrompt({ sessions = [], subjects = [], availability 
   const weakestName = normalizeTimetableSubjectName(weakestSubject?.name, "your weakest subject");
   const weakestMissedCount = missedBySubject.get(weakestName) || 0;
   const mostMissed = [...missedBySubject.entries()].sort((left, right) => right[1] - left[1])[0] || null;
-  const examCountdowns = getTimetableExamCountdowns(preferences, now);
+  const examCountdowns = getTimetableExamCountdowns(normalizedPreferences, now);
   const nearestExam = examCountdowns[0] || null;
   const recoveryMoves = getTimetableRecoveryMoves({ sessions: visibleSessions, subjects: selectedSubjects, availability, preferences, weekStartIso, now });
   const recommendedHours = Math.max(1, Math.min(4, (weakestMissedCount >= 2 || getTimetableSubjectPerformance(weakestSubject) <= 2) ? 2 : 1));
@@ -1560,21 +1596,31 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
   let repeatSubject = null;
   let repeatRemaining = 0;
   const sessions = [];
-  const chooseNextSubject = () => {
+  const chooseNextSubject = (isAllowed = () => true) => {
     if (!weightedSubjects.length) return null;
     if (repeatSubject && repeatRemaining > 0) {
-      repeatRemaining -= 1;
-      const nextSubject = repeatSubject;
-      if (repeatRemaining <= 0) repeatSubject = null;
-      return nextSubject;
+      if (isAllowed(repeatSubject)) {
+        repeatRemaining -= 1;
+        const nextSubject = repeatSubject;
+        if (repeatRemaining <= 0) repeatSubject = null;
+        return nextSubject;
+      }
+      repeatSubject = null;
+      repeatRemaining = 0;
     }
-    const subject = weightedSubjects[cursor % weightedSubjects.length];
-    cursor += 1;
-    if (shouldTimetableDoublePeriod(subject)) {
-      repeatSubject = subject;
-      repeatRemaining = 1;
+    for (let attempt = 0; attempt < weightedSubjects.length; attempt += 1) {
+      const subject = weightedSubjects[cursor % weightedSubjects.length];
+      cursor += 1;
+      if (!isAllowed(subject)) continue;
+      if (shouldTimetableDoublePeriod(subject)) {
+        repeatSubject = subject;
+        repeatRemaining = 1;
+      }
+      return subject;
     }
-    return subject;
+    repeatSubject = null;
+    repeatRemaining = 0;
+    return null;
   };
   TIMETABLE_DAY_KEYS.forEach((day, dayIndex) => {
     const dayDate = addDays(weekStartIso, dayIndex);
@@ -1620,7 +1666,9 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
         sessions.push(createEmptyTimetableSession({ dayId: day.id, date, start, end, idSuffix: `slot-${slotIndex}` }));
         return;
       }
-      const subject = chooseNextSubject();
+      const slotStartDate = new Date(dayDate);
+      slotStartDate.setHours(Math.floor(startM / 60), startM % 60, 0, 0);
+      const subject = chooseNextSubject((candidate) => !isTimetableSubjectPastFinalExam(candidate?.name, normalizedPreferences.examDates, slotStartDate));
       if (!subject) {
         sessions.push(createEmptyTimetableSession({ dayId: day.id, date, start, end, idSuffix: `slot-${slotIndex}` }));
         return;
@@ -1690,6 +1738,18 @@ function normalizeTimetableSessions(value, now = new Date()) {
     };
   }) : [];
   return applyTimetableAutoMisses(normalized, now);
+}
+
+function isTimetablePostExamSubjectSession(session, examDates = []) {
+  if (!session || ["break", "empty", "exam"].includes(session.type) || ["break", "empty"].includes(session.status)) return false;
+  const sessionStartDate = getTimetableSessionStartDate(session);
+  if (!sessionStartDate) return false;
+  return isTimetableSubjectPastFinalExam(session.title, examDates, sessionStartDate);
+}
+
+function filterTimetablePostExamSubjectSessions(sessions = [], preferences = {}) {
+  const normalizedPreferences = normalizeTimetablePreferences(preferences);
+  return (Array.isArray(sessions) ? sessions : []).filter((session) => !isTimetablePostExamSubjectSession(session, normalizedPreferences.examDates));
 }
 
 function normalizeTimetablePickerTime(value) {
@@ -8338,7 +8398,7 @@ export default function App() {
     const timetableLearnerName = String(timetableProfile.learnerName || "").trim();
     const timetableGradeLabel = String(timetableProfile.grade || "").trim();
     const timetableProfileSummary = [timetableLearnerName, timetableGradeLabel].filter(Boolean).join(" - ");
-    const visibleTimetableSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+    const visibleTimetableSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(timetableSessions, timetableNow), normalizedPreferences);
     const completedCount = visibleTimetableSessions.filter((session) => session.status === "completed").length;
     const trackableCount = visibleTimetableSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
     const weeklyProgress = trackableCount ? Math.round((completedCount / trackableCount) * 100) : 0;
@@ -14146,7 +14206,7 @@ export default function App() {
   const buildStudyTimetablePayload = (sessionsOverride = null, overrides = {}) => {
     const nextAvailability = normalizeTimetableAvailability(overrides.availability || timetableAvailability);
     const nextPreferences = normalizeTimetablePreferences(overrides.preferences || timetablePreferences, timetableProfile);
-    const nextSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow);
+    const nextSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(normalizeTimetableSessions(sessionsOverride || timetableSessions, timetableNow), timetableNow), nextPreferences);
     return {
       profile: overrides.profile || timetableProfile,
       subjects: sanitizeTimetableSubjects(overrides.subjects || timetableSubjects),
@@ -14176,11 +14236,11 @@ export default function App() {
     const subjects = sanitizeTimetableSubjects(timetable.subjects);
     const availability = normalizeTimetableAvailability(timetable.availability);
     const preferences = normalizeTimetablePreferences(timetable.preferences, profile);
-    const sessions = normalizeTimetableSessions(timetable.sessions, timetableNow).map((session) => (
+    const sessions = filterTimetablePostExamSubjectSessions(normalizeTimetableSessions(timetable.sessions, timetableNow).map((session) => (
       session.type === "study" && isGenericTimetablePlanningSubjectName(session.title)
         ? { ...session, title: "Empty", status: "empty", type: "empty" }
         : session
-    ));
+    )), preferences);
     const nextWeekStartIso = timetable.weekStartIso || timetable.week_start_iso || timetableWeekStartIso || getTimetableWeekStartIso();
     const generatedSessions = applyTimetableAutoMisses(generateStudyTimetableSessions({
       subjects,
@@ -14536,7 +14596,8 @@ export default function App() {
     setIsDownloadingTimetableImage(true);
     setTimetableMessage("");
     try {
-      const exportSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+      const exportPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
+      const exportSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(timetableSessions, timetableNow), exportPreferences);
       const exportRows = buildTimetableRows(exportSessions);
       if (!exportRows.length) throw new Error("No timetable rows to export.");
       const exportSessionsByCell = exportSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
@@ -14757,7 +14818,8 @@ export default function App() {
       setTimetableTransitionPrompt(null);
       return;
     }
-    const visibleSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+    const visiblePreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
+    const visibleSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(timetableSessions, timetableNow), visiblePreferences);
     const nextPrompt = buildTimetableTransitionPrompt({
       sessions: visibleSessions,
       subjects: timetableSubjects,
@@ -14776,7 +14838,7 @@ export default function App() {
     setTimetableTransitionPrompt((current) => (
       current?.key === nextPrompt.key ? { ...current, ...nextPrompt } : nextPrompt
     ));
-  }, [currentPage, isTimetableEditing, timetableLoadVersion, timetableNow, timetableSessions, timetableSubjects, timetablePreferences, timetableWeekStartIso]);
+  }, [currentPage, isTimetableEditing, timetableLoadVersion, timetableNow, timetableSessions, timetableSubjects, timetablePreferences, timetableProfile, timetableWeekStartIso]);
 
   useEffect(() => {
     if (currentPage !== "timetable" || !authChecked || !authToken || isLoadingTimetable || timetableLoadVersion <= 0) return;
@@ -14784,27 +14846,29 @@ export default function App() {
     try {
       const storageKey = getTimetableCoachPromptStorageKey();
       if (window.localStorage.getItem(storageKey) === todayKey) return;
+      const coachPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
       const prompt = buildTimetableCoachPrompt({
         sessions: timetableSessions,
         subjects: timetableSubjects,
         availability: timetableAvailability,
-        preferences: timetablePreferences,
+        preferences: coachPreferences,
         weekStartIso: timetableWeekStartIso,
         now: timetableNow,
       });
       setTimetableCoachPrompt(prompt);
       window.localStorage.setItem(storageKey, todayKey);
     } catch {
+      const coachPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
       setTimetableCoachPrompt(buildTimetableCoachPrompt({
         sessions: timetableSessions,
         subjects: timetableSubjects,
         availability: timetableAvailability,
-        preferences: timetablePreferences,
+        preferences: coachPreferences,
         weekStartIso: timetableWeekStartIso,
         now: timetableNow,
       }));
     }
-  }, [authChecked, authToken, currentPage, isLoadingTimetable, timetableLoadVersion, timetableSessions, timetableSubjects, timetableAvailability, timetablePreferences, timetableWeekStartIso]);
+  }, [authChecked, authToken, currentPage, isLoadingTimetable, timetableLoadVersion, timetableSessions, timetableSubjects, timetableAvailability, timetablePreferences, timetableProfile, timetableWeekStartIso]);
 
   useEffect(() => {
     if (!billingUsage && !billingSubscription) return;
