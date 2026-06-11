@@ -5633,6 +5633,7 @@ export default function App() {
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
   const hasLoadedTimetableRef = useRef(false);
+  const timetablePlanningStateRef = useRef({ isEditing: false, hasPlanPreview: false });
   const timetableExportRef = useRef(null);
   const adminAutoModeSwitchRef = useRef(false);
   const adminAutoModeSwitchLastAtRef = useRef(0);
@@ -14657,7 +14658,7 @@ export default function App() {
     if (hasLoadedTimetableRef.current && !force) return;
     hasLoadedTimetableRef.current = true;
     const cachedPayload = readCachedStudyTimetablePayload();
-    if (hasStudyTimetablePayloadContent(cachedPayload)) {
+    if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload)) {
       applyTimetablePayload(cachedPayload);
     }
     setIsLoadingTimetable(true);
@@ -14666,6 +14667,7 @@ export default function App() {
       const response = await authFetch("/study-timetable", { timeoutMs: 60000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
+      if (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview) return;
       const nextPayload = mergeStudyTimetablePayloads(data.timetable || {}, cachedPayload);
       if (hasStudyTimetablePayloadContent(nextPayload)) {
         applyTimetablePayload(nextPayload);
@@ -14698,6 +14700,7 @@ export default function App() {
       if (!isPaidStudyTimetableAllowed()) {
         applyTimetablePayload(localPayload);
         if (exitEditing) {
+          timetablePlanningStateRef.current = { isEditing: false, hasPlanPreview: false };
           setIsTimetableEditing(false);
           setHasTimetablePlanPreview(false);
         }
@@ -14720,6 +14723,7 @@ export default function App() {
         applyTimetablePayload(savedPayload);
       }
       if (exitEditing) {
+        timetablePlanningStateRef.current = { isEditing: false, hasPlanPreview: false };
         setIsTimetableEditing(false);
         setHasTimetablePlanPreview(false);
       }
@@ -14976,11 +14980,12 @@ export default function App() {
       preferences: nextPreferences,
       weekStartIso: timetableWeekStartIso,
     });
+    const hasPlannedSlots = nextSessions.length > 0;
+    timetablePlanningStateRef.current = { isEditing: true, hasPlanPreview: hasPlannedSlots };
     setTimetableAvailability(nextAvailability);
     setTimetablePreferences(nextPreferences);
     setTimetableSessions(nextSessions);
     setIsTimetableEditing(true);
-    const hasPlannedSlots = nextSessions.length > 0;
     setHasTimetablePlanPreview(hasPlannedSlots);
     setTimetableMessage(hasPlannedSlots
       ? "Your timetable plan is ready below. You can now edit the timetable the way you want, then press Save My Timetable."
@@ -14992,6 +14997,7 @@ export default function App() {
     }
   };
   const startReEditingTimetable = () => {
+    timetablePlanningStateRef.current = { isEditing: true, hasPlanPreview: false };
     setIsTimetableEditing(true);
     setHasTimetablePlanPreview(false);
     setTimetableSubjectRemovalPrompt(null);
@@ -15022,6 +15028,7 @@ export default function App() {
   const addTimetableSubject = () => {
     const id = `subject-${Date.now()}`;
     setTimetableSubjects((current) => [...current, { id, name: "New Subject", selected: true, priority: 3, performance: 3 }]);
+    timetablePlanningStateRef.current = { isEditing: true, hasPlanPreview: false };
     setIsTimetableEditing(true);
   };
   const requestRemoveTimetableSubject = (subject) => {
@@ -15415,6 +15422,13 @@ export default function App() {
     const intervalId = window.setInterval(() => setTimetableNow(new Date()), 1000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    timetablePlanningStateRef.current = {
+      isEditing: isTimetableEditing,
+      hasPlanPreview: hasTimetablePlanPreview,
+    };
+  }, [isTimetableEditing, hasTimetablePlanPreview]);
 
   useEffect(() => {
     setTimetableSessions((current) => {
