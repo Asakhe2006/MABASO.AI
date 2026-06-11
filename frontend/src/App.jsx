@@ -1047,6 +1047,65 @@ function applyTimetableAutoMisses(sessions = [], now = new Date()) {
   ));
 }
 
+function getTimetableComparableTitle(value = "") {
+  return normalizeTimetableSubjectName(value, "")
+    .replace(/^Exam:\s*/i, "")
+    .replace(/\s+(revise|recap)$/i, "")
+    .trim()
+    .toLowerCase();
+}
+
+function findTimetableSubjectForTitle(subjects = [], title = "") {
+  const comparableTitle = getTimetableComparableTitle(title);
+  return (Array.isArray(subjects) ? subjects : []).find((subject) => (
+    subject?.selected !== false && getTimetableComparableTitle(subject?.name) === comparableTitle
+  )) || null;
+}
+
+function getTimetableReviewAction(subject = {}) {
+  const priority = Math.max(1, Math.min(5, Number(subject.priority || 3)));
+  const performance = Math.max(1, Math.min(5, Number(subject.performance || 3)));
+  if (performance <= 2 || performance < priority) return "Revise";
+  if (priority < performance) return "Recap";
+  return priority >= 4 ? "Revise" : "Recap";
+}
+
+function isTimetableStudyLikeSession(session) {
+  if (!session || ["break", "empty", "exam"].includes(session.type)) return false;
+  if (["break", "empty"].includes(session.status)) return false;
+  return Boolean(normalizeTimetableSubjectName(session.title, ""));
+}
+
+function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions = [], subjects = [], allowDerived = true }) {
+  if (session || !allowDerived || !slot?.start || !slot?.end || !dayId) return session || null;
+  const slotStartM = timetableTimeToMinutes(slot.start, -1);
+  if (slotStartM < 0) return null;
+  const previousSession = (Array.isArray(sessions) ? sessions : [])
+    .filter((item) => item?.dayId === dayId && isTimetableStudyLikeSession(item))
+    .map((item) => ({
+      session: item,
+      range: normalizeTimetableRange(item.start, item.end),
+    }))
+    .filter((item) => item.range.endM <= slotStartM)
+    .sort((left, right) => right.range.endM - left.range.endM)[0]?.session || null;
+  if (!previousSession) return null;
+  const subject = findTimetableSubjectForTitle(subjects, previousSession.title) || { name: previousSession.title, priority: 3, performance: 3 };
+  const action = getTimetableReviewAction(subject);
+  return {
+    id: `review-${previousSession.id}-${slot.start}-${slot.end}`,
+    sourceSessionId: previousSession.id,
+    dayId,
+    date,
+    start: slot.start,
+    end: slot.end,
+    title: `${normalizeTimetableSubjectName(previousSession.title, "Subject")} ${action}`,
+    status: previousSession.status === "completed" ? "completed" : previousSession.status === "missed" ? "missed" : "scheduled",
+    type: "review",
+    derived: true,
+    reviewAction: action.toLowerCase(),
+  };
+}
+
 function generateStudyTimetableSessions({ subjects, availability, preferences, weekStartIso }) {
   const normalizedAvailability = normalizeTimetableAvailability(availability);
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
@@ -7962,15 +8021,25 @@ export default function App() {
               const slotLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : `${slot.start} - ${slot.end}`;
               return (
               <div key={`${slot.start}-${slot.end}`} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
-                <div className={`px-3 py-3 text-sm font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
+                <div className={`flex min-h-[70px] items-center justify-center px-3 py-3 text-center text-sm font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
                 {TIMETABLE_DAY_KEYS.map((day, dayIndex) => {
-                  const session = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
+                  const rawSession = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
+                  const fallback = { dayId: day.id, date: addDays(timetableWeekStartIso, dayIndex).toISOString(), start: slot.start, end: slot.end };
+                  const session = resolveTimetableDisplaySession({
+                    session: rawSession,
+                    slot,
+                    dayId: day.id,
+                    date: fallback.date,
+                    sessions: visibleTimetableSessions,
+                    subjects: timetableSubjects,
+                    allowDerived: !isTimetableEditing || hasTimetablePlanPreview,
+                  });
                   const isEmptyCell = !session || session.status === "empty" || session.type === "empty";
                   const isBreakCell = session?.status === "break" || session?.type === "break";
                   const isExamCell = session?.type === "exam";
+                  const isDerivedReviewCell = session?.type === "review" || session?.derived;
                   const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
                   const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
-                  const fallback = { dayId: day.id, date: addDays(timetableWeekStartIso, dayIndex).toISOString(), start: slot.start, end: slot.end };
                   const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
                   const baseTone = isEmptyCell
@@ -7983,13 +8052,15 @@ export default function App() {
                           ? "border-rose-400/35 bg-rose-700/55 text-white"
                           : isBreakCell
                             ? "border-yellow-300/45 bg-yellow-400/20 text-yellow-50"
-                            : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
+                            : isDerivedReviewCell
+                              ? "border-cyan-300/30 border-l-4 border-l-cyan-300 bg-cyan-300/10 text-cyan-50"
+                              : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
                   const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
                     <div key={`${day.id}-${slot.start}-${slot.end}`} className="border-l border-white/5 p-1.5">
-                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(session.id); }} className={`min-h-[46px] w-full rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
+                      <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(session.sourceSessionId || session.id); }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
                         {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
-                          <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
+                          <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
                             {cellOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
                           </select>
@@ -13740,53 +13811,182 @@ export default function App() {
   const shiftTimetableWeek = (direction) => {
     rebuildTimetableForWeek(addDays(timetableWeekStartIso, direction * 7).toISOString());
   };
-  const inlineTimetableExportStyles = (sourceNode, cloneNode) => {
-    if (!sourceNode || !cloneNode || typeof window === "undefined") return;
-    const computed = window.getComputedStyle(sourceNode);
-    const styleText = Array.from(computed)
-      .map((property) => `${property}:${computed.getPropertyValue(property)};`)
-      .join("");
-    cloneNode.setAttribute("style", `${styleText}${cloneNode.getAttribute("style") || ""}`);
-    Array.from(sourceNode.children || []).forEach((sourceChild, index) => {
-      inlineTimetableExportStyles(sourceChild, cloneNode.children?.[index]);
-    });
-  };
   const downloadTimetableWeekImage = async () => {
-    const sourceNode = timetableExportRef.current;
-    if (!sourceNode || isDownloadingTimetableImage) return;
+    if (isDownloadingTimetableImage) return;
     setIsDownloadingTimetableImage(true);
     setTimetableMessage("");
     try {
-      await new Promise((resolve) => window.requestAnimationFrame(resolve));
-      const rect = sourceNode.getBoundingClientRect();
-      const width = Math.max(1, Math.ceil(rect.width));
-      const height = Math.max(1, Math.ceil(rect.height));
-      const clone = sourceNode.cloneNode(true);
-      inlineTimetableExportStyles(sourceNode, clone);
-      clone.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-      clone.style.width = `${width}px`;
-      clone.style.height = `${height}px`;
-      clone.style.margin = "0";
-      clone.style.background = "#000000";
-      const serialized = new XMLSerializer().serializeToString(clone);
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject width="100%" height="100%">${serialized}</foreignObject></svg>`;
-      const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
-      const image = new Image();
-      const imageLoaded = new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = reject;
-      });
-      image.src = svgUrl;
-      await imageLoaded;
-      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const exportSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
+      const exportRows = buildTimetableRows(exportSessions);
+      if (!exportRows.length) throw new Error("No timetable rows to export.");
+      const exportSessionsByCell = exportSessions.reduce((acc, session) => ({ ...acc, [`${session.dayId}-${session.start}-${session.end}`]: session }), {});
+      const completedCount = exportSessions.filter((session) => session.status === "completed").length;
+      const trackableCount = exportSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
+      const weeklyProgress = trackableCount ? Math.round((completedCount / trackableCount) * 100) : 0;
+      const width = 1500;
+      const margin = 28;
+      const timeWidth = 140;
+      const dayWidth = Math.floor((width - (margin * 2) - timeWidth) / 7);
+      const headerHeight = 150;
+      const rowHeight = 76;
+      const footerHeight = 92;
+      const height = headerHeight + (exportRows.length * rowHeight) + footerHeight + margin;
       const canvas = document.createElement("canvas");
+      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
       canvas.width = Math.round(width * scale);
       canvas.height = Math.round(height * scale);
       const context = canvas.getContext("2d");
       if (!context) throw new Error("Canvas export is not available.");
       context.scale(scale, scale);
-      context.drawImage(image, 0, 0, width, height);
-      URL.revokeObjectURL(svgUrl);
+      const roundRect = (x, y, w, h, radius = 10) => {
+        const r = Math.min(radius, w / 2, h / 2);
+        context.beginPath();
+        context.moveTo(x + r, y);
+        context.lineTo(x + w - r, y);
+        context.quadraticCurveTo(x + w, y, x + w, y + r);
+        context.lineTo(x + w, y + h - r);
+        context.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        context.lineTo(x + r, y + h);
+        context.quadraticCurveTo(x, y + h, x, y + h - r);
+        context.lineTo(x, y + r);
+        context.quadraticCurveTo(x, y, x + r, y);
+        context.closePath();
+      };
+      const drawBox = (x, y, w, h, fill, stroke = "#1f2937", lineWidth = 1.2, radius = 10) => {
+        roundRect(x, y, w, h, radius);
+        context.fillStyle = fill;
+        context.fill();
+        context.strokeStyle = stroke;
+        context.lineWidth = lineWidth;
+        context.stroke();
+      };
+      const wrapText = (text, maxWidth, maxLines = 2) => {
+        const words = String(text || "").split(/\s+/).filter(Boolean);
+        const lines = [];
+        let line = "";
+        words.forEach((word) => {
+          const nextLine = line ? `${line} ${word}` : word;
+          if (context.measureText(nextLine).width <= maxWidth || !line) {
+            line = nextLine;
+          } else {
+            lines.push(line);
+            line = word;
+          }
+        });
+        if (line) lines.push(line);
+        if (lines.length > maxLines) {
+          const clipped = lines.slice(0, maxLines);
+          clipped[maxLines - 1] = `${clipped[maxLines - 1].replace(/\s+$/, "")}...`;
+          return clipped;
+        }
+        return lines;
+      };
+      const drawCenteredText = (text, x, y, w, h, color = "#f8fafc", font = "600 16px Inter, Arial", maxLines = 2) => {
+        context.font = font;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillStyle = color;
+        const lines = wrapText(text, Math.max(20, w - 18), maxLines);
+        const lineHeight = 19;
+        const startY = y + (h / 2) - ((lines.length - 1) * lineHeight / 2);
+        lines.forEach((line, index) => context.fillText(line, x + (w / 2), startY + (index * lineHeight)));
+      };
+      const getTone = (session, isTodayCell) => {
+        if (!session || session.status === "empty" || session.type === "empty") return { fill: "#020202", stroke: "#111827", text: "#f8fafc", lineWidth: 1 };
+        if (session.type === "exam") return { fill: "#3b2a05", stroke: "#f59e0b", text: "#fffbeb", lineWidth: 1.4 };
+        if (session.status === "completed") return { fill: "#166534", stroke: "#4ade80", text: "#ffffff", lineWidth: 1.6 };
+        if (session.status === "missed") return { fill: "#7f1230", stroke: "#fb7185", text: "#ffffff", lineWidth: 1.6 };
+        if (session.status === "break" || session.type === "break") return { fill: "#4c4206", stroke: isTodayCell ? "#38bdf8" : "#facc15", text: "#fef9c3", lineWidth: isTodayCell ? 3 : 1.4 };
+        if (session.type === "review" || session.derived) return { fill: "#062b32", stroke: isTodayCell ? "#38bdf8" : "#67e8f9", text: "#ecfeff", lineWidth: isTodayCell ? 3 : 1.4 };
+        return { fill: "#07130f", stroke: isTodayCell ? "#38bdf8" : "#34d399", text: "#ffffff", lineWidth: isTodayCell ? 3 : 1.4 };
+      };
+
+      context.fillStyle = "#000000";
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = "#ffffff";
+      context.font = "700 34px Inter, Arial";
+      context.textAlign = "left";
+      context.textBaseline = "top";
+      context.fillText("Study Timetable", margin, 24);
+      context.font = "600 22px Inter, Arial";
+      context.fillStyle = "#d1fae5";
+      context.fillText(formatTimetableWeekRange(timetableWeekStartIso), margin, 68);
+      context.font = "500 16px Inter, Arial";
+      context.fillStyle = "#94a3b8";
+      context.fillText(`${timetableSubjects.filter((subject) => subject.selected !== false).length} active subjects`, margin, 102);
+      context.textAlign = "right";
+      context.fillStyle = "#f8fafc";
+      context.fillText(`Weekly Progress: ${weeklyProgress}%`, width - margin, 70);
+      drawBox(width - margin - 260, 102, 260, 10, "#111827", "#111827", 1, 5);
+      drawBox(width - margin - 260, 102, Math.max(0, Math.min(260, 260 * (weeklyProgress / 100))), 10, "#22c55e", "#22c55e", 1, 5);
+
+      const tableX = margin;
+      let y = headerHeight;
+      context.fillStyle = "#020202";
+      context.fillRect(tableX, y - 50, timeWidth + (dayWidth * 7), 50);
+      context.strokeStyle = "#1f2937";
+      context.lineWidth = 1;
+      context.strokeRect(tableX, y - 50, timeWidth + (dayWidth * 7), 50);
+      drawCenteredText("TIME", tableX, y - 50, timeWidth, 50, "#94a3b8", "700 13px Inter, Arial", 1);
+      TIMETABLE_DAY_KEYS.forEach((day, index) => {
+        const x = tableX + timeWidth + (index * dayWidth);
+        context.strokeStyle = "#1f2937";
+        context.strokeRect(x, y - 50, dayWidth, 50);
+        drawCenteredText(`${day.short}\n${formatTimetableDate(addDays(timetableWeekStartIso, index))}`, x, y - 44, dayWidth, 40, "#f8fafc", "700 15px Inter, Arial", 2);
+      });
+
+      exportRows.forEach((slot) => {
+        const currentSlotActive = isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow);
+        const slotEndDate = new Date(timetableNow);
+        slotEndDate.setHours(Math.floor(slot.endM / 60), slot.endM % 60, 0, 0);
+        const slotLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : `${slot.start} - ${slot.end}`;
+        context.strokeStyle = "#111827";
+        context.strokeRect(tableX, y, timeWidth + (dayWidth * 7), rowHeight);
+        if (currentSlotActive) drawBox(tableX + 2, y + 8, timeWidth - 4, rowHeight - 16, "#075985", "#38bdf8", 2, 0);
+        drawCenteredText(slotLabel, tableX, y, timeWidth, rowHeight, "#f8fafc", "700 16px Inter, Arial", 2);
+        TIMETABLE_DAY_KEYS.forEach((day, dayIndex) => {
+          const x = tableX + timeWidth + (dayIndex * dayWidth);
+          context.strokeStyle = "#111827";
+          context.strokeRect(x, y, dayWidth, rowHeight);
+          const rawSession = exportSessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
+          const date = addDays(timetableWeekStartIso, dayIndex).toISOString();
+          const session = resolveTimetableDisplaySession({
+            session: rawSession,
+            slot,
+            dayId: day.id,
+            date,
+            sessions: exportSessions,
+            subjects: timetableSubjects,
+            allowDerived: true,
+          });
+          const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
+          const tone = getTone(session, isTodayCell);
+          drawBox(x + 9, y + 12, dayWidth - 18, rowHeight - 24, tone.fill, tone.stroke, tone.lineWidth, 9);
+          if (session && session.type !== "empty" && session.status !== "empty") {
+            const prefix = session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : "";
+            drawCenteredText(`${prefix}${session.title}`, x + 9, y + 12, dayWidth - 18, rowHeight - 24, tone.text, "700 14px Inter, Arial", 2);
+          }
+        });
+        y += rowHeight;
+      });
+
+      const legendY = height - footerHeight + 18;
+      const legendItems = [
+        ["Completed", "#166534"],
+        ["Missed", "#7f1230"],
+        ["Break", "#4c4206"],
+        ["Review", "#062b32"],
+        ["Current", "#075985"],
+      ];
+      context.textAlign = "left";
+      context.textBaseline = "middle";
+      context.font = "600 14px Inter, Arial";
+      legendItems.forEach(([label, color], index) => {
+        const x = margin + (index * 210);
+        drawBox(x, legendY, 22, 22, color, "#334155", 1, 5);
+        context.fillStyle = "#e2e8f0";
+        context.fillText(label, x + 32, legendY + 11);
+      });
       const pngUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
       link.href = pngUrl;
