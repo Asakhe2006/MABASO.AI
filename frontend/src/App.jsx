@@ -110,6 +110,7 @@ const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
 const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
+const ACTIVE_COLLABORATION_ROOM_STORAGE_KEY = "mabaso-active-collaboration-room-v1";
 const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
@@ -1080,6 +1081,17 @@ function getTimetableSessionStartDate(session) {
   return date;
 }
 
+function getTimetableSlotDate(weekStartIso = "", dayId = "", timeValue = "") {
+  const dayIndex = TIMETABLE_DAY_KEYS.findIndex((day) => day.id === dayId);
+  if (dayIndex < 0 || !weekStartIso || !timeValue) return null;
+  const date = addDays(weekStartIso, dayIndex);
+  if (Number.isNaN(date.getTime())) return null;
+  const minutes = timetableTimeToMinutes(timeValue, -1);
+  if (minutes < 0) return null;
+  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+  return date;
+}
+
 function getTimetableMinutesForDate(date = new Date()) {
   return (date.getHours() * 60) + date.getMinutes() + (date.getSeconds() / 60);
 }
@@ -1142,8 +1154,9 @@ function isTimetableStudyLikeSession(session) {
   return Boolean(normalizeTimetableSubjectName(session.title, ""));
 }
 
-function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions = [], subjects = [], allowDerived = true }) {
-  if (session || !allowDerived || !slot?.start || !slot?.end || !dayId) return session || null;
+function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions = [], subjects = [], allowDerived = true, weekStartIso = "", now = new Date() }) {
+  const isEmptySession = session?.status === "empty" || session?.type === "empty";
+  if ((session && !isEmptySession) || !allowDerived || !slot?.start || !slot?.end || !dayId) return session || null;
   const slotStartM = timetableTimeToMinutes(slot.start, -1);
   const slotEndM = timetableTimeToMinutes(slot.end, -1);
   if (slotStartM < 0) return null;
@@ -1158,6 +1171,10 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
   if (!previousSession) return null;
   const subject = findTimetableSubjectForTitle(subjects, previousSession.title) || { name: previousSession.title, priority: 3, performance: 3 };
   const isRecovery = previousSession.status === "missed" && isTimetablePoorPerformanceSubject(subject);
+  if (isRecovery) {
+    const slotEndDate = getTimetableSlotDate(weekStartIso, dayId, slot.end);
+    if (slotEndDate && slotEndDate.getTime() <= now.getTime()) return session || null;
+  }
   const action = isRecovery ? "Recovery" : getTimetableReviewAction(subject);
   const baseSubjectName = normalizeTimetableSubjectName(previousSession.title, "Subject");
   return {
@@ -1201,6 +1218,8 @@ function getTimetableRecoveryMoves({ sessions = [], subjects = [], weekStartIso 
             sessions: visibleSessions,
             subjects,
             allowDerived: true,
+            weekStartIso,
+            now,
           });
           if (recoverySession?.recovery && recoverySession.sourceSessionId === missedSession.id) {
             moves.push({
@@ -1215,6 +1234,99 @@ function getTimetableRecoveryMoves({ sessions = [], subjects = [], weekStartIso 
       }
     });
   return moves;
+}
+
+function buildTimetableRecoveryReschedule({ sessions = [], subjects = [], weekStartIso = "", now = new Date() }) {
+  const visibleSessions = applyTimetableAutoMisses(normalizeTimetableSessions(sessions, now), now);
+  const rows = buildTimetableRows(visibleSessions);
+  const nextSessions = [...visibleSessions];
+  const sessionsByCell = new Map(nextSessions.map((session, index) => [`${session.dayId}-${session.start}-${session.end}`, { session, index }]));
+  const existingRecoverySourceIds = new Set(nextSessions
+    .filter((session) => session?.recovery && session.sourceSessionId)
+    .map((session) => session.sourceSessionId));
+  const moves = [];
+  const missedSessions = visibleSessions
+    .filter((session) => session.status === "missed" && isTimetableStudyLikeSession(session) && !existingRecoverySourceIds.has(session.id))
+    .filter((session) => {
+      const subject = findTimetableSubjectForTitle(subjects, session.title);
+      return subject && isTimetablePoorPerformanceSubject(subject);
+    })
+    .sort((left, right) => {
+      const leftEnd = getTimetableSessionEndDate(left)?.getTime() || 0;
+      const rightEnd = getTimetableSessionEndDate(right)?.getTime() || 0;
+      return leftEnd - rightEnd;
+    });
+
+  const isCandidateRawSession = (session) => (
+    !session
+    || session.status === "empty"
+    || session.type === "empty"
+    || (session.type === "review" && session.status !== "completed" && session.status !== "missed" && !session.recovery)
+  );
+
+  missedSessions.forEach((missedSession) => {
+    const subject = findTimetableSubjectForTitle(subjects, missedSession.title);
+    const subjectName = normalizeTimetableSubjectName(subject?.name || missedSession.title, "Missed work");
+    for (const day of TIMETABLE_DAY_KEYS) {
+      const dayIndex = TIMETABLE_DAY_KEYS.findIndex((item) => item.id === day.id);
+      const date = addDays(weekStartIso, dayIndex).toISOString();
+      for (const slot of rows) {
+        const slotEndDate = getTimetableSlotDate(weekStartIso, day.id, slot.end);
+        if (!slotEndDate || slotEndDate.getTime() <= now.getTime()) continue;
+        const cellKey = `${day.id}-${slot.start}-${slot.end}`;
+        const currentCell = sessionsByCell.get(cellKey);
+        if (!isCandidateRawSession(currentCell?.session)) continue;
+        const displaySession = resolveTimetableDisplaySession({
+          session: currentCell?.session || null,
+          slot,
+          dayId: day.id,
+          date,
+          sessions: nextSessions,
+          subjects,
+          allowDerived: true,
+          weekStartIso,
+          now,
+        });
+        const canReplaceReviewSpace = !displaySession
+          || displaySession.status === "empty"
+          || displaySession.type === "empty"
+          || ((displaySession.type === "review" || displaySession.derived) && (!displaySession.recovery || displaySession.sourceSessionId === missedSession.id));
+        if (!canReplaceReviewSpace) continue;
+        const recoverySession = {
+          id: `${day.id}-${slot.start}-${slot.end}-recovery-${missedSession.id}`,
+          sourceSessionId: missedSession.id,
+          dayId: day.id,
+          date,
+          start: slot.start,
+          end: slot.end,
+          title: `${subjectName} Recovery`,
+          status: "scheduled",
+          type: "review",
+          recovery: true,
+          reviewAction: "recovery",
+        };
+        if (currentCell) {
+          nextSessions[currentCell.index] = recoverySession;
+        } else {
+          nextSessions.push(recoverySession);
+        }
+        sessionsByCell.set(cellKey, {
+          session: recoverySession,
+          index: currentCell ? currentCell.index : nextSessions.length - 1,
+        });
+        existingRecoverySourceIds.add(missedSession.id);
+        moves.push({
+          sourceSession: missedSession,
+          recoverySession,
+          movedToDay: day.short,
+          movedToTime: slot.start,
+        });
+        return;
+      }
+    }
+  });
+
+  return { sessions: nextSessions, moves };
 }
 
 function buildTimetableTransitionPrompt({ sessions = [], subjects = [], weekStartIso = "", now = new Date() }) {
@@ -1243,8 +1355,10 @@ function buildTimetableTransitionPrompt({ sessions = [], subjects = [], weekStar
       sessions,
       subjects,
       allowDerived: true,
+      weekStartIso,
+      now,
     });
-    if (!nextSession || nextSession.status === "empty" || nextSession.type === "empty") continue;
+    if (!nextSession || nextSession.status === "empty" || nextSession.type === "empty" || nextSession.status === "break" || nextSession.type === "break") continue;
     return {
       key: `${formatTimetableDateInput(now)}-${currentSlot.start}-${currentSlot.end}-${nextSession.title}`,
       title: nextSession.title,
@@ -5183,6 +5297,7 @@ export default function App() {
   const [timetableLoadVersion, setTimetableLoadVersion] = useState(0);
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
   const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
+  const [isReschedulingTimetableRecovery, setIsReschedulingTimetableRecovery] = useState(false);
   const [timetableMessage, setTimetableMessage] = useState("");
   const [timetableCoachPrompt, setTimetableCoachPrompt] = useState(null);
   const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
@@ -5360,6 +5475,45 @@ export default function App() {
         window.localStorage.setItem(ROOM_INVITE_STORAGE_KEY, normalized);
       } else {
         window.localStorage.removeItem(ROOM_INVITE_STORAGE_KEY);
+      }
+    }
+    return normalized;
+  };
+
+  const getCollaborationStorageEmail = (emailOverride = "") => (
+    normalizeHistoryOwnerEmail(emailOverride || authEmail || authEmailInput || (typeof window !== "undefined" ? window.localStorage.getItem(AUTH_EMAIL_KEY) || "" : "")) || "__guest__"
+  );
+
+  const loadActiveCollaborationRoomId = (emailOverride = "") => {
+    if (typeof window === "undefined") return "";
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(ACTIVE_COLLABORATION_ROOM_STORAGE_KEY) || "{}");
+      const ownerKey = getCollaborationStorageEmail(emailOverride);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return normalizeCollaborationRoomId(parsed[ownerKey] || "");
+      }
+      return normalizeCollaborationRoomId(String(parsed || ""));
+    } catch {
+      return "";
+    }
+  };
+
+  const persistActiveCollaborationRoomId = (roomId = "", emailOverride = "") => {
+    const normalized = normalizeCollaborationRoomId(roomId);
+    if (typeof window !== "undefined") {
+      const ownerKey = getCollaborationStorageEmail(emailOverride);
+      let storedMap = {};
+      try {
+        const parsed = JSON.parse(window.localStorage.getItem(ACTIVE_COLLABORATION_ROOM_STORAGE_KEY) || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) storedMap = parsed;
+      } catch {
+        storedMap = {};
+      }
+      if (normalized) {
+        window.localStorage.setItem(ACTIVE_COLLABORATION_ROOM_STORAGE_KEY, JSON.stringify({ ...storedMap, [ownerKey]: normalized }));
+      } else {
+        delete storedMap[ownerKey];
+        window.localStorage.setItem(ACTIVE_COLLABORATION_ROOM_STORAGE_KEY, JSON.stringify(storedMap));
       }
     }
     return normalized;
@@ -6297,6 +6451,17 @@ export default function App() {
     ? Boolean(selectedQuizQuestions.length)
     : hasResults || ["chat"].includes(activeTab);
   const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
+  const hasCollaborationSeedContent = Boolean(
+    summary
+    || transcript
+    || formula
+    || example
+    || lectureNotes
+    || lectureSlides
+    || studyImages.length
+    || flashcards.length
+    || selectedQuizQuestions.length
+  );
   const errorHint = getErrorHint(error);
   const isCurrentErrorUsageBlocked = isUsageBlockedMessage(error);
   const captureErrorTitle = isCurrentErrorUsageBlocked ? "Access limit reached" : "An error occurred";
@@ -8080,6 +8245,11 @@ export default function App() {
                 {isDownloadingTimetableImage ? "Downloading..." : "Download Week Image"}
               </button>
             ) : null}
+            {shouldShowTimetableGrid && timetableRows.length && !isTimetableEditing ? (
+              <button type="button" onClick={rescheduleMissedTimetableRecovery} disabled={isReschedulingTimetableRecovery} className="rounded-[14px] border border-rose-300/35 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-50 disabled:opacity-60" title="Reschedule missed weak-subject work">
+                {isReschedulingTimetableRecovery ? "Rescheduling..." : "↻ AI Reschedule Missed"}
+              </button>
+            ) : null}
             {!isTimetableEditing ? (
               <button type="button" onClick={startReEditingTimetable} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">Re-edit Timetable</button>
             ) : null}
@@ -8296,6 +8466,9 @@ export default function App() {
             </div>
             {timetableRows.length ? timetableRows.map((slot) => {
               const currentSlotActive = !isTimetableEditing && isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow);
+              const slotEndDate = new Date(timetableNow);
+              slotEndDate.setHours(Math.floor(slot.endM / 60), slot.endM % 60, 0, 0);
+              const currentSlotCountdownLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : "";
               const slotLabel = `${slot.start} - ${slot.end}`;
               return (
               <div key={`${slot.start}-${slot.end}`} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
@@ -8311,6 +8484,8 @@ export default function App() {
                     sessions: visibleTimetableSessions,
                     subjects: timetableSubjects,
                     allowDerived: !isTimetableEditing || hasTimetablePlanPreview,
+                    weekStartIso: timetableWeekStartIso,
+                    now: timetableNow,
                   });
                   const isEmptyCell = !session || session.status === "empty" || session.type === "empty";
                   const isBreakCell = session?.status === "break" || session?.type === "break";
@@ -8332,7 +8507,7 @@ export default function App() {
                           : isBreakCell
                             ? "border-yellow-300/45 bg-yellow-400/20 text-yellow-50"
                             : isRecoveryCell
-                              ? "border-orange-300/40 border-l-4 border-l-orange-300 bg-orange-400/14 text-orange-50"
+                              ? "border-rose-300/45 border-l-4 border-l-rose-300 bg-rose-500/12 text-rose-50"
                             : isDerivedReviewCell
                               ? "border-cyan-300/30 border-l-4 border-l-cyan-300 bg-cyan-300/10 text-cyan-50"
                               : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
@@ -8347,6 +8522,11 @@ export default function App() {
                           </select>
                         ) : isEmptyCell ? (
                           <span className="block min-h-[20px]" aria-hidden="true" />
+                        ) : isTodayCell && currentSlotCountdownLabel ? (
+                          <span className="phone-safe-copy flex flex-col items-center justify-center gap-1 leading-5">
+                            <span>{session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : ""}{session.title}</span>
+                            <span className="text-xs font-semibold text-sky-100">{currentSlotCountdownLabel}</span>
+                          </span>
                         ) : (
                           <span className="phone-safe-copy">{session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : ""}{session.title}</span>
                         )}
@@ -8372,6 +8552,7 @@ export default function App() {
             ["Scheduled / Exam", "bg-white/5", "Planned study sessions and exam dates."],
             ["Break", "bg-yellow-400/40", "Breaks use the times you selected."],
             ["Current Time", "bg-sky-500/50", "The active time interval is highlighted while it is in progress."],
+            ["Recovery", "bg-rose-500/30", "Red-lined sessions are missed weak-subject work rescheduled by AI."],
             ["Empty", "bg-black", "Black spaces mean no subject was selected."],
           ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
         </div>
@@ -8611,7 +8792,7 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button>
+              <button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button>
             </div>
           </div>
 
@@ -13921,6 +14102,41 @@ export default function App() {
       if (!silent) setIsSavingTimetable(false);
     }
   };
+  const rescheduleMissedTimetableRecovery = async () => {
+    if (isTimetableEditing) return;
+    if (!canUseStudyTimetable()) {
+      setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
+      openUpgradeModal();
+      return;
+    }
+    setIsReschedulingTimetableRecovery(true);
+    setTimetableMessage("");
+    let nextSessionsSnapshot = null;
+    let movesSnapshot = [];
+    setTimetableSessions((current) => {
+      const result = buildTimetableRecoveryReschedule({
+        sessions: current,
+        subjects: timetableSubjects,
+        weekStartIso: timetableWeekStartIso,
+        now: timetableNow,
+      });
+      nextSessionsSnapshot = result.sessions;
+      movesSnapshot = result.moves;
+      return result.moves.length ? result.sessions : current;
+    });
+    try {
+      if (movesSnapshot.length && nextSessionsSnapshot) {
+        await saveStudyTimetable(nextSessionsSnapshot, { silent: true, exitEditing: false });
+        setTimetableMessage(`${movesSnapshot.length} missed weak-subject session${movesSnapshot.length === 1 ? "" : "s"} rescheduled into upcoming recovery space.`);
+      } else {
+        setTimetableMessage("No poor-performance missed sessions need recovery right now.");
+      }
+    } catch {
+      setTimetableMessage("Could not save the recovery reschedule. Please try again.");
+    } finally {
+      setIsReschedulingTimetableRecovery(false);
+    }
+  };
   const regenerateStudyTimetable = () => {
     const nextAvailability = normalizeTimetableAvailability(timetableAvailability);
     const nextPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
@@ -14223,7 +14439,7 @@ export default function App() {
         if (session.status === "completed") return { fill: "#166534", stroke: "#4ade80", text: "#ffffff", lineWidth: 1.6 };
         if (session.status === "missed") return { fill: "#7f1230", stroke: "#fb7185", text: "#ffffff", lineWidth: 1.6 };
         if (session.status === "break" || session.type === "break") return { fill: "#4c4206", stroke: isTodayCell ? "#38bdf8" : "#facc15", text: "#fef9c3", lineWidth: isTodayCell ? 3 : 1.4 };
-        if (session.recovery) return { fill: "#3b2106", stroke: isTodayCell ? "#38bdf8" : "#fb923c", text: "#ffedd5", lineWidth: isTodayCell ? 3 : 1.6 };
+        if (session.recovery) return { fill: "#3b0718", stroke: isTodayCell ? "#38bdf8" : "#fb7185", text: "#ffe4e6", lineWidth: isTodayCell ? 3 : 1.8 };
         if (session.type === "review" || session.derived) return { fill: "#062b32", stroke: isTodayCell ? "#38bdf8" : "#67e8f9", text: "#ecfeff", lineWidth: isTodayCell ? 3 : 1.4 };
         return { fill: "#07130f", stroke: isTodayCell ? "#38bdf8" : "#34d399", text: "#ffffff", lineWidth: isTodayCell ? 3 : 1.4 };
       };
@@ -14266,7 +14482,8 @@ export default function App() {
         const currentSlotActive = isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow);
         const slotEndDate = new Date(timetableNow);
         slotEndDate.setHours(Math.floor(slot.endM / 60), slot.endM % 60, 0, 0);
-        const slotLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : `${slot.start} - ${slot.end}`;
+        const currentSlotCountdownLabel = currentSlotActive ? formatTimetableCountdown(slotEndDate.getTime() - timetableNow.getTime()) : "";
+        const slotLabel = `${slot.start} - ${slot.end}`;
         context.strokeStyle = "#111827";
         context.strokeRect(tableX, y, timeWidth + (dayWidth * 7), rowHeight);
         if (currentSlotActive) drawBox(tableX + 2, y + 8, timeWidth - 4, rowHeight - 16, "#075985", "#38bdf8", 2, 0);
@@ -14285,13 +14502,16 @@ export default function App() {
             sessions: exportSessions,
             subjects: timetableSubjects,
             allowDerived: true,
+            weekStartIso: timetableWeekStartIso,
+            now: timetableNow,
           });
           const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
           const tone = getTone(session, isTodayCell);
           drawBox(x + 9, y + 12, dayWidth - 18, rowHeight - 24, tone.fill, tone.stroke, tone.lineWidth, 9);
           if (session && session.type !== "empty" && session.status !== "empty") {
             const prefix = session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : "";
-            drawCenteredText(`${prefix}${session.title}`, x + 9, y + 12, dayWidth - 18, rowHeight - 24, tone.text, "700 14px Inter, Arial", 2);
+            const label = isTodayCell && currentSlotCountdownLabel ? `${prefix}${session.title}\n${currentSlotCountdownLabel}` : `${prefix}${session.title}`;
+            drawCenteredText(label, x + 9, y + 12, dayWidth - 18, rowHeight - 24, tone.text, "700 14px Inter, Arial", isTodayCell && currentSlotCountdownLabel ? 2 : 2);
           }
         });
         y += rowHeight;
@@ -14303,6 +14523,7 @@ export default function App() {
         ["Missed", "#7f1230"],
         ["Break", "#4c4206"],
         ["Review", "#062b32"],
+        ["Recovery", "#3b0718"],
         ["Current", "#075985"],
       ];
       context.textAlign = "left";
@@ -16095,6 +16316,14 @@ export default function App() {
       setCollaborationRooms((current) => (
         JSON.stringify(current) === JSON.stringify(nextRooms) ? current : nextRooms
       ));
+      const requestedRoomId = parseRoomInviteIdFromLocation();
+      const rememberedRoomId = loadActiveCollaborationRoomId();
+      const pendingRoomId = loadStoredRoomInviteId();
+      const roomIdToOpen = requestedRoomId || pendingRoomId || rememberedRoomId || nextRooms[0]?.id || "";
+      const canOpenRememberedRoom = roomIdToOpen && nextRooms.some((room) => room.id === roomIdToOpen);
+      if (canOpenRememberedRoom && (!activeRoomId || !activeRoom || activeRoomId !== roomIdToOpen)) {
+        void loadCollaborationRoom(roomIdToOpen, { silent: true, resetNotesDraft: !activeRoom });
+      }
     } catch (err) {
       if (!silent) setError(err.message || "Could not load collaboration rooms.");
     }
@@ -16122,6 +16351,7 @@ export default function App() {
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId((current) => (current === roomId ? current : roomId));
       const nextRoom = data.room || null;
+      persistActiveCollaborationRoomId(nextRoom?.id || roomId);
       setActiveRoom((current) => (
         JSON.stringify(current) === JSON.stringify(nextRoom) ? current : nextRoom
       ));
@@ -16153,6 +16383,7 @@ export default function App() {
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
       setActiveRoomId(normalizedRoomId);
+      persistActiveCollaborationRoomId(normalizedRoomId);
       setActiveRoom(data.room || null);
       syncRoomNotesDraftFromRoom(data.room, { force: true });
       refreshCollaborationRooms(true);
@@ -19739,7 +19970,7 @@ export default function App() {
   };
 
   const createCollaborationRoom = async () => {
-    if (!summary && !transcript && !lectureNotes && !lectureSlides) return setError("Generate a transcript or study guide first, then create a collaboration room.");
+    if (!hasCollaborationSeedContent) return setError("Generate a transcript, study guide, or other study material first, then create a collaboration room.");
     const resolvedTitle = roomTitleInput.trim() || `${extractHistoryTitle(summary, workspaceFileLabel)} group room`;
     setIsCreatingRoom(true);
     setError("");
@@ -19768,6 +19999,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not create the collaboration room.");
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId(data.room?.id || "");
+      persistActiveCollaborationRoomId(data.room?.id || "");
       setActiveRoom(data.room || null);
       roomNotesLastEditedAtRef.current = 0;
       syncRoomNotesDraftFromRoom(data.room, { force: true });
@@ -19932,8 +20164,9 @@ export default function App() {
       setError("Podcast and PowerPoint tools stay personal for now, so they cannot be synced into the collaboration room yet.");
       return;
     }
+    const previousRoom = activeRoom;
+    setActiveRoom((current) => (current ? { ...current, active_tab: tabId } : current));
     if (activeRoom && !activeRoom.is_owner) {
-      setActiveRoom((current) => (current ? { ...current, active_tab: tabId } : current));
       setFollowRoomView(false);
       return;
     }
@@ -19946,10 +20179,11 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not sync the current tool.");
       setActiveRoom(data.room || null);
-      refreshCollaborationRooms(true);
+      void refreshCollaborationRooms(true);
       const sharedLabel = tabs.find((tab) => tab.id === tabId)?.label || "Current tool";
       setStatus(`${sharedLabel} shared with the room.`);
     } catch (err) {
+      setActiveRoom(previousRoom || null);
       setError(err.message || "Could not sync the current tool.");
     }
   };
@@ -21824,7 +22058,7 @@ export default function App() {
                     </div>
                   </div>
                 </>) : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom || (!summary && !transcript && !lectureNotes && !lectureSlides)} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
 
