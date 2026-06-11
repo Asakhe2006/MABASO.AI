@@ -1867,7 +1867,6 @@ function TimetableTimePicker({ value, onChange, disabled = false }) {
   );
 }
 
-const progressSteps = ["1. Sign in", "2. Capture lecture", "3. Study workspace", "4. Collaboration"];
 const premiumPresentationDesigns = [
   {
     id: "quantum-black",
@@ -5449,6 +5448,7 @@ export default function App() {
   const [studyImages, setStudyImages] = useState([]);
   const [lectureNoteSources, setLectureNoteSources] = useState([]);
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
+  const [pendingLectureSlideFiles, setPendingLectureSlideFiles] = useState([]);
   const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
   const [pastQuestionMemo, setPastQuestionMemo] = useState("");
   const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
@@ -6613,7 +6613,14 @@ export default function App() {
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
   const lectureNotesFileName = formatGroupedSourceLabel(lectureNoteFileNames, "note file", "note files");
   const lectureSlides = studySourceEntriesToText(lectureSlideSources, "SLIDE SOURCE");
-  const lectureSlideFileNames = lectureSlideSources.map((item) => item.name);
+  const pendingLectureSlideDisplaySources = pendingLectureSlideFiles.map((item) => ({
+    id: item.id,
+    name: item.name || item.file?.name || "Slide source",
+    prefix: "WAITING TO READ",
+    pending: true,
+  }));
+  const visibleLectureSlideSources = [...lectureSlideSources, ...pendingLectureSlideDisplaySources];
+  const lectureSlideFileNames = visibleLectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
   const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
@@ -6623,13 +6630,19 @@ export default function App() {
   const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const canCancelTranscription = (isTranscribing || isTranscribingVideo) && ["transcription", "video"].includes(currentJobType) && !isGeneratingSummary && !isProcessingLectureBundle;
-  const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim());
+  const hasQueuedLectureSlides = pendingLectureSlideFiles.length > 0;
+  const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim() || hasQueuedLectureSlides);
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
-    ? "Slides are still being read. Please wait before generating the study guide."
-    : slidesReadyForGuide
-      ? "Slide read successful. You can now generate the study guide."
-      : "Slides are not read yet. Upload or finish reading the slides before generating the study guide.";
+    ? "Reading slide sources..."
+    : hasQueuedLectureSlides
+      ? "Slides are queued. Press Generate Study Guide to read them and generate the material."
+      : slidesReadyForGuide
+        ? "Slide read successful. You can generate the study guide."
+        : hasStudyInputs
+          ? "Press Generate Study Guide when your lecture material is ready."
+          : "Upload or record lecture material before generating a study guide.";
+  const slideGuideStatusClassName = isExtractingSlides || hasQueuedLectureSlides || slidesReadyForGuide || hasStudyInputs ? "text-emerald-200" : "text-slate-300";
   const captureStatusMessage = status || "Ready for your next lecture. Add lecture material if available, such as slides, notes, or past papers.";
   const hasResults = Boolean(transcript || summary || formula || example || flashcards.length || quizQuestions.length || presentationData.slides.length || podcastData.script || (reportData && (reportData.body || (reportData.sections || []).length)) || mindMapData.root);
   const selectedQuizQuestions = quizQuestions;
@@ -6699,7 +6712,6 @@ export default function App() {
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
   const showLandingAuthPanel = showLandingAuthOptions || isAppleSigningIn;
   const showAuthMessageBanner = Boolean(authMessage.trim()) && !authPasswordIsIncorrect && !landingAuthMessageIsGuidance;
-  const activeStepIndex = ["capture", "about", "support"].includes(currentPage) ? 1 : ["workspace", "materials", "payments", "timetable", "voice"].includes(currentPage) ? 2 : currentPage === "collaboration" ? 3 : currentPage === "admin" ? 3 : -1;
   const normalizedAuthEmail = normalizeHistoryOwnerEmail(authEmail || authEmailInput || "");
   const sortedCollaborationRooms = [...collaborationRooms].sort((left, right) => {
     const leftIsHighlighted = left.id === highlightedInviteRoomId ? 1 : 0;
@@ -7142,6 +7154,7 @@ export default function App() {
       setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
       setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
       setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
+      setPendingLectureSlideFiles([]);
       setPastQuestionPaperSources(normalizeStudySourceEntries(snapshot.pastQuestionPaperSources, "", [], "PAST QUESTION PAPER"));
       setPastQuestionMemo(snapshot.pastQuestionMemo || "");
       setPresentationData(restoredPresentationData);
@@ -14588,6 +14601,56 @@ export default function App() {
     }
   };
   const getActiveStudySession = () => timetableSessions.find((session) => session.id === activeStudySessionId) || null;
+  const getActiveTimetableNavItem = () => {
+    if (!authToken || !timetableWeekStartIso) return null;
+    const weekStartDate = new Date(timetableWeekStartIso);
+    if (Number.isNaN(weekStartDate.getTime())) return null;
+    if (getTimetableWeekStartIso(timetableNow) !== getTimetableWeekStartIso(weekStartDate)) return null;
+    const dayIndex = (timetableNow.getDay() + 6) % 7;
+    const day = TIMETABLE_DAY_KEYS[dayIndex];
+    if (!day) return null;
+    const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
+    const visibleSessions = filterTimetablePostExamSubjectSessions(
+      applyTimetableAutoMisses(normalizeTimetableSessions(timetableSessions, timetableNow), timetableNow),
+      normalizedPreferences,
+    );
+    const rows = buildTimetableRows(visibleSessions);
+    const activeSlot = rows.find((slot) => isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow));
+    if (!activeSlot) return null;
+    const activeSlotKey = `${activeSlot.start}-${activeSlot.end}`;
+    const sourceSession = visibleSessions.find((session) => {
+      if (session?.dayId !== day.id) return false;
+      const range = normalizeTimetableRange(session.start, session.end);
+      return `${range.start}-${range.end}` === activeSlotKey;
+    }) || null;
+    const date = getTimetableSlotDate(timetableWeekStartIso, day.id, activeSlot.start)?.toISOString() || "";
+    const displaySession = resolveTimetableDisplaySession({
+      session: sourceSession,
+      slot: activeSlot,
+      dayId: day.id,
+      date,
+      sessions: visibleSessions,
+      subjects: timetableSubjects,
+      preferences: normalizedPreferences,
+      allowDerived: !isTimetableEditing || hasTimetablePlanPreview,
+      weekStartIso: timetableWeekStartIso,
+      now: timetableNow,
+    });
+    if (!displaySession || displaySession.status === "empty" || displaySession.type === "empty") return null;
+    const endDate = getTimetableSlotDate(timetableWeekStartIso, day.id, activeSlot.end);
+    const remainingMs = endDate ? endDate.getTime() - timetableNow.getTime() : 0;
+    const isBreak = displaySession.status === "break" || displaySession.type === "break";
+    const isExam = displaySession.type === "exam";
+    const title = isBreak
+      ? "Break"
+      : isExam
+        ? `Exam: ${normalizeTimetableSubjectName(displaySession.title || displaySession.subject, "Subject").replace(/^Exam:\s*/i, "")}`
+        : normalizeTimetableSubjectName(displaySession.title, "Study session");
+    return {
+      title,
+      remainingLabel: remainingMs > 0 ? formatTimetableCountdown(remainingMs) : "ending now",
+    };
+  };
   const queueActiveStudySessionSave = (sessionsSnapshot, delayMs = 700) => {
     if (!sessionsSnapshot) return;
     if (activeStudySessionSaveTimerRef.current) window.clearTimeout(activeStudySessionSaveTimerRef.current);
@@ -17363,6 +17426,7 @@ export default function App() {
       );
       setPastQuestionMemo(item.pastQuestionMemo || "");
       setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
+      setPendingLectureSlideFiles([]);
       setPastQuestionPaperSources(
         normalizeStudySourceEntries(
           item.pastQuestionPaperSources,
@@ -17982,20 +18046,23 @@ export default function App() {
     });
   };
 
-  const handleLectureSlidesFilesChange = async (selectedFiles) => {
-    await extractAndApplyStudySourceFiles(selectedFiles, {
-      sourceName: "slide source",
-      sourcePrefix: "SLIDE SOURCE",
-      currentSources: lectureSlideSources,
-      setSources: setLectureSlideSources,
-      setBusy: setIsExtractingSlides,
-      jobType: "slides",
-      startStatus: "Reading slide sources...",
-      successMessage: ({ addedNames, skippedNames }) => (
-        `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`
-      ),
-      failureStatus: "Slide reading failed.",
-    });
+  const handleLectureSlidesFilesChange = (selectedFiles) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return;
+    try {
+      files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, "slide sources"));
+      const queuedFiles = files.map((selectedFile, index) => ({
+        id: `pending-slide-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+        name: selectedFile.name || `Slide source ${index + 1}`,
+        file: selectedFile,
+      }));
+      setPendingLectureSlideFiles((current) => [...current, ...queuedFiles]);
+      setError("");
+      setStatus(`${queuedFiles.length} slide source${queuedFiles.length === 1 ? "" : "s"} queued. Press Generate Study Guide to read slides and generate the material.`);
+    } catch (err) {
+      setError(err.message || "Could not add slide sources.");
+      setStatus("Slide upload failed.");
+    }
   };
 
   const handlePastQuestionPapersFilesChange = async (selectedFiles) => {
@@ -18176,6 +18243,7 @@ export default function App() {
 
   const removeLectureSlideSource = (sourceId) => {
     setLectureSlideSources((current) => current.filter((item) => item.id !== sourceId));
+    setPendingLectureSlideFiles((current) => current.filter((item) => item.id !== sourceId));
     setStatus("Slide source removed.");
   };
 
@@ -18427,19 +18495,22 @@ export default function App() {
 
   const generateStudyGuide = async (transcriptText = transcript, sourceOverrides = {}) => {
     const resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
-    const resolvedLectureNoteSources = Array.isArray(sourceOverrides.lectureNoteSources) ? sourceOverrides.lectureNoteSources : lectureNoteSources;
-    const resolvedLectureSlideSources = Array.isArray(sourceOverrides.lectureSlideSources) ? sourceOverrides.lectureSlideSources : lectureSlideSources;
-    const resolvedPastQuestionPaperSources = Array.isArray(sourceOverrides.pastQuestionPaperSources) ? sourceOverrides.pastQuestionPaperSources : pastQuestionPaperSources;
+    let resolvedLectureNoteSources = Array.isArray(sourceOverrides.lectureNoteSources) ? sourceOverrides.lectureNoteSources : lectureNoteSources;
+    let resolvedLectureSlideSources = Array.isArray(sourceOverrides.lectureSlideSources) ? sourceOverrides.lectureSlideSources : lectureSlideSources;
+    let resolvedPastQuestionPaperSources = Array.isArray(sourceOverrides.pastQuestionPaperSources) ? sourceOverrides.pastQuestionPaperSources : pastQuestionPaperSources;
     const resolvedPastQuestionMemo = typeof sourceOverrides.pastQuestionMemo === "string" ? sourceOverrides.pastQuestionMemo : pastQuestionMemo;
-    const resolvedLectureNotes = typeof sourceOverrides.lectureNotesText === "string" ? sourceOverrides.lectureNotesText : lectureNotes;
-    const resolvedLectureSlides = typeof sourceOverrides.lectureSlidesText === "string" ? sourceOverrides.lectureSlidesText : lectureSlides;
-    const resolvedPastQuestionPapers = typeof sourceOverrides.pastQuestionPapersText === "string"
+    let resolvedLectureNotes = typeof sourceOverrides.lectureNotesText === "string" ? sourceOverrides.lectureNotesText : lectureNotes;
+    let resolvedLectureSlides = typeof sourceOverrides.lectureSlidesText === "string" ? sourceOverrides.lectureSlidesText : lectureSlides;
+    let resolvedPastQuestionPapers = typeof sourceOverrides.pastQuestionPapersText === "string"
       ? sourceOverrides.pastQuestionPapersText
       : [
         studySourceEntriesToText(resolvedPastQuestionPaperSources, "PAST QUESTION PAPER"),
         resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
       ].filter(Boolean).join("\n\n");
-    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim())) {
+    const shouldReadQueuedSlidesForGuide = pendingLectureSlideFiles.length > 0
+      && !Array.isArray(sourceOverrides.lectureSlideSources)
+      && typeof sourceOverrides.lectureSlidesText !== "string";
+    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim() || shouldReadQueuedSlidesForGuide)) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
@@ -18452,6 +18523,32 @@ export default function App() {
     setProgress(0);
     setChatMessages([]);
     try {
+      if (shouldReadQueuedSlidesForGuide) {
+        const pendingSlideSnapshot = [...pendingLectureSlideFiles];
+        const pendingSlideFiles = pendingSlideSnapshot.map((item) => item.file).filter(Boolean);
+        const pendingSlideIds = new Set(pendingSlideSnapshot.map((item) => item.id));
+        setStatus(`Reading ${pendingSlideFiles.length} slide source${pendingSlideFiles.length === 1 ? "" : "s"} before generating the study guide...`);
+        setProgress(8);
+        const slideResult = await extractAndApplyStudySourceFiles(pendingSlideFiles, {
+          sourceName: "slide source",
+          sourcePrefix: "SLIDE SOURCE",
+          currentSources: resolvedLectureSlideSources,
+          setSources: setLectureSlideSources,
+          setBusy: setIsExtractingSlides,
+          jobType: "slides",
+          startStatus: "Reading slide sources...",
+          successMessage: ({ addedNames, skippedNames }) => (
+            `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} read.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generating the study guide now.`
+          ),
+          failureStatus: "Slide reading failed.",
+        });
+        resolvedLectureSlideSources = slideResult.nextSources;
+        resolvedLectureSlides = slideResult.text;
+        setPendingLectureSlideFiles((current) => current.filter((item) => !pendingSlideIds.has(item.id)));
+        setCurrentJobType("study_guide");
+        setStatus("Slides read. Submitting study guide request...");
+        setProgress(0);
+      }
       let submitAttempt = 0;
       let jobRequest = null;
       while (!jobRequest) {
@@ -22012,10 +22109,7 @@ export default function App() {
         <main className="relative mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
           <div className="grid min-h-[70vh] items-center gap-8 xl:grid-cols-[1fr_0.95fr]">
             <section className="rounded-[32px] border border-white/10 bg-slate-900/70 p-6 shadow-[0_30px_90px_rgba(2,8,23,0.45)] backdrop-blur xl:p-8">
-              <div className="flex flex-wrap gap-3">
-                {progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === 0 ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}
-              </div>
-              <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-black/40 p-4 sm:p-5">
+              <div className="overflow-hidden rounded-[28px] border border-white/10 bg-black/40 p-4 sm:p-5">
                 <img src={BRAND_ART_URL} alt="Mabaso AI microphone and study logo" className="mx-auto w-full max-w-[320px] rounded-[24px]" />
               </div>
               <p className="brand-mark mt-6 text-3xl font-black sm:text-5xl">Mabaso AI</p>
@@ -22259,6 +22353,8 @@ export default function App() {
     return renderActiveStudySessionPage();
   }
 
+  const activeTimetableNavItem = getActiveTimetableNavItem();
+
   return (
     <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -22277,7 +22373,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
-              <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}>Study Timetable</button>
+              <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{activeTimetableNavItem ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{activeTimetableNavItem.title} - {activeTimetableNavItem.remainingLabel}</span> : null}</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
@@ -22299,11 +22395,10 @@ export default function App() {
           <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
           <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
           <button type="button" onClick={openPaymentsNavigationTarget} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
-          <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"}`}>Timetable</button>
+          <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)]" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"}`}><span className="block">Timetable</span>{activeTimetableNavItem ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{activeTimetableNavItem.title} - {activeTimetableNavItem.remainingLabel}</span> : null}</button>
           <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
           <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
         </div>
-        <div className="mb-6 hidden flex-wrap gap-3 sm:flex">{progressSteps.map((step, index) => <div key={step} className={`rounded-full border px-4 py-2 text-sm ${index === activeStepIndex ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : index < activeStepIndex ? "border-white/10 bg-white/5 text-white" : "border-white/10 bg-slate-950/75 text-slate-300"}`}>{step}</div>)}</div>
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
@@ -22402,7 +22497,7 @@ export default function App() {
                           </div>
                         ) : null}
                       </button>
-                      <p className={`mt-2 text-xs leading-6 ${slidesReadyForGuide ? "text-emerald-200" : "text-rose-200"}`}>{slideGuideStatusLine}</p>
+                      <p className={`mt-2 text-xs leading-6 ${slideGuideStatusClassName}`}>{slideGuideStatusLine}</p>
                     </div>
                   </div>
                   {hasResults ? <div className="rounded-2xl border border-sky-300/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-50">Study workspace is ready. Open it from the Workspace tab above.</div> : null}
@@ -22415,7 +22510,7 @@ export default function App() {
 
               <div className="mt-5 grid gap-4 xl:grid-cols-3">
                 <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNoteFileNames.length ? `${lectureNoteFileNames.length} source${lectureNoteFileNames.length === 1 ? "" : "s"} added` : "No notes added yet"}</p></div><button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-base font-bold text-white">+</span><span>Add More</span></button></div>{lectureNoteSources.length ? <div className="mt-4 grid gap-3">{lectureNoteSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removeLectureNoteSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "LECTURE NOTE"}</p></div>)}</div> : <p className="mt-3 text-xs leading-6 text-slate-300">Accepted here: TXT, MD, PDF, DOCX, and clear note images.</p>}</div>
-                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add More</span></button></div>{lectureSlideSources.length ? <div className="mt-4 grid gap-3">{lectureSlideSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removeLectureSlideSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "SLIDE SOURCE"}</p></div>)}</div> : null}</div>
+                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add More</span></button></div>{visibleLectureSlideSources.length ? <div className="mt-4 grid gap-3">{visibleLectureSlideSources.map((source) => <div key={source.id} className={`relative rounded-2xl border px-4 py-3 pr-11 text-sm text-slate-200 ${source.pending ? "border-amber-300/20 bg-amber-400/10" : "border-white/10 bg-slate-950/75"}`}><button type="button" onClick={() => removeLectureSlideSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className={`mt-2 text-xs uppercase tracking-[0.22em] ${source.pending ? "text-amber-100/80" : "text-emerald-200/70"}`}>{source.prefix || "SLIDE SOURCE"}</p></div>)}</div> : null}</div>
                 <div className="rounded-2xl border border-amber-300/15 bg-amber-400/10 p-4">
                   <div className="force-mobile-stack flex items-center justify-between gap-3">
                     <div className="min-w-0">
