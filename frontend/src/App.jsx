@@ -8218,6 +8218,9 @@ export default function App() {
     const normalizedAvailability = normalizeTimetableAvailability(timetableAvailability);
     const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
     const selectedSubjects = timetableSubjects.filter((subject) => subject.selected !== false);
+    const timetableLearnerName = String(timetableProfile.learnerName || "").trim();
+    const timetableGradeLabel = String(timetableProfile.grade || "").trim();
+    const timetableProfileSummary = [timetableLearnerName, timetableGradeLabel].filter(Boolean).join(" - ");
     const visibleTimetableSessions = applyTimetableAutoMisses(timetableSessions, timetableNow);
     const completedCount = visibleTimetableSessions.filter((session) => session.status === "completed").length;
     const trackableCount = visibleTimetableSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
@@ -8279,26 +8282,6 @@ export default function App() {
         </div>
 
         {timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
-        {timetableCompletionPrompt ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 backdrop-blur-sm">
-            <div className="w-full max-w-lg rounded-[28px] border border-white/10 bg-slate-950 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.5)]">
-              <p className="text-xs uppercase tracking-[0.3em] text-amber-100/80">Completion Locked</p>
-              <h3 className="mt-4 text-2xl font-semibold leading-tight text-white">This study period cannot be marked done yet.</h3>
-              <p className="mt-4 text-sm leading-7 text-slate-300">
-                To keep your weekly progress accurate and honest, you can mark a session as completed only while its scheduled time is currently in progress.
-              </p>
-              <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-50">
-                <p className="font-semibold">{timetableCompletionPrompt.title}</p>
-                <p className="mt-1 text-amber-100/80">Scheduled for {timetableCompletionPrompt.windowLabel}.</p>
-              </div>
-              <div className="mt-6 flex justify-end">
-                <button type="button" onClick={() => setTimetableCompletionPrompt(null)} className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10">
-                  I understand
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
         {timetableTransitionPrompt ? (
           <div className="mt-5 rounded-2xl border border-sky-300/30 bg-sky-400/12 px-4 py-3 text-sm text-sky-50">
             <div className="force-mobile-stack flex items-start justify-between gap-3">
@@ -8491,6 +8474,13 @@ export default function App() {
           </div>
           <div className="text-center">
             <p className="text-2xl font-semibold text-white">{formatTimetableWeekRange(timetableWeekStartIso)}</p>
+            {!isTimetableEditing && timetableProfileSummary ? (
+              <div className="mt-3 inline-flex max-w-full flex-wrap items-center justify-center gap-2 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">
+                {timetableLearnerName ? <span className="phone-safe-copy">{timetableLearnerName}</span> : null}
+                {timetableLearnerName && timetableGradeLabel ? <span className="text-emerald-100/50">|</span> : null}
+                {timetableGradeLabel ? <span className="phone-safe-copy">{timetableGradeLabel}</span> : null}
+              </div>
+            ) : null}
             <p className="mt-2 text-sm text-slate-400">{isLoadingTimetable ? "Loading saved timetable..." : `${selectedSubjects.length} active subject${selectedSubjects.length === 1 ? "" : "s"}`}</p>
           </div>
           <div className="flex min-w-[240px] items-center gap-3">
@@ -8538,6 +8528,7 @@ export default function App() {
                   const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
                   const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
+                  const showCompletionPromptHere = Boolean(timetableCompletionPrompt?.id && session?.id === timetableCompletionPrompt.id);
                   const baseTone = isEmptyCell
                     ? "border-white/5 bg-black text-white"
                     : isExamCell
@@ -8555,7 +8546,7 @@ export default function App() {
                               : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
                   const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
-                    <div key={`${day.id}-${slot.start}-${slot.end}`} className="border-l border-white/5 p-1.5">
+                    <div key={`${day.id}-${slot.start}-${slot.end}`} className="relative border-l border-white/5 p-1.5">
                       <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => { if (!isTimetableEditing && session?.id && !isReadOnlyCell) toggleTimetableSessionStatus(isRecoveryCell ? session.id : (session.sourceSessionId || session.id), session); }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
                         {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
                           <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
@@ -8573,6 +8564,20 @@ export default function App() {
                           <span className="phone-safe-copy">{session.status === "completed" ? "Done: " : session.status === "missed" ? "Missed: " : ""}{session.title}</span>
                         )}
                       </button>
+                      {showCompletionPromptHere ? (
+                        <div className="absolute left-1/2 top-full z-40 mt-2 w-80 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-2xl border border-amber-300/25 bg-slate-950 p-3 text-left shadow-[0_18px_45px_rgba(0,0,0,0.45)]">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-amber-100/80">Completion Locked</p>
+                          <p className="mt-2 text-sm font-semibold leading-5 text-white">This study period cannot be marked done yet.</p>
+                          <p className="mt-2 text-xs leading-5 text-slate-300">For accurate weekly progress, you can mark a session completed only while its scheduled time is currently in progress.</p>
+                          <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs leading-5 text-amber-50">
+                            <p className="font-semibold">{timetableCompletionPrompt.title}</p>
+                            <p className="mt-1 text-amber-100/80">Scheduled for {timetableCompletionPrompt.windowLabel}.</p>
+                          </div>
+                          <div className="mt-3 flex justify-end">
+                            <button type="button" onClick={() => setTimetableCompletionPrompt(null)} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white">I understand</button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -14349,6 +14354,7 @@ export default function App() {
     if (!candidateSession || ["break", "empty", "missed"].includes(candidateSession.status) || candidateSession.type === "exam") return;
     if (!isTimetableSessionActiveNow(candidateSession, timetableNow)) {
       setTimetableCompletionPrompt({
+        id: candidateSession.id,
         title: normalizeTimetableSubjectName(candidateSession.title, "This session"),
         windowLabel: formatTimetableSessionWindow(candidateSession),
       });
@@ -14420,7 +14426,7 @@ export default function App() {
       const margin = 28;
       const timeWidth = 140;
       const dayWidth = Math.floor((width - (margin * 2) - timeWidth) / 7);
-      const headerHeight = 150;
+      const headerHeight = 174;
       const rowHeight = 76;
       const footerHeight = 92;
       const height = headerHeight + (exportRows.length * rowHeight) + footerHeight + margin;
@@ -14497,6 +14503,9 @@ export default function App() {
 
       context.fillStyle = "#000000";
       context.fillRect(0, 0, width, height);
+      const exportLearnerName = String(timetableProfile.learnerName || "").trim();
+      const exportGradeLabel = String(timetableProfile.grade || "").trim();
+      const exportProfileSummary = [exportLearnerName, exportGradeLabel].filter(Boolean).join(" - ");
       context.fillStyle = "#ffffff";
       context.font = "700 34px Inter, Arial";
       context.textAlign = "left";
@@ -14507,12 +14516,19 @@ export default function App() {
       context.fillText(formatTimetableWeekRange(timetableWeekStartIso), margin, 68);
       context.font = "500 16px Inter, Arial";
       context.fillStyle = "#94a3b8";
-      context.fillText(`${timetableSubjects.filter((subject) => subject.selected !== false).length} active subjects`, margin, 102);
+      if (exportProfileSummary) {
+        context.fillStyle = "#bbf7d0";
+        context.fillText(exportProfileSummary, margin, 102);
+        context.fillStyle = "#94a3b8";
+        context.fillText(`${timetableSubjects.filter((subject) => subject.selected !== false).length} active subjects`, margin, 126);
+      } else {
+        context.fillText(`${timetableSubjects.filter((subject) => subject.selected !== false).length} active subjects`, margin, 102);
+      }
       context.textAlign = "right";
       context.fillStyle = "#f8fafc";
-      context.fillText(`Weekly Progress: ${weeklyProgress}%`, width - margin, 70);
-      drawBox(width - margin - 260, 102, 260, 10, "#111827", "#111827", 1, 5);
-      drawBox(width - margin - 260, 102, Math.max(0, Math.min(260, 260 * (weeklyProgress / 100))), 10, "#22c55e", "#22c55e", 1, 5);
+      context.fillText(`Weekly Progress: ${weeklyProgress}%`, width - margin, 78);
+      drawBox(width - margin - 260, 112, 260, 10, "#111827", "#111827", 1, 5);
+      drawBox(width - margin - 260, 112, Math.max(0, Math.min(260, 260 * (weeklyProgress / 100))), 10, "#22c55e", "#22c55e", 1, 5);
 
       const tableX = margin;
       let y = headerHeight;
