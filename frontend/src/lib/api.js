@@ -1,29 +1,30 @@
-// frontend/src/lib/api.js
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+// Central credentialed fetch helper
+export async function apiFetch(path, options = {}) {
+  const base = process.env.REACT_APP_API_BASE || '';
+  const url = path.startsWith('http') ? path : `${base}${path}`;
 
-export default async function apiFetch(path, opts = {}) {
-  const url = path.startsWith("http://") || path.startsWith("https://") ? path : `${API_BASE}${path}`;
-  const fetchOpts = {
-    credentials: "include", // ensure cookies/session are sent
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    cache: opts.cache || "no-store", // default: bypass cache for admin-critical calls
-    ...opts,
-  };
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+  const init = Object.assign({}, options, { headers, credentials: 'include' });
 
-  const res = await fetch(url, fetchOpts);
-  const contentType = res.headers.get("Content-Type") || "";
-  let body = null;
-  if (contentType.includes("application/json")) {
-    body = await res.json().catch(() => null);
-  } else {
-    body = await res.text().catch(() => null);
+  // cache-bust if provided
+  if (options.cacheBust) {
+    const sep = url.includes('?') ? '&' : '?';
+    const ts = Date.now();
+    return fetch(`${url}${sep}_=${ts}`, init).then(handleResponse);
   }
 
+  return fetch(url, init).then(handleResponse);
+}
+
+async function handleResponse(res) {
   if (!res.ok) {
-    const err = new Error(body?.detail || res.statusText || `HTTP ${res.status}`);
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) {}
+    const err = new Error(res.statusText || 'Fetch error');
     err.status = res.status;
-    err.body = body;
+    err.body = json || text;
     throw err;
   }
-  return body;
+  return res.json().catch(() => null);
 }
