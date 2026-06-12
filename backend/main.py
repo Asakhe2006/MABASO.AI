@@ -4254,11 +4254,6 @@ def load_site_ratings(limit: int = 200) -> dict[str, Any]:
     return {"items": items, "total": total, "average_stars": average, "distribution": distribution}
 
 
-def ensure_paid_timetable_access(email: str):
-    if get_billing_quota_plan_id(get_effective_plan_id(email)) == "free":
-        raise HTTPException(status_code=402, detail="Study timetable is available on paid plans.")
-
-
 def ensure_json_payload_size(value: Any, *, max_chars: int, label: str) -> Any:
     try:
         payload = json.dumps(value, ensure_ascii=False)
@@ -11546,7 +11541,6 @@ async def submit_site_rating(
 
 @app.get("/study-timetable")
 async def get_study_timetable(current_user: str = Depends(require_authenticated_user)):
-    ensure_paid_timetable_access(current_user)
     return {"timetable": get_study_timetable_for_user(current_user)}
 
 
@@ -11557,7 +11551,6 @@ async def save_study_timetable(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
-    ensure_paid_timetable_access(current_user)
     timetable = await asyncio.to_thread(save_study_timetable_for_user, current_user, payload)
     record_audit_log(
         action="study_timetable.saved",

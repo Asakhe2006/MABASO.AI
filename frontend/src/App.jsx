@@ -1,4 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import LectureAssistantPanel from "./components/LectureAssistantPanel";
 import MindMapFlow from "./components/MindMapFlow";
@@ -750,10 +751,10 @@ const TIMETABLE_DEFAULT_END = "21:30";
 const TIMETABLE_DEFAULT_SESSION_MINUTES = 90;
 const TIMETABLE_MIN_SESSION_MINUTES = 30;
 const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
-const TIMETABLE_FREE_ACCESS_MS = 7 * 24 * 60 * 60 * 1000;
 const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_LOADING_STORAGE_KEY = "mabaso-study-timetable-loader-v1";
+const TIMETABLE_LOADING_MIN_MS = 3000;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_LOADING_STAGES = [
@@ -840,6 +841,131 @@ const TIMETABLE_LOADING_PIECES = Array.from({ length: 28 }, (_, index) => ({
   tone: index % 3 === 0 ? "cyan" : index % 3 === 1 ? "lime" : "emerald",
   scale: 0.7 + (index % 4) * 0.12,
 }));
+const TIMETABLE_LOADING_MESSAGE_TONES = [
+  {
+    label: "Momentum",
+    icon: "01",
+    cardClass: "border-lime-300/35 bg-lime-400/10 text-lime-50 shadow-[0_0_34px_rgba(132,204,22,0.18)]",
+    quoteClass: "text-lime-300",
+  },
+  {
+    label: "Discipline",
+    icon: "02",
+    cardClass: "border-amber-300/35 bg-amber-400/10 text-amber-50 shadow-[0_0_34px_rgba(251,191,36,0.16)]",
+    quoteClass: "text-amber-300",
+  },
+  {
+    label: "Focus",
+    icon: "03",
+    cardClass: "border-cyan-300/35 bg-cyan-400/10 text-cyan-50 shadow-[0_0_34px_rgba(34,211,238,0.18)]",
+    quoteClass: "text-cyan-300",
+  },
+];
+const STUDY_SESSION_MOTIVATION_STORAGE_KEY = "mabaso-study-session-motivation-state-v1";
+const STUDY_SESSION_MOTIVATION_HISTORY_KEY = "mabaso-study-session-motivation-history-v1";
+const STUDY_SESSION_MOTIVATION_HISTORY_MS = 7 * 24 * 60 * 60 * 1000;
+const STUDY_SESSION_MOTIVATION_VISIBLE_MS = 5000;
+const STUDY_SESSION_MOTIVATION_TRIGGERS = [
+  { key: "60", thresholdMs: 60 * 60 * 1000, label: "1 hour left", tone: "lime", purpose: "Momentum" },
+  { key: "45", thresholdMs: 45 * 60 * 1000, label: "45 minutes left", tone: "gold", purpose: "Discipline" },
+  { key: "30", thresholdMs: 30 * 60 * 1000, label: "30 minutes left", tone: "cyan", purpose: "Focus" },
+  { key: "15", thresholdMs: 15 * 60 * 1000, label: "15 minutes left", tone: "orange", purpose: "Final push" },
+  { key: "5", thresholdMs: 5 * 60 * 1000, label: "5 minutes left", tone: "red", purpose: "Finish strong" },
+];
+const STUDY_SESSION_MOTIVATION_TONES = {
+  lime: {
+    accentClass: "text-lime-300",
+    cardClass: "border-lime-300/50 bg-lime-400/10 shadow-[0_0_42px_rgba(132,204,22,0.22)]",
+    glowClass: "bg-lime-300/18",
+  },
+  gold: {
+    accentClass: "text-yellow-300",
+    cardClass: "border-yellow-300/50 bg-yellow-400/10 shadow-[0_0_42px_rgba(250,204,21,0.22)]",
+    glowClass: "bg-yellow-300/18",
+  },
+  cyan: {
+    accentClass: "text-cyan-300",
+    cardClass: "border-cyan-300/50 bg-cyan-400/10 shadow-[0_0_42px_rgba(34,211,238,0.22)]",
+    glowClass: "bg-cyan-300/18",
+  },
+  orange: {
+    accentClass: "text-orange-300",
+    cardClass: "border-orange-300/50 bg-orange-400/10 shadow-[0_0_42px_rgba(251,146,60,0.22)]",
+    glowClass: "bg-orange-300/18",
+  },
+  red: {
+    accentClass: "text-red-300",
+    cardClass: "border-red-300/55 bg-red-500/10 shadow-[0_0_42px_rgba(248,113,113,0.24)]",
+    glowClass: "bg-red-300/18",
+  },
+  purple: {
+    accentClass: "text-purple-300",
+    cardClass: "border-purple-300/50 bg-purple-400/10 shadow-[0_0_42px_rgba(192,132,252,0.22)]",
+    glowClass: "bg-purple-300/18",
+  },
+  turquoise: {
+    accentClass: "text-teal-300",
+    cardClass: "border-teal-300/50 bg-teal-400/10 shadow-[0_0_42px_rgba(45,212,191,0.22)]",
+    glowClass: "bg-teal-300/18",
+  },
+};
+const STUDY_SESSION_MOTIVATION_TITLES = {
+  60: ["Keep going.", "Build momentum.", "Stay with it.", "Your future is forming.", "Strong start.", "Keep building."],
+  45: ["Don't stop now.", "Momentum is on your side.", "Stay disciplined.", "Protect this hour.", "Keep the rhythm.", "Your effort matters."],
+  30: ["Stay focused.", "Hold your attention.", "Halfway strength.", "Keep your mind here.", "Small progress counts.", "Focus wins marks."],
+  15: ["You're doing great.", "Finish this section strong.", "Push through.", "The finish line is close.", "Every minute matters.", "Stay sharp now."],
+  5: ["Almost there.", "Finish strong.", "Complete what you started.", "Final push.", "End with focus.", "Make it count."],
+};
+const STUDY_SESSION_MOTIVATION_BODIES = {
+  60: [
+    "Your mind is adapting to the challenge.",
+    "Every expert once struggled with the basics.",
+    "You are investing in a future version of yourself.",
+    "Consistency today creates opportunities tomorrow.",
+    "The students who win are usually the ones who kept going.",
+    "This session is already building discipline.",
+  ],
+  45: [
+    "Discipline today creates freedom tomorrow.",
+    "Your future self will thank you for this session.",
+    "Stay with the process. Results come later.",
+    "This is where real study habits become stronger.",
+    "Keep showing up while the work is still difficult.",
+    "A focused learner does not need a perfect mood.",
+  ],
+  30: [
+    "You are closer than you think.",
+    "The hardest part is behind you.",
+    "Keep your attention where your goals are.",
+    "Small progress still counts.",
+    "Your focus now can save revision time later.",
+    "Stay calm and work through the next idea.",
+  ],
+  15: [
+    "Finish this section strong.",
+    "Every minute now is progress.",
+    "You will be proud that you stayed with it.",
+    "The finish line is getting closer.",
+    "Use these minutes to secure what you learned.",
+    "End this session with a clear win.",
+  ],
+  5: [
+    "The session is nearly complete.",
+    "Give your best final effort.",
+    "Success is often decided in the final minutes.",
+    "Complete what you started.",
+    "Close the session with one useful note.",
+    "Finish with the same seriousness you started with.",
+  ],
+};
+const STUDY_SESSION_SUBJECT_MOTIVATION = [
+  { pattern: /math/i, title: "Mathematics rewards practice.", body: "Every solved problem strengthens your reasoning skills." },
+  { pattern: /physics/i, title: "Understanding beats memorisation.", body: "Every scientist once struggled with difficult concepts." },
+  { pattern: /chem/i, title: "Chemistry follows patterns.", body: "Master the concepts and the marks will follow." },
+  { pattern: /history/i, title: "History explains the world.", body: "Strong answers connect causes, effects, and evidence." },
+  { pattern: /biology/i, title: "Biology reveals how life works.", body: "Every topic you learn makes the bigger picture clearer." },
+  { pattern: /english/i, title: "Communication is a superpower.", body: "Keep improving the way you read, write, and explain." },
+];
 
 function getTimetableLoadingSubjectCopy(subjectName = "") {
   const name = String(subjectName || "").trim();
@@ -931,6 +1057,61 @@ function pickTimetableLoadingMessages(subjectName = "", previousSignature = "") 
     if (selected.join("|") !== previousSignature) return selected;
   }
   return pool.slice(0, 3);
+}
+
+function buildStudySessionMotivationPool(triggerKey = "30", subjectName = "", context = {}) {
+  const titles = STUDY_SESSION_MOTIVATION_TITLES[triggerKey] || STUDY_SESSION_MOTIVATION_TITLES[30];
+  const bodies = STUDY_SESSION_MOTIVATION_BODIES[triggerKey] || STUDY_SESSION_MOTIVATION_BODIES[30];
+  const baseMessages = titles.flatMap((title, titleIndex) => bodies.map((body, bodyIndex) => ({
+    id: `${triggerKey}-base-${titleIndex}-${bodyIndex}`,
+    title,
+    body,
+  })));
+  const subjectMessages = STUDY_SESSION_SUBJECT_MOTIVATION
+    .filter((item) => item.pattern.test(subjectName))
+    .map((item, index) => ({
+      id: `${triggerKey}-subject-${index}-${String(subjectName || "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      title: item.title,
+      body: item.body,
+    }));
+  const nextSubject = normalizeTimetableSubjectName(context.nextSubject || "", "");
+  const isNight = Boolean(context.isNight);
+  const restMessages = triggerKey === "5" && !nextSubject
+    ? (isNight ? [
+      { id: "5-rest-night-1", title: "Time to rest.", body: "Recovery is part of success." },
+      { id: "5-rest-night-2", title: "Rest now.", body: "Return stronger tomorrow." },
+      { id: "5-rest-night-3", title: "Sleep builds tomorrow's focus.", body: "A good night's sleep sharpens your thinking." },
+    ] : [
+      { id: "5-rest-day-1", title: "Great work.", body: "Take a break and recharge." },
+      { id: "5-rest-day-2", title: "Recovery matters.", body: "Stretch, hydrate, and relax for a moment." },
+      { id: "5-rest-day-3", title: "You earned recovery time.", body: "Reset your mind before the next task." },
+    ])
+    : [];
+  const nextSubjectMessages = triggerKey === "5" && nextSubject
+    ? [
+      { id: `5-next-${nextSubject.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-1`, title: `Prepare for ${nextSubject}.`, body: "Your next study session begins soon." },
+      { id: `5-next-${nextSubject.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-2`, title: `${nextSubject} is coming up next.`, body: "Get ready to switch focus smoothly." },
+    ]
+    : [];
+  return [...nextSubjectMessages, ...restMessages, ...subjectMessages, ...baseMessages];
+}
+
+function pruneStudySessionMotivationHistory(history = [], nowMs = Date.now()) {
+  return (Array.isArray(history) ? history : []).filter((item) => {
+    const shownAtMs = new Date(item?.shownAt || 0).getTime();
+    return Number.isFinite(shownAtMs) && nowMs - shownAtMs <= STUDY_SESSION_MOTIVATION_HISTORY_MS;
+  });
+}
+
+function pickStudySessionMotivationMessage({ triggerKey = "30", subjectName = "", history = [], context = {} }) {
+  const pool = buildStudySessionMotivationPool(triggerKey, subjectName, context);
+  if (!pool.length) return null;
+  const recentHistory = pruneStudySessionMotivationHistory(history);
+  const recentIds = new Set(recentHistory.map((item) => item.messageId).filter(Boolean));
+  const candidates = pool.filter((message) => !recentIds.has(message.id));
+  const source = candidates.length ? candidates : pool;
+  const index = Math.floor(Math.random() * source.length);
+  return source[index] || source[0] || null;
 }
 
 function createDefaultTimetableProfile() {
@@ -1059,8 +1240,31 @@ function shouldTimetableDoublePeriod(subject = {}) {
   return getTimetableSubjectPriority(subject) >= 4 && getTimetableSubjectPerformance(subject) <= 3;
 }
 
+function getTimetableSubjectCategory(subjectName = "") {
+  const normalized = normalizeTimetableSubjectName(subjectName, "").toLowerCase();
+  if (/math|physics|account|computer|coding|program|technology|engineering|chem/.test(normalized)) return "logical";
+  if (/history|geography|life\s*science|biology|agric|business|economics|religion/.test(normalized)) return "memory";
+  if (/english|literature|language|afrikaans|zulu|xhosa|french|spanish|communication/.test(normalized)) return "language";
+  if (/art|design|music|drama|creative|visual/.test(normalized)) return "creative";
+  return "general";
+}
+
+function getTimetableSubjectDifficulty(subject = {}, examUrgencyWeight = 0) {
+  const priority = getTimetableSubjectPriority(subject);
+  const performance = getTimetableSubjectPerformance(subject);
+  const weakness = Math.max(0, 5 - performance);
+  return priority + weakness + Math.max(0, Number(examUrgencyWeight || 0));
+}
+
+function getTimetableEnergyBand(startM = 0) {
+  if (startM < 12 * 60) return "high";
+  if (startM < 17 * 60) return "medium";
+  return "light";
+}
+
 function getExamUrgencyWeight(daysRemaining) {
   if (!Number.isFinite(daysRemaining) || daysRemaining < 0) return 0;
+  if (daysRemaining <= 3) return 5;
   if (daysRemaining <= 7) return 4;
   if (daysRemaining <= 14) return 3;
   if (daysRemaining <= 30) return 2;
@@ -1127,6 +1331,9 @@ function buildWeightedTimetableSubjects(subjects = [], examDates = [], reference
       return {
         ...subject,
         name,
+        category: getTimetableSubjectCategory(name),
+        difficulty: getTimetableSubjectDifficulty(subject, examWeight),
+        examUrgencyWeight: examWeight,
         weight: priorityWeight + weaknessWeight + examWeight + examPracticeWeight,
       };
     });
@@ -1453,6 +1660,47 @@ function findTimetableSubjectForTitle(subjects = [], title = "") {
   )) || null;
 }
 
+function wouldExceedTimetableConsecutiveSubject({ sessions = [], dayId = "", start = "", end = "", subjectName = "", maxConsecutive = 2 }) {
+  const subjectKey = getTimetableComparableTitle(subjectName);
+  if (!dayId || !subjectKey) return false;
+  const candidateRange = normalizeTimetableRange(start, end);
+  const comparableSessions = (Array.isArray(sessions) ? sessions : [])
+    .filter((session) => session?.dayId === dayId)
+    .map((session) => {
+      const range = normalizeTimetableRange(session.start, session.end);
+      const isSameRange = range.startM === candidateRange.startM && range.endM === candidateRange.endM;
+      return {
+        isSameRange,
+        isStudy: isTimetableStudyLikeSession(session),
+        key: getTimetableComparableTitle(session.title || session.subject),
+        startM: range.startM,
+        endM: range.endM,
+      };
+    })
+    .filter((session) => !session.isSameRange)
+    .concat([{ key: subjectKey, isStudy: true, startM: candidateRange.startM, endM: candidateRange.endM }])
+    .sort((left, right) => left.startM - right.startM || left.endM - right.endM);
+  let currentKey = "";
+  let count = 0;
+  let previousEndM = null;
+  for (const session of comparableSessions) {
+    if (!session.isStudy || !session.key || (previousEndM !== null && session.startM > previousEndM)) {
+      currentKey = "";
+      count = 0;
+      previousEndM = session.endM;
+      continue;
+    }
+    if (session.key === currentKey) count += 1;
+    else {
+      currentKey = session.key;
+      count = 1;
+    }
+    if (currentKey === subjectKey && count > maxConsecutive) return true;
+    previousEndM = session.endM;
+  }
+  return false;
+}
+
 function isTimetableSubjectPastFinalExam(subjectName = "", examDates = [], referenceDate = new Date()) {
   const comparableTitle = getTimetableComparableTitle(subjectName);
   if (!comparableTitle) return false;
@@ -1497,6 +1745,9 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
   if (!previousSession) return null;
   const subject = findTimetableSubjectForTitle(subjects, previousSession.title) || { name: previousSession.title, priority: 3, performance: 3 };
   const isRecovery = previousSession.status === "missed" && isTimetablePoorPerformanceSubject(subject);
+  const previousRange = normalizeTimetableRange(previousSession.start, previousSession.end);
+  const isImmediateFollowUp = previousRange.endM === slotStartM;
+  if (!isRecovery && (isImmediateFollowUp || previousSession.type === "review" || previousSession.derived)) return session || null;
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
   const slotStartDate = getTimetableSlotDate(weekStartIso, dayId, slot.start) || (() => {
     if (!date || !slot.start) return null;
@@ -1520,7 +1771,7 @@ function resolveTimetableDisplaySession({ session, slot, dayId, date, sessions =
       includePastPapers: normalizedPreferences.includePastPapers,
       examUrgencyWeight: subjectExam?.urgencyWeight || 0,
     });
-  const baseSubjectName = normalizeTimetableSubjectName(previousSession.title, "Subject");
+  const baseSubjectName = normalizeTimetableSubjectName(subject?.name || previousSession.title, "Subject");
   return {
     id: `review-${previousSession.id}-${slot.start}-${slot.end}`,
     sourceSessionId: previousSession.id,
@@ -1671,6 +1922,13 @@ function buildTimetableRecoveryReschedule({ sessions = [], subjects = [], availa
           || displaySession.type === "empty"
           || ((displaySession.type === "review" || displaySession.derived) && (!displaySession.recovery || displaySession.sourceSessionId === missedSession.id));
         if (!canReplaceReviewSpace) continue;
+        if (wouldExceedTimetableConsecutiveSubject({
+          sessions: nextSessions,
+          dayId: day.id,
+          start: slot.start,
+          end: slot.end,
+          subjectName,
+        })) continue;
         const recoverySession = createRecoverySession({ dayId: day.id, date, start: slot.start, end: slot.end, missedSession, subjectName });
         if (currentCell) {
           nextSessions[currentCell.index] = recoverySession;
@@ -1736,6 +1994,16 @@ function buildTimetableRecoveryReschedule({ sessions = [], subjects = [], availa
         const start = minutesToTimetableTime(startM);
         const end = minutesToTimetableTime(endM);
         if (!isFutureSlot(day.id, end)) break;
+        if (wouldExceedTimetableConsecutiveSubject({
+          sessions: nextSessions,
+          dayId: day.id,
+          start,
+          end,
+          subjectName,
+        })) {
+          startM += 5;
+          continue;
+        }
         const recoverySession = createRecoverySession({ dayId: day.id, date, start, end, missedSession, subjectName });
         nextSessions.push(recoverySession);
         sessionsByCell.set(`${day.id}-${start}-${end}`, { session: recoverySession, index: nextSessions.length - 1 });
@@ -1849,36 +2117,70 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
   const normalizedAvailability = normalizeTimetableAvailability(availability);
   const normalizedPreferences = normalizeTimetablePreferences(preferences);
   const weightedSubjects = buildWeightedTimetableSubjects(subjects, normalizedPreferences.examDates, weekStartIso || new Date());
+  const uniqueSubjects = Array.from(new Map(weightedSubjects.map((subject) => [getTimetableComparableTitle(subject.name), subject])).values());
   const sessionLength = normalizedPreferences.sessionLengthMinutes || TIMETABLE_DEFAULT_SESSION_MINUTES;
   let cursor = 0;
-  let repeatSubject = null;
-  let repeatRemaining = 0;
   const sessions = [];
-  const chooseNextSubject = (isAllowed = () => true) => {
-    if (!weightedSubjects.length) return null;
-    if (repeatSubject && repeatRemaining > 0) {
-      if (isAllowed(repeatSubject)) {
-        repeatRemaining -= 1;
-        const nextSubject = repeatSubject;
-        if (repeatRemaining <= 0) repeatSubject = null;
-        return nextSubject;
-      }
-      repeatSubject = null;
-      repeatRemaining = 0;
-    }
-    for (let attempt = 0; attempt < weightedSubjects.length; attempt += 1) {
-      const subject = weightedSubjects[cursor % weightedSubjects.length];
-      cursor += 1;
-      if (!isAllowed(subject)) continue;
-      if (shouldTimetableDoublePeriod(subject)) {
-        repeatSubject = subject;
-        repeatRemaining = 1;
-      }
-      return subject;
-    }
-    repeatSubject = null;
-    repeatRemaining = 0;
-    return null;
+  const getSubjectExamUrgencyForDate = (subject, slotStartDate) => getTimetableExamCountdowns(normalizedPreferences, slotStartDate)
+    .find((exam) => getTimetableComparableTitle(exam.subject) === getTimetableComparableTitle(subject?.name))?.urgencyWeight || 0;
+  const getDayStudySequence = (dayId) => sessions
+    .filter((session) => session.dayId === dayId && isTimetableStudyLikeSession(session))
+    .sort((left, right) => timetableTimeToMinutes(left.start) - timetableTimeToMinutes(right.start));
+  const chooseNextSubject = ({ isAllowed = () => true, dayId, start, end, startM, slotStartDate }) => {
+    const subjectPool = uniqueSubjects.length ? uniqueSubjects : weightedSubjects;
+    if (!subjectPool.length) return null;
+    const daySequence = getDayStudySequence(dayId);
+    const lastSession = daySequence[daySequence.length - 1] || null;
+    const previousSession = daySequence[daySequence.length - 2] || null;
+    const lastKey = getTimetableComparableTitle(lastSession?.title);
+    const previousKey = getTimetableComparableTitle(previousSession?.title);
+    const lastCategory = lastSession ? getTimetableSubjectCategory(lastSession.title) : "";
+    const energyBand = getTimetableEnergyBand(startM);
+    const candidates = subjectPool
+      .filter((subject) => subject && isAllowed(subject))
+      .filter((subject) => !wouldExceedTimetableConsecutiveSubject({
+        sessions,
+        dayId,
+        start,
+        end,
+        subjectName: subject.name,
+      }));
+    const source = candidates;
+    if (!source.length) return null;
+    const scored = source.map((subject, index) => {
+      const key = getTimetableComparableTitle(subject.name);
+      const category = getTimetableSubjectCategory(subject.name);
+      const urgency = getSubjectExamUrgencyForDate(subject, slotStartDate);
+      const difficulty = getTimetableSubjectDifficulty(subject, urgency);
+      const recentSameCount = daySequence.slice(-4).filter((session) => getTimetableComparableTitle(session.title) === key).length;
+      let score = Number(subject.weight || 1) + urgency * 3;
+      if (energyBand === "high") score += difficulty * 1.8;
+      if (energyBand === "medium") score += difficulty >= 6 ? 2 : 1;
+      if (energyBand === "light") score += difficulty <= 6 ? 3 : -difficulty;
+      if (lastCategory && category !== lastCategory) score += 5;
+      if (lastCategory && category === lastCategory && source.some((candidate) => getTimetableSubjectCategory(candidate.name) !== lastCategory)) score -= 4;
+      if (lastKey === key) score += shouldTimetableDoublePeriod(subject) || urgency >= 4 ? 1 : -10;
+      if (lastKey === key && previousKey === key) score -= 100;
+      if (daySequence.slice(-2).some((session) => getTimetableComparableTitle(session.title) === key)) score -= 4;
+      score -= recentSameCount * 2;
+      score -= ((index + cursor) % Math.max(1, source.length)) * 0.05;
+      return { subject, score };
+    }).sort((left, right) => right.score - left.score || left.subject.name.localeCompare(right.subject.name));
+    cursor += 1;
+    return scored[0]?.subject || null;
+  };
+  const getPlannedStudyTitle = ({ subject, dayId, startM, slotStartDate }) => {
+    const baseName = normalizeTimetableSubjectName(subject?.name, "Study");
+    const urgency = getSubjectExamUrgencyForDate(subject, slotStartDate);
+    const energyBand = getTimetableEnergyBand(startM);
+    const daySequence = getDayStudySequence(dayId);
+    const lastTwoContainSubject = daySequence.slice(-2).some((session) => getTimetableComparableTitle(session.title) === getTimetableComparableTitle(baseName));
+    if (lastTwoContainSubject) return baseName;
+    if (urgency >= 4 && normalizedPreferences.includePastPapers !== false && energyBand === "light") return `${baseName} Past Paper`;
+    if (urgency >= 3 && energyBand !== "high") return `${baseName} Revision`;
+    if (getTimetableSubjectPerformance(subject) <= 2 && energyBand !== "high") return `${baseName} Revision`;
+    if (energyBand === "light" && getTimetableSubjectPriority(subject) < getTimetableSubjectPerformance(subject)) return `${baseName} Recap`;
+    return baseName;
   };
   TIMETABLE_DAY_KEYS.forEach((day, dayIndex) => {
     const dayDate = addDays(weekStartIso, dayIndex);
@@ -1926,12 +2228,20 @@ function generateStudyTimetableSessions({ subjects, availability, preferences, w
       }
       const slotStartDate = new Date(dayDate);
       slotStartDate.setHours(Math.floor(startM / 60), startM % 60, 0, 0);
-      const subject = chooseNextSubject((candidate) => !isTimetableSubjectPastFinalExam(candidate?.name, normalizedPreferences.examDates, slotStartDate));
+      const subject = chooseNextSubject({
+        dayId: day.id,
+        start,
+        end,
+        startM,
+        slotStartDate,
+        isAllowed: (candidate) => !isTimetableSubjectPastFinalExam(candidate?.name, normalizedPreferences.examDates, slotStartDate),
+      });
       if (!subject) {
         sessions.push(createEmptyTimetableSession({ dayId: day.id, date, start, end, idSuffix: `slot-${slotIndex}` }));
         return;
       }
-      sessions.push({ id: `${day.id}-${start}-${end}-study`, dayId: day.id, date, start, end, title: subject.name, status: "scheduled", type: "study" });
+      const title = getPlannedStudyTitle({ subject, dayId: day.id, startM, slotStartDate });
+      sessions.push({ id: `${day.id}-${start}-${end}-study`, dayId: day.id, date, start, end, title, status: "scheduled", type: "study" });
     };
 
     const pushBlocker = (blocker, startM = blocker.startM, endM = blocker.endM) => {
@@ -5752,6 +6062,7 @@ export default function App() {
   const [timetableLoadVersion, setTimetableLoadVersion] = useState(0);
   const [timetableLoadingStageIndex, setTimetableLoadingStageIndex] = useState(0);
   const [timetableLoadingMessages, setTimetableLoadingMessages] = useState(() => pickTimetableLoadingMessages());
+  const [timetableLoadingVisibleUntilMs, setTimetableLoadingVisibleUntilMs] = useState(0);
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
   const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
   const [isReschedulingTimetableRecovery, setIsReschedulingTimetableRecovery] = useState(false);
@@ -5764,6 +6075,7 @@ export default function App() {
   const [activeStudySessionQuestion, setActiveStudySessionQuestion] = useState("");
   const [isAskingActiveStudySession, setIsAskingActiveStudySession] = useState(false);
   const [activeStudySessionMessage, setActiveStudySessionMessage] = useState("");
+  const [activeStudyMotivationPopup, setActiveStudyMotivationPopup] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
   const fileInputRef = useRef(null);
@@ -5776,6 +6088,8 @@ export default function App() {
   const roomMessageInputRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
+  const activeStudyMotivationTimerRef = useRef(null);
+  const timetableLoadingRunActiveRef = useRef(false);
   const presentationTemplateInputRef = useRef(null);
   const podcastAudioRef = useRef(null);
   const podcastAudioSegmentsRef = useRef([]);
@@ -8700,6 +9014,8 @@ export default function App() {
           ? "text-amber-100 drop-shadow-[0_0_30px_rgba(251,191,36,0.62)]"
           : "text-cyan-50 drop-shadow-[0_0_34px_rgba(34,211,238,0.66)]";
     const focusTone = focusScore >= 90 ? "#22c55e" : focusScore >= 70 ? "#22d3ee" : focusScore >= 50 ? "#f59e0b" : "#fb7185";
+    const motivationPopup = activeStudyMotivationPopup?.sessionId === session?.id ? activeStudyMotivationPopup : null;
+    const motivationTone = STUDY_SESSION_MOTIVATION_TONES[motivationPopup?.tone] || STUDY_SESSION_MOTIVATION_TONES.cyan;
 
     if (!session) {
       return (
@@ -8730,6 +9046,33 @@ export default function App() {
           </div>
 
           <section className="py-10 text-center sm:py-14">
+            <div className="pointer-events-none mx-auto mb-5 min-h-[132px] max-w-md">
+              <AnimatePresence mode="wait">
+                {motivationPopup ? (
+                  <motion.div
+                    key={motivationPopup.id}
+                    initial={{ opacity: 0, y: 16, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.94 }}
+                    transition={{ duration: 0.4, ease: "easeOut" }}
+                    className={`relative overflow-hidden rounded-2xl border px-5 py-4 ${motivationTone.cardClass}`}
+                  >
+                    <div className={`absolute left-1/2 top-0 h-16 w-28 -translate-x-1/2 -translate-y-1/2 rounded-full blur-2xl ${motivationTone.glowClass}`} />
+                    <div className="relative z-10">
+                      <p className={`text-xs font-semibold uppercase tracking-[0.28em] ${motivationTone.accentClass}`}>{motivationPopup.label}</p>
+                      <div className="mt-3 flex items-start justify-center gap-3">
+                        <span className={`text-3xl font-black leading-none ${motivationTone.accentClass}`}>&quot;</span>
+                        <div>
+                          <h2 className={`text-lg font-black ${motivationTone.accentClass}`}>{motivationPopup.title}</h2>
+                          <p className="mt-2 text-sm leading-6 text-white">{motivationPopup.body}</p>
+                        </div>
+                        <span className={`self-end text-3xl font-black leading-none ${motivationTone.accentClass}`}>&quot;</span>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-cyan-100 shadow-[0_0_36px_rgba(34,211,238,0.24)]">
               <svg viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
                 <path d="M12 3a4 4 0 0 1 4 4v2h1a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3h1V7a4 4 0 0 1 4-4Zm-2 6h4V7a2 2 0 1 0-4 0v2Z" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
@@ -8829,6 +9172,10 @@ export default function App() {
   const renderTimetableLoadingScreen = ({ subjectName = "", previewItems = [] } = {}) => {
     const subjectCopy = getTimetableLoadingSubjectCopy(subjectName);
     const stageLabel = TIMETABLE_LOADING_STAGES[timetableLoadingStageIndex % TIMETABLE_LOADING_STAGES.length] || TIMETABLE_LOADING_STAGES[0];
+    const loadingMessagePool = (timetableLoadingMessages.length ? timetableLoadingMessages : TIMETABLE_LOADING_DIRECT_MESSAGES.slice(0, 3)).slice(0, 3);
+    const activeMessageIndex = loadingMessagePool.length ? timetableLoadingStageIndex % loadingMessagePool.length : 0;
+    const activeLoadingMessage = loadingMessagePool[activeMessageIndex] || "Success is built one study session at a time.";
+    const activeLoadingTone = TIMETABLE_LOADING_MESSAGE_TONES[activeMessageIndex % TIMETABLE_LOADING_MESSAGE_TONES.length];
     const safePreviewItems = previewItems.length ? previewItems : [
       { label: subjectName || "Study Session", time: "Loading plan" },
       { label: "Revision", time: "Checking progress" },
@@ -8877,12 +9224,20 @@ export default function App() {
             ))}
           </div>
 
-          <div className="mt-8 grid w-full max-w-4xl gap-3 md:grid-cols-3">
-            {(timetableLoadingMessages.length ? timetableLoadingMessages : TIMETABLE_LOADING_DIRECT_MESSAGES.slice(0, 3)).slice(0, 3).map((message, index) => (
-              <div key={`${message}-${index}`} className="timetable-loading-quote rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 text-sm leading-6 text-slate-100">
-                {message}
-              </div>
-            ))}
+          <div className="mt-8 flex min-h-[122px] w-full max-w-2xl items-center justify-center">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={`${activeMessageIndex}-${activeLoadingMessage}`}
+                initial={{ opacity: 0, y: 14, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -12, scale: 0.96 }}
+                transition={{ duration: 0.28, ease: "easeOut" }}
+                className={`timetable-loading-quote w-full rounded-2xl border px-5 py-5 text-sm leading-7 ${activeLoadingTone.cardClass}`}
+              >
+                <p className={`text-xs font-black uppercase tracking-[0.24em] ${activeLoadingTone.quoteClass}`}>{activeLoadingTone.label} {activeLoadingTone.icon}</p>
+                <p className="mt-3 text-base font-semibold text-white">{activeLoadingMessage}</p>
+              </motion.div>
+            </AnimatePresence>
           </div>
 
           <div className="mt-8 h-1.5 w-64 overflow-hidden rounded-full bg-white/10">
@@ -8894,8 +9249,7 @@ export default function App() {
   };
 
   const renderStudyTimetablePage = () => {
-    const paidAllowed = isPaidStudyTimetableAllowed();
-    const timetableAllowed = canUseStudyTimetable();
+    const paidAllowed = getCurrentPlanTier() !== "free";
     const normalizedAvailability = normalizeTimetableAvailability(timetableAvailability);
     const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
     const displayTimetableSubjects = sanitizeTimetableSubjects(timetableSubjects);
@@ -8944,22 +9298,6 @@ export default function App() {
         label: normalizeTimetableSubjectName(session.title, session.type === "break" ? "Break" : "Study Session"),
         time: `${session.start} - ${session.end}`,
       }));
-
-    if (!timetableAllowed) {
-      return (
-        <section className="min-h-[70vh] rounded-[32px] border border-emerald-300/20 bg-slate-950/72 p-6 shadow-[0_24px_80px_rgba(2,8,23,0.4)] backdrop-blur">
-          <div className="flex items-start gap-4">
-            {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Timetable</p>
-              <h2 className="mt-3 text-4xl font-semibold text-white">Upgrade to keep your study timetable active.</h2>
-              <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">Your first timetable week has ended. Upgrade to Pro to continue viewing, editing, and tracking your saved study timetable.</p>
-              <button type="button" onClick={openUpgradeModal} className="mt-6 rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-5 py-3 text-sm font-semibold text-white">Upgrade to Pro</button>
-            </div>
-          </div>
-        </section>
-      );
-    }
 
     return (
       <section className="min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6">
@@ -14744,7 +15082,7 @@ export default function App() {
     }
   };
 
-  const isPaidStudyTimetableAllowed = () => getCurrentPlanTier() !== "free";
+  const isPaidStudyTimetableAllowed = () => true;
   const hasResolvedBillingPlan = () => {
     if (!authToken) return true;
     if (authSessionMode === "admin" || authAvailableModes.includes("admin")) return true;
@@ -14803,31 +15141,16 @@ export default function App() {
     if (hasStudyTimetablePayloadContent(freePayload)) return freePayload;
     return cachedPayload || freePayload || null;
   };
-  const getFreeStudyTimetableFirstSavedAt = () => {
-    const freePayload = readFreeStudyTimetablePayload();
-    const cachedPayload = readCachedStudyTimetablePayload();
-    const raw = freePayload?.firstSavedAt
-      || freePayload?.created_at
-      || freePayload?.createdAt
-      || cachedPayload?.firstSavedAt
-      || cachedPayload?.created_at
-      || cachedPayload?.createdAt
-      || "";
-    const timestamp = raw ? new Date(raw).getTime() : 0;
-    return Number.isFinite(timestamp) ? timestamp : 0;
-  };
-  const isFreeStudyTimetableExpired = () => {
-    if (getCurrentPlanTier() !== "free") return false;
-    const firstSavedAt = getFreeStudyTimetableFirstSavedAt();
-    return Boolean(firstSavedAt && timetableNow.getTime() - firstSavedAt >= TIMETABLE_FREE_ACCESS_MS);
-  };
-  const canUseStudyTimetable = () => isPaidStudyTimetableAllowed() || !isFreeStudyTimetableExpired();
-  const shouldShowTimetableLoadingView = () => (
+  const shouldTimetableLoadDataBePending = () => (
     currentPage === "timetable"
     && Boolean(authToken)
     && !isTimetableEditing
     && !hasTimetablePlanPreview
     && (!authChecked || isLoadingTimetable || !hasLoadedTimetableRef.current || !hasResolvedBillingPlan())
+  );
+  const shouldShowTimetableLoadingView = () => (
+    shouldTimetableLoadDataBePending()
+    || (currentPage === "timetable" && !isTimetableEditing && !hasTimetablePlanPreview && timetableNow.getTime() < timetableLoadingVisibleUntilMs)
   );
   const getTimetableLoadingSubjectName = () => {
     const localPayload = readLatestLocalStudyTimetablePayload();
@@ -15063,11 +15386,6 @@ export default function App() {
         if (!silent) setTimetableMessage(getReadableRequestError(err));
       }
     }
-    if (!canUseStudyTimetable()) {
-      setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
-      openUpgradeModal();
-      return;
-    }
     if (!silent) {
       setIsSavingTimetable(true);
       setTimetableMessage("");
@@ -15163,6 +15481,107 @@ export default function App() {
       title,
       remainingLabel: remainingMs > 0 ? formatTimetableCountdown(remainingMs) : "ending now",
     };
+  };
+  const getStudySessionMotivationStateKey = (sessionId = activeStudySessionId) => (
+    `${STUDY_SESSION_MOTIVATION_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}:${sessionId || "__session__"}`
+  );
+  const getStudySessionMotivationHistoryKey = () => (
+    `${STUDY_SESSION_MOTIVATION_HISTORY_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`
+  );
+  const readStudySessionMotivationState = (sessionId = activeStudySessionId) => {
+    if (typeof window === "undefined" || !sessionId) return {};
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(getStudySessionMotivationStateKey(sessionId)) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  const writeStudySessionMotivationState = (sessionId, state = {}) => {
+    if (typeof window === "undefined" || !sessionId) return;
+    try {
+      window.localStorage.setItem(getStudySessionMotivationStateKey(sessionId), JSON.stringify(state));
+    } catch {
+      // Motivation state is helpful, but the session should keep working if storage fails.
+    }
+  };
+  const readStudySessionMotivationHistory = () => {
+    if (typeof window === "undefined") return [];
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(getStudySessionMotivationHistoryKey()) || "[]");
+      return pruneStudySessionMotivationHistory(parsed);
+    } catch {
+      return [];
+    }
+  };
+  const writeStudySessionMotivationHistory = (history = []) => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(getStudySessionMotivationHistoryKey(), JSON.stringify(pruneStudySessionMotivationHistory(history)));
+    } catch {
+      // Ignore storage failures; the popup can still show a useful message.
+    }
+  };
+  const getNextStudySessionAfter = (session) => {
+    const endDate = getTimetableSessionEndDate(session);
+    if (!endDate) return null;
+    return filterTimetablePostExamSubjectSessions(
+      applyTimetableAutoMisses(normalizeTimetableSessions(timetableSessions, timetableNow), timetableNow),
+      normalizeTimetablePreferences(timetablePreferences, timetableProfile),
+    )
+      .filter((item) => (
+        item
+        && item.id !== session?.id
+        && !["break", "empty", "exam"].includes(item.type)
+        && !["break", "empty", "missed", "completed"].includes(item.status)
+      ))
+      .filter((item) => {
+        const startDate = getTimetableSessionStartDate(item);
+        return startDate && startDate.getTime() >= endDate.getTime();
+      })
+      .sort((left, right) => {
+        const leftStart = getTimetableSessionStartDate(left)?.getTime() || 0;
+        const rightStart = getTimetableSessionStartDate(right)?.getTime() || 0;
+        return leftStart - rightStart;
+      })[0] || null;
+  };
+  const showStudySessionMotivationPopup = ({ session, trigger, message, nextSubject = "" }) => {
+    if (!session || !trigger || !message) return;
+    if (activeStudyMotivationTimerRef.current) window.clearTimeout(activeStudyMotivationTimerRef.current);
+    const nowIso = new Date().toISOString();
+    const state = readStudySessionMotivationState(session.id);
+    const nextState = {
+      ...state,
+      [`hasShown${trigger.key}Min`]: true,
+      [trigger.key]: nowIso,
+      updatedAt: nowIso,
+    };
+    writeStudySessionMotivationState(session.id, nextState);
+    const history = readStudySessionMotivationHistory();
+    writeStudySessionMotivationHistory([
+      ...history,
+      {
+        messageId: message.id,
+        userId: normalizeHistoryOwnerEmail(authEmail) || "__guest__",
+        shownAt: nowIso,
+      },
+    ]);
+    const currentHour = timetableNow.getHours();
+    const isNight = currentHour >= 20 || currentHour < 5;
+    const tone = trigger.key === "5" && !nextSubject
+      ? (isNight ? "purple" : "turquoise")
+      : trigger.tone;
+    setActiveStudyMotivationPopup({
+      id: `${session.id}-${trigger.key}-${Date.now()}`,
+      sessionId: session.id,
+      label: trigger.label,
+      title: message.title,
+      body: message.body,
+      tone,
+    });
+    activeStudyMotivationTimerRef.current = window.setTimeout(() => {
+      setActiveStudyMotivationPopup((current) => (current?.sessionId === session.id && current?.label === trigger.label ? null : current));
+    }, STUDY_SESSION_MOTIVATION_VISIBLE_MS);
   };
   const queueActiveStudySessionSave = (sessionsSnapshot, delayMs = 700) => {
     if (!sessionsSnapshot) return;
@@ -15320,11 +15739,6 @@ export default function App() {
   };
   const rescheduleMissedTimetableRecovery = async () => {
     if (isTimetableEditing) return;
-    if (!canUseStudyTimetable()) {
-      setTimetableMessage("Your first timetable week has ended. Upgrade to Pro to keep your study timetable active.");
-      openUpgradeModal();
-      return;
-    }
     setIsReschedulingTimetableRecovery(true);
     setTimetableMessage("");
     try {
@@ -15538,6 +15952,7 @@ export default function App() {
       });
       return;
     }
+    const completedAt = new Date().toISOString();
     let nextSessionsSnapshot = null;
     setTimetableSessions((current) => {
       const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
@@ -15549,6 +15964,9 @@ export default function App() {
           derived: false,
           type: "study",
           status: "completed",
+          completedAt,
+          studyEndedAt: completedAt,
+          focusScore: calculateStudySessionFocusScore({ ...derivedSession, status: "completed", completedAt }, timetableNow),
         };
         const updated = [...normalized, materializedRecovery];
         nextSessionsSnapshot = updated;
@@ -15558,7 +15976,13 @@ export default function App() {
         if (!sessionId || session.id !== sessionId || ["break", "empty", "missed"].includes(session.status) || session.type === "exam") return session;
         if (shouldAutoMissTimetableSession(session, timetableNow)) return { ...session, status: "missed" };
         if (session.status === "completed") return session;
-        return { ...session, status: "completed" };
+        return {
+          ...session,
+          status: "completed",
+          completedAt,
+          studyEndedAt: session.studyEndedAt || completedAt,
+          focusScore: calculateStudySessionFocusScore({ ...session, status: "completed", completedAt }, timetableNow),
+        };
       });
       nextSessionsSnapshot = updated;
       return updated;
@@ -15803,7 +16227,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!shouldShowTimetableLoadingView()) return undefined;
+    if (currentPage !== "timetable") {
+      timetableLoadingRunActiveRef.current = false;
+      setTimetableLoadingVisibleUntilMs(0);
+      return;
+    }
+    if (!shouldTimetableLoadDataBePending()) return;
+    const nowMs = Date.now();
+    setTimetableLoadingVisibleUntilMs((current) => Math.max(current, nowMs + TIMETABLE_LOADING_MIN_MS));
+    if (timetableLoadingRunActiveRef.current) return;
+    timetableLoadingRunActiveRef.current = true;
     const subjectName = getTimetableLoadingSubjectName();
     const storageKey = `${TIMETABLE_LOADING_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
     let previousSignature = "";
@@ -15825,10 +16258,6 @@ export default function App() {
         // Ignore private-mode storage failures; the loader can still run.
       }
     }
-    const intervalId = window.setInterval(() => {
-      setTimetableLoadingStageIndex((current) => (current + 1) % TIMETABLE_LOADING_STAGES.length);
-    }, 1550);
-    return () => window.clearInterval(intervalId);
   }, [
     authChecked,
     authEmail,
@@ -15843,6 +16272,55 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!shouldShowTimetableLoadingView()) return undefined;
+    const intervalId = window.setInterval(() => {
+      setTimetableLoadingStageIndex((current) => current + 1);
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [
+    authChecked,
+    authToken,
+    billingSubscription?.plan_id,
+    billingUsage?.plan_id,
+    currentPage,
+    hasTimetablePlanPreview,
+    isLoadingTimetable,
+    isTimetableEditing,
+    timetableLoadingVisibleUntilMs,
+  ]);
+
+  useEffect(() => {
+    if (currentPage !== "timetable") {
+      timetableLoadingRunActiveRef.current = false;
+      setTimetableLoadingVisibleUntilMs(0);
+      return undefined;
+    }
+    if (shouldTimetableLoadDataBePending()) return undefined;
+    const remainingMs = timetableLoadingVisibleUntilMs - Date.now();
+    if (remainingMs <= 0) {
+      timetableLoadingRunActiveRef.current = false;
+      if (timetableLoadingVisibleUntilMs) setTimetableLoadingVisibleUntilMs(0);
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(() => {
+      timetableLoadingRunActiveRef.current = false;
+      setTimetableLoadingVisibleUntilMs(0);
+    }, remainingMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    authChecked,
+    authToken,
+    billingSubscription?.plan_id,
+    billingUsage?.plan_id,
+    currentPage,
+    hasTimetablePlanPreview,
+    isLoadingTimetable,
+    isTimetableEditing,
+    timetableLoadVersion,
+    timetableLoadingVisibleUntilMs,
+  ]);
+
+  useEffect(() => {
     timetablePlanningStateRef.current = {
       isEditing: isTimetableEditing,
       hasPlanPreview: hasTimetablePlanPreview,
@@ -15851,6 +16329,8 @@ export default function App() {
 
   useEffect(() => {
     if (isTimetableEditing || hasTimetablePlanPreview) return;
+    if (!authChecked || !authToken || isLoadingTimetable || !hasLoadedTimetableRef.current || !hasResolvedBillingPlan()) return;
+    if (!["timetable", "study-session"].includes(currentPage)) return;
     setTimetableSessions((current) => {
       const next = applyTimetableAutoMisses(current, timetableNow);
       const changed = next.some((session, index) => session.status !== current[index]?.status);
@@ -15861,7 +16341,7 @@ export default function App() {
       }
       return changed ? next : current;
     });
-  }, [timetableNow, isTimetableEditing, hasTimetablePlanPreview]);
+  }, [authChecked, authToken, billingSubscription?.plan_id, billingUsage?.plan_id, currentPage, timetableNow, isLoadingTimetable, isTimetableEditing, hasTimetablePlanPreview]);
 
   useEffect(() => {
     if (currentPage !== "study-session") return;
@@ -15876,6 +16356,46 @@ export default function App() {
       || null;
     if (matchingSession) openActiveStudySession(matchingSession);
   }, [activeStudySessionId, browserPath, currentPage, timetableNow, timetableSessions, timetablePreferences, timetableProfile]);
+
+  useEffect(() => {
+    if (currentPage !== "study-session" || !activeStudySessionId) {
+      if (activeStudyMotivationTimerRef.current) window.clearTimeout(activeStudyMotivationTimerRef.current);
+      setActiveStudyMotivationPopup(null);
+      return;
+    }
+    const session = getActiveStudySession();
+    const sessionWindow = getTimetableSessionWindow(session);
+    if (!session || !sessionWindow || session.status === "completed" || session.status === "missed") return;
+    const remainingMs = sessionWindow.endDate.getTime() - timetableNow.getTime();
+    const durationMs = Math.max(1, sessionWindow.endDate.getTime() - sessionWindow.startDate.getTime());
+    if (remainingMs <= 0) return;
+    const state = readStudySessionMotivationState(session.id);
+    const trigger = STUDY_SESSION_MOTIVATION_TRIGGERS.find((item) => {
+      const lowerThreshold = Math.max(0, ...STUDY_SESSION_MOTIVATION_TRIGGERS
+        .filter((candidate) => candidate.thresholdMs < item.thresholdMs)
+        .map((candidate) => candidate.thresholdMs));
+      return durationMs >= item.thresholdMs
+        && remainingMs <= item.thresholdMs
+        && remainingMs > lowerThreshold
+        && !state[`hasShown${item.key}Min`]
+        && !state[item.key];
+    });
+    if (!trigger) return;
+    const nextSession = trigger.key === "5" ? getNextStudySessionAfter(session) : null;
+    const nextSubject = nextSession ? normalizeTimetableSubjectName(nextSession.title, "") : "";
+    const currentHour = timetableNow.getHours();
+    const history = readStudySessionMotivationHistory();
+    const message = pickStudySessionMotivationMessage({
+      triggerKey: trigger.key,
+      subjectName: normalizeTimetableSubjectName(session.title, ""),
+      history,
+      context: {
+        nextSubject,
+        isNight: currentHour >= 20 || currentHour < 5,
+      },
+    });
+    showStudySessionMotivationPopup({ session, trigger, message, nextSubject });
+  }, [activeStudySessionId, currentPage, timetableNow, timetableSessions, timetablePreferences, timetableProfile]);
 
   useEffect(() => {
     if (currentPage !== "timetable" || isTimetableEditing || !timetableWeekStartIso || timetableLoadVersion <= 0) {
