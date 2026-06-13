@@ -957,6 +957,7 @@ WORKED EXAMPLE ENGINE RULES
 - Adapt the teaching style, layout, reasoning depth, and flow to the subject, difficulty, question type, calculation style, and learner needs.
 - Teach the reasoning, explain why each step happens, show how formulas are selected, reveal common mistakes, and build intuition.
 - If the supplied notes, slides, transcript, or study guide contain a derivation, include that derivation clearly inside the worked example.
+- If no explicit example appears but the topic contains formulas, derivations, procedures, or problem-solving concepts, create at least one original practice example grounded in the supplied material.
 - If formulas are present, explain when the formula applies, what each term is doing, and why that formula is the correct choice.
 - Keep paragraphs short and visually structured in markdown.
 - Use modern educational formatting such as short headings, step dividers, warnings, checkpoints, summaries, and a boxed-style final answer.
@@ -18609,6 +18610,7 @@ async def generate_structured_study_assets(
                         "- If formulas appear anywhere in the study guide, notes, slides, transcript, or past-paper reference, `formula` must extract them and must not claim that no formula exists.\n"
                         "- `formula` should be a compact markdown study sheet with readable formulas, important rearrangements, and derived forms when the supplied material shows them.\n"
                         "- `worked_example` should explain every example that appears in the study guide WORKED EXAMPLES section.\n"
+                        "- If no explicit worked example appears but the lecture has formulas, derivations, methods, or likely exam-style procedures, create at least one original practice example using only the supplied topic context.\n"
                         "- If the supplied material contains a derivation, rearrangement, or formula build-up, include that derivation clearly inside `worked_example`.\n"
                         "- `worked_example` must explain why each step happens, why the formula fits, and how the result is checked.\n"
                         "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"

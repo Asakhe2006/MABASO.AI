@@ -5364,6 +5364,11 @@ function stripWorkedExampleSourceLeaks(markdown = "") {
     .trim();
 }
 
+function isMissingWorkedExampleContent(markdown = "") {
+  const text = compactGuideVisualText(markdown).toLowerCase();
+  return !text || /no worked example section was detected|worked examples will appear here/.test(text);
+}
+
 function getGuideSectionByHeading(sections, heading) {
   const normalizedHeading = normalizeGuideHeading(getGuideCanonicalHeading(heading) || heading);
   return (sections || []).find((section) => section.normalizedHeading === normalizedHeading) || null;
@@ -5912,6 +5917,7 @@ export default function App() {
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
   const [upgradeLimitMessage, setUpgradeLimitMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
+  const [selectedBillingPlan, setSelectedBillingPlan] = useState(null);
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [paymentRequests, setPaymentRequests] = useState([]);
@@ -6578,10 +6584,10 @@ export default function App() {
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayShap</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan and generate a unique PayShap reference. Your subscription activates only after an admin verifies the bank payment reference.</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayFast or PayShap</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan, then continue with PayFast for automatic activation after payment confirmation or PayShap for admin-verified bank payment.</p>
           </div>
-          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
+          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
         {billingCheckoutMessage ? (
           <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
@@ -6602,6 +6608,41 @@ export default function App() {
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">PayShap Number: <span className="phone-safe-copy font-semibold text-white">{manualPaymentDetails.payshap_number || "Not configured"}</span></div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">Account Name: <span className="phone-safe-copy font-semibold text-white">{manualPaymentDetails.account_name || "Not configured"}</span></div>
+            </div>
+          </div>
+        ) : null}
+        {selectedBillingPlan?.paymentType === "checkout" ? (
+          <div className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-100/80">Choose payment method</p>
+                <h3 className="mt-2 text-xl font-semibold text-white">
+                  {selectedBillingPlan.name}
+                  {selectedBillingPlan.selectedIntervalLabel ? ` - ${selectedBillingPlan.selectedIntervalLabel}` : ""} {selectedBillingPlan.selectedPrice || selectedBillingPlan.price || ""}
+                </h3>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">PayFast redirects to online checkout and activates the paid plan automatically after PayFast confirms the payment. PayShap creates a bank reference for admin verification.</p>
+              </div>
+              <button type="button" onClick={() => setSelectedBillingPlan(null)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Change plan</button>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => startBillingCheckout(selectedBillingPlan, "payfast")}
+                disabled={Boolean(billingCheckoutPlanId)}
+                className="rounded-2xl bg-white px-4 py-4 text-left text-sm font-bold text-slate-950 transition hover:bg-cyan-50 disabled:cursor-wait disabled:opacity-70"
+              >
+                {billingCheckoutPlanId === `payfast:${selectedBillingPlan.id}` ? "Opening PayFast..." : "Pay with PayFast"}
+                <span className="mt-2 block text-xs font-semibold text-slate-600">Card, EFT, or PayFast-supported checkout. Automatic activation after confirmation.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => startBillingCheckout(selectedBillingPlan, "payshap")}
+                disabled={Boolean(billingCheckoutPlanId)}
+                className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-left text-sm font-bold text-emerald-50 transition hover:bg-emerald-300/15 disabled:cursor-wait disabled:opacity-70"
+              >
+                {billingCheckoutPlanId === `payshap:${selectedBillingPlan.id}` ? "Generating PayShap..." : "Pay with PayShap"}
+                <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Admin verifies before the plan activates.</span>
+              </button>
             </div>
           </div>
         ) : null}
@@ -6640,17 +6681,17 @@ export default function App() {
                     <button
                       key={option.id}
                       type="button"
-                      onClick={() => startBillingCheckout({ ...plan, id: option.id })}
+                      onClick={() => selectBillingPlanForPayment({ ...plan, id: option.id, selectedIntervalLabel: option.label, selectedPrice: option.price })}
                       disabled={Boolean(billingCheckoutPlanId)}
                       className="rounded-2xl bg-white px-3 py-3 text-xs font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70"
                     >
-                      {billingCheckoutPlanId === option.id ? "Generating..." : `${option.label} ${option.price}`}
+                      {billingCheckoutPlanId.endsWith(`:${option.id}`) ? "Processing..." : `${option.label} ${option.price}`}
                     </button>
                   ))}
                 </div>
               ) : (
-                <button type="button" onClick={() => startBillingCheckout(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
-                  {billingCheckoutPlanId === plan.id ? "Generating..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Generate PayShap Reference"}
+                <button type="button" onClick={() => selectBillingPlanForPayment(plan)} disabled={Boolean(billingCheckoutPlanId)} className="mt-5 w-full rounded-full bg-white px-4 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-70">
+                  {billingCheckoutPlanId.endsWith(`:${plan.id}`) ? "Processing..." : plan.paymentType === "free" ? "Start Free" : plan.paymentType === "quote" ? "Request Quote" : "Choose Payment Method"}
                 </button>
               )}
             </article>
@@ -7291,7 +7332,11 @@ export default function App() {
   const podcastEstimatedMinutes = getPodcastEstimatedMinutes(podcastData);
   const guideSections = extractGuideSections(formattedGuide || summary);
   const activeRoomGuideSections = extractGuideSections(activeRoomFormattedGuide || activeRoom?.summary || "");
-  const cleanedExampleContent = stripWorkedExampleSourceLeaks(formattedExample || example);
+  const guideWorkedExampleSection = getGuideSectionByHeading(guideSections, "WORKED EXAMPLES") || getGuideSectionByHeading(guideSections, "STEP-BY-STEP EXPLANATIONS");
+  const rawWorkedExampleContent = isMissingWorkedExampleContent(formattedExample || example)
+    ? guideWorkedExampleSection?.content || formattedExample || example
+    : formattedExample || example;
+  const cleanedExampleContent = stripWorkedExampleSourceLeaks(rawWorkedExampleContent);
   const rawExampleSections = extractGuideSections(cleanedExampleContent);
   const exampleSections = rawExampleSections.length === 1 && rawExampleSections[0]?.normalizedHeading === "study guide" && compactGuideVisualText(cleanedExampleContent)
     ? [toGuideSectionRecord("WORKED EXAMPLES", rawExampleSections[0].content, "WORKED EXAMPLES")]
@@ -9781,8 +9826,8 @@ export default function App() {
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Payments</p>
-              <h2 className="mt-2 text-3xl font-semibold text-white">Track PayShap payment requests.</h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Manual PayShap payments stay pending until an admin verifies the reference in the dashboard.</p>
+              <h2 className="mt-2 text-3xl font-semibold text-white">Track payments and plan access.</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">PayFast payments activate automatically after confirmation. Manual PayShap payments stay pending until an admin verifies the reference in the dashboard.</p>
             </div>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
@@ -9806,14 +9851,14 @@ export default function App() {
                     <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || "Configured after backend env vars are added"}</p>
                   </div>
                 </div>
-                <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Generate PayShap Reference</button>
+                <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Choose Payment Method</button>
               </div>
             )}
             <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
               <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Verification</p>
               <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
-                <p>Pending means the payment record exists, but your plan is not active yet.</p>
-                <p>Verified means the admin matched the bank payment reference and the subscription was activated.</p>
+                <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
+                <p>Verified means the admin matched the bank payment reference and the subscription was activated. PayFast subscriptions activate automatically after PayFast confirms payment.</p>
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
                 <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:0717020081" className="font-semibold text-white underline decoration-white/30 underline-offset-4">0717020081</a> with your payment reference and bank proof of payment.</p>
               </div>
@@ -13483,6 +13528,7 @@ export default function App() {
     setPaymentRequests([]);
     setManualPaymentDetails(null);
     setManualPaymentRequest(null);
+    setSelectedBillingPlan(null);
     setBillingCheckoutMessage("");
     setBillingCheckoutPlanId("");
     setConfirmingPaymentId("");
@@ -14807,6 +14853,7 @@ export default function App() {
       setPaymentRequests([]);
       setManualPaymentDetails(null);
       setManualPaymentRequest(null);
+      setSelectedBillingPlan(null);
       setIsBillingUsageLoading(false);
       return null;
     }
@@ -14848,6 +14895,7 @@ export default function App() {
     setIsUpgradeModalOpen(true);
     setBillingCheckoutMessage("");
     setUpgradeLimitMessage("");
+    setSelectedBillingPlan(null);
     if (authToken) {
       refreshBillingStatus().catch((err) => {
         setBillingCheckoutMessage(getReadableRequestError(err));
@@ -16574,7 +16622,7 @@ export default function App() {
     return Math.max(min, Math.min(max, Math.round(numericValue)));
   };
 
-  const startBillingCheckout = async (plan) => {
+  const selectBillingPlanForPayment = (plan) => {
     if (!plan) return;
     if (plan.paymentType === "free") {
       setIsUpgradeModalOpen(false);
@@ -16587,8 +16635,41 @@ export default function App() {
       return;
     }
     setBillingCheckoutMessage("");
-    setBillingCheckoutPlanId(plan.id);
+    setUpgradeLimitMessage("");
+    setManualPaymentRequest(null);
+    setSelectedBillingPlan(plan);
+  };
+
+  const startBillingCheckout = async (plan, paymentProvider = "payshap") => {
+    if (!plan) return;
+    if (plan.paymentType === "free") {
+      setIsUpgradeModalOpen(false);
+      navigateToPath("/app");
+      return;
+    }
+    if (plan.paymentType === "quote") {
+      setIsUpgradeModalOpen(false);
+      navigateToPath("/pricing");
+      return;
+    }
+    const provider = String(paymentProvider || "").trim().toLowerCase() === "payfast" ? "payfast" : "payshap";
+    setBillingCheckoutMessage("");
+    setBillingCheckoutPlanId(`${provider}:${plan.id}`);
     try {
+      if (provider === "payfast") {
+        const { data } = await authJsonWithTransientRetries(
+          "/api/billing/checkout",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ plan_id: plan.id }),
+          },
+          { timeoutMs: 30000, retries: 1 },
+        );
+        setBillingCheckoutMessage("Opening PayFast checkout. Your plan will activate automatically after payment is confirmed.");
+        submitExternalCheckoutForm(data);
+        return;
+      }
       const { data } = await authJsonWithTransientRetries(
         "/api/payments/create",
         {
@@ -16604,6 +16685,7 @@ export default function App() {
       if (paymentRequest) {
         setPaymentRequests((current) => mergePaymentRequestList(current, paymentRequest));
       }
+      setSelectedBillingPlan(null);
       setBillingCheckoutMessage(paymentRequest?.payment_reference
         ? `PayShap reference ${paymentRequest.payment_reference} created. Pay with the exact reference, then click I Have Paid.`
         : "PayShap payment request created. Pay with the displayed reference, then click I Have Paid.");
@@ -21625,10 +21707,12 @@ export default function App() {
   };
 
   const openTutorWorkspaceTool = (tabId = "guide") => {
+    const normalizedTabId = normalizeWorkspaceTabId(tabId);
     teacherViewportSyncRef.current = "";
-    teacherAutoTabRef.current = tabId;
-    setTeacherPreviewTab(tabId === "examples" ? "examples" : tabId === "transcript" ? "transcript" : "guide");
-    setActiveTab(tabId);
+    teacherAutoTabRef.current = normalizedTabId;
+    setTeacherPreviewTab(normalizedTabId === "examples" ? "examples" : normalizedTabId === "transcript" ? "transcript" : "guide");
+    setActiveTab(normalizedTabId);
+    openProtectedAppPage("workspace");
   };
 
   const copyTeacherTranscript = async () => {

@@ -80,7 +80,7 @@ The backend refuses unsafe temporary SQLite storage on Render when `REQUIRE_PERS
 ## Notes
 
 - Account materials and billing usage are stored by signed-in email on the backend; browser storage is only a cache.
-- Manual PayShap subscriptions require `PAYSHAP_ACCOUNT_NAME` and `PAYSHAP_NUMBER` on the backend. The app creates pending payment references first; admins verify them from Admin Dashboard -> Payments before subscriptions activate.
+- PayFast checkout uses `PAYFAST_MERCHANT_ID` and `PAYFAST_MERCHANT_KEY` on the backend; paid users activate automatically after the PayFast webhook confirms the matching plan payment. Manual PayShap subscriptions still require `PAYSHAP_ACCOUNT_NAME` and `PAYSHAP_NUMBER`; admins verify those references from Admin Dashboard -> Payments before subscriptions activate.
 - Voice input uses the browser speech recognition API.
 - Optional voice reply playback uses browser text-to-speech.
 - Admin dashboard range controls support `1 day`, `7 days`, `1 month`, and `1 year`.
