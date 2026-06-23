@@ -4921,12 +4921,23 @@ def verify_email_password_auth(email: str, password: str, code: str, mode: str) 
 
 
 class TimeoutGoogleRequest:
+    _cache: dict[str, dict[str, Any]] = {}
+    _cache_lock = threading.Lock()
+
     def __init__(self, timeout: float):
         self.timeout = timeout
         self.request = GoogleRequest()
 
     def __call__(self, url, method="GET", body=None, headers=None, timeout=None, **kwargs):
-        return self.request(
+        cache_key = str(url or "") if str(method or "GET").upper() == "GET" and body is None else ""
+        now = utc_now()
+        if cache_key:
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+                if cached and cached.get("expires_at", now) > now and cached.get("response") is not None:
+                    return cached["response"]
+
+        response = self.request(
             url=url,
             method=method,
             body=body,
@@ -4934,6 +4945,30 @@ class TimeoutGoogleRequest:
             timeout=timeout or self.timeout,
             **kwargs,
         )
+        if cache_key and 200 <= int(getattr(response, "status", 0) or 0) < 300:
+            cache_seconds = 300
+            cache_control = str((getattr(response, "headers", {}) or {}).get("cache-control", ""))
+            max_age_match = re.search(r"max-age=(\d+)", cache_control, flags=re.IGNORECASE)
+            if max_age_match:
+                cache_seconds = max(60, min(86400, int(max_age_match.group(1))))
+            with self._cache_lock:
+                self._cache[cache_key] = {
+                    "response": response,
+                    "expires_at": now + timedelta(seconds=cache_seconds),
+                }
+        return response
+
+
+_google_auth_request: TimeoutGoogleRequest | None = None
+_google_auth_request_lock = threading.Lock()
+
+
+def get_google_auth_request() -> TimeoutGoogleRequest:
+    global _google_auth_request
+    with _google_auth_request_lock:
+        if _google_auth_request is None or _google_auth_request.timeout != GOOGLE_AUTH_VERIFY_TIMEOUT:
+            _google_auth_request = TimeoutGoogleRequest(GOOGLE_AUTH_VERIFY_TIMEOUT)
+        return _google_auth_request
 
 
 def create_session_from_google_credential(credential: str) -> tuple[str, str]:
@@ -4942,7 +4977,7 @@ def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     try:
         token_info = google_id_token.verify_oauth2_token(
             credential,
-            TimeoutGoogleRequest(GOOGLE_AUTH_VERIFY_TIMEOUT),
+            get_google_auth_request(),
             GOOGLE_CLIENT_ID,
         )
     except Exception as exc:

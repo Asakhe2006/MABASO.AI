@@ -754,7 +754,8 @@ const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
 const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_LOADING_STORAGE_KEY = "mabaso-study-timetable-loader-v1";
-const TIMETABLE_LOADING_MIN_MS = 3000;
+const TIMETABLE_LOADING_MESSAGE_MS = 3000;
+const TIMETABLE_LOADING_MIN_MS = TIMETABLE_LOADING_MESSAGE_MS * 3;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_LOADING_STAGES = [
@@ -5927,6 +5928,8 @@ export default function App() {
   const [adminPaymentActionId, setAdminPaymentActionId] = useState("");
   const [isBillingUsageLoading, setIsBillingUsageLoading] = useState(false);
   const billingStatusRequestRef = useRef(null);
+  const upgradeModalScrollRef = useRef(null);
+  const upgradePaymentOptionsRef = useRef(null);
   const [currentPage, setCurrentPage] = useState("capture");
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
@@ -6089,6 +6092,7 @@ export default function App() {
   const lectureSlidesFileInputRef = useRef(null);
   const pastQuestionPaperFileInputRef = useRef(null);
   const bulkLectureFileInputRef = useRef(null);
+  const generateStudyGuideButtonRef = useRef(null);
   const chatImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
@@ -6579,7 +6583,7 @@ export default function App() {
   };
 
   const renderUpgradeModal = () => (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur">
+    <div ref={upgradeModalScrollRef} className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur">
       <div className="w-full max-w-5xl rounded-[30px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.16),transparent_34%),linear-gradient(180deg,#0f172a,#020617)] p-5 text-white shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:p-6">
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -6612,7 +6616,7 @@ export default function App() {
           </div>
         ) : null}
         {selectedBillingPlan?.paymentType === "checkout" ? (
-          <div className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-4">
+          <div ref={upgradePaymentOptionsRef} className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-100/80">Choose payment method</p>
@@ -14096,10 +14100,11 @@ export default function App() {
   };
 
   const finishGoogleLogin = async (credential) => {
-    setAuthMessage("");
+    setAuthMessage("Signing in with Google...");
     const previewEmail = extractEmailFromJwt(credential);
     if (previewEmail) setAuthEmailInput(previewEmail);
     setIsGoogleSigningIn(true);
+    setStatus("Finishing Google sign-in...");
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/google`, {
         method: "POST",
@@ -14902,6 +14907,26 @@ export default function App() {
       });
     }
   };
+  const scrollUpgradePaymentOptionsIntoView = () => {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => {
+      upgradeModalScrollRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
+      upgradePaymentOptionsRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+  const scrollGenerateStudyGuideButtonIntoView = (delayMs = 120) => {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => {
+      generateStudyGuideButtonRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      generateStudyGuideButtonRef.current?.focus?.({ preventScroll: true });
+    }, delayMs);
+  };
+
+  useEffect(() => {
+    if (isUpgradeModalOpen && selectedBillingPlan?.paymentType === "checkout") {
+      scrollUpgradePaymentOptionsIntoView();
+    }
+  }, [isUpgradeModalOpen, selectedBillingPlan?.id, selectedBillingPlan?.paymentType]);
 
   const getUsageFeatureState = (usage, featureId) => {
     const normalizedFeatureId = String(featureId || "").trim().toLowerCase();
@@ -16323,7 +16348,7 @@ export default function App() {
     if (!shouldShowTimetableLoadingView()) return undefined;
     const intervalId = window.setInterval(() => {
       setTimetableLoadingStageIndex((current) => current + 1);
-    }, 1000);
+    }, TIMETABLE_LOADING_MESSAGE_MS);
     return () => window.clearInterval(intervalId);
   }, [
     authChecked,
@@ -16638,6 +16663,7 @@ export default function App() {
     setUpgradeLimitMessage("");
     setManualPaymentRequest(null);
     setSelectedBillingPlan(plan);
+    scrollUpgradePaymentOptionsIntoView();
   };
 
   const startBillingCheckout = async (plan, paymentProvider = "payshap") => {
@@ -18847,6 +18873,7 @@ export default function App() {
     });
     setError("");
     setStatus(`${selectedFile.name} selected.`);
+    scrollGenerateStudyGuideButtonIntoView();
   };
 
   const cleanupRecordingMonitoring = ({ stopStream = false } = {}) => {
@@ -19112,6 +19139,7 @@ export default function App() {
       if (interactive) {
         setStatus(successMessage(result));
         setProgress(100);
+        scrollGenerateStudyGuideButtonIntoView();
       }
       return {
         ...result,
@@ -19249,6 +19277,7 @@ export default function App() {
       setPendingLectureSlideFiles((current) => [...current, ...queuedFiles]);
       setError("");
       setStatus(`${queuedFiles.length} slide source${queuedFiles.length === 1 ? "" : "s"} queued. Press Generate Study Guide to read slides and generate the material.`);
+      scrollGenerateStudyGuideButtonIntoView();
     } catch (err) {
       setError(err.message || "Could not add slide sources.");
       setStatus("Slide upload failed.");
@@ -19303,6 +19332,7 @@ export default function App() {
     setStatus(`Sorting ${files.length} lecture file${files.length === 1 ? "" : "s"} into the right sections...`);
     setProgress(4);
     setIsProcessingLectureBundle(true);
+    scrollGenerateStudyGuideButtonIntoView();
 
     if (activeLectureMediaFile) {
       startTransition(() => {
@@ -23675,7 +23705,7 @@ export default function App() {
                       ) : null}
                     </div>
                     <div>
-                      <button type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
+                      <button ref={generateStudyGuideButtonRef} type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
                         <span className="block text-base font-semibold">Generate Study Guide</span>
                         {guideActionMeta.showProgress ? (
                           <div className="mt-4">
