@@ -324,8 +324,27 @@ if not APP_SECRET:
         "APP_SECRET is not set. Generated a temporary per-process secret; set APP_SECRET in production so sessions remain stable across restarts."
     )
 SESSION_TOKEN_PREFIX = "mabaso.v1"
+SESSION_JWT_ISSUER = os.getenv("SESSION_JWT_ISSUER", "mabaso-ai").strip() or "mabaso-ai"
+SESSION_JWT_AUDIENCE = os.getenv("SESSION_JWT_AUDIENCE", "mabaso-ai-web").strip() or "mabaso-ai-web"
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "mabaso_session").strip() or "mabaso_session"
+CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "mabaso_csrf").strip() or "mabaso_csrf"
 APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", os.getenv("FRONTEND_PUBLIC_URL", "https://mabaso-ai-web.onrender.com")).strip().rstrip("/")
 API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", os.getenv("BACKEND_PUBLIC_URL", "")).strip().rstrip("/")
+SESSION_COOKIE_SECURE = os.getenv(
+    "SESSION_COOKIE_SECURE",
+    "true" if (
+        APP_PUBLIC_URL.startswith("https://")
+        or API_PUBLIC_URL.startswith("https://")
+        or os.getenv("RENDER", "").strip().lower() == "true"
+    ) else "false",
+).strip().lower() not in {"0", "false", "no", "off"}
+SESSION_COOKIE_SAMESITE = os.getenv(
+    "SESSION_COOKIE_SAMESITE",
+    "none" if SESSION_COOKIE_SECURE else "lax",
+).strip().lower()
+if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    SESSION_COOKIE_SAMESITE = "none" if SESSION_COOKIE_SECURE else "lax"
+SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN", "").strip() or None
 PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
 PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
 PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
@@ -2397,7 +2416,8 @@ def decode_token_component(value: str) -> str:
 
 
 def is_signed_session_token(token: str) -> bool:
-    return bool(token and token.startswith(f"{SESSION_TOKEN_PREFIX}."))
+    token_text = (token or "").strip()
+    return bool(token_text and (token_text.startswith(f"{SESSION_TOKEN_PREFIX}.") or token_text.count(".") == 2))
 
 
 def build_signed_session_token(
@@ -2407,11 +2427,30 @@ def build_signed_session_token(
 ) -> str:
     resolved_mode = normalize_session_mode(session_mode, email)
     expiry = expires_at or (utc_now() + timedelta(minutes=SESSION_TTL_MINUTES))
+    issued_at = utc_now()
+    if jwt is not None:
+        return jwt.encode(
+            {
+                "iss": SESSION_JWT_ISSUER,
+                "aud": SESSION_JWT_AUDIENCE,
+                "sub": email,
+                "email": email,
+                "mode": resolved_mode,
+                "typ": "access",
+                "jti": uuid4().hex,
+                "iat": int(issued_at.timestamp()),
+                "nbf": int(issued_at.timestamp()),
+                "exp": int(expiry.timestamp()),
+            },
+            APP_SECRET,
+            algorithm="HS256",
+        )
+
     payload = json.dumps(
         {
             "email": email,
             "exp": int(expiry.timestamp()),
-            "iat": int(utc_now().timestamp()),
+            "iat": int(issued_at.timestamp()),
             "nonce": uuid4().hex,
             "mode": resolved_mode,
         },
@@ -2428,10 +2467,36 @@ def build_signed_session_token(
 
 
 def decode_signed_session_token(token: str) -> dict[str, Any] | None:
-    if not is_signed_session_token(token):
+    token_text = (token or "").strip()
+    if not token_text:
         return None
 
-    parts = token.split(".")
+    if not token_text.startswith(f"{SESSION_TOKEN_PREFIX}."):
+        if jwt is None or token_text.count(".") != 2:
+            return None
+        try:
+            claims = jwt.decode(
+                token_text,
+                APP_SECRET,
+                algorithms=["HS256"],
+                audience=SESSION_JWT_AUDIENCE,
+                issuer=SESSION_JWT_ISSUER,
+                leeway=10,
+            )
+        except Exception:
+            return None
+
+        email = normalize_email(claims.get("email") or claims.get("sub") or "")
+        expires_at = int(claims.get("exp", 0) or 0)
+        if not email or not expires_at:
+            return None
+        return {
+            "email": email,
+            "exp": expires_at,
+            "mode": normalize_session_mode(str(claims.get("mode") or "user"), email),
+        }
+
+    parts = token_text.split(".")
     if len(parts) != 4:
         return None
 
@@ -2461,6 +2526,114 @@ def decode_signed_session_token(token: str) -> dict[str, Any] | None:
         "exp": expires_at,
         "mode": normalize_session_mode(str(payload.get("mode") or "user"), email),
     }
+
+
+def get_session_cookie_max_age_seconds(token: str) -> int:
+    payload = decode_signed_session_token(token) or {}
+    expires_at = int(payload.get("exp", 0) or 0)
+    if not expires_at:
+        return max(0, SESSION_TTL_MINUTES * 60)
+    return max(0, expires_at - int(utc_now().timestamp()))
+
+
+def get_cookie_options(*, httponly: bool) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "path": "/",
+        "secure": SESSION_COOKIE_SECURE,
+        "httponly": httponly,
+        "samesite": SESSION_COOKIE_SAMESITE,
+    }
+    if SESSION_COOKIE_DOMAIN:
+        options["domain"] = SESSION_COOKIE_DOMAIN
+    return options
+
+
+def build_csrf_cookie_value(session_token: str) -> str:
+    nonce = secrets.token_urlsafe(24)
+    signature = hmac.new(
+        APP_SECRET.encode("utf-8"),
+        f"{hash_value(session_token)}:{nonce}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{nonce}.{signature}"
+
+
+def is_valid_csrf_cookie_value(session_token: str, csrf_value: str) -> bool:
+    value = (csrf_value or "").strip()
+    if not session_token or "." not in value:
+        return False
+    nonce, signature = value.rsplit(".", 1)
+    if not nonce or not signature:
+        return False
+    expected_signature = hmac.new(
+        APP_SECRET.encode("utf-8"),
+        f"{hash_value(session_token)}:{nonce}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, signature)
+
+
+def set_auth_cookies(response: Response, session_token: str):
+    if not session_token:
+        return
+    max_age = get_session_cookie_max_age_seconds(session_token)
+    if max_age <= 0:
+        clear_auth_cookies(response)
+        return
+    session_cookie_options = get_cookie_options(httponly=True)
+    csrf_cookie_options = get_cookie_options(httponly=False)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
+        max_age=max_age,
+        **session_cookie_options,
+    )
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=build_csrf_cookie_value(session_token),
+        max_age=max_age,
+        **csrf_cookie_options,
+    )
+
+
+def clear_auth_cookies(response: Response):
+    response.delete_cookie(key=SESSION_COOKIE_NAME, **get_cookie_options(httponly=True))
+    response.delete_cookie(key=CSRF_COOKIE_NAME, **get_cookie_options(httponly=False))
+
+
+def get_bearer_token_from_authorization(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return ""
+    return authorization.split(" ", 1)[1].strip()
+
+
+def validate_cookie_csrf(request: Request, session_token: str):
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+        return
+    header_value = (request.headers.get("x-csrf-token") or "").strip()
+    cookie_value = (request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+    if not header_value or not cookie_value or not hmac.compare_digest(header_value, cookie_value):
+        raise HTTPException(status_code=403, detail="Security token is missing or invalid. Refresh the page and try again.")
+    if not is_valid_csrf_cookie_value(session_token, cookie_value):
+        raise HTTPException(status_code=403, detail="Security token is invalid. Refresh the page and try again.")
+
+
+def get_request_session_token(
+    request: Request,
+    authorization: str | None = None,
+    *,
+    require_csrf: bool = True,
+) -> str:
+    bearer_token = get_bearer_token_from_authorization(authorization)
+    if bearer_token:
+        return bearer_token
+
+    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    if not cookie_token:
+        raise HTTPException(status_code=401, detail="Authentication is required.")
+    if require_csrf:
+        validate_cookie_csrf(request, cookie_token)
+    return cookie_token
 
 
 def normalize_email(email: str) -> str:
@@ -4768,13 +4941,14 @@ def get_session_email(token: str) -> str | None:
 
 
 def get_authorization_token(authorization: str | None) -> str:
-    if not authorization or not authorization.lower().startswith("bearer "):
+    token = get_bearer_token_from_authorization(authorization)
+    if not token:
         raise HTTPException(status_code=401, detail="Authentication is required.")
-    return authorization.split(" ", 1)[1].strip()
+    return token
 
 
-def require_authenticated_user(authorization: str | None = Header(None)) -> str:
-    token = get_authorization_token(authorization)
+def require_authenticated_user(request: Request, authorization: str | None = Header(None)) -> str:
+    token = get_request_session_token(request, authorization)
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
@@ -4782,8 +4956,8 @@ def require_authenticated_user(authorization: str | None = Header(None)) -> str:
     return context["email"]
 
 
-def require_admin_user(authorization: str | None = Header(None)) -> str:
-    token = get_authorization_token(authorization)
+def require_admin_user(request: Request, authorization: str | None = Header(None)) -> str:
+    token = get_request_session_token(request, authorization)
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
@@ -5040,6 +5214,17 @@ def build_auth_response(email: str, token: str, *, include_account_snapshot: boo
             }
         )
     return response
+
+
+def build_cookie_auth_response(
+    response: Response,
+    email: str,
+    token: str,
+    *,
+    include_account_snapshot: bool = True,
+) -> dict[str, Any]:
+    set_auth_cookies(response, token)
+    return build_auth_response(email, token, include_account_snapshot=include_account_snapshot)
 
 
 def run_post_auth_background_sync(
@@ -10782,7 +10967,7 @@ async def request_login_code(payload: RequestCodeRequest, request: Request):
 
 
 @app.post("/auth/verify-code")
-async def verify_login(payload: VerifyCodeRequest, request: Request):
+async def verify_login(payload: VerifyCodeRequest, request: Request, response: Response):
     started_at = utc_now()
     email = validate_email_address(payload.email)
     enforce_rate_limit(scope="auth_verify_code", request=request, limit=10, window_seconds=15 * 60, identity=email)
@@ -10802,7 +10987,7 @@ async def verify_login(payload: VerifyCodeRequest, request: Request):
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/request-code")
@@ -10862,7 +11047,7 @@ async def verify_email_password_registration_code_route(payload: VerifyCodeReque
 
 
 @app.post("/auth/email-password/register/complete")
-async def complete_email_password_registration_route(payload: EmailPasswordRegistrationCompleteRequest, request: Request):
+async def complete_email_password_registration_route(payload: EmailPasswordRegistrationCompleteRequest, request: Request, response: Response):
     started_at = utc_now()
     email = validate_email_address(payload.email)
     enforce_rate_limit(scope="auth_register_complete", request=request, limit=5, window_seconds=60 * 60, identity=email)
@@ -10884,11 +11069,11 @@ async def complete_email_password_registration_route(payload: EmailPasswordRegis
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/login")
-async def login_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
+async def login_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request, response: Response):
     started_at = utc_now()
     email = validate_email_address(payload.email)
     enforce_rate_limit(scope="auth_password_login", request=request, limit=10, window_seconds=15 * 60, identity=email)
@@ -10953,11 +11138,11 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/register")
-async def register_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request):
+async def register_with_email_password_route(payload: EmailPasswordAuthRequest, request: Request, response: Response):
     started_at = utc_now()
     email = validate_email_address(payload.email)
     enforce_rate_limit(scope="auth_password_register", request=request, limit=5, window_seconds=60 * 60, identity=email)
@@ -10977,11 +11162,11 @@ async def register_with_email_password_route(payload: EmailPasswordAuthRequest, 
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/email-password/verify-code")
-async def verify_email_password_login(payload: EmailPasswordVerifyRequest, request: Request):
+async def verify_email_password_login(payload: EmailPasswordVerifyRequest, request: Request, response: Response):
     started_at = utc_now()
     email = validate_email_address(payload.email)
     enforce_rate_limit(scope="auth_password_verify", request=request, limit=10, window_seconds=15 * 60, identity=email)
@@ -11001,11 +11186,11 @@ async def verify_email_password_login(payload: EmailPasswordVerifyRequest, reque
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/google")
-async def google_login(payload: GoogleAuthRequest, request: Request):
+async def google_login(payload: GoogleAuthRequest, request: Request, response: Response):
     started_at = utc_now()
     enforce_rate_limit(scope="auth_google_login", request=request, limit=10, window_seconds=15 * 60)
     credential = payload.credential.strip()
@@ -11031,11 +11216,11 @@ async def google_login(payload: GoogleAuthRequest, request: Request):
         email,
         int((utc_now() - started_at).total_seconds() * 1000),
     )
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/apple")
-async def apple_login(payload: AppleAuthRequest, request: Request):
+async def apple_login(payload: AppleAuthRequest, request: Request, response: Response):
     started_at = utc_now()
     enforce_rate_limit(scope="auth_apple_login", request=request, limit=10, window_seconds=15 * 60)
     if not compact_text(payload.authorization_code) and not compact_text(payload.id_token):
@@ -11053,13 +11238,13 @@ async def apple_login(payload: AppleAuthRequest, request: Request):
         },
         daemon=True,
     ).start()
-    return build_auth_response(email, session_token, include_account_snapshot=False)
+    return build_cookie_auth_response(response, email, session_token, include_account_snapshot=False)
 
 
 @app.get("/auth/me")
-async def auth_me(request: Request, authorization: str | None = Header(None)):
+async def auth_me(request: Request, response: Response, authorization: str | None = Header(None)):
     started_at = utc_now()
-    token = get_authorization_token(authorization)
+    token = get_request_session_token(request, authorization, require_csrf=False)
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
@@ -11079,19 +11264,22 @@ async def auth_me(request: Request, authorization: str | None = Header(None)):
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
         metadata={"token_refreshed": bool(refreshed_token)},
     )
-    response = build_auth_response(context["email"], refreshed_token or token)
-    response["token"] = refreshed_token
-    return response
+    active_token = refreshed_token or token
+    set_auth_cookies(response, active_token)
+    payload = build_auth_response(context["email"], active_token)
+    payload["token"] = refreshed_token
+    return payload
 
 
 @app.post("/auth/select-mode")
 async def select_auth_mode(
     payload: SessionModeRequest,
     request: Request,
+    response: Response,
     authorization: str | None = Header(None),
 ):
     started_at = utc_now()
-    token = get_authorization_token(authorization)
+    token = get_request_session_token(request, authorization)
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
@@ -11107,14 +11295,15 @@ async def select_auth_mode(
         resource_name=next_mode,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
-    return build_auth_response(context["email"], session_token)
+    return build_cookie_auth_response(response, context["email"], session_token)
 
 
 @app.post("/auth/logout")
-async def logout(request: Request, authorization: str | None = Header(None)):
-    token = get_authorization_token(authorization)
+async def logout(request: Request, response: Response, authorization: str | None = Header(None)):
+    token = get_request_session_token(request, authorization)
     context = get_session_context(token)
     revoke_session(token)
+    clear_auth_cookies(response)
     if context:
         record_audit_log(
             action="auth.logout",

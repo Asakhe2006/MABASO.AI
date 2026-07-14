@@ -103,6 +103,8 @@ const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
 const ADMIN_DASHBOARD_RANGE_STORAGE_KEY = "mabaso-admin-dashboard-range-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
+const COOKIE_SESSION_AUTH_STATE = "cookie-session";
+const CSRF_COOKIE_NAME = import.meta.env.VITE_CSRF_COOKIE_NAME || "mabaso_csrf";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
 const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
@@ -172,6 +174,38 @@ function withDeviceHeaders(headers = {}) {
   const nextHeaders = new Headers(headers || {});
   nextHeaders.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
   return nextHeaders;
+}
+
+function isCookieBackedAuthToken(token = "") {
+  return token === COOKIE_SESSION_AUTH_STATE;
+}
+
+function isBearerAuthToken(token = "") {
+  return Boolean(token && !isCookieBackedAuthToken(token));
+}
+
+function getCookieValue(name = "") {
+  if (typeof document === "undefined" || !name) return "";
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = document.cookie.match(new RegExp(`(?:^|; )${escapedName}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function withAuthHeaders(headers = {}, token = "") {
+  const nextHeaders = withDeviceHeaders(headers);
+  if (isBearerAuthToken(token)) {
+    nextHeaders.set("Authorization", `Bearer ${token}`);
+  }
+  const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+  if (csrfToken) {
+    nextHeaders.set("X-CSRF-Token", csrfToken);
+  }
+  return nextHeaders;
+}
+
+function resolveAuthStateToken(responseToken = "", fallbackToken = "") {
+  if (getCookieValue(CSRF_COOKIE_NAME)) return COOKIE_SESSION_AUTH_STATE;
+  return responseToken || fallbackToken || COOKIE_SESSION_AUTH_STATE;
 }
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -4651,6 +4685,10 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
   const startedAt = Date.now();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   const providedSignal = options.signal;
+  const resourceText = String(resource || "");
+  const shouldIncludeCredentials = /^https?:\/\//i.test(resourceText)
+    ? resourceText.startsWith(API_BASE_URL)
+    : resourceText.startsWith("/");
   let providedAbortHandler = null;
   if (providedSignal) {
     if (providedSignal.aborted) {
@@ -4660,7 +4698,11 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
       providedSignal.addEventListener("abort", providedAbortHandler, { once: true });
     }
   }
-  const nextOptions = { ...options, signal: controller.signal };
+  const nextOptions = {
+    ...options,
+    credentials: options.credentials || (shouldIncludeCredentials ? "include" : undefined),
+    signal: controller.signal,
+  };
 
   try {
     const response = await fetch(resource, nextOptions);
@@ -4820,14 +4862,20 @@ function extractEmailFromJwt(token) {
 }
 
 function getTokenExpiryTimestamp(token) {
-  if (!token || !String(token).startsWith("mabaso.v1.")) return 0;
+  if (!token || isCookieBackedAuthToken(token)) return 0;
   try {
-    const parts = String(token).split(".");
-    const encodedPayload = parts[2] || "";
-    if (!encodedPayload) return 0;
-    const base64 = encodedPayload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = `${base64}${"=".repeat((4 - (base64.length % 4 || 4)) % 4)}`;
-    const payload = JSON.parse(window.atob(padded));
+    const tokenText = String(token);
+    let payload = null;
+    if (tokenText.startsWith("mabaso.v1.")) {
+      const parts = tokenText.split(".");
+      const encodedPayload = parts[2] || "";
+      if (!encodedPayload) return 0;
+      const base64 = encodedPayload.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = `${base64}${"=".repeat((4 - (base64.length % 4 || 4)) % 4)}`;
+      payload = JSON.parse(window.atob(padded));
+    } else {
+      payload = decodeJwtPayload(tokenText);
+    }
     return Number(payload?.exp || 0) * 1000;
   } catch {
     return 0;
@@ -13565,11 +13613,6 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const token = window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
-    if (!token) {
-      setAuthServerStateReady(true);
-      setAuthChecked(true);
-      return undefined;
-    }
     const storedEmail = window.localStorage.getItem(AUTH_EMAIL_KEY) || "";
     const storedMode = window.localStorage.getItem(AUTH_MODE_KEY) || "user";
     let storedAvailableModes = [];
@@ -13578,25 +13621,31 @@ export default function App() {
     } catch {
       storedAvailableModes = [];
     }
-    setAuthToken(token);
-    setAuthEmail(storedEmail);
+    if (token) {
+      setAuthToken(token);
+      setAuthEmail(storedEmail);
+      setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
+      setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
+    }
     setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-    setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
-    setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
     setAuthServerStateReady(false);
     setAuthChecked(true);
-    apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${token}` }) }, 8000).then(async (response) => {
+    apiFetch("/auth/me", { headers: withAuthHeaders({}, token) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
-        clearSession("Sign in to continue.");
+        if (token) {
+          clearSession("Sign in to continue.");
+        }
         return;
       }
       if (!response.ok) {
-        setAuthMessage(data.detail || "Opening your saved session while the server reconnects.");
+        if (token) {
+          setAuthMessage(data.detail || "Opening your saved session while the server reconnects.");
+        }
         return;
       }
-      const nextToken = data.token || token;
+      const nextToken = resolveAuthStateToken(data.token || "", token);
       authTokenRef.current = nextToken;
       const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
       const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
@@ -13611,11 +13660,13 @@ export default function App() {
       }
     }).catch((error) => {
       if (cancelled) return;
-      setAuthMessage(
-        isAbortError(error)
-          ? "Opening your saved session while the server wakes up."
-          : "Using the saved session while the server finishes reconnecting.",
-      );
+      if (token) {
+        setAuthMessage(
+          isAbortError(error)
+            ? "Opening your saved session while the server wakes up."
+            : "Using the saved session while the server finishes reconnecting.",
+        );
+      }
     }).finally(() => {
       if (!cancelled) setAuthServerStateReady(true);
     });
@@ -13638,7 +13689,7 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     authTokenRef.current = authToken;
-    window.localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
     window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
@@ -13855,12 +13906,13 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${authToken}` }) }, 8000).then(async (response) => {
+      apiFetch("/auth/me", { headers: withAuthHeaders({}, authToken) }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
-          authTokenRef.current = data.token;
-          setAuthToken(data.token);
+          const nextToken = resolveAuthStateToken(data.token || "", authToken);
+          authTokenRef.current = nextToken;
+          setAuthToken(nextToken);
         }
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
         const nextSessionMode = data.session_mode || authSessionMode;
@@ -14013,7 +14065,7 @@ export default function App() {
   };
 
   const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
-    const nextToken = data?.token || "";
+    const nextToken = resolveAuthStateToken(data?.token || "");
     const nextEmail = data?.email || fallbackEmail || "";
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
@@ -14047,13 +14099,14 @@ export default function App() {
   const refreshSessionIfNeeded = async (tokenOverride = "") => {
     const currentToken = tokenOverride || authToken;
     if (!currentToken) return currentToken;
+    if (isCookieBackedAuthToken(currentToken)) return currentToken;
     const expiryTimestamp = getTokenExpiryTimestamp(currentToken);
     if (!expiryTimestamp || expiryTimestamp - Date.now() > 12 * 60 * 1000) return currentToken;
 
     let transientAttempt = 0;
     while (true) {
       try {
-        const response = await apiFetch("/auth/me", { headers: withDeviceHeaders({ Authorization: `Bearer ${currentToken}` }) }, 20000);
+        const response = await apiFetch("/auth/me", { headers: withAuthHeaders({}, currentToken) }, 20000);
         const data = await parseJsonSafe(response);
         if (response.status === 401) {
           clearSession("Your session expired. Please sign in again.");
@@ -14064,7 +14117,7 @@ export default function App() {
           requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
           throw requestError;
         }
-        const nextToken = data.token || currentToken;
+        const nextToken = resolveAuthStateToken(data.token || "", currentToken);
         authTokenRef.current = nextToken;
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
         const nextSessionMode = data.session_mode || authSessionMode || "user";
@@ -14758,9 +14811,7 @@ export default function App() {
     const currentToken = tokenOverride || authToken;
     if (!currentToken) throw new Error("Please sign in to continue.");
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
-    const headers = new Headers(requestOptions.headers || {});
-    headers.set("Authorization", `Bearer ${activeToken}`);
-    headers.set("X-Mabaso-Device-Id", getOrCreateAuthDeviceId());
+    const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
     let response;
     try {
       response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
@@ -14771,8 +14822,8 @@ export default function App() {
       throw requestError;
     }
     if (response.status === 401) {
-      const latestToken = authTokenRef.current || window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
-      if (latestToken && latestToken !== activeToken) {
+      const latestToken = authTokenRef.current || "";
+      if (isBearerAuthToken(latestToken) && latestToken !== activeToken) {
         const staleAuthError = new Error("A stale authenticated request was ignored after the session token changed.");
         staleAuthError.staleAuthRequest = true;
         throw staleAuthError;
