@@ -383,3 +383,26 @@ input[type="submit"],
     filter: none;
   }
 }
+
+@media (max-width: 640px) {
+  .tutor-wave-field::before,
+  .tutor-wave-field::after,
+  .tutor-orb-ring-primary,
+  .tutor-orb-ring-secondary {
+    animation: none;
+  }
+
+  .tutor-orb-shell {
+    width: 128px;
+    height: 128px;
+    transform: none;
+  }
+
+  .tutor-orb-shell.is-speaking {
+    transform: scale(1.02);
+  }
+
+  .tutor-orb-core {
+    inset: 12px;
+  }
+}

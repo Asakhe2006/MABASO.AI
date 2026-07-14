@@ -63,6 +63,10 @@ services:
         value: "true"
       - key: SESSION_COOKIE_SAMESITE
         value: "none"
+      - key: AUTH_RESPONSE_INCLUDE_TOKEN
+        value: "false"
+      - key: SLOW_REQUEST_LOG_MS
+        value: "1200"
       - key: CORS_ALLOW_ORIGINS
         value: "https://mabaso-ai-web.onrender.com,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
       - key: CORS_ALLOW_ORIGIN_REGEX

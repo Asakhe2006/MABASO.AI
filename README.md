@@ -86,6 +86,8 @@ Important security variables:
 - `SESSION_COOKIE_SAMESITE=none` for the deployed Render frontend/backend origins.
 - `SESSION_JWT_ISSUER=mabaso-ai`
 - `SESSION_JWT_AUDIENCE=mabaso-ai-web`
+- `AUTH_RESPONSE_INCLUDE_TOKEN=false` keeps session JWTs inside HttpOnly cookies instead of exposing them to browser JavaScript.
+- `SLOW_REQUEST_LOG_MS=1200` logs slow backend requests with an `X-Response-Time-Ms` response header for debugging.
 
 Production persistence variables:
 

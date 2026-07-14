@@ -23,6 +23,7 @@ import ssl
 import subprocess
 import threading
 import tempfile
+import time
 import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,7 @@ from xml.etree import ElementTree as ET
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
@@ -230,6 +232,7 @@ LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 REGISTRATION_TOKEN_TTL_MINUTES = int(os.getenv("REGISTRATION_TOKEN_TTL_MINUTES", str(LOGIN_CODE_TTL_MINUTES)))
 SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
+SLOW_REQUEST_LOG_MS = max(100, int(os.getenv("SLOW_REQUEST_LOG_MS", "1200")))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
 LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS", "1200"))
@@ -345,6 +348,7 @@ SESSION_COOKIE_SAMESITE = os.getenv(
 if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     SESSION_COOKIE_SAMESITE = "none" if SESSION_COOKIE_SECURE else "lax"
 SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN", "").strip() or None
+AUTH_RESPONSE_INCLUDE_TOKEN = os.getenv("AUTH_RESPONSE_INCLUDE_TOKEN", "false").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
 PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
 PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
@@ -1432,6 +1436,9 @@ class AdminUserStatusRequest(BaseModel):
     status: str = "active"
 
 
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOW_ORIGINS,
@@ -1446,7 +1453,11 @@ app.add_middleware(
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    started_at = time.perf_counter()
     response = await call_next(request)
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    response.headers.setdefault("X-Response-Time-Ms", str(duration_ms))
+    response.headers.setdefault("Vary", "Origin, Accept-Encoding")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -1455,6 +1466,14 @@ async def add_security_headers(request: Request, call_next):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     if request.url.path.startswith("/auth/"):
         response.headers.setdefault("Cache-Control", "no-store")
+    if duration_ms >= SLOW_REQUEST_LOG_MS and request.url.path != "/health":
+        logger.warning(
+            "Slow request method=%s path=%s status=%s duration_ms=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
     return response
 
 
@@ -1560,7 +1579,7 @@ def parse_database_url_components(database_url: str) -> dict[str, Any]:
 
 
 POSTGRES_ENDPOINT_LOGGED = False
-POSTGRES_POOL: ConnectionPool | None = None
+POSTGRES_POOL: Any = None
 
 
 class PostgresConnection:
@@ -2573,15 +2592,16 @@ def is_valid_csrf_cookie_value(session_token: str, csrf_value: str) -> bool:
     return hmac.compare_digest(expected_signature, signature)
 
 
-def set_auth_cookies(response: Response, session_token: str):
+def set_auth_cookies(response: Response, session_token: str) -> str:
     if not session_token:
-        return
+        return ""
     max_age = get_session_cookie_max_age_seconds(session_token)
     if max_age <= 0:
         clear_auth_cookies(response)
-        return
+        return ""
     session_cookie_options = get_cookie_options(httponly=True)
     csrf_cookie_options = get_cookie_options(httponly=False)
+    csrf_token = build_csrf_cookie_value(session_token)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
@@ -2590,10 +2610,11 @@ def set_auth_cookies(response: Response, session_token: str):
     )
     response.set_cookie(
         key=CSRF_COOKIE_NAME,
-        value=build_csrf_cookie_value(session_token),
+        value=csrf_token,
         max_age=max_age,
         **csrf_cookie_options,
     )
+    return csrf_token
 
 
 def clear_auth_cookies(response: Response):
@@ -5196,7 +5217,7 @@ def build_auth_response(email: str, token: str, *, include_account_snapshot: boo
             logger.exception("Auth account snapshot failed for %s; returning session response without account payload.", email)
             account = {}
     response = {
-        "token": token,
+        "token": token if AUTH_RESPONSE_INCLUDE_TOKEN else "",
         "email": email,
         "session_mode": session_mode,
         "available_modes": available_modes,
@@ -5223,8 +5244,11 @@ def build_cookie_auth_response(
     *,
     include_account_snapshot: bool = True,
 ) -> dict[str, Any]:
-    set_auth_cookies(response, token)
-    return build_auth_response(email, token, include_account_snapshot=include_account_snapshot)
+    csrf_token = set_auth_cookies(response, token)
+    payload = build_auth_response(email, token, include_account_snapshot=include_account_snapshot)
+    if csrf_token:
+        payload["csrf_token"] = csrf_token
+    return payload
 
 
 def run_post_auth_background_sync(
@@ -11265,9 +11289,11 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
         metadata={"token_refreshed": bool(refreshed_token)},
     )
     active_token = refreshed_token or token
-    set_auth_cookies(response, active_token)
+    csrf_token = set_auth_cookies(response, active_token)
     payload = build_auth_response(context["email"], active_token)
-    payload["token"] = refreshed_token
+    payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
+    if csrf_token:
+        payload["csrf_token"] = csrf_token
     return payload
 
 

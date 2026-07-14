@@ -2336,14 +2336,14 @@ Data is used to:
         tabs: ["Auth", "Uploads", "Jobs", "Generation"],
         rows: [
           { label: "Reference style", value: "Endpoint + response examples" },
-          { label: "Auth", value: "Bearer token" },
+          { label: "Auth", value: "HttpOnly cookie" },
           { label: "Flow", value: "Request -> job -> result" },
         ],
       },
     },
     contains: [
       { icon: "braces", title: "Endpoint reference", description: "Covers auth, uploads, generation, and study-job patterns." },
-      { icon: "key-square", title: "Authentication model", description: "Explains bearer tokens, protected routes, and session-sensitive APIs." },
+      { icon: "key-square", title: "Authentication model", description: "Explains HttpOnly cookie sessions, CSRF headers, protected routes, and session-sensitive APIs." },
       { icon: "terminal-square", title: "Response examples", description: "Shows job IDs, success responses, and generation request shapes." },
     ],
     layout: [
@@ -2365,7 +2365,7 @@ Data is used to:
     ],
     codeSamples: [
       {
-        title: "Authenticate and attach a bearer token",
+        title: "Authenticate with a secure cookie session",
         language: "http",
         code: `POST /auth/email-password/login
 Content-Type: application/json
@@ -2379,15 +2379,16 @@ Content-Type: application/json
 Response:
 {
   "email": "student@example.com",
-  "token": "mabaso.v1....",
-  "session_mode": "user"
+  "session_mode": "user",
+  "csrf_token": "signed-csrf-value"
 }`,
       },
       {
         title: "Upload a lecture and receive a job ID",
         language: "http",
         code: `POST /upload-audio/
-Authorization: Bearer <token>
+Cookie: mabaso_session=<HttpOnly session cookie>
+X-CSRF-Token: <csrf_token from auth response>
 Content-Type: multipart/form-data
 
 file=<lecture-recording.mp4>
@@ -2401,7 +2402,8 @@ Response:
         title: "Generate a study guide from lecture context",
         language: "json",
         code: `POST /generate-study-guide/
-Authorization: Bearer <token>
+Cookie: mabaso_session=<HttpOnly session cookie>
+X-CSRF-Token: <csrf_token from auth response>
 Content-Type: application/json
 
 {

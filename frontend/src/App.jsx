@@ -1,9 +1,6 @@
-import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import ReactMarkdown from "react-markdown";
-import LectureAssistantPanel from "./components/LectureAssistantPanel";
-import MindMapFlow from "./components/MindMapFlow";
-import { EnterpriseFooter, EnterpriseSiteShell, ProtectedWorkspacePreview } from "./EnterpriseSiteShell";
+import { Bot, CalendarDays, CreditCard, FolderOpen, GraduationCap, UploadCloud, UsersRound } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -14,6 +11,13 @@ import {
   resolveMetadataForRoute,
 } from "./siteRouting";
 import { useLectureAssistant } from "./useLectureAssistant";
+
+const ReactMarkdown = lazy(() => import("react-markdown"));
+const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
+const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
+const EnterpriseFooter = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseFooter })));
+const EnterpriseSiteShell = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseSiteShell })));
+const ProtectedWorkspacePreview = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.ProtectedWorkspacePreview })));
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -117,6 +121,7 @@ const ACTIVE_COLLABORATION_ROOM_STORAGE_KEY = "mabaso-active-collaboration-room-
 const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
+let runtimeCsrfToken = "";
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const PUBLIC_TERMS_PATH = "/terms-and-conditions";
@@ -196,15 +201,25 @@ function withAuthHeaders(headers = {}, token = "") {
   if (isBearerAuthToken(token)) {
     nextHeaders.set("Authorization", `Bearer ${token}`);
   }
-  const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+  const csrfToken = getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken;
   if (csrfToken) {
     nextHeaders.set("X-CSRF-Token", csrfToken);
   }
   return nextHeaders;
 }
 
-function resolveAuthStateToken(responseToken = "", fallbackToken = "") {
-  if (getCookieValue(CSRF_COOKIE_NAME)) return COOKIE_SESSION_AUTH_STATE;
+function rememberAuthCsrfToken(value = "") {
+  const token = String(value || "").trim();
+  if (token) runtimeCsrfToken = token;
+}
+
+function clearAuthCsrfToken() {
+  runtimeCsrfToken = "";
+}
+
+function resolveAuthStateToken(responseToken = "", fallbackToken = "", csrfToken = "") {
+  rememberAuthCsrfToken(csrfToken);
+  if (getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken) return COOKIE_SESSION_AUTH_STATE;
   return responseToken || fallbackToken || COOKIE_SESSION_AUTH_STATE;
 }
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -564,6 +579,17 @@ const collaborationMaterialTabs = [
   { id: "quiz", label: "Test" },
 ];
 const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"];
+const MOBILE_APP_NAV_ITEMS = [
+  { id: "capture", label: "Capture", icon: UploadCloud },
+  { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
+  { id: "voice", label: "AI", icon: Bot },
+  { id: "timetable", label: "Plan", icon: CalendarDays },
+  { id: "materials", label: "Files", icon: FolderOpen },
+];
+const MOBILE_MORE_NAV_ITEMS = [
+  { id: "payments", label: "Pay", icon: CreditCard },
+  { id: "collaboration", label: "Rooms", icon: UsersRound, requiresResults: true },
+];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
   "Academic Report",
@@ -13607,6 +13633,7 @@ export default function App() {
     window.localStorage.removeItem(AUTH_MODE_KEY);
     window.localStorage.removeItem(AUTH_AVAILABLE_MODES_KEY);
     authTokenRef.current = "";
+    clearAuthCsrfToken();
     setAuthMessage(message);
   };
 
@@ -13645,7 +13672,7 @@ export default function App() {
         }
         return;
       }
-      const nextToken = resolveAuthStateToken(data.token || "", token);
+      const nextToken = resolveAuthStateToken(data.token || "", token, data.csrf_token || "");
       authTokenRef.current = nextToken;
       const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
       const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
@@ -13910,7 +13937,7 @@ export default function App() {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
         if (data.token) {
-          const nextToken = resolveAuthStateToken(data.token || "", authToken);
+          const nextToken = resolveAuthStateToken(data.token || "", authToken, data.csrf_token || "");
           authTokenRef.current = nextToken;
           setAuthToken(nextToken);
         }
@@ -14065,7 +14092,7 @@ export default function App() {
   };
 
   const applyAuthResponse = (data, fallbackEmail = "", { promptForMode = false } = {}) => {
-    const nextToken = resolveAuthStateToken(data?.token || "");
+    const nextToken = resolveAuthStateToken(data?.token || "", "", data?.csrf_token || "");
     const nextEmail = data?.email || fallbackEmail || "";
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
@@ -14117,7 +14144,7 @@ export default function App() {
           requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
           throw requestError;
         }
-        const nextToken = resolveAuthStateToken(data.token || "", currentToken);
+        const nextToken = resolveAuthStateToken(data.token || "", currentToken, data.csrf_token || "");
         authTokenRef.current = nextToken;
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
         const nextSessionMode = data.session_mode || authSessionMode || "user";
@@ -23627,6 +23654,52 @@ export default function App() {
   }
 
   const activeTimetableNavItem = getActiveTimetableNavItem();
+  const renderMobileAppNavigation = () => {
+    const handleMobileNavClick = (item) => {
+      if (item.id === "payments") {
+        openPaymentsNavigationTarget();
+        return;
+      }
+      if (item.id === "collaboration") {
+        openCollaborationPage();
+        return;
+      }
+      openProtectedAppPage(item.id);
+    };
+
+    const renderItem = (item) => {
+      const Icon = item.icon;
+      const disabled = Boolean(item.requiresResults && !hasResults);
+      const active = currentPage === item.id || (item.id === "timetable" && Boolean(activeTimetableNavItem));
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => handleMobileNavClick(item)}
+          disabled={disabled}
+          className={`mobile-app-nav__item ${active ? "is-active" : ""}`}
+          aria-label={item.label}
+        >
+          <Icon className="h-5 w-5" aria-hidden="true" />
+          <span>{item.label}</span>
+        </button>
+      );
+    };
+
+    return (
+      <nav className="mobile-app-nav sm:hidden" aria-label="Mabaso mobile navigation">
+        <div className="mobile-app-nav__rail">
+          {MOBILE_APP_NAV_ITEMS.map(renderItem)}
+        </div>
+        <div className="mobile-app-nav__secondary">
+          {MOBILE_MORE_NAV_ITEMS.map(renderItem)}
+          <button type="button" onClick={openUpgradeModal} className="mobile-app-nav__upgrade">
+            Pro
+          </button>
+        </div>
+      </nav>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -23637,7 +23710,7 @@ export default function App() {
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
-      <main className={`relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
+      <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
         <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
@@ -23663,15 +23736,6 @@ export default function App() {
             </div>
           </div>
         </header>
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:hidden">
-          <button type="button" onClick={() => openProtectedAppPage("capture")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>Capture</button>
-          <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Workspace</button>
-          <button type="button" onClick={() => openProtectedAppPage("materials")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>My Materials</button>
-          <button type="button" onClick={openPaymentsNavigationTarget} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
-          <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)]" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"}`}><span className="block">Timetable</span>{activeTimetableNavItem ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{activeTimetableNavItem.title} - {activeTimetableNavItem.remainingLabel}</span> : null}</button>
-          <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`min-h-[56px] rounded-[14px] border px-4 py-3 text-sm font-semibold ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white"} disabled:opacity-50`}>Collaborate</button>
-          <button type="button" onClick={openUpgradeModal} className="col-span-2 min-h-[56px] rounded-[14px] bg-white px-4 py-3 text-sm font-bold text-slate-950">Upgrade to Pro</button>
-        </div>
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
@@ -24137,6 +24201,7 @@ export default function App() {
         {historyPanel}
         {quizFeedbackModal}
       </main>
+      {renderMobileAppNavigation()}
     </div>
   );
 }
