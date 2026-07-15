@@ -107,6 +107,7 @@ const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
 const ADMIN_DASHBOARD_RANGE_STORAGE_KEY = "mabaso-admin-dashboard-range-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
+const AUTH_COOKIE_SESSION_KEY = "mabaso-cookie-session-active";
 const COOKIE_SESSION_AUTH_STATE = "cookie-session";
 const CSRF_COOKIE_NAME = import.meta.env.VITE_CSRF_COOKIE_NAME || "mabaso_csrf";
 const AUTH_EMAIL_KEY = "mabaso-auth-email";
@@ -118,6 +119,7 @@ const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-p
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
 const ACTIVE_COLLABORATION_ROOM_STORAGE_KEY = "mabaso-active-collaboration-room-v1";
+const ACTIVE_WORKSPACE_TAB_STORAGE_KEY = "mabaso-active-workspace-tab-v1";
 const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
@@ -221,6 +223,16 @@ function resolveAuthStateToken(responseToken = "", fallbackToken = "", csrfToken
   rememberAuthCsrfToken(csrfToken);
   if (getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken) return COOKIE_SESSION_AUTH_STATE;
   return responseToken || fallbackToken || COOKIE_SESSION_AUTH_STATE;
+}
+
+function loadPersistedAuthStateToken() {
+  try {
+    const bearerToken = window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    if (bearerToken) return bearerToken;
+    return window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true" ? COOKIE_SESSION_AUTH_STATE : "";
+  } catch {
+    return "";
+  }
 }
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -584,7 +596,7 @@ const MOBILE_APP_NAV_ITEMS = [
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
   { id: "voice", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
-  { id: "materials", label: "Files", icon: FolderOpen },
+  { id: "materials", label: "My Materials", icon: FolderOpen },
 ];
 const MOBILE_MORE_NAV_ITEMS = [
   { id: "payments", label: "Pay", icon: CreditCard },
@@ -792,6 +804,19 @@ function normalizeWorkspaceTabId(tabId = "") {
   return workspaceTabs.some((tab) => tab.id === normalized) ? normalized : "guide";
 }
 
+function normalizeStoredWorkspaceTabId(tabId = "") {
+  const normalized = String(tabId || "").trim().toLowerCase();
+  return tabs.some((tab) => tab.id === normalized) ? normalized : "guide";
+}
+
+function loadStoredWorkspaceTabId() {
+  try {
+    return normalizeStoredWorkspaceTabId(window.localStorage.getItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY) || "guide");
+  } catch {
+    return "guide";
+  }
+}
+
 function normalizeAppPageId(pageId = "", fallback = "workspace") {
   const normalized = String(pageId || "").trim().toLowerCase();
   return APP_PAGE_IDS.includes(normalized) ? normalized : fallback;
@@ -814,7 +839,7 @@ const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
 const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_LOADING_STORAGE_KEY = "mabaso-study-timetable-loader-v1";
-const TIMETABLE_LOADING_MESSAGE_MS = 3000;
+const TIMETABLE_LOADING_MESSAGE_MS = 5000;
 const TIMETABLE_LOADING_MIN_MS = TIMETABLE_LOADING_MESSAGE_MS * 3;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
@@ -4677,21 +4702,21 @@ function AdminBarList({
 
 function getErrorHint(message) {
   const text = (message || "").toLowerCase();
-  if (text.includes("openai_api_key")) return "Add your OpenAI API key to the backend environment.";
-  if (text.includes("ffmpeg")) return "Install ffmpeg on the backend server for larger files.";
+  if (text.includes("openai_api_key")) return "The AI service is temporarily unavailable. Please try again.";
+  if (text.includes("ffmpeg")) return "This media file could not be processed right now. Please try another file or try again.";
   if (text.includes("http 407") || text.includes("response 407") || text.includes("proxy rejected authentication")) {
-    return "The backend proxy credentials are being rejected. Recheck your YouTube proxy URL or Webshare username and password on Render.";
+    return "The video link could not be read right now. Try another public link or upload the lecture file directly.";
   }
-  if (text.includes("impersonate target")) return "If a video link still fails, leave YTDLP_IMPERSONATE_TARGET empty or add YouTube cookies or a proxy on the backend.";
+  if (text.includes("impersonate target")) return "The video link could not be read right now. Try another link or upload the lecture file directly.";
   if (text.includes("blocked direct server-side download")) return "Try a video with public captions, or upload the lecture file directly.";
   if (text.includes("yt-dlp") || text.includes("video-link transcription") || text.includes("downloadable audio format")) {
-    return "Try another public video link, or upload the lecture file directly. YouTube links may also need public captions or working backend cookies.";
+    return "Try another public video link, or upload the lecture file directly.";
   }
   if (text.includes("smtp")) {
-    return "For Gmail, keep smtp.gmail.com with port 587, SMTP_USE_TLS=true, SMTP_USE_SSL=false, and set SMTP_PASSWORD to a Gmail app password instead of your normal Gmail password.";
+    return "Email delivery is temporarily unavailable. Please try again later.";
   }
   if (text.includes("timed out")) return "Large lecture processing can take time. Retry after the backend finishes waking up, and keep this tab open while the job starts.";
-  return "Check the backend logs for the exact failing stage.";
+  return "An error occurred. Please try again.";
 }
 
 function isUsageBlockedMessage(message = "") {
@@ -4789,6 +4814,16 @@ function getBackendConnectionTroubleshootingMessage(context = "") {
   );
 }
 
+function sanitizePublicRequestErrorMessage(message = "", context = "") {
+  const text = String(message || "").trim();
+  if (!text) return getBackendConnectionTroubleshootingMessage(context);
+  if (isUsageBlockedMessage(text)) return text;
+  if (/backend logs?|traceback|stack trace|exception|openai_api_key|api key|secret|supabase|postgres|database|sql|render|smtp|ffmpeg|yt-dlp|ytdlp|proxy credential|webshare|environment/i.test(text)) {
+    return getBackendConnectionTroubleshootingMessage(context);
+  }
+  return text;
+}
+
 function getReadableRequestError(error, context = "") {
   const normalizedContext = String(context || "").toLowerCase();
   if (isAbortError(error)) {
@@ -4812,7 +4847,7 @@ function getReadableRequestError(error, context = "") {
     return getBackendConnectionTroubleshootingMessage();
   }
 
-  return message || getBackendConnectionTroubleshootingMessage();
+  return sanitizePublicRequestErrorMessage(message, context);
 }
 
 function isTransientServerConnectionMessage(message) {
@@ -5953,7 +5988,7 @@ function getLatestCollaborationRoomMessageRecord(room) {
 export default function App() {
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
-  const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
+  const [authToken, setAuthToken] = useState(loadPersistedAuthStateToken);
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
   const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
   const [authAvailableModes, setAuthAvailableModes] = useState(() => {
@@ -6053,7 +6088,7 @@ export default function App() {
   const [includeSystemAudioInRecording, setIncludeSystemAudioInRecording] = useState(true);
   const [monitorSharedAudioDuringRecording, setMonitorSharedAudioDuringRecording] = useState(true);
   const [dragActive, setDragActive] = useState(false);
-  const [activeTab, setActiveTab] = useState("guide");
+  const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -6199,7 +6234,7 @@ export default function App() {
   const enterpriseGoogleButtonRef = useRef(null);
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
-  const authTokenRef = useRef(window.localStorage.getItem(AUTH_TOKEN_KEY) || "");
+  const authTokenRef = useRef(loadPersistedAuthStateToken());
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
@@ -6213,6 +6248,7 @@ export default function App() {
   const loadedTimetableModeRef = useRef("");
   const timetablePlanningStateRef = useRef({ isEditing: false, hasPlanPreview: false });
   const timetableExportRef = useRef(null);
+  const savedTimetableSnapshotRef = useRef(null);
   const adminAutoModeSwitchRef = useRef(false);
   const adminAutoModeSwitchLastAtRef = useRef(0);
   const hasRestoredWorkspaceDraftRef = useRef("");
@@ -9380,7 +9416,14 @@ export default function App() {
     const timetableLearnerName = String(timetableProfile.learnerName || "").trim();
     const timetableGradeLabel = String(timetableProfile.grade || "").trim();
     const timetableProfileSummary = [timetableLearnerName, timetableGradeLabel].filter(Boolean).join(" - ");
-    const visibleTimetableSessions = filterTimetablePostExamSubjectSessions(applyTimetableAutoMisses(timetableSessions, timetableNow), normalizedPreferences);
+    const normalizedTimetableSessionsForDisplay = normalizeTimetableSessions(timetableSessions, timetableNow);
+    const shouldApplySavedTimetableMisses = !isTimetableEditing && !hasTimetablePlanPreview && hasLoadedTimetableRef.current;
+    const visibleTimetableSessions = filterTimetablePostExamSubjectSessions(
+      shouldApplySavedTimetableMisses
+        ? applyTimetableAutoMisses(normalizedTimetableSessionsForDisplay, timetableNow)
+        : normalizedTimetableSessionsForDisplay,
+      normalizedPreferences,
+    );
     const completedCount = visibleTimetableSessions.filter((session) => session.status === "completed").length;
     const trackableCount = visibleTimetableSessions.filter((session) => !["break", "empty"].includes(session.status) && !["break", "empty"].includes(session.type)).length;
     const weeklyProgress = trackableCount ? Math.round((completedCount / trackableCount) * 100) : 0;
@@ -9630,6 +9673,7 @@ export default function App() {
             </div>
             <div className="flex flex-wrap gap-3">
               <button type="button" onClick={regenerateStudyTimetable} className="rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">{hasTimetablePlanPreview ? "Plan Again" : "Plan"}</button>
+              <button type="button" onClick={() => restoreSavedTimetableSnapshot()} className="rounded-[14px] border border-white/10 bg-slate-950/65 px-4 py-3 text-sm font-semibold text-white">Cancel</button>
               {hasTimetablePlanPreview ? (
                 <button type="button" onClick={() => saveStudyTimetable()} disabled={isSavingTimetable} className="rounded-[14px] bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">{isSavingTimetable ? "Saving..." : "Save My Timetable"}</button>
               ) : null}
@@ -13629,17 +13673,21 @@ export default function App() {
     setSelectedTeacherVoiceName("marin");
     persistPostAuthRedirectPath("");
     window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    window.localStorage.removeItem(AUTH_COOKIE_SESSION_KEY);
     window.localStorage.removeItem(AUTH_EMAIL_KEY);
     window.localStorage.removeItem(AUTH_MODE_KEY);
     window.localStorage.removeItem(AUTH_AVAILABLE_MODES_KEY);
+    window.localStorage.removeItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY);
     authTokenRef.current = "";
     clearAuthCsrfToken();
+    currentPageRef.current = "capture";
+    navigateToPath("/", { replace: true });
     setAuthMessage(message);
   };
 
   useEffect(() => {
     let cancelled = false;
-    const token = window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+    const token = loadPersistedAuthStateToken();
     const storedEmail = window.localStorage.getItem(AUTH_EMAIL_KEY) || "";
     const storedMode = window.localStorage.getItem(AUTH_MODE_KEY) || "user";
     let storedAvailableModes = [];
@@ -13684,6 +13732,11 @@ export default function App() {
       applyServerAccountState(data);
       if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
         setCurrentPage("admin");
+      } else {
+        const routedPage = resolveCurrentPageFromRoute(browserPath);
+        if (routedPage && routedPage !== "admin") {
+          setCurrentPage(routedPage);
+        }
       }
     }).catch((error) => {
       if (cancelled) return;
@@ -13716,7 +13769,13 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     authTokenRef.current = authToken;
-    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    if (isCookieBackedAuthToken(authToken)) {
+      window.localStorage.setItem(AUTH_COOKIE_SESSION_KEY, "true");
+      window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    } else {
+      window.localStorage.removeItem(AUTH_COOKIE_SESSION_KEY);
+      window.localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    }
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
     window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
@@ -13726,6 +13785,14 @@ export default function App() {
     if (authToken) return;
     authTokenRef.current = "";
   }, [authToken]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY, normalizeStoredWorkspaceTabId(activeTab));
+    } catch {
+      // Keep workspace navigation usable if storage is unavailable.
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!authEmailInput.trim()) return;
@@ -15292,12 +15359,22 @@ export default function App() {
     if (hasStudyTimetablePayloadContent(freePayload)) return freePayload;
     return cachedPayload || freePayload || null;
   };
-  const shouldTimetableLoadDataBePending = () => (
-    currentPage === "timetable"
-    && Boolean(authToken)
+  const isTimetableDataLoadingForNav = () => (
+    Boolean(authToken)
     && !isTimetableEditing
     && !hasTimetablePlanPreview
     && (!authChecked || isLoadingTimetable || !hasLoadedTimetableRef.current || !hasResolvedBillingPlan())
+  );
+  const shouldTimetableLoadDataBePending = () => (
+    currentPage === "timetable"
+    && isTimetableDataLoadingForNav()
+  );
+  const shouldTimetablePreloadOnCurrentSurface = () => (
+    ["capture", "timetable", "study-session"].includes(currentPage)
+    && Boolean(authToken)
+    && !isTimetableEditing
+    && !hasTimetablePlanPreview
+    && authChecked
   );
   const shouldShowTimetableLoadingView = () => (
     shouldTimetableLoadDataBePending()
@@ -15442,32 +15519,49 @@ export default function App() {
       sessions: mergeTimetableSessionProgress(basePayload.sessions, progressPayload.sessions),
     };
   };
-  const applyTimetablePayload = (timetable = {}) => {
+  const applyTimetablePayload = (timetable = {}, options = {}) => {
+    const { preferCurrentWeek = false, rememberAsSaved = true } = options || {};
     const rawProfile = timetable.profile && typeof timetable.profile === "object" ? timetable.profile : {};
     const profile = { ...createDefaultTimetableProfile(), ...rawProfile };
     const subjects = sanitizeTimetableSubjects(timetable.subjects);
     const availability = normalizeTimetableAvailability(timetable.availability);
     const preferences = normalizeTimetablePreferences(timetable.preferences, profile);
+    const payloadWeekStartIso = timetable.weekStartIso || timetable.week_start_iso || timetableWeekStartIso || getTimetableWeekStartIso();
+    const nextWeekStartIso = preferCurrentWeek ? getTimetableWeekStartIso(timetableNow) : payloadWeekStartIso;
     const sessions = filterTimetablePostExamSubjectSessions(normalizeTimetableSessions(timetable.sessions, timetableNow).map((session) => (
       session.type === "study" && isGenericTimetablePlanningSubjectName(session.title)
         ? { ...session, title: "Empty", status: "empty", type: "empty" }
         : session
     )), preferences);
-    const nextWeekStartIso = timetable.weekStartIso || timetable.week_start_iso || timetableWeekStartIso || getTimetableWeekStartIso();
+    const canUsePayloadSessionsForWeek = sessions.length
+      && getTimetableWeekStartIso(new Date(payloadWeekStartIso)) === getTimetableWeekStartIso(new Date(nextWeekStartIso));
     const generatedSessions = applyTimetableAutoMisses(generateStudyTimetableSessions({
       subjects,
       availability,
       preferences,
       weekStartIso: nextWeekStartIso,
     }), timetableNow);
+    const nextSessions = canUsePayloadSessionsForWeek ? sessions : generatedSessions;
     setTimetableProfile(profile);
     setTimetableSubjects(subjects);
     setTimetableAvailability(availability);
     setTimetablePreferences(preferences);
     setTimetableWeekStartIso(nextWeekStartIso);
-    setTimetableSessions(sessions.length ? sessions : generatedSessions);
+    setTimetableSessions(nextSessions);
     setHasTimetablePlanPreview(false);
     setTimetableLoadVersion((current) => current + 1);
+    if (rememberAsSaved) {
+      savedTimetableSnapshotRef.current = {
+        ...timetable,
+        profile,
+        subjects,
+        availability,
+        preferences,
+        sessions: nextSessions,
+        weekStartIso: nextWeekStartIso,
+        week_start_iso: nextWeekStartIso,
+      };
+    }
   };
   const loadFreeStudyTimetable = ({ force = false } = {}) => {
     const loadMode = "free";
@@ -15476,7 +15570,7 @@ export default function App() {
     loadedTimetableModeRef.current = loadMode;
     const payload = readLatestLocalStudyTimetablePayload();
     if (payload?.sessions?.length || payload?.subjects?.length) {
-      applyTimetablePayload(payload);
+      applyTimetablePayload(payload, { preferCurrentWeek: true });
     } else {
       setTimetableLoadVersion((current) => current + 1);
     }
@@ -15489,7 +15583,7 @@ export default function App() {
     loadedTimetableModeRef.current = loadMode;
     const cachedPayload = readCachedStudyTimetablePayload();
     if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload)) {
-      applyTimetablePayload(cachedPayload);
+      applyTimetablePayload(cachedPayload, { preferCurrentWeek: true });
     }
     setIsLoadingTimetable(true);
     setTimetableMessage("");
@@ -15503,7 +15597,7 @@ export default function App() {
       const cachedHasSavedSessions = Array.isArray(cachedPayload?.sessions) && cachedPayload.sessions.length > 0;
       const nextPayload = mergeStudyTimetablePayloads(serverPayload, cachedPayload);
       if (hasStudyTimetablePayloadContent(nextPayload)) {
-        applyTimetablePayload(nextPayload);
+        applyTimetablePayload(nextPayload, { preferCurrentWeek: true });
         writeCachedStudyTimetablePayload(nextPayload);
         if (!serverHasSavedSessions && cachedHasSavedSessions) {
           window.setTimeout(() => {
@@ -15515,7 +15609,7 @@ export default function App() {
           }, 0);
         }
       } else if (!hasStudyTimetablePayloadContent(cachedPayload)) {
-        applyTimetablePayload(serverPayload);
+        applyTimetablePayload(serverPayload, { preferCurrentWeek: true });
       }
     } catch (err) {
       hasLoadedTimetableRef.current = false;
@@ -15547,6 +15641,7 @@ export default function App() {
       const nextSessions = localPayload.sessions;
       if (!isPaidStudyTimetableAllowed()) {
         applyTimetablePayload(localPayload);
+        savedTimetableSnapshotRef.current = localPayload;
         if (exitEditing) {
           timetablePlanningStateRef.current = { isEditing: false, hasPlanPreview: false };
           setIsTimetableEditing(false);
@@ -15565,6 +15660,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not save your study timetable.");
       const savedPayload = mergeStudyTimetablePayloads(data.timetable || {}, localPayload);
       writeCachedStudyTimetablePayload(savedPayload);
+      savedTimetableSnapshotRef.current = savedPayload;
       if (silent) {
         setTimetableSessions(savedPayload.sessions || nextSessions);
       } else {
@@ -15585,6 +15681,7 @@ export default function App() {
   const getActiveStudySession = () => timetableSessions.find((session) => session.id === activeStudySessionId) || null;
   const getActiveTimetableNavItem = () => {
     if (!authToken || !timetableWeekStartIso) return null;
+    if (isTimetableEditing || hasTimetablePlanPreview || !hasLoadedTimetableRef.current || isLoadingTimetable) return null;
     const weekStartDate = new Date(timetableWeekStartIso);
     if (Number.isNaN(weekStartDate.getTime())) return null;
     if (getTimetableWeekStartIso(timetableNow) !== getTimetableWeekStartIso(weekStartDate)) return null;
@@ -15593,9 +15690,9 @@ export default function App() {
     if (!day) return null;
     const normalizedPreferences = normalizeTimetablePreferences(timetablePreferences, timetableProfile);
     const visibleSessions = filterTimetablePostExamSubjectSessions(
-      applyTimetableAutoMisses(normalizeTimetableSessions(timetableSessions, timetableNow), timetableNow),
+      normalizeTimetableSessions(timetableSessions, timetableNow),
       normalizedPreferences,
-    );
+    ).filter((session) => !session.derived);
     const rows = buildTimetableRows(visibleSessions);
     const activeSlot = rows.find((slot) => isCurrentTimetableSlot(slot, timetableWeekStartIso, timetableNow));
     if (!activeSlot) return null;
@@ -15605,6 +15702,8 @@ export default function App() {
       const range = normalizeTimetableRange(session.start, session.end);
       return `${range.start}-${range.end}` === activeSlotKey;
     }) || null;
+    if (!sourceSession) return null;
+    if (["empty", "break", "missed"].includes(sourceSession.status) || ["empty", "break"].includes(sourceSession.type)) return null;
     const date = getTimetableSlotDate(timetableWeekStartIso, day.id, activeSlot.start)?.toISOString() || "";
     const displaySession = resolveTimetableDisplaySession({
       session: sourceSession,
@@ -15614,11 +15713,11 @@ export default function App() {
       sessions: visibleSessions,
       subjects: timetableSubjects,
       preferences: normalizedPreferences,
-      allowDerived: !isTimetableEditing || hasTimetablePlanPreview,
+      allowDerived: false,
       weekStartIso: timetableWeekStartIso,
       now: timetableNow,
     });
-    if (!displaySession || displaySession.status === "empty" || displaySession.type === "empty") return null;
+    if (!displaySession || ["empty", "break", "missed"].includes(displaySession.status) || ["empty", "break"].includes(displaySession.type)) return null;
     const endDate = getTimetableSlotDate(timetableWeekStartIso, day.id, activeSlot.end);
     const remainingMs = endDate ? endDate.getTime() - timetableNow.getTime() : 0;
     const isBreak = displaySession.status === "break" || displaySession.type === "break";
@@ -15940,7 +16039,19 @@ export default function App() {
       });
     }
   };
+  const restoreSavedTimetableSnapshot = (message = "Your saved timetable was restored. Unsaved edits were not applied.") => {
+    const snapshot = savedTimetableSnapshotRef.current || readLatestLocalStudyTimetablePayload();
+    if (hasStudyTimetablePayloadContent(snapshot)) {
+      applyTimetablePayload(snapshot, { preferCurrentWeek: true });
+    }
+    timetablePlanningStateRef.current = { isEditing: false, hasPlanPreview: false };
+    setIsTimetableEditing(false);
+    setHasTimetablePlanPreview(false);
+    setTimetableSubjectRemovalPrompt(null);
+    setTimetableMessage(message);
+  };
   const startReEditingTimetable = () => {
+    savedTimetableSnapshotRef.current = buildStudyTimetablePayload(timetableSessions);
     timetablePlanningStateRef.current = { isEditing: true, hasPlanPreview: false };
     setIsTimetableEditing(true);
     setHasTimetablePlanPreview(false);
@@ -16615,11 +16726,11 @@ export default function App() {
   }, [authAvailableModes, authSessionMode, billingUsage?.plan_id, billingSubscription?.plan_id, podcastSpeakerCount]);
 
   useEffect(() => {
-    if (!["timetable", "study-session"].includes(currentPage) || !authToken || !authChecked) return;
+    if (!shouldTimetablePreloadOnCurrentSurface()) return;
     if (!hasResolvedBillingPlan()) {
       const localPayload = readLatestLocalStudyTimetablePayload();
       if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(localPayload)) {
-        applyTimetablePayload(localPayload);
+        applyTimetablePayload(localPayload, { preferCurrentWeek: true });
       }
       return;
     }
@@ -23654,6 +23765,11 @@ export default function App() {
   }
 
   const activeTimetableNavItem = getActiveTimetableNavItem();
+  const timetableNavStatusLabel = isTimetableDataLoadingForNav()
+    ? "Loading timetable..."
+    : activeTimetableNavItem
+      ? `${activeTimetableNavItem.title} - ${activeTimetableNavItem.remainingLabel}`
+      : "";
   const renderMobileAppNavigation = () => {
     const handleMobileNavClick = (item) => {
       if (item.id === "payments") {
@@ -23682,6 +23798,7 @@ export default function App() {
         >
           <Icon className="h-5 w-5" aria-hidden="true" />
           <span>{item.label}</span>
+          {item.id === "timetable" && timetableNavStatusLabel ? <small className="mobile-app-nav__subline">{timetableNavStatusLabel}</small> : null}
         </button>
       );
     };
@@ -23719,7 +23836,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
-              <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{activeTimetableNavItem ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{activeTimetableNavItem.title} - {activeTimetableNavItem.remainingLabel}</span> : null}</button>
+              <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{timetableNavStatusLabel ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{timetableNavStatusLabel}</span> : null}</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
