@@ -241,12 +241,37 @@ def _extract_openai_compatible_delta(payload: Any) -> str:
     return ""
 
 
+def normalize_openai_message_content(value: Any) -> str | list[dict[str, Any]]:
+    if isinstance(value, list):
+        parts: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            item_type = compact_text(item.get("type")).lower()
+            if item_type == "text":
+                text = compact_text(item.get("text"))
+                if text:
+                    parts.append({"type": "text", "text": text})
+                continue
+            if item_type == "image_url":
+                image_payload = item.get("image_url")
+                image_url = ""
+                if isinstance(image_payload, dict):
+                    image_url = compact_text(image_payload.get("url"))
+                else:
+                    image_url = compact_text(image_payload)
+                if image_url:
+                    parts.append({"type": "image_url", "image_url": {"url": image_url}})
+        return parts
+    return compact_text(value)
+
+
 def iter_openai_compatible_stream(
     *,
     provider: str,
     base_url: str,
     system_prompt: str,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     model: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,
@@ -263,7 +288,7 @@ def iter_openai_compatible_stream(
         request_messages.append({"role": "system", "content": compact_text(system_prompt)})
     for message in messages:
         role = "assistant" if compact_text(message.get("role")).lower() == "assistant" else "user"
-        content = compact_text(message.get("content"))
+        content = normalize_openai_message_content(message.get("content"))
         if content:
             request_messages.append({"role": role, "content": content})
 
@@ -320,7 +345,7 @@ def iter_provider_stream(
     provider: str,
     *,
     system_prompt: str,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     model: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,

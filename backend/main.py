@@ -220,7 +220,7 @@ MAX_CHAT_CONTEXT_CHARS = int(os.getenv("MAX_CHAT_CONTEXT_CHARS", "36000"))
 MAX_PODCAST_CONTEXT_CHARS = int(os.getenv("MAX_PODCAST_CONTEXT_CHARS", "42000"))
 MAX_SUPPORT_MESSAGE_CHARS = int(os.getenv("MAX_SUPPORT_MESSAGE_CHARS", "4000"))
 MAX_SUPPORT_CONTEXT_CHARS = int(os.getenv("MAX_SUPPORT_CONTEXT_CHARS", "180"))
-MAX_REFERENCE_IMAGE_INPUT_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_INPUT_CHARS", "220000"))
+MAX_REFERENCE_IMAGE_INPUT_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_INPUT_CHARS", "1400000"))
 MAX_REFERENCE_IMAGE_URL_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_URL_CHARS", "2400"))
 MAX_CHAT_REFERENCE_IMAGES = int(os.getenv("MAX_CHAT_REFERENCE_IMAGES", "4"))
 MAX_GENERATION_REFERENCE_IMAGES = int(os.getenv("MAX_GENERATION_REFERENCE_IMAGES", "6"))
@@ -823,6 +823,14 @@ The notes should feel like:
 - visually organized,
 - optimized for exam revision.
 
+WORLDWIDE LANGUAGE QUALITY RULES
+- Write the final study guide naturally in the requested output language. Never perform literal word-for-word translation.
+- First understand the lecture content, then rewrite it as if an experienced lecturer, textbook author, or tutor originally wrote it in that language.
+- Maintain one language consistently across headings, explanations, examples, formula explanations, questions, and answers. Do not switch back to English unless an academic term is normally used in English by universities.
+- Give highest care to South African languages: isiZulu, isiXhosa, Afrikaans, Sesotho, Sepedi, Setswana, Siswati, Tshivenda, Xitsonga, and isiNdebele. Use natural educational grammar and accepted academic terminology, not direct English sentence structure.
+- For technical terms such as monopoly, GDP, artificial intelligence, machine learning, accounting, engineering, law, medicine, demand, and supply, choose the wording students would actually hear in lectures and textbooks. Keep English terms only when that is the natural academic convention.
+- If the selected language is not listed explicitly, still write in that language with native fluency and academic clarity.
+
 STEP 1 - ANALYZE CONTENT
 Before generating notes, identify:
 - academic subject
@@ -895,6 +903,7 @@ MANDATORY COMPATIBILITY RULES
 - Always include ## STEP-BY-STEP EXPLANATIONS with 3 to 6 clear sequenced steps or step-labeled bullets that teach the learner how to move through the method, process, argument, or reasoning. This section is mandatory and is never optional.
 - Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
 - Do not include a FLASHCARDS section in the study guide. Flashcards are generated separately only when the user presses Generate Flashcards.
+- Always include ## REAL-WORLD APPLICATIONS at the end. Explain careers, industries, professional use, and why students are learning the topic. Use South African examples when appropriate, such as Shoprite, Pick n Pay, Checkers, Capitec, FNB, Standard Bank, SARS, Transnet, MultiChoice, MTN, and Vodacom when they genuinely fit the subject.
 
 PREMIUM DEPTH RULES
 - Make the guide detailed enough for serious exam revision, especially when the supplied notes, slides, transcript, or past papers contain enough information.
@@ -970,6 +979,11 @@ QUALITY RULES
 - Write naturally like a highly organized top university student.
 - Use more stacked comparison cards, process flows, and visual-learning suggestions when concepts are complex.
 - Focus on conceptual understanding and intuitive explanations, not just memorization.
+- Before finalizing, perform an internal quality check for grammar, spelling, natural fluency, mixed-language drift, duplicated paragraphs, duplicated headings, repeated definitions, repeated examples, missing required sections, inconsistent terminology, and formatting problems.
+- Remove repeated content before returning the final guide. Do not duplicate definitions, formulas, examples, headings, practice questions, or summaries.
+- Worked examples must be complete when source material supports them: Problem, Given Information, Step 1, Step 2, Step 3, Explanation, Final Answer, and Real-life interpretation.
+- Practice questions should include variety where useful: multiple choice, short answer, long questions, scenario questions, application questions, higher-order thinking, and critical thinking. Do not add a final mock test inside the study guide.
+- Add quick-revision support when useful: Key Takeaways, One-page Quick Revision Notes, Top Facts to Remember, Frequently Confused Concepts, Quick Definitions, Important Vocabulary, and Exam Checklist.
 - Do not include YouTube links or long export suggestions.
 """
 
@@ -1281,6 +1295,7 @@ class LectureAssistantRequest(BaseModel):
     lecture_slides: str = ""
     past_question_papers: str = ""
     messages: list[LectureAssistantMessage] = []
+    reference_images: list[str] = []
     language: str = "English"
     voice_mode: bool = False
     session_id: str = ""
@@ -2749,7 +2764,7 @@ def normalize_session_mode(mode: str, email: str) -> str:
         )
         requested_mode = "user"
     if requested_mode == "admin" and not is_admin_email(email):
-        raise HTTPException(status_code=403, detail="Admin access is not available for this account.")
+        raise HTTPException(status_code=403, detail="Protected access is not available for this account.")
     return requested_mode
 
 
@@ -2774,7 +2789,7 @@ def get_user_account_status(email: str) -> str:
 
 def ensure_user_account_is_active(email: str):
     if get_user_account_status(email) != "active":
-        raise HTTPException(status_code=403, detail="This account has been suspended. Contact the administrator.")
+        raise HTTPException(status_code=403, detail="This account has been suspended. Contact support.")
 
 
 def set_user_account_status(email: str, status: str, updated_by: str):
@@ -3330,7 +3345,7 @@ def ensure_admin_login_allowed(email: str, ip_address: str):
         raise HTTPException(
             status_code=429,
             detail=(
-                "Admin login is temporarily locked after too many failed attempts. "
+                "Protected sign-in is temporarily locked after too many failed attempts. "
                 f"Try again after {readable_time}."
             ),
         )
@@ -4983,7 +4998,7 @@ def require_admin_user(request: Request, authorization: str | None = Header(None
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
     if context["mode"] != "admin" or not is_admin_email(context["email"]):
-        raise HTTPException(status_code=403, detail="Admin access is required.")
+        raise HTTPException(status_code=403, detail="Restricted access is required.")
     return context["email"]
 
 
@@ -5222,6 +5237,11 @@ def build_auth_response(email: str, token: str, *, include_account_snapshot: boo
         "session_mode": session_mode,
         "available_modes": available_modes,
         "is_admin": "admin" in available_modes,
+        "cookie_session": True,
+        "session_cookie_name": SESSION_COOKIE_NAME,
+        "csrf_cookie_name": CSRF_COOKIE_NAME,
+        "session_cookie_secure": SESSION_COOKIE_SECURE,
+        "session_cookie_samesite": SESSION_COOKIE_SAMESITE,
         "account": account or None,
     }
     if account:
@@ -6253,7 +6273,7 @@ def build_lecture_assistant_messages(
     *,
     persisted_recent_messages: list[dict[str, Any]] | None = None,
     memory_summary: str = "",
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     voice_mode = bool(payload.voice_mode)
     wants_detail = lecture_assistant_voice_wants_detail(payload.question) if voice_mode else False
     history = sanitize_lecture_assistant_history(
@@ -6273,12 +6293,39 @@ def build_lecture_assistant_messages(
     if compact_text(memory_summary):
         history = [{"role": "assistant", "content": compact_text(memory_summary)[:1800]}] + history
     question = compact_text(payload.question)
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     if question:
-        history.append({"role": "user", "content": question[:2400]})
+        if reference_images and not voice_mode:
+            content_parts: list[dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": (
+                        f"{question[:2400]}\n\n"
+                        "Use the attached photo(s) as primary evidence. Read visible text, diagrams, handwriting, "
+                        "tables, graphs, and mathematical notation carefully. Explain the answer in clean, human-readable study-guide style."
+                    ),
+                }
+            ]
+            content_parts.extend({"type": "image_url", "image_url": {"url": image}} for image in reference_images)
+            history.append({"role": "user", "content": content_parts})
+        else:
+            history.append({"role": "user", "content": question[:2400]})
     return history
 
 
 def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_provider: str = "") -> list[dict[str, str]]:
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
+    if reference_images and not bool(payload.voice_mode):
+        attempts = resolve_provider_attempts("openai", voice_mode=False)
+        return [
+            {
+                **attempt,
+                "model": VISION_MODEL,
+                "label": "OpenAI Vision",
+            }
+            for attempt in attempts
+            if attempt.get("provider") == "openai"
+        ]
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
     if not bool(payload.voice_mode):
@@ -7042,7 +7089,7 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             "renewal_status": "admin",
             "days_remaining": 0,
             "seconds_remaining": 0,
-            "time_remaining_label": "Admin access",
+            "time_remaining_label": "Protected access",
             "expires_at": "",
             "expired": False,
         }
@@ -9957,10 +10004,16 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         ),
     )
 
+    activity_count_by_user: dict[str, int] = {}
+    for log in logs[:120]:
+        user_key = normalize_email(log["email"] or "anonymous") or "anonymous"
+        activity_count_by_user[user_key] = activity_count_by_user.get(user_key, 0) + 1
+
     activity_logs = [
         {
             "timestamp": log["created_at"],
             "user": log["email"] or "anonymous",
+            "user_activity_count": activity_count_by_user.get(normalize_email(log["email"] or "anonymous") or "anonymous", 1),
             "ip_address": log["ip_address"],
             "device": log["user_agent"],
             "action": log["action"],
@@ -10123,7 +10176,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             suspicious_activity.append(
                 {
                     "email": normalize_email(row["email"]),
-                    "reason": f"Admin login lock active for IP {row['ip_address']}.",
+                    "reason": f"Protected sign-in lock active for IP {row['ip_address']}.",
                 }
             )
 
@@ -11117,13 +11170,13 @@ async def login_with_email_password_route(payload: EmailPasswordAuthRequest, req
             failure_count = int(failure_state.get("failure_count") or 0)
             if locked_until:
                 detail = (
-                    "Admin login has been locked after 3 failed attempts. "
+                    "Protected sign-in has been locked after 3 failed attempts. "
                     f"Try again after {locked_until.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}."
                 )
                 status_code = 429
             else:
                 remaining = max(ADMIN_LOGIN_MAX_ATTEMPTS - failure_count, 0)
-                detail = f"Email or password is incorrect. {remaining} admin attempt{'s' if remaining != 1 else ''} remaining."
+                detail = f"Email or password is incorrect. {remaining} protected attempt{'s' if remaining != 1 else ''} remaining."
                 status_code = 400
             record_audit_log(
                 action="auth.email_password.login",
@@ -11268,6 +11321,8 @@ async def apple_login(payload: AppleAuthRequest, request: Request, response: Res
 @app.get("/auth/me")
 async def auth_me(request: Request, response: Response, authorization: str | None = Header(None)):
     started_at = utc_now()
+    bearer_token = get_bearer_token_from_authorization(authorization)
+    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
     token = get_request_session_token(request, authorization, require_csrf=False)
     context = get_session_context(token)
     if not context:
@@ -11292,6 +11347,8 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
     csrf_token = set_auth_cookies(response, active_token)
     payload = build_auth_response(context["email"], active_token)
     payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
+    payload["auth_transport"] = "cookie" if cookie_token and not bearer_token else "bearer"
+    payload["cookie_session_active"] = bool(cookie_token)
     if csrf_token:
         payload["csrf_token"] = csrf_token
     return payload
@@ -11523,7 +11580,7 @@ async def confirm_payment_submitted_endpoint(
         metadata={"payment_request_id": payment["id"], "status": payment["status"]},
     )
     return {
-        "message": "Payment submission recorded. Your subscription will activate after admin verification.",
+        "message": "Payment submission recorded. Your subscription will activate after manual verification.",
         "payment_request": payment,
     }
 
@@ -12007,7 +12064,7 @@ async def suspend_subscription_abuse_account(
                 0,
                 0,
                 "",
-                json.dumps([{"rule": "admin_action", "message": "Suspended by admin.", "severity": 100}], ensure_ascii=False),
+                json.dumps([{"rule": "protected_action", "message": "Suspended by operator.", "severity": 100}], ensure_ascii=False),
                 utc_now().isoformat(),
             ),
         )
@@ -21749,6 +21806,7 @@ async def ask_study_assistant(
 def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
     metadata = normalize_chat_history_json(row.get("metadata_json"))
     client_request_id = compact_text(metadata.get("client_request_id"))
+    reference_images = metadata.get("reference_images") if isinstance(metadata.get("reference_images"), list) else []
     return {
         "id": compact_text(row.get("id")),
         "conversationId": compact_text(row.get("conversation_id")),
@@ -21761,6 +21819,7 @@ def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
         "traceId": client_request_id,
         "clientRequestId": client_request_id,
         "metadata": metadata,
+        "referenceImages": reference_images,
     }
 
 
@@ -22269,6 +22328,7 @@ def persist_lecture_assistant_turn(
         return None
 
     title_hint = build_fallback_conversation_title(payload.question, payload.lecture_label)
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     try:
         conversation = chat_history_store.ensure_conversation(
             email=current_user,
@@ -22299,6 +22359,8 @@ def persist_lecture_assistant_turn(
                         "metadata_json": {
                             "client_request_id": compact_text(payload.client_request_id),
                             "voice_mode": bool(payload.voice_mode),
+                            "reference_image_count": len(reference_images),
+                            "reference_images": reference_images,
                         },
                     }
                 ],
@@ -22320,6 +22382,7 @@ def persist_lecture_assistant_turn(
                         "metadata_json": {
                             "client_request_id": compact_text(payload.client_request_id),
                             "voice_mode": bool(payload.voice_mode),
+                            "reference_image_count": len(reference_images),
                         },
                     }
                 ],
@@ -22419,13 +22482,20 @@ def create_lecture_assistant_stream(
         window_seconds=10 * 60,
         identity=current_user,
     )
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
+    if reference_images:
+        payload = payload.model_copy(update={"reference_images": reference_images})
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
     consume_plan_quota(
         email=current_user,
         feature="study_chat",
         request=request,
-        metadata={"route": "lecture_assistant_stream", "voice_mode": bool(payload.voice_mode)},
+        metadata={
+            "route": "lecture_assistant_stream",
+            "voice_mode": bool(payload.voice_mode),
+            "reference_images": len(reference_images),
+        },
     )
 
     started_at = utc_now()

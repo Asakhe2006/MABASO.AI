@@ -80,6 +80,10 @@ const VOICE_TRANSCRIPT_QUEUE_CLARIFY_DELAY_MS = 220;
 const VOICE_TRANSCRIPT_PROCESS_CONFIDENCE_THRESHOLD = 0.44;
 const ASSISTANT_TRACE_METRIC_LIMIT = 50;
 const ASSISTANT_DUPLICATE_REQUEST_WINDOW_MS = 8000;
+const MAX_ASSISTANT_REFERENCE_IMAGES = 4;
+const MAX_ASSISTANT_REFERENCE_IMAGE_CHARS = 1400000;
+const ASSISTANT_REFERENCE_IMAGE_MAX_DIMENSION = 1400;
+const ASSISTANT_REFERENCE_IMAGE_QUALITY = 0.82;
 
 function nowMs() {
   return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -106,6 +110,81 @@ function createClientId(prefix = "assistant") {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeAssistantReferenceImages(value = []) {
+  const source = Array.isArray(value) ? value : [];
+  return source
+    .map((item, index) => {
+      if (typeof item === "string") {
+        const dataUrl = compactText(item);
+        return dataUrl ? { id: createClientId("image"), name: `Photo ${index + 1}`, dataUrl } : null;
+      }
+      if (!item || typeof item !== "object") return null;
+      const dataUrl = compactText(item.dataUrl || item.data_url || item.url || item.imageUrl || item.image_url);
+      if (!dataUrl) return null;
+      return {
+        id: compactText(item.id, createClientId("image")),
+        name: compactText(item.name, `Photo ${index + 1}`),
+        dataUrl,
+        size: Number(item.size || 0) || 0,
+        type: compactText(item.type || item.mimeType || item.mime_type),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_ASSISTANT_REFERENCE_IMAGES);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read that image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not prepare that image."));
+    image.src = src;
+  });
+}
+
+async function compressAssistantImageFile(file) {
+  if (!file?.type?.startsWith("image/")) {
+    throw new Error("Choose an image file.");
+  }
+  const sourceDataUrl = await readFileAsDataUrl(file);
+  const image = await loadImageElement(sourceDataUrl);
+  const scale = Math.min(1, ASSISTANT_REFERENCE_IMAGE_MAX_DIMENSION / Math.max(image.width || 1, image.height || 1));
+  const width = Math.max(1, Math.round((image.width || 1) * scale));
+  const height = Math.max(1, Math.round((image.height || 1) * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Could not prepare that image.");
+  context.drawImage(image, 0, 0, width, height);
+
+  let quality = ASSISTANT_REFERENCE_IMAGE_QUALITY;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  while (dataUrl.length > MAX_ASSISTANT_REFERENCE_IMAGE_CHARS && quality > 0.52) {
+    quality -= 0.08;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  }
+  if (dataUrl.length > MAX_ASSISTANT_REFERENCE_IMAGE_CHARS) {
+    throw new Error("That image is too large. Try a clearer cropped photo.");
+  }
+  return {
+    id: createClientId("image"),
+    name: compactText(file.name, "Photo"),
+    dataUrl,
+    size: Number(file.size || 0) || 0,
+    type: "image/jpeg",
+  };
 }
 
 function nowIso() {
@@ -663,6 +742,7 @@ function createConversationRecord({
 }
 
 function createConversationMessage(role, content = "", extra = {}) {
+  const referenceImages = normalizeAssistantReferenceImages(extra.referenceImages || extra.reference_images || extra.metadata?.reference_images || []);
   return {
     id: createClientId(role),
     role: compactText(role, "assistant"),
@@ -675,6 +755,8 @@ function createConversationMessage(role, content = "", extra = {}) {
     traceId: compactText(extra.traceId),
     clientRequestId: compactText(extra.clientRequestId),
     metrics: extra.metrics && typeof extra.metrics === "object" ? extra.metrics : {},
+    referenceImages,
+    metadata: extra.metadata && typeof extra.metadata === "object" ? extra.metadata : {},
   };
 }
 
@@ -703,6 +785,9 @@ function normalizeConversationRecord(rawConversation, index = 0) {
         const messageMetadata = message.metadata && typeof message.metadata === "object"
           ? message.metadata
           : {};
+        const referenceImages = normalizeAssistantReferenceImages(
+          message.referenceImages || message.reference_images || messageMetadata.reference_images || [],
+        );
         return {
           id: compactText(message.id, `${id}-message-${messageIndex}`),
           role,
@@ -715,6 +800,8 @@ function normalizeConversationRecord(rawConversation, index = 0) {
           traceId: compactText(message.traceId || message.trace_id || message.clientRequestId || message.client_request_id || messageMetadata.client_request_id),
           clientRequestId: compactText(message.clientRequestId || message.client_request_id || message.traceId || message.trace_id || messageMetadata.client_request_id),
           metrics: message.metrics && typeof message.metrics === "object" ? message.metrics : {},
+          referenceImages,
+          metadata: messageMetadata,
         };
       })
       .filter(Boolean)
@@ -886,11 +973,18 @@ function parseSseEventBlock(rawBlock = "") {
 async function readErrorResponse(response) {
   const text = await response.text();
   if (!text) return "The lecture assistant request failed.";
+  const sanitize = (value) => {
+    const message = compactText(value, "The lecture assistant request failed.");
+    if (/backend logs?|traceback|stack trace|exception|api key|secret|supabase|postgres|database|sql|render|not configured/i.test(message)) {
+      return "The lecture assistant could not complete that request. Please try again.";
+    }
+    return message;
+  };
   try {
     const parsed = JSON.parse(text);
-    return compactText(parsed.detail || parsed.message || parsed.error, text);
+    return sanitize(parsed.detail || parsed.message || parsed.error || text);
   } catch {
-    return text;
+    return sanitize(text);
   }
 }
 
@@ -1004,6 +1098,7 @@ export function useLectureAssistant({
   const [voiceInterrupted, setVoiceInterrupted] = useState(false);
   const [isProcessingVoiceTurn, setIsProcessingVoiceTurn] = useState(false);
   const [performanceMetrics, setPerformanceMetrics] = useState([]);
+  const [attachedImages, setAttachedImages] = useState([]);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const remoteSyncAvailable = Boolean(
     compactText(authEmail)
@@ -1021,6 +1116,7 @@ export function useLectureAssistant({
   const recognitionRef = useRef(null);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
+  const attachedImageInputRef = useRef(null);
   const copyResetTimerRef = useRef(0);
   const speechRestartTimerRef = useRef(0);
   const voiceListeningTimerRef = useRef(0);
@@ -1146,10 +1242,11 @@ export function useLectureAssistant({
     });
   };
 
-  const buildRequestFingerprint = ({ conversationId = "", question = "", interactionMode = "text" } = {}) => [
+  const buildRequestFingerprint = ({ conversationId = "", question = "", interactionMode = "text", referenceImages = "" } = {}) => [
     compactText(conversationId),
     compactText(interactionMode, "text").toLowerCase(),
     compactText(question).toLowerCase(),
+    compactText(referenceImages),
   ].join("|");
 
   const isVoicePreviewMuted = () => Date.now() < voicePreviewMuteUntilRef.current;
@@ -3558,11 +3655,45 @@ export function useLectureAssistant({
     triggerVoiceInterruption("");
   };
 
+  const attachImageFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter((file) => file?.type?.startsWith("image/"));
+    if (!files.length) {
+      setStatusText("Choose an image file.");
+      return;
+    }
+    const remainingSlots = Math.max(0, MAX_ASSISTANT_REFERENCE_IMAGES - attachedImages.length);
+    if (!remainingSlots) {
+      setStatusText(`You can attach up to ${MAX_ASSISTANT_REFERENCE_IMAGES} photos per question.`);
+      return;
+    }
+    setStatusText("Preparing photo for the assistant...");
+    const prepared = [];
+    for (const file of files.slice(0, remainingSlots)) {
+      try {
+        prepared.push(await compressAssistantImageFile(file));
+      } catch (error) {
+        setStatusText(compactText(error?.message, "One photo could not be prepared."));
+      }
+    }
+    if (!prepared.length) return;
+    setAttachedImages((current) => normalizeAssistantReferenceImages([...current, ...prepared]));
+    setStatusText(`${prepared.length} photo${prepared.length === 1 ? "" : "s"} attached. Ask a question about it.`);
+  };
+
+  const removeAttachedImage = (imageId) => {
+    setAttachedImages((current) => current.filter((image) => image.id !== imageId));
+  };
+
+  const clearAttachedImages = () => {
+    setAttachedImages([]);
+  };
+
   const sendMessage = async ({
     promptText = draft,
     baseMessages = null,
     appendUserMessage = true,
     interactionMode = "text",
+    referenceImages = null,
   } = {}) => {
     const resolvedInteractionMode = compactText(interactionMode, "text").toLowerCase() === "voice" ? "voice" : "text";
     const useVoiceInteraction = resolvedInteractionMode === "voice";
@@ -3570,13 +3701,17 @@ export function useLectureAssistant({
       setStatusText("Voice preview just played. Wait a moment, then speak again.");
       return false;
     }
+    const selectedReferenceImages = normalizeAssistantReferenceImages(
+      Array.isArray(referenceImages) ? referenceImages : attachedImages,
+    );
     const question = compactText(
       useVoiceInteraction
         ? (normalizeVoiceTranscript(promptText) || promptText)
         : promptText,
+      selectedReferenceImages.length ? "Please explain the attached photo." : "",
     );
     if (!question) {
-      setStatusText("Type or speak a question first.");
+      setStatusText("Type or speak a question first, or attach a photo.");
       return false;
     }
     if (isGeneratingRef.current) return false;
@@ -3595,6 +3730,7 @@ export function useLectureAssistant({
       conversationId: targetConversationId,
       question,
       interactionMode: resolvedInteractionMode,
+      referenceImages: selectedReferenceImages.map((image) => `${image.name}:${image.dataUrl.length}`).join("|"),
     });
     if (activeRequestFingerprintsRef.current.has(requestFingerprint)) {
       pushPerformanceMetric({
@@ -3625,7 +3761,13 @@ export function useLectureAssistant({
       frontendRenderMs: 0,
     };
     const nextUserMessage = appendUserMessage
-      ? createConversationMessage("user", question, { interactionMode: resolvedInteractionMode, traceId, clientRequestId })
+      ? createConversationMessage("user", question, {
+        interactionMode: resolvedInteractionMode,
+        traceId,
+        clientRequestId,
+        referenceImages: selectedReferenceImages,
+        metadata: { reference_images: selectedReferenceImages },
+      })
       : null;
     const nextAssistantMessage = createConversationMessage("assistant", "", {
       status: "streaming",
@@ -3663,6 +3805,7 @@ export function useLectureAssistant({
     }));
 
     setDraft("");
+    if (appendUserMessage) setAttachedImages([]);
     setIsGenerating(true);
     setStatusText(useVoiceInteraction
       ? (hasLectureContext ? "Processing your voice question..." : "Processing your voice question without lecture context...")
@@ -3691,6 +3834,7 @@ export function useLectureAssistant({
           content: message.content,
           timestamp: message.timestamp,
         })),
+        reference_images: selectedReferenceImages.map((image) => image.dataUrl).filter(Boolean),
         language: useVoiceInteraction ? LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE : outputLanguage,
         voice_mode: useVoiceInteraction,
         session_id: targetConversationId,
@@ -3812,7 +3956,12 @@ export function useLectureAssistant({
           return;
         }
         if (event === "error") {
-          throw new Error(compactText(data.message, "The lecture assistant could not finish that reply."));
+          const streamErrorMessage = compactText(data.message, "The lecture assistant could not finish that reply.");
+          throw new Error(
+            /backend logs?|traceback|stack trace|exception|api key|secret|supabase|postgres|database|sql|render|not configured/i.test(streamErrorMessage)
+              ? "The lecture assistant could not finish that reply. Please try again."
+              : streamErrorMessage,
+          );
         }
       });
 
@@ -3887,6 +4036,7 @@ export function useLectureAssistant({
       baseMessages: trimmedMessages,
       appendUserMessage: false,
       interactionMode: compactText(lastUserMessage.interactionMode, "text"),
+      referenceImages: lastUserMessage.referenceImages || [],
     });
   };
 
@@ -4183,8 +4333,11 @@ export function useLectureAssistant({
     activeConversation,
     activeConversationId,
     activeProvider,
+    attachedImageInputRef,
+    attachedImages,
+    attachImageFiles,
     assistantAudioState,
-    canSend: Boolean(compactText(draft)) && !isGenerating,
+    canSend: Boolean(compactText(draft) || attachedImages.length) && !isGenerating,
     canLoadMoreConversations,
     closePanel,
     composerRef,
@@ -4223,6 +4376,7 @@ export function useLectureAssistant({
     previewSelectedVoiceWithDraft,
     previewVoiceProfile,
     regenerateLastResponse,
+    removeAttachedImage,
     renameConversation,
     searchQuery,
     selectedVoiceProfile,
@@ -4242,6 +4396,7 @@ export function useLectureAssistant({
     startListening,
     statusText,
     stopGenerating,
+    clearAttachedImages,
     stopListening,
     stopSpeaking,
     stopVoiceChat,

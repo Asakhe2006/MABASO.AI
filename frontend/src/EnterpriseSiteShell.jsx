@@ -30,7 +30,7 @@ function SiteIcon({ name, className = "h-5 w-5" }) {
 }
 
 function pageActionLabel(access = "public") {
-  if (access === "admin") return "Admin only";
+  if (access === "admin") return "Restricted";
   if (access === "login") return "Login required";
   return "Public";
 }
@@ -404,13 +404,13 @@ function ProtectedAdminState({ page, onNavigate, onOpenApp }) {
             <LucideIcons.ShieldAlert className="h-4 w-4" aria-hidden="true" />
             Access denied
           </div>
-          <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">{page.adminGuard?.title || "Administrative access required"}</h1>
-          <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">{page.adminGuard?.description || "This page is reserved for authorized Mabaso AI administrators."}</p>
+          <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">{page.adminGuard?.title || "Restricted access required"}</h1>
+          <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">{page.adminGuard?.description || "This page is reserved for authorized Mabaso AI operators."}</p>
           <div className="mt-8 grid gap-4 xl:grid-cols-3">
             {[
-              "Security alerts and operational logs remain restricted to authorized administrators.",
+              "Security alerts and operational logs remain restricted to authorized operators.",
               "Student-mode sessions should return to the main workspace or the public company trust pages.",
-              "If you have admin access, enter through the protected admin mode flow after authentication.",
+              "If you have elevated access, enter through the protected mode flow after authentication.",
             ].map((message) => (
               <div key={message} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4 text-sm leading-7 text-slate-200">
                 {message}

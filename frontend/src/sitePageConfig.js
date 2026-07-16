@@ -145,7 +145,7 @@ export const sitePages = [
       { icon: "shield-check", title: "Free Study", description: "No card required, small monthly credits, and enough access to test study guides, chat, and basic exports." },
       { icon: "graduation-cap", title: "Student Plus", description: "R49/month with higher AI credits, reports, quizzes, mind maps, and PDF/DOCX exports." },
       { icon: "brain", title: "Pro Research", description: "R149/month with higher document limits, advanced academic reports, presentations, priority queue access, and strict spend caps." },
-      { icon: "building-2", title: "Team / Institution", description: "Shared seats, pooled credits, admin controls, invoices, audit logs, and approval before extra billing." },
+      { icon: "building-2", title: "Team / Institution", description: "Shared seats, pooled credits, restricted controls, invoices, audit logs, and approval before extra billing." },
     ],
     workflow: [
       "Show exact monthly prices before checkout",
@@ -160,7 +160,7 @@ export const sitePages = [
     },
     designNotes: [
       "Use calm pricing cards and strong anti-dark-pattern copy.",
-      "Make PayFast-paid plans active only after PayFast confirms payment; make PayShap-paid plans active only after admin reference verification.",
+      "Make PayFast-paid plans active only after PayFast confirms payment; make PayShap-paid plans active only after manual reference verification.",
     ],
     footerCrossLinks: [
       { label: "Terms", route: "/company/terms" },
@@ -175,12 +175,12 @@ export const sitePages = [
     access: "public",
     metadata: {
       title: "Payment Success | Mabaso AI",
-      description: "Your Mabaso AI payment was received. PayFast plans activate after payment confirmation, and PayShap plans activate after admin verification.",
+      description: "Your Mabaso AI payment was received. PayFast plans activate after payment confirmation, and PayShap plans activate after manual verification.",
     },
     hero: {
       eyebrow: "Billing / Payment",
       headline: "Payment submitted. Activation is being confirmed.",
-      description: "PayFast payments activate automatically after provider confirmation. Manual PayShap subscriptions stay pending until an admin matches the exact bank payment reference and verifies the request.",
+      description: "PayFast payments activate automatically after provider confirmation. Manual PayShap subscriptions stay pending until the exact bank payment reference is verified.",
       ctas: [
         primaryCta("Open Workspace", "open-app", "capture"),
         secondaryCta("View Pricing", "navigate", "/pricing"),
@@ -192,7 +192,7 @@ export const sitePages = [
       },
     },
     modules: [
-      { icon: "shield-check", title: "Automatic or manual confirmation", description: "PayFast subscriptions activate after webhook confirmation. PayShap subscriptions activate after admin reference verification." },
+      { icon: "shield-check", title: "Automatic or manual confirmation", description: "PayFast subscriptions activate after webhook confirmation. PayShap subscriptions activate after manual reference verification." },
       { icon: "clock", title: "Pending status", description: "Manual payment requests remain pending until the bank payment is reviewed." },
       { icon: "life-buoy", title: "Support ready", description: "If payment completed but access does not update, contact support with your payment reference." },
     ],
@@ -200,7 +200,7 @@ export const sitePages = [
       "The user chooses PayFast for online checkout or PayShap for a bank reference",
       "PayFast activates after webhook confirmation",
       "For PayShap, the user pays with the exact reference and clicks I Have Paid",
-      "An admin verifies the PayShap bank reference in the Payments dashboard",
+      "The PayShap bank reference is verified in the Payments dashboard",
     ],
     footerCrossLinks: [
       { label: "Pricing", route: "/pricing" },
@@ -2052,12 +2052,12 @@ That is why the platform is built around lecture context, not isolated AI prompt
     access: "public",
     metadata: {
       title: "Security | Mabaso AI",
-      description: "Understand Mabaso AI security controls including secure uploads, encrypted transport, session monitoring, AI abuse prevention, admin auditing, and platform hardening.",
+      description: "Understand Mabaso AI security controls including secure uploads, encrypted transport, session monitoring, AI abuse prevention, restricted auditing, and platform hardening.",
     },
     hero: {
       eyebrow: "Company / Security",
       headline: "Security architecture designed to protect uploads, sessions, AI usage, and collaboration.",
-      description: "Security explains how Mabaso AI approaches trust: secure uploads, session controls, response headers, rate limiting, route hardening, monitoring, and admin-level auditing for sensitive product operations.",
+      description: "Security explains how Mabaso AI approaches trust: secure uploads, session controls, response headers, rate limiting, route hardening, monitoring, and restricted auditing for sensitive product operations.",
       ctas: [
         primaryCta("Read Privacy Policy", "route", "/company/privacy"),
         secondaryCta("Contact Support", "route", "/support/contact-support"),
@@ -2069,7 +2069,7 @@ That is why the platform is built around lecture context, not isolated AI prompt
       ],
       preview: {
         kicker: "Enterprise trust layer",
-        title: "Encryption, secure uploads, monitoring, and admin auditing",
+        title: "Encryption, secure uploads, monitoring, and restricted auditing",
         subtitle: "This page should feel serious, technical, and calm enough to increase trust without reading like pure compliance copy.",
         tabs: ["Transport", "Uploads", "Sessions", "Monitoring"],
         rows: [
@@ -2086,7 +2086,7 @@ That is why the platform is built around lecture context, not isolated AI prompt
     ],
     layout: [
       { title: "Trust hero", description: "Start with security posture, not marketing slogans." },
-      { title: "Control categories", description: "Break the page into uploads, sessions, AI routes, admin monitoring, and platform headers." },
+      { title: "Control categories", description: "Break the page into uploads, sessions, AI routes, protected monitoring, and platform headers." },
       { title: "Support reassurance", description: "Close with privacy, terms, and support links for users who need more context." },
     ],
     modules: [
@@ -2104,7 +2104,7 @@ That is why the platform is built around lecture context, not isolated AI prompt
         title: "Monitoring and trust",
         items: [
           "Audit logging for sensitive product actions",
-          "Admin alerts and session analytics",
+          "Private alerts and session analytics",
           "Secure handling for protected user routes and collaboration flows",
         ],
       },
@@ -2121,7 +2121,7 @@ That is why the platform is built around lecture context, not isolated AI prompt
     visuals: [
       "Security control cards with transport, upload, and session groupings",
       "Platform monitoring panel showing audits and health signals",
-      "Route-protection diagram for public, authenticated, and admin-only states",
+      "Route-protection diagram for public, authenticated, and restricted states",
     ],
     emptyState: {
       title: "Security details unavailable",
@@ -2359,7 +2359,7 @@ Data is used to:
           "Authentication and session routes",
           "Lecture upload and extraction routes",
           "Study generation and polling routes",
-          "Protected admin and support endpoints",
+          "Protected support and operations endpoints",
         ],
       },
     ],
@@ -2566,7 +2566,7 @@ Content-Type: application/json
         icon: "lock",
         title: "Access rules",
         items: [
-          "Route requires login and admin authorization",
+          "Route requires login and elevated authorization",
           "Unauthorized visitors see a restricted access screen",
           "Non-authorized signed-in users are blocked from platform operations data",
         ],
@@ -2584,7 +2584,7 @@ Content-Type: application/json
     designNotes: [
       "The restricted route should feel like a real operations console, not a hidden settings page.",
       "Unauthorized and locked states must look premium and final, not like missing features.",
-      "Use a lighter enterprise admin canvas to differentiate it from the student-facing dark workspace.",
+      "Use a lighter protected operations canvas to differentiate it from the student-facing dark workspace.",
     ],
     relatedPages: ["/company/security", "/developers/api-documentation", "/support/contact-support"],
     footerCrossLinks: ["/company/privacy", "/company/terms", "/company/about"],

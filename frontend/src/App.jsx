@@ -4355,6 +4355,10 @@ function titleCaseWords(value = "") {
     .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
+function formatAccountRoleLabel(value = "") {
+  return String(value || "").trim().toLowerCase() === "admin" ? "Protected" : titleCaseWords(value || "User");
+}
+
 function normalizePaymentStatus(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   return ["pending", "verified", "rejected"].includes(normalized) ? normalized : "pending";
@@ -4380,7 +4384,7 @@ function getSubscriptionCountdownText(subscription = null) {
   if (!subscription || typeof subscription !== "object") return "";
   const status = String(subscription.status || "").toLowerCase();
   const planId = String(subscription.plan_id || "free").toLowerCase();
-  if (subscription.renewal_status === "admin") return "Admin access";
+  if (subscription.renewal_status === "admin") return "Protected access";
   if (status === "expired" || subscription.expired) return subscription.message || "Subscription expired. Account is on the Free Plan.";
   if (!subscription.active || planId === "free") return "";
   return subscription.time_remaining_label || "";
@@ -6699,7 +6703,7 @@ export default function App() {
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayFast or PayShap</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan, then continue with PayFast for automatic activation after payment confirmation or PayShap for admin-verified bank payment.</p>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan, then continue with PayFast for automatic activation after payment confirmation or PayShap for manually verified bank payment.</p>
           </div>
           <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
@@ -6734,7 +6738,7 @@ export default function App() {
                   {selectedBillingPlan.name}
                   {selectedBillingPlan.selectedIntervalLabel ? ` - ${selectedBillingPlan.selectedIntervalLabel}` : ""} {selectedBillingPlan.selectedPrice || selectedBillingPlan.price || ""}
                 </h3>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">PayFast redirects to online checkout and activates the paid plan automatically after PayFast confirms the payment. PayShap creates a bank reference for admin verification.</p>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">PayFast redirects to online checkout and activates the paid plan automatically after PayFast confirms the payment. PayShap creates a bank reference for manual verification.</p>
               </div>
               <button type="button" onClick={() => setSelectedBillingPlan(null)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Change plan</button>
             </div>
@@ -6755,7 +6759,7 @@ export default function App() {
                 className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-left text-sm font-bold text-emerald-50 transition hover:bg-emerald-300/15 disabled:cursor-wait disabled:opacity-70"
               >
                 {billingCheckoutPlanId === `payshap:${selectedBillingPlan.id}` ? "Generating PayShap..." : "Pay with PayShap"}
-                <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Admin verifies before the plan activates.</span>
+                <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Manual verification happens before the plan activates.</span>
               </button>
             </div>
           </div>
@@ -6816,7 +6820,7 @@ export default function App() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">My Payments</p>
-                <p className="mt-2 text-sm text-slate-300">Pending payments wait for admin verification before plan activation.</p>
+                <p className="mt-2 text-sm text-slate-300">Pending payments wait for manual verification before plan activation.</p>
               </div>
               <button type="button" onClick={() => { setIsUpgradeModalOpen(false); openProtectedAppPage("payments"); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Open Page</button>
             </div>
@@ -7366,7 +7370,7 @@ export default function App() {
   const isRegistrationPasswordStep = isRegisterMode && registerStep === "password";
   const showResetVerificationCard = isResetMode && Boolean(pendingEmailAuthEmail);
   const authMessageIsPositive = /^(verification code sent|support message sent|you are signed in|email verified)/i.test(authMessage.trim());
-  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or admin mode|enter your email and we will send a verification code|your study history stays linked to this email|continue with google or apple to sign in securely|create your mabaso ai account by continuing with google or apple)/i.test(authMessage.trim());
+  const authMessageIsNeutral = /^(enter your email and a new password|opening your saved session|using the saved session|choose user mode or protected mode|enter your email and we will send a verification code|your study history stays linked to this email|continue with google or apple to sign in securely|create your mabaso ai account by continuing with google or apple)/i.test(authMessage.trim());
   const authPasswordIsIncorrect = authMode === "login" && /email or password is incorrect|incorrect password/i.test(authMessage.trim());
   const landingAuthMessageIsGuidance = /continue with google or apple|create your mabaso ai account by continuing with google or apple/i.test(authMessage.trim());
   const authMessageIsError = Boolean(authMessage.trim()) && !authMessageIsPositive && !authMessageIsNeutral;
@@ -9879,7 +9883,7 @@ export default function App() {
           </div>
         </div>
         <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-semibold leading-7 text-amber-50">
-          IMPORTANT: Use the exact reference when making payment. Clicking I Have Paid does not activate the subscription; admin verification is still required.
+          IMPORTANT: Use the exact reference when making payment. Clicking I Have Paid does not activate the subscription; manual verification is still required.
         </div>
         {payment?.id ? (
           <button
@@ -9933,7 +9937,7 @@ export default function App() {
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Payments</p>
                 <h2 className="mt-2 text-3xl font-semibold text-white">Open protected payment verification.</h2>
-                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Admin payment verification is protected. Open the Payments dashboard to view all user references, amounts paid, remaining subscription time, and VERIFY or REJECT actions.</p>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Payment verification is protected. Open the Payments dashboard to view all user references, amounts paid, remaining subscription time, and VERIFY or REJECT actions.</p>
               </div>
             </div>
             <button type="button" onClick={openAdminPaymentsQueue} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Open Payments Dashboard</button>
@@ -9949,7 +9953,7 @@ export default function App() {
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Payments</p>
               <h2 className="mt-2 text-3xl font-semibold text-white">Track payments and plan access.</h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">PayFast payments activate automatically after confirmation. Manual PayShap payments stay pending until an admin verifies the reference in the dashboard.</p>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">PayFast payments activate automatically after confirmation. Manual PayShap payments stay pending until the reference is verified.</p>
             </div>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
@@ -9980,7 +9984,7 @@ export default function App() {
               <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Verification</p>
               <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                 <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
-                <p>Verified means the admin matched the bank payment reference and the subscription was activated. PayFast subscriptions activate automatically after PayFast confirms payment.</p>
+                <p>Verified means the bank payment reference was matched and the subscription was activated. PayFast subscriptions activate automatically after PayFast confirms payment.</p>
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
                 <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:0717020081" className="font-semibold text-white underline decoration-white/30 underline-offset-4">0717020081</a> with your payment reference and bank proof of payment.</p>
               </div>
@@ -11344,7 +11348,7 @@ export default function App() {
 
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Feature Usage Distribution</p>
-                <h2 className="mt-2 text-2xl font-semibold text-slate-950">What administrators and students use most</h2>
+                <h2 className="mt-2 text-2xl font-semibold text-slate-950">What operators and students use most</h2>
                 <div className="mt-5">
                   <AdminDonutChart items={featureUsageItems} totalLabel="Actions" />
                 </div>
@@ -11404,7 +11408,7 @@ export default function App() {
                             <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-sm font-semibold text-indigo-700">{index + 1}</span>
                             <div className="min-w-0">
                               <p className="phone-safe-copy truncate text-sm font-semibold text-slate-900">{user.email}</p>
-                              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{titleCaseWords(user.role)} account</p>
+                              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{formatAccountRoleLabel(user.role)} account</p>
                             </div>
                           </div>
                         </div>
@@ -11519,7 +11523,7 @@ export default function App() {
                           <p className="phone-safe-copy text-sm font-semibold text-slate-900">{user.email}</p>
                           <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">Risk {titleCaseWords(user.risk_score || "low")}</p>
                         </td>
-                        <td className="px-3 py-4 text-sm text-slate-700">{titleCaseWords(user.role)}</td>
+                        <td className="px-3 py-4 text-sm text-slate-700">{formatAccountRoleLabel(user.role)}</td>
                         <td className="px-3 py-4">
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span>
                         </td>
@@ -11924,7 +11928,7 @@ export default function App() {
                   </div>
                 ))}
                 <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-                  <p className="text-sm text-slate-600">Configured admin accounts</p>
+                  <p className="text-sm text-slate-600">Configured protected accounts</p>
                   <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminInteger(dashboard.settings?.admin_email_count ?? 0)}</p>
                 </div>
               </div>
@@ -11946,7 +11950,7 @@ export default function App() {
                   <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
                   <div className="min-w-0">
                     <p className="truncate text-base font-semibold text-white">Mabaso AI</p>
-                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Admin Dashboard</p>
+                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Protected Dashboard</p>
                   </div>
                 </div>
               </div>
@@ -12520,7 +12524,7 @@ export default function App() {
                     <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">Risk {titleCaseWords(user.risk_score || "low")}</p>
                     <p className="mt-2 text-xs text-slate-500">Joined {user.created_at ? formatAdminDateTime(user.created_at) : "Unknown"}</p>
                   </td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{titleCaseWords(user.role)}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">{formatAccountRoleLabel(user.role)}</td>
                   <td className="px-3 py-4"><span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span></td>
                   <td className="px-3 py-4 text-sm text-slate-700">
                     <p>{user.last_login_at ? formatAdminDateTime(user.last_login_at) : "Never"}</p>
@@ -12574,7 +12578,14 @@ export default function App() {
               ["User", "Event", "Status", "Resource", "Time", "IP Address", "Duration"],
               filteredLogs.map((log, index) => (
                 <tr key={`${log.timestamp}-${index}`} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
-                  <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">{log.user}</td>
+                  <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="phone-safe-copy">{log.user}</span>
+                      {Number(log.user_activity_count || 0) > 1 ? (
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">{Number(log.user_activity_count)}x</span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="px-3 py-4"><span className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${getAdminActionTone(log.action)}`}>{formatAdminActionLabel(log.action)}</span></td>
                   <td className="px-3 py-4"><span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(log.status)}`}>{titleCaseWords(log.status || "success")}</span></td>
                   <td className="px-3 py-4 text-sm text-slate-700">{log.resource || "No resource recorded"}</td>
@@ -13397,7 +13408,7 @@ export default function App() {
                   </div>
                 ))}
                 <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
-                  <p className="text-sm text-slate-600">Configured admin accounts</p>
+                  <p className="text-sm text-slate-600">Configured protected accounts</p>
                   <p className="mt-2 text-2xl font-semibold text-slate-950">{formatAdminInteger(dashboard.settings?.admin_email_count ?? 0)}</p>
                 </div>
               </div>
@@ -13419,7 +13430,7 @@ export default function App() {
                   <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
                   <div className="min-w-0">
                     <p className="truncate text-base font-semibold text-white">Mabaso AI</p>
-                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Admin Dashboard</p>
+                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Protected Dashboard</p>
                   </div>
                 </div>
               </div>
@@ -13563,7 +13574,7 @@ export default function App() {
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
                 <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
-                <p className="mt-2 text-sm uppercase tracking-[0.28em] text-emerald-200/70">Admin dashboard</p>
+                <p className="mt-2 text-sm uppercase tracking-[0.28em] text-emerald-200/70">Protected dashboard</p>
                 <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">Secure analytics and operations view.</h1>
               </div>
               <div className="flex flex-col gap-3 xl:items-end">
@@ -13594,7 +13605,7 @@ export default function App() {
 
               {adminSidebarTab === "overview" ? <div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Real-time activity</p><div className="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-4">{(dashboard.overview?.charts?.real_time_activity || []).map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs text-slate-400">{item.label}</p><p className="mt-2 text-xl font-semibold text-white">{item.count}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Feature usage</p><div className="mt-4 space-y-3">{(dashboard.overview?.charts?.feature_usage_breakdown || []).slice(0, 8).map((item) => <div key={item.label} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><span className="text-sm text-white">{item.label}</span><span className="text-sm font-semibold text-emerald-100">{item.count}</span></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Conversion funnel</p><div className="mt-4 space-y-3">{(dashboard.overview?.charts?.conversion_funnel || []).map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-sm text-white">{item.label}</p><p className="mt-2 text-xl font-semibold text-emerald-100">{item.count}</p></div>)}</div></div><div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Retention</p><div className="mt-4 grid gap-3 sm:grid-cols-3">{[{ label: "Day 1", value: dashboard.analytics?.retention?.day_1 ?? 0 }, { label: "Day 7", value: dashboard.analytics?.retention?.day_7 ?? 0 }, { label: "Day 30", value: dashboard.analytics?.retention?.day_30 ?? 0 }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"><p className="text-xs text-slate-400">{item.label}</p><p className="mt-2 text-xl font-semibold text-white">{item.value}%</p></div>)}</div></div></div> : null}
 
-              {adminSidebarTab === "users" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Users</p><h2 className="mt-2 text-2xl font-semibold text-white">User table and account controls</h2></div><div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200">{filteredUsers.length} visible user{filteredUsers.length === 1 ? "" : "s"}</div></div><div className="mt-5 space-y-4">{filteredUsers.length ? filteredUsers.map((user) => <article key={user.email} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div className="min-w-0"><p className="phone-safe-copy text-lg font-semibold text-white">{user.email}</p><p className="mt-2 text-sm text-slate-300">{user.role} • {user.status} • risk {user.risk_score}</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Last login", value: user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never" }, { label: "IP", value: user.last_login_ip || "--" }, { label: "Sessions", value: user.sessions_count }, { label: "Uploads / generations", value: `${user.total_uploads} / ${user.total_generations}` }].map((item) => <div key={`${user.email}-${item.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3"><p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">{item.label}</p><p className="mt-2 text-sm text-white">{item.value}</p></div>)}</div></div><div className="flex flex-wrap gap-2">{user.status !== "suspended" ? <button type="button" onClick={() => updateAdminUserStatus(user.email, "suspended")} className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-100">Suspend</button> : <button type="button" onClick={() => updateAdminUserStatus(user.email, "active")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Activate</button>}<button type="button" onClick={() => forceLogoutAdminUser(user.email)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Force Logout</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Reset Password</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Assign Role</button></div></div></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No users match the current search.</div>}</div></div> : null}
+              {adminSidebarTab === "users" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Users</p><h2 className="mt-2 text-2xl font-semibold text-white">User table and account controls</h2></div><div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200">{filteredUsers.length} visible user{filteredUsers.length === 1 ? "" : "s"}</div></div><div className="mt-5 space-y-4">{filteredUsers.length ? filteredUsers.map((user) => <article key={user.email} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div className="min-w-0"><p className="phone-safe-copy text-lg font-semibold text-white">{user.email}</p><p className="mt-2 text-sm text-slate-300">{formatAccountRoleLabel(user.role)} • {user.status} • risk {user.risk_score}</p><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Last login", value: user.last_login_at ? new Date(user.last_login_at).toLocaleString() : "Never" }, { label: "IP", value: user.last_login_ip || "--" }, { label: "Sessions", value: user.sessions_count }, { label: "Uploads / generations", value: `${user.total_uploads} / ${user.total_generations}` }].map((item) => <div key={`${user.email}-${item.label}`} className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-3"><p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">{item.label}</p><p className="mt-2 text-sm text-white">{item.value}</p></div>)}</div></div><div className="flex flex-wrap gap-2">{user.status !== "suspended" ? <button type="button" onClick={() => updateAdminUserStatus(user.email, "suspended")} className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-100">Suspend</button> : <button type="button" onClick={() => updateAdminUserStatus(user.email, "active")} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Activate</button>}<button type="button" onClick={() => forceLogoutAdminUser(user.email)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Force Logout</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Reset Password</button><button type="button" disabled className="rounded-full border border-white/10 bg-slate-900/80 px-4 py-2 text-sm text-slate-500">Assign Role</button></div></div></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No users match the current search.</div>}</div></div> : null}
 
               {adminSidebarTab === "activity" ? <div className="rounded-[28px] border border-white/10 bg-slate-950/75 p-5"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">Activity logs</p><h2 className="mt-2 text-2xl font-semibold text-white">Recent audit trail</h2><div className="mt-5 space-y-3">{filteredLogs.length ? filteredLogs.map((log, index) => <div key={`${log.timestamp}-${index}`} className="rounded-[22px] border border-white/10 bg-white/[0.04] p-4"><div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between"><div className="min-w-0"><p className="phone-safe-copy text-sm font-semibold text-white">{log.action}</p><p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{log.user} • {log.ip_address || "No IP"} • {log.status}</p></div><p className="text-sm text-slate-300">{new Date(log.timestamp).toLocaleString()}</p></div><p className="mt-3 text-sm leading-7 text-slate-200">{log.resource || "No resource"} • {log.duration_ms || 0} ms</p></div>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-slate-300">No logs match the current search.</div>}</div></div> : null}
 
@@ -14262,7 +14273,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
@@ -14289,7 +14300,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Apple sign-in failed.");
       applyAuthResponse(data, data.email || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Apple sign-in failed.");
     }
@@ -14363,7 +14374,7 @@ export default function App() {
       setPendingEmailAuthEmail("");
       setPendingEmailAuthMode("");
       setStatus("Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err));
     } finally {
@@ -14487,7 +14498,7 @@ export default function App() {
       setStatus("Account created successfully.");
       setAuthMessage(
         data?.available_modes?.includes("admin")
-          ? "Choose user mode or admin mode to continue."
+          ? "Choose user mode or protected mode to continue."
           : "You are signed in. Your history will sync to this email on any device.",
       );
     } catch (err) {
@@ -14580,7 +14591,7 @@ export default function App() {
       setPendingEmailAuthMode("");
       setAuthMode("login");
       setStatus((pendingEmailAuthMode || authMode) === "reset" ? "Password reset successfully." : "Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or admin mode to continue." : "You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err));
     } finally {
@@ -16926,7 +16937,7 @@ export default function App() {
         setManualPaymentRequest(paymentRequest);
         setPaymentRequests((current) => mergePaymentRequestList(current, paymentRequest));
       }
-      setBillingCheckoutMessage(data.message || "Payment submitted. It remains pending until admin verification.");
+      setBillingCheckoutMessage(data.message || "Payment submitted. It remains pending until manual verification.");
     } catch (err) {
       setBillingCheckoutMessage(getReadableRequestError(err));
     } finally {
@@ -18222,7 +18233,7 @@ export default function App() {
         }
         await loadAdminDashboard(true, nextToken);
       }
-      if (!silent) setStatus(targetMode === "admin" ? "Admin mode opened." : "User mode opened.");
+      if (!silent) setStatus(targetMode === "admin" ? "Protected mode opened." : "User mode opened.");
     } catch (err) {
       if (!silent) setError(err.message || "Could not switch session mode.");
     }
@@ -18289,9 +18300,9 @@ export default function App() {
         setAdminDashboard(cachedDashboard);
       }
       if (!silent) setError(err.message || "Could not load the protected area.");
-      if (/admin access/i.test(String(err?.message || "").toLowerCase())) {
+      if (/admin access|restricted access|protected access/i.test(String(err?.message || "").toLowerCase())) {
         if (authAvailableModes.includes("admin")) {
-          setAuthMessage("Admin access is available. Reopening admin mode...");
+          setAuthMessage("Protected access is available. Reopening protected mode...");
           setCurrentPage("admin");
           if (authSessionMode !== "admin" && !adminAutoModeSwitchRef.current) {
             adminAutoModeSwitchRef.current = true;
@@ -23672,7 +23683,7 @@ export default function App() {
         <main className="relative mx-auto flex min-h-screen max-w-5xl items-center px-4 py-10 sm:px-6 lg:px-8">
           <section className="w-full rounded-[32px] border border-white/10 bg-slate-950/75 p-6 shadow-[0_28px_80px_rgba(2,8,23,0.55)]">
             <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
-            <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Admin access</p>
+            <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Protected access</p>
             <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">
               {isOpeningAllowedAdminDashboard ? "Opening the protected area." : "Open the protected area."}
             </h1>
@@ -23682,7 +23693,7 @@ export default function App() {
                 : "This route is protected. If this email is configured for elevated access, switch into protected mode to continue."}
             </p>
             <div className="mt-8 grid gap-5 xl:grid-cols-2">
-              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Protected mode</p><h2 className="mt-3 text-2xl font-semibold text-white">{isOpeningAllowedAdminDashboard ? "Open protected mode now" : "Enter protected area"}</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts.</p></button>
+              <button type="button" onClick={() => chooseSessionMode("admin")} disabled={!isAdminAccount} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-50"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Protected mode</p><h2 className="mt-3 text-2xl font-semibold text-white">{isOpeningAllowedAdminDashboard ? "Open protected mode now" : "Enter protected area"}</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, billing, and security alerts with server-side checks enforced.</p></button>
               <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Return to student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study tools, and use the normal Mabaso workspace.</p></button>
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -23740,7 +23751,7 @@ export default function App() {
             <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Mode selection</p>
             <h1 className="mt-4 text-4xl font-semibold tracking-[-0.04em] text-white sm:text-5xl">Choose how this account should enter the platform.</h1>
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">This login matches an admin account, but the admin area stays hidden unless you deliberately switch into admin mode.</p>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300">This login has elevated access, but the protected area stays hidden unless you deliberately switch into protected mode.</p>
             <div className="mt-8 grid gap-5 xl:grid-cols-2">
               <button type="button" onClick={() => chooseSessionMode("user")} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-6 text-left transition hover:bg-white/10"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">User mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the normal student workspace</h2><p className="mt-3 text-sm leading-7 text-slate-300">Capture lectures, generate study guides, and use the platform like a normal user.</p></button>
               <button type="button" onClick={() => chooseSessionMode("admin")} className="rounded-[28px] border border-emerald-300/20 bg-emerald-300/10 p-6 text-left transition hover:border-emerald-300/35"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Protected mode</p><h2 className="mt-3 text-2xl font-semibold text-white">Open the protected area</h2><p className="mt-3 text-sm leading-7 text-slate-200">Review users, logs, AI generation activity, system health, and security alerts with server-side checks enforced.</p></button>
@@ -23839,7 +23850,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{timetableNavStatusLabel ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{timetableNavStatusLabel}</span> : null}</button>
               <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
-              {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Admin Dashboard" : "Choose Mode"}</button> : null}
+              {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Protected Dashboard" : "Choose Mode"}</button> : null}
             </div>
             <div className="force-mobile-stack flex flex-wrap items-center gap-3">
               <label className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-slate-200">

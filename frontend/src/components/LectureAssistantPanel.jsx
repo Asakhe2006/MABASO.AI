@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  ImagePlus,
   LoaderCircle,
   Menu,
   MessageSquarePlus,
@@ -374,6 +375,9 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
 
   const {
     activeConversation,
+    attachedImageInputRef,
+    attachedImages = [],
+    attachImageFiles,
     canLoadMoreConversations,
     assistantAudioState,
     closePanel,
@@ -411,6 +415,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
     previewingVoiceId,
     previewSelectedVoiceWithDraft,
     regenerateLastResponse,
+    removeAttachedImage,
     renameConversation,
     searchQuery,
     selectedVoiceProfile,
@@ -491,6 +496,11 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
       event.preventDefault();
       if (!isGenerating) sendMessage();
     }
+  };
+
+  const handleAttachImagesChange = (event) => {
+    attachImageFiles?.(event.target.files);
+    event.target.value = "";
   };
 
   const handleComposerFocus = () => {
@@ -964,6 +974,20 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                           )}
                         </div>
 
+                        {Array.isArray(message.referenceImages) && message.referenceImages.length ? (
+                          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            {message.referenceImages.map((image) => (
+                              <img
+                                key={image.id || image.dataUrl}
+                                src={image.dataUrl}
+                                alt={image.name || "Attached photo"}
+                                className="h-24 w-full rounded-2xl border border-white/10 object-cover"
+                                loading="lazy"
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+
                         <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
                           <button
                             type="button"
@@ -1048,6 +1072,31 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
         )}
 
         <div className={`mt-4 rounded-[28px] border p-3 ${themed(theme, "border-white/10 bg-slate-950/82", "border-slate-200 bg-white/92")}`}>
+          <input
+            ref={attachedImageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={handleAttachImagesChange}
+          />
+          {attachedImages.length ? (
+            <div className="mb-3 flex flex-wrap gap-2 px-1">
+              {attachedImages.map((image) => (
+                <div key={image.id} className={`group relative h-16 w-16 overflow-hidden rounded-2xl border ${themed(theme, "border-white/10 bg-white/5", "border-slate-200 bg-slate-50")}`}>
+                  <img src={image.dataUrl} alt={image.name || "Attached photo"} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removeAttachedImage?.(image.id)}
+                    className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-slate-950/80 text-white shadow"
+                    aria-label={`Remove ${image.name || "photo"}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className="flex items-end gap-3">
             <textarea
               ref={composerRef}
@@ -1060,6 +1109,14 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               className={`min-h-[56px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
             />
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => attachedImageInputRef?.current?.click?.()}
+                className={`flex h-12 w-12 items-center justify-center rounded-full border transition ${themed(theme, "border-white/10 bg-white/5 text-slate-100 hover:bg-white/10", "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100")}`}
+                aria-label="Add photo"
+              >
+                <ImagePlus className="h-5 w-5" />
+              </button>
               <button
                 type="button"
                 onClick={() => {

@@ -320,6 +320,18 @@ iframe {
   white-space: nowrap;
 }
 
+.mobile-app-nav__item .mobile-app-nav__subline {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgba(167, 243, 208, 0.9);
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mobile-app-nav__item.is-active {
   border-color: rgba(52, 211, 153, 0.42);
   background: rgba(16, 185, 129, 0.18);
