@@ -2398,9 +2398,12 @@ export function useLectureAssistant({
   const openPanel = ({ focusComposer = true } = {}) => {
     setIsOpen(true);
     if (!focusComposer || typeof window === "undefined") return;
-    window.requestAnimationFrame(() => {
+    const focusComposerInput = () => {
       composerRef.current?.focus?.();
-    });
+    };
+    window.requestAnimationFrame(focusComposerInput);
+    window.setTimeout(focusComposerInput, 80);
+    window.setTimeout(focusComposerInput, 180);
   };
 
   const closePanel = () => setIsOpen(false);

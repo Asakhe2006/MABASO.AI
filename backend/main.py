@@ -331,8 +331,14 @@ SESSION_JWT_ISSUER = os.getenv("SESSION_JWT_ISSUER", "mabaso-ai").strip() or "ma
 SESSION_JWT_AUDIENCE = os.getenv("SESSION_JWT_AUDIENCE", "mabaso-ai-web").strip() or "mabaso-ai-web"
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "mabaso_session").strip() or "mabaso_session"
 CSRF_COOKIE_NAME = os.getenv("CSRF_COOKIE_NAME", "mabaso_csrf").strip() or "mabaso_csrf"
-APP_PUBLIC_URL = os.getenv("APP_PUBLIC_URL", os.getenv("FRONTEND_PUBLIC_URL", "https://mabaso-ai-web.onrender.com")).strip().rstrip("/")
-API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", os.getenv("BACKEND_PUBLIC_URL", "")).strip().rstrip("/")
+APP_PUBLIC_URL = os.getenv(
+    "APP_PUBLIC_URL",
+    os.getenv("FRONTEND_PUBLIC_URL", os.getenv("FRONTEND_URL", "https://mabaso-ai-web.onrender.com")),
+).strip().rstrip("/")
+API_PUBLIC_URL = os.getenv(
+    "API_PUBLIC_URL",
+    os.getenv("BACKEND_PUBLIC_URL", os.getenv("BACKEND_URL", "")),
+).strip().rstrip("/")
 SESSION_COOKIE_SECURE = os.getenv(
     "SESSION_COOKIE_SECURE",
     "true" if (
@@ -347,6 +353,29 @@ SESSION_COOKIE_SAMESITE = os.getenv(
 ).strip().lower()
 if SESSION_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     SESSION_COOKIE_SAMESITE = "none" if SESSION_COOKIE_SECURE else "lax"
+if SESSION_COOKIE_SAMESITE == "none" and not SESSION_COOKIE_SECURE:
+    if (
+        APP_PUBLIC_URL.startswith("https://")
+        or API_PUBLIC_URL.startswith("https://")
+        or os.getenv("RENDER", "").strip().lower() == "true"
+    ):
+        logger.warning("SESSION_COOKIE_SAMESITE=None requires Secure cookies in production; forcing SESSION_COOKIE_SECURE=true.")
+        SESSION_COOKIE_SECURE = True
+    else:
+        logger.warning("SESSION_COOKIE_SAMESITE=None without SESSION_COOKIE_SECURE=true will be rejected by modern browsers.")
+if (
+    APP_PUBLIC_URL
+    and API_PUBLIC_URL
+    and urlparse(APP_PUBLIC_URL).netloc
+    and urlparse(API_PUBLIC_URL).netloc
+    and urlparse(APP_PUBLIC_URL).netloc != urlparse(API_PUBLIC_URL).netloc
+    and SESSION_COOKIE_SAMESITE != "none"
+):
+    logger.warning(
+        "Frontend and backend origins differ (%s vs %s). Set SESSION_COOKIE_SAMESITE=none with SESSION_COOKIE_SECURE=true for cross-origin cookie sessions.",
+        APP_PUBLIC_URL,
+        API_PUBLIC_URL,
+    )
 SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN", "").strip() or None
 AUTH_RESPONSE_INCLUDE_TOKEN = os.getenv("AUTH_RESPONSE_INCLUDE_TOKEN", "false").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
@@ -704,12 +733,12 @@ if DATABASE_BACKEND == "postgres":
 
 def resolve_cors_allow_origins() -> list[str]:
     configured = [
-        origin.strip()
+        origin.strip().rstrip("/")
         for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
         if origin.strip() and origin.strip() != "*"
     ]
     candidates = configured or list(DEFAULT_CORS_ALLOW_ORIGINS)
-    for env_name in ("APP_PUBLIC_URL", "FRONTEND_PUBLIC_URL", "RENDER_EXTERNAL_URL"):
+    for env_name in ("APP_PUBLIC_URL", "FRONTEND_PUBLIC_URL", "FRONTEND_URL"):
         origin = os.getenv(env_name, "").strip().rstrip("/")
         if origin and origin not in candidates:
             candidates.append(origin)
@@ -721,7 +750,7 @@ def resolve_cors_allow_origins() -> list[str]:
 CORS_ALLOW_ORIGINS = resolve_cors_allow_origins()
 CORS_ALLOW_ORIGIN_REGEX = os.getenv(
     "CORS_ALLOW_ORIGIN_REGEX",
-    r"^https://([a-z0-9-]+\.)?mabaso(ai)?\.(com|co\.za)$|^https://[a-z0-9-]+\.onrender\.com$",
+    r"^https://([a-z0-9-]+\.)?mabaso(ai)?\.(com|co\.za)$",
 ).strip() or None
 
 LEGACY_STUDY_GUIDE_PROMPT = """
@@ -2583,7 +2612,11 @@ def get_cookie_options(*, httponly: bool) -> dict[str, Any]:
 
 
 def build_csrf_cookie_value(session_token: str) -> str:
-    nonce = secrets.token_urlsafe(24)
+    nonce = hmac.new(
+        APP_SECRET.encode("utf-8"),
+        f"csrf:{hash_value(session_token)}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:48]
     signature = hmac.new(
         APP_SECRET.encode("utf-8"),
         f"{hash_value(session_token)}:{nonce}".encode("utf-8"),
@@ -2660,16 +2693,17 @@ def get_request_session_token(
     *,
     require_csrf: bool = True,
 ) -> str:
+    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    if cookie_token:
+        if require_csrf:
+            validate_cookie_csrf(request, cookie_token)
+        return cookie_token
+
     bearer_token = get_bearer_token_from_authorization(authorization)
     if bearer_token:
         return bearer_token
 
-    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
-    if not cookie_token:
-        raise HTTPException(status_code=401, detail="Authentication is required.")
-    if require_csrf:
-        validate_cookie_csrf(request, cookie_token)
-    return cookie_token
+    raise HTTPException(status_code=401, detail="Authentication is required.")
 
 
 def normalize_email(email: str) -> str:
@@ -11347,7 +11381,7 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
     csrf_token = set_auth_cookies(response, active_token)
     payload = build_auth_response(context["email"], active_token)
     payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
-    payload["auth_transport"] = "cookie" if cookie_token and not bearer_token else "bearer"
+    payload["auth_transport"] = "cookie" if cookie_token else ("bearer" if bearer_token else "none")
     payload["cookie_session_active"] = bool(cookie_token)
     if csrf_token:
         payload["csrf_token"] = csrf_token
@@ -11383,9 +11417,15 @@ async def select_auth_mode(
 
 @app.post("/auth/logout")
 async def logout(request: Request, response: Response, authorization: str | None = Header(None)):
-    token = get_request_session_token(request, authorization)
-    context = get_session_context(token)
-    revoke_session(token)
+    token = ""
+    context = None
+    try:
+        token = get_request_session_token(request, authorization, require_csrf=False)
+        context = get_session_context(token)
+        if token:
+            revoke_session(token)
+    except HTTPException:
+        context = None
     clear_auth_cookies(response)
     if context:
         record_audit_log(

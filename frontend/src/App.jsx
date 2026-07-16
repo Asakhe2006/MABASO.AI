@@ -200,9 +200,6 @@ function getCookieValue(name = "") {
 
 function withAuthHeaders(headers = {}, token = "") {
   const nextHeaders = withDeviceHeaders(headers);
-  if (isBearerAuthToken(token)) {
-    nextHeaders.set("Authorization", `Bearer ${token}`);
-  }
   const csrfToken = getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken;
   if (csrfToken) {
     nextHeaders.set("X-CSRF-Token", csrfToken);
@@ -221,14 +218,12 @@ function clearAuthCsrfToken() {
 
 function resolveAuthStateToken(responseToken = "", fallbackToken = "", csrfToken = "") {
   rememberAuthCsrfToken(csrfToken);
-  if (getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken) return COOKIE_SESSION_AUTH_STATE;
-  return responseToken || fallbackToken || COOKIE_SESSION_AUTH_STATE;
+  return COOKIE_SESSION_AUTH_STATE;
 }
 
 function loadPersistedAuthStateToken() {
   try {
-    const bearerToken = window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
-    if (bearerToken) return bearerToken;
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
     return window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true" ? COOKIE_SESSION_AUTH_STATE : "";
   } catch {
     return "";
@@ -3466,12 +3461,30 @@ function saveWorkspaceDraft(email = "", snapshot = null) {
       window.localStorage.removeItem(storageKey);
       return;
     }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitizeWorkspaceSnapshotForStorage(snapshot)));
+    const sanitizedSnapshot = sanitizeWorkspaceSnapshotForStorage(snapshot);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(sanitizedSnapshot));
+      return;
+    } catch {
+      const compactSnapshot = {
+        ...sanitizedSnapshot,
+        studyImages: Array.isArray(sanitizedSnapshot.studyImages) ? sanitizedSnapshot.studyImages.slice(0, 2) : [],
+      };
+      window.localStorage.setItem(storageKey, JSON.stringify(compactSnapshot));
+    }
   } catch {
     try {
-      window.localStorage.removeItem(storageKey);
+      const sanitizedSnapshot = sanitizeWorkspaceSnapshotForStorage(snapshot || {});
+      const textOnlySnapshot = {
+        ...sanitizedSnapshot,
+        studyImages: [],
+        lectureNoteSources: [],
+        lectureSlideSources: [],
+        pastQuestionPaperSources: [],
+      };
+      window.localStorage.setItem(storageKey, JSON.stringify(textOnlySnapshot));
     } catch {
-      // Ignore cleanup failures.
+      // Keep the last good draft if this write is too large for browser storage.
     }
   }
 }
@@ -6195,6 +6208,8 @@ export default function App() {
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
   const [activeStudySessionId, setActiveStudySessionId] = useState("");
   const [activeStudySessionQuestion, setActiveStudySessionQuestion] = useState("");
+  const [activeStudySessionNotesDraft, setActiveStudySessionNotesDraft] = useState("");
+  const [activeStudySessionReferenceImages, setActiveStudySessionReferenceImages] = useState([]);
   const [isAskingActiveStudySession, setIsAskingActiveStudySession] = useState(false);
   const [activeStudySessionMessage, setActiveStudySessionMessage] = useState("");
   const [activeStudyMotivationPopup, setActiveStudyMotivationPopup] = useState(null);
@@ -6207,6 +6222,7 @@ export default function App() {
   const bulkLectureFileInputRef = useRef(null);
   const generateStudyGuideButtonRef = useRef(null);
   const chatImageInputRef = useRef(null);
+  const activeStudySessionImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
@@ -7240,11 +7256,11 @@ export default function App() {
   }, [showLandingAuthOptions]);
 
   useEffect(() => {
-    if (!authChecked || authToken || !findProtectedWorkspaceRoute(browserPath)) return;
+    if (!authChecked || !authServerStateReady || authToken || !findProtectedWorkspaceRoute(browserPath)) return;
     const explicitPreviewPath = consumeExplicitProtectedPreviewPath();
     if (explicitPreviewPath === browserPath) return;
     navigateToPath("/", { replace: true });
-  }, [authChecked, authToken, browserPath]);
+  }, [authChecked, authServerStateReady, authToken, browserPath]);
 
   useEffect(() => {
     setDismissedRoomInviteIds(loadDismissedRoomInviteIds(authEmail || authEmailInput || ""));
@@ -9274,8 +9290,8 @@ export default function App() {
                 </div>
                 <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-100">Auto-saved</span>
               </div>
-              <textarea value={session.studyNotes || ""} onChange={(event) => updateActiveStudySessionNotes(event.target.value)} rows={10} className="mt-5 min-h-[260px] w-full resize-y rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50" placeholder="Write formulas, reminders, definitions, mistakes, or questions from this study period..." />
-              <p className="mt-3 text-right text-xs text-slate-400">{String(session.studyNotes || "").length}/4000</p>
+              <textarea value={activeStudySessionNotesDraft} onChange={(event) => updateActiveStudySessionNotes(event.target.value)} rows={10} className="mt-5 min-h-[260px] w-full resize-y rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50" placeholder="Write formulas, reminders, definitions, mistakes, or questions from this study period..." />
+              <p className="mt-3 text-right text-xs text-slate-400">{String(activeStudySessionNotesDraft || "").length}/4000</p>
             </div>
 
             <div className="rounded-[28px] border border-emerald-300/15 bg-black/45 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.28)] backdrop-blur">
@@ -9291,7 +9307,7 @@ export default function App() {
                 <p className="mt-6 max-w-sm text-center text-sm leading-7 text-slate-300">Focus improves when you stay in the session, write useful notes, and ask study questions during the period.</p>
                 <div className="mt-6 grid w-full grid-cols-3 gap-3 text-center text-xs text-slate-300">
                   <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{messages.filter((message) => message.role === "user").length}</p><p className="mt-1">Questions</p></div>
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{String(session.studyNotes || "").trim().split(/\s+/).filter(Boolean).length}</p><p className="mt-1">Words</p></div>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{String(activeStudySessionNotesDraft || session.studyNotes || "").trim().split(/\s+/).filter(Boolean).length}</p><p className="mt-1">Words</p></div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3"><p className="font-bold text-white">{isCompleted ? "Done" : `${progressPercent}%`}</p><p className="mt-1">Progress</p></div>
                 </div>
               </div>
@@ -9311,13 +9327,36 @@ export default function App() {
                 <div key={message.id || `${message.role}-${index}`} className={`max-w-[92%] rounded-2xl border px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border-cyan-300/20 bg-cyan-300/10 text-slate-100" : "ml-auto border-emerald-300/20 bg-emerald-300/10 text-white"}`}>
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
                   <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words">{message.content}</p>
+                  {Array.isArray(message.referenceImages) && message.referenceImages.length ? (
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                      {message.referenceImages.map((image, imageIndex) => (
+                        <img key={image.id || `${message.id || index}-image-${imageIndex}`} src={image.dataUrl || image.url || image.previewUrl} alt={image.name || "Uploaded study reference"} className="h-24 w-full rounded-xl border border-white/10 object-cover" />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               )) : (
                 <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Ask a question about this subject, a definition, a calculation, or anything else you need clarified.</div>
               )}
             </div>
             <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/80 p-3">
+              <input ref={activeStudySessionImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleActiveStudySessionReferenceFilesChange} />
+              {activeStudySessionReferenceImages.length ? (
+                <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {activeStudySessionReferenceImages.map((image) => (
+                    <div key={image.id} className="relative overflow-hidden rounded-2xl border border-cyan-300/20 bg-white/[0.04]">
+                      <img src={image.dataUrl} alt={image.name || "Study reference"} className="h-24 w-full object-cover" />
+                      <button type="button" onClick={() => removeActiveStudySessionReferenceImage(image.id)} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/75 text-sm font-black text-white" aria-label="Remove study reference image">x</button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <div className="flex items-end gap-3">
+                <button type="button" onClick={() => activeStudySessionImageInputRef.current?.click()} disabled={isAskingActiveStudySession || activeStudySessionReferenceImages.length >= MAX_AI_REFERENCE_IMAGES} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-cyan-300/25 bg-cyan-300/10 text-cyan-50 disabled:opacity-50" aria-label="Add study reference photo">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+                  </svg>
+                </button>
                 <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Ask anything..." />
                 <button type="button" onClick={askActiveStudySessionAssistant} disabled={isAskingActiveStudySession} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#06b6d4,#22c55e)] text-white disabled:opacity-50" aria-label="Send study session question">
                   <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
@@ -9749,7 +9788,7 @@ export default function App() {
                   const isDerivedReviewCell = session?.type === "review" || session?.derived;
                   const isLockedMissedCell = !isEmptyCell && !isBreakCell && !isExamCell && session?.status === "missed";
                   const isCompletedCell = session?.status === "completed";
-                  const isReadOnlyCell = isLockedMissedCell || isBreakCell || isExamCell;
+                  const isReadOnlyCell = (!isTimetableEditing && isLockedMissedCell) || isBreakCell || isExamCell;
                   const isTodayCell = currentSlotActive && formatTimetableDateInput(addDays(timetableWeekStartIso, dayIndex)) === formatTimetableDateInput(timetableNow);
                   const cellOptions = Array.from(new Set([...subjectOptions, !isEmptyCell && !isBreakCell && !isExamCell ? session?.title : ""].filter(Boolean)));
                   const showCompletionPromptHere = Boolean(timetableCompletionPrompt?.id && session?.id === timetableCompletionPrompt.id);
@@ -9783,8 +9822,8 @@ export default function App() {
                           windowLabel: formatTimetableSessionWindow(session),
                         });
                       }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
-                        {isTimetableEditing && !isBreakCell && !isExamCell && !isLockedMissedCell ? (
-                          <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback)} className="w-full bg-transparent text-center text-sm text-white outline-none">
+                        {isTimetableEditing && !isBreakCell && !isExamCell ? (
+                          <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback, session)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
                             {cellOptions.map((option) => <option key={option} value={option} className="bg-slate-950 text-white">{option}</option>)}
                           </select>
@@ -13716,7 +13755,7 @@ export default function App() {
     setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
     setAuthServerStateReady(false);
     setAuthChecked(true);
-    apiFetch("/auth/me", { headers: withAuthHeaders({}, token) }, 8000).then(async (response) => {
+    apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -13731,7 +13770,7 @@ export default function App() {
         }
         return;
       }
-      const nextToken = resolveAuthStateToken(data.token || "", token, data.csrf_token || "");
+      const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
       authTokenRef.current = nextToken;
       const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
       const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
@@ -13780,13 +13819,8 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     authTokenRef.current = authToken;
-    if (isCookieBackedAuthToken(authToken)) {
-      window.localStorage.setItem(AUTH_COOKIE_SESSION_KEY, "true");
-      window.localStorage.removeItem(AUTH_TOKEN_KEY);
-    } else {
-      window.localStorage.removeItem(AUTH_COOKIE_SESSION_KEY);
-      window.localStorage.setItem(AUTH_TOKEN_KEY, authToken);
-    }
+    window.localStorage.setItem(AUTH_COOKIE_SESSION_KEY, "true");
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
     window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
@@ -13902,7 +13936,7 @@ export default function App() {
     );
 
     if (!hasWorkspaceContent) {
-      saveWorkspaceDraft(ownerEmail, null);
+      if (hasRestoredWorkspaceDraftRef.current === ownerEmail) saveWorkspaceDraft(ownerEmail, null);
       return;
     }
 
@@ -13966,9 +14000,13 @@ export default function App() {
     );
     if (hasLiveWorkspace) return;
     const routedPage = authToken ? resolveCurrentPageFromRoute(browserPath) : "";
+    const shouldRestoreStudyGuideTab = routedPage === "workspace"
+      && (Array.isArray(snapshot.studyImages) && snapshot.studyImages.length || snapshot.summary || snapshot.transcript)
+      && normalizeWorkspaceTabId(snapshot.activeTab || "guide") === "guide";
     applyWorkspaceSnapshot(snapshot, {
       preserveStatus: true,
       currentPageOverride: routedPage || "",
+      activeTabOverride: shouldRestoreStudyGuideTab ? "guide" : "",
     });
   }, [
     authChecked,
@@ -14011,14 +14049,13 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
-      apiFetch("/auth/me", { headers: withAuthHeaders({}, authToken) }, 8000).then(async (response) => {
+      apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
-        if (data.token) {
-          const nextToken = resolveAuthStateToken(data.token || "", authToken, data.csrf_token || "");
-          authTokenRef.current = nextToken;
-          setAuthToken(nextToken);
-        }
+        if (data.csrf_token) rememberAuthCsrfToken(data.csrf_token);
+        const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
+        authTokenRef.current = nextToken;
+        setAuthToken(nextToken);
         const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
         const nextSessionMode = data.session_mode || authSessionMode;
         const keepAdminRouteStable = browserPath === "/admin/dashboard"
@@ -14205,56 +14242,7 @@ export default function App() {
     const currentToken = tokenOverride || authToken;
     if (!currentToken) return currentToken;
     if (isCookieBackedAuthToken(currentToken)) return currentToken;
-    const expiryTimestamp = getTokenExpiryTimestamp(currentToken);
-    if (!expiryTimestamp || expiryTimestamp - Date.now() > 12 * 60 * 1000) return currentToken;
-
-    let transientAttempt = 0;
-    while (true) {
-      try {
-        const response = await apiFetch("/auth/me", { headers: withAuthHeaders({}, currentToken) }, 20000);
-        const data = await parseJsonSafe(response);
-        if (response.status === 401) {
-          clearSession("Your session expired. Please sign in again.");
-          throw new Error("Your session expired. Please sign in again.");
-        }
-        if (!response.ok) {
-          const requestError = new Error(data.detail || "Could not refresh your session.");
-          requestError.transient = isTransientHttpStatus(response.status) || isTransientServerConnectionMessage(requestError.message);
-          throw requestError;
-        }
-        const nextToken = resolveAuthStateToken(data.token || "", currentToken, data.csrf_token || "");
-        authTokenRef.current = nextToken;
-        const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
-        const nextSessionMode = data.session_mode || authSessionMode || "user";
-        const keepAdminRouteStable = browserPath === "/admin/dashboard"
-          && authSessionMode === "admin"
-          && nextSessionMode !== "admin"
-          && nextAvailableModes.includes("admin");
-        setAuthToken(nextToken);
-        setAuthEmail(data.email || authEmail || "");
-        if (!keepAdminRouteStable) setAuthSessionMode(nextSessionMode);
-        setAuthAvailableModes(nextAvailableModes);
-        applyServerAccountState(data, { includeBilling: false });
-        return nextToken;
-      } catch (err) {
-        const message = String(err?.message || "");
-        const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
-        const tokenStillUsable = expiryTimestamp - Date.now() > 60 * 1000;
-
-        if (isTransient && transientAttempt < 1) {
-          transientAttempt += 1;
-          await wait(1200 * transientAttempt);
-          continue;
-        }
-
-        if (isTransient && tokenStillUsable) {
-          setAuthMessage((current) => current || "Using your saved session while the server reconnects.");
-          return currentToken;
-        }
-
-        throw err;
-      }
-    }
+    return COOKIE_SESSION_AUTH_STATE;
   };
 
   const finishGoogleLogin = async (credential) => {
@@ -14916,10 +14904,20 @@ export default function App() {
     const currentToken = tokenOverride || authToken;
     if (!currentToken) throw new Error("Please sign in to continue.");
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
-    const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
+    const requestMethod = String(requestOptions.method || "GET").toUpperCase();
+    let headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
     let response;
     try {
       response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
+      if (response.status === 403 && !["GET", "HEAD", "OPTIONS"].includes(requestMethod)) {
+        const sessionResponse = await apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000);
+        if (sessionResponse.ok) {
+          const sessionData = await parseJsonSafe(sessionResponse);
+          if (sessionData.csrf_token) rememberAuthCsrfToken(sessionData.csrf_token);
+          headers = withAuthHeaders(requestOptions.headers || {}, COOKIE_SESSION_AUTH_STATE);
+          response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
+        }
+      }
     } catch (err) {
       const requestError = new Error(getReadableRequestError(err, path));
       requestError.aborted = isAbortError(err);
@@ -14936,7 +14934,6 @@ export default function App() {
       clearSession("Your session expired. Please sign in again.");
       throw new Error("Your session expired. Please sign in again.");
     }
-    const requestMethod = String(requestOptions.method || "GET").toUpperCase();
     const shouldRefreshUsage = response.ok
       && requestMethod !== "GET"
       && !String(path || "").startsWith("/api/billing/")
@@ -15854,7 +15851,9 @@ export default function App() {
   const updateActiveStudySessionRecord = (sessionId, updater, { save = true, delayMs = 700 } = {}) => {
     if (!sessionId) return null;
     setTimetableSessions((current) => {
-      const normalized = applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
+      const normalized = currentPageRef.current === "study-session"
+        ? normalizeTimetableSessions(current, timetableNow)
+        : applyTimetableAutoMisses(normalizeTimetableSessions(current, timetableNow), timetableNow);
       const updated = normalized.map((session) => (
         session.id === sessionId ? updater(session) : session
       ));
@@ -15900,12 +15899,15 @@ export default function App() {
       return updated;
     });
     setActiveStudySessionId(sessionToOpen.id);
+    setActiveStudySessionNotesDraft(sessionToOpen.studyNotes || "");
+    setActiveStudySessionReferenceImages([]);
     currentPageRef.current = "study-session";
     setCurrentPage("study-session");
     navigateToPath(`/study-session/${encodeURIComponent(getStudySessionRouteSlug(sessionToOpen.title))}`);
   };
   const closeActiveStudySession = () => {
     setActiveStudySessionQuestion("");
+    setActiveStudySessionReferenceImages([]);
     setActiveStudySessionMessage("");
     openProtectedAppPage("timetable");
   };
@@ -15939,12 +15941,47 @@ export default function App() {
   const updateActiveStudySessionNotes = (value) => {
     const sessionId = activeStudySessionId;
     const notes = String(value || "").slice(0, 4000);
+    setActiveStudySessionNotesDraft(notes);
     updateActiveStudySessionRecord(sessionId, (session) => ({
       ...session,
       studyNotes: notes,
       notesUpdatedAt: new Date().toISOString(),
       focusScore: calculateStudySessionFocusScore({ ...session, studyNotes: notes }, timetableNow),
     }), { save: true, delayMs: 900 });
+  };
+  const handleActiveStudySessionReferenceFilesChange = async (selectedFiles) => {
+    const files = Array.from(selectedFiles?.target?.files || selectedFiles || []);
+    if (activeStudySessionImageInputRef.current) activeStudySessionImageInputRef.current.value = "";
+    if (!files.length) return;
+    const remainingSlots = Math.max(0, MAX_AI_REFERENCE_IMAGES - activeStudySessionReferenceImages.length);
+    if (!remainingSlots) {
+      setActiveStudySessionMessage(`You can attach up to ${MAX_AI_REFERENCE_IMAGES} study photos in one question.`);
+      return;
+    }
+    try {
+      const nextImages = [];
+      for (const selectedFile of files.slice(0, remainingSlots)) {
+        if (!selectedFile.type.startsWith("image/")) {
+          throw new Error("Please upload image files for study references.");
+        }
+        if (selectedFile.size > 5 * 1024 * 1024) {
+          throw new Error("Each study reference photo must be smaller than 5 MB.");
+        }
+        const dataUrl = await readFileAsDataUrl(selectedFile);
+        nextImages.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          name: selectedFile.name,
+          dataUrl,
+        });
+      }
+      setActiveStudySessionReferenceImages((current) => [...current, ...nextImages].slice(0, MAX_AI_REFERENCE_IMAGES));
+      setActiveStudySessionMessage(`${nextImages.length} study photo${nextImages.length === 1 ? "" : "s"} added.`);
+    } catch (err) {
+      setActiveStudySessionMessage(sanitizePublicRequestErrorMessage(err.message || "Could not read the study photo.", "study photo"));
+    }
+  };
+  const removeActiveStudySessionReferenceImage = (imageId) => {
+    setActiveStudySessionReferenceImages((current) => current.filter((item) => item.id !== imageId));
   };
   const askActiveStudySessionAssistant = async () => {
     const session = getActiveStudySession();
@@ -15958,11 +15995,13 @@ export default function App() {
       return;
     }
     const existingMessages = Array.isArray(session.studyMessages) ? session.studyMessages : [];
+    const selectedReferenceImages = activeStudySessionReferenceImages.slice(0, MAX_AI_REFERENCE_IMAGES);
     const turnId = `active-study-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const userMessage = { id: `${turnId}-user`, role: "user", content: question };
+    const userMessage = { id: `${turnId}-user`, role: "user", content: question, referenceImages: selectedReferenceImages };
     const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "Thinking..." };
     const pendingMessages = [...existingMessages, userMessage, pendingAssistantMessage].slice(-20);
     setActiveStudySessionQuestion("");
+    setActiveStudySessionReferenceImages([]);
     setActiveStudySessionMessage("MABASO is answering from your study session.");
     setIsAskingActiveStudySession(true);
     updateActiveStudySessionRecord(session.id, (item) => ({
@@ -15977,6 +16016,7 @@ export default function App() {
         deliveryMode: "study_session",
         currentSection: `Active study session: ${normalizeTimetableSubjectName(session.title, "Subject")}`,
         responseLength: "concise",
+        referenceImages: selectedReferenceImages.map((image) => image.dataUrl).filter(Boolean),
       });
       const completedMessages = pendingMessages.map((message) => (
         message.id === pendingAssistantMessage.id ? { ...message, content: answer } : message
@@ -15988,12 +16028,13 @@ export default function App() {
       }), { save: true, delayMs: 150 });
       setActiveStudySessionMessage("Answer ready.");
     } catch (err) {
+      const safeMessage = sanitizePublicRequestErrorMessage(err.message || "Study assistant could not answer right now.", "study assistant");
       const failedMessages = pendingMessages.map((message) => (
-        message.id === pendingAssistantMessage.id ? { ...message, content: err.message || "Study assistant could not answer right now." } : message
+        message.id === pendingAssistantMessage.id ? { ...message, content: safeMessage } : message
       ));
       updateActiveStudySessionRecord(session.id, (item) => ({ ...item, studyMessages: failedMessages }), { save: true, delayMs: 150 });
-      setActiveStudySessionMessage(err.message || "Study assistant failed.");
-      setError(err.message || "Study assistant failed.");
+      setActiveStudySessionMessage(safeMessage);
+      setError(safeMessage);
     } finally {
       setIsAskingActiveStudySession(false);
     }
@@ -16195,21 +16236,80 @@ export default function App() {
       return { ...next, examDates: next.examDates.filter((item) => item.id !== examId) };
     });
   };
-  const updateTimetableSessionTitle = (sessionId, title, fallback = null) => {
+  const updateTimetableSessionTitle = (sessionId, title, fallback = null, visibleSession = null) => {
     const nextTitle = normalizeTimetableSubjectName(title, "");
     setTimetableSessions((current) => {
       let found = false;
       const updated = current.map((session) => {
         if (session.id !== sessionId) return session;
         found = true;
-        if (!nextTitle) return { ...session, title: "Empty", status: "empty", type: "empty" };
-        return { ...session, title: nextTitle, status: session.status === "break" ? "break" : "scheduled", type: session.type === "exam" ? "exam" : "study" };
+        if (!nextTitle) {
+          return {
+            ...session,
+            title: "Empty",
+            status: "empty",
+            type: "empty",
+            derived: false,
+            recovery: false,
+            sourceSessionId: "",
+            reviewAction: "",
+          };
+        }
+        if (session.status === "break" || session.type === "break" || session.type === "exam") return session;
+        return {
+          ...session,
+          title: nextTitle,
+          status: "scheduled",
+          type: "study",
+          derived: false,
+          recovery: false,
+          sourceSessionId: "",
+          reviewAction: "",
+        };
       });
       if (found || !fallback || !nextTitle) return updated;
       const date = fallback.date || new Date().toISOString();
+      const existingEditableSlot = updated.find((session) => (
+        session.dayId === fallback.dayId
+        && session.start === fallback.start
+        && session.end === fallback.end
+        && session.status !== "break"
+        && session.type !== "break"
+        && session.type !== "exam"
+      ));
+      if (existingEditableSlot) {
+        return updated.map((session) => (
+          session.id === existingEditableSlot.id
+            ? {
+              ...session,
+              title: nextTitle,
+              status: "scheduled",
+              type: "study",
+              derived: false,
+              recovery: false,
+              sourceSessionId: "",
+              reviewAction: "",
+            }
+            : session
+        ));
+      }
       return [
         ...updated,
-        { id: `${fallback.dayId}-${fallback.start}-${fallback.end}-manual`, dayId: fallback.dayId, date, start: fallback.start, end: fallback.end, title: nextTitle, status: "scheduled", type: "study" },
+        {
+          ...(visibleSession && typeof visibleSession === "object" ? visibleSession : {}),
+          id: `${fallback.dayId}-${fallback.start}-${fallback.end}-manual-${Date.now()}`,
+          dayId: fallback.dayId,
+          date,
+          start: fallback.start,
+          end: fallback.end,
+          title: nextTitle,
+          status: "scheduled",
+          type: "study",
+          derived: false,
+          recovery: false,
+          sourceSessionId: "",
+          reviewAction: "",
+        },
       ];
     });
   };
@@ -16629,6 +16729,16 @@ export default function App() {
       || null;
     if (matchingSession) openActiveStudySession(matchingSession);
   }, [activeStudySessionId, browserPath, currentPage, timetableNow, timetableSessions, timetablePreferences, timetableProfile]);
+
+  useEffect(() => {
+    if (currentPage !== "study-session" || !activeStudySessionId) {
+      setActiveStudySessionNotesDraft("");
+      return;
+    }
+    const session = timetableSessions.find((item) => item.id === activeStudySessionId);
+    if (!session) return;
+    setActiveStudySessionNotesDraft(String(session.studyNotes || ""));
+  }, [activeStudySessionId, currentPage]);
 
   useEffect(() => {
     if (currentPage !== "study-session" || !activeStudySessionId) {
@@ -24219,7 +24329,11 @@ export default function App() {
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
-                            onClick={() => lectureAssistant.openPanel({ focusComposer: true })}
+                            onClick={() => {
+                              lectureAssistant.openPanel?.({ focusComposer: true });
+                              window.setTimeout(() => lectureAssistant.openPanel?.({ focusComposer: true }), 90);
+                              setStatus("Lecture assistant opened.");
+                            }}
                             className="rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] px-4 py-2 text-sm font-semibold text-white"
                           >
                             Open Assistant
