@@ -1281,6 +1281,10 @@ class StudyTimetableRequest(BaseModel):
     week_start_iso: str = ""
 
 
+class LectureTimetableRequest(BaseModel):
+    entries: list[dict[str, Any]] = []
+
+
 class ChatTurn(BaseModel):
     role: str
     content: str
@@ -2007,6 +2011,22 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_study_timetables_updated_at
             ON study_timetables (updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lecture_timetables (
+                email TEXT PRIMARY KEY,
+                entries_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_lecture_timetables_updated_at
+            ON lecture_timetables (updated_at DESC)
             """
         )
         connection.execute(
@@ -4592,6 +4612,88 @@ def save_study_timetable_for_user(email: str, payload: StudyTimetableRequest) ->
             ),
         )
     return get_study_timetable_for_user(normalized_email)
+
+
+def normalize_lecture_timetable_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_entries: list[dict[str, Any]] = []
+    for item in entries[:120]:
+        if not isinstance(item, dict):
+            continue
+        module = compact_text(item.get("module") or item.get("subject") or "")[:120]
+        lecturer = compact_text(item.get("lecturer") or "")[:120]
+        day = compact_text(item.get("day") or "")[:24]
+        start = compact_text(item.get("start") or item.get("time") or "")[:12]
+        end = compact_text(item.get("end") or "")[:12]
+        venue = compact_text(item.get("venue") or item.get("room") or "")[:120]
+        if not any([module, lecturer, day, start, end, venue]):
+            continue
+        normalized_entries.append(
+            {
+                "id": compact_text(item.get("id") or uuid4().hex)[:80],
+                "module": module or "Untitled Module",
+                "lecturer": lecturer,
+                "day": day or "Monday",
+                "start": start,
+                "end": end,
+                "venue": venue,
+            }
+        )
+    return normalized_entries
+
+
+def serialize_lecture_timetable_row(row: Any, email: str) -> dict[str, Any]:
+    if not row:
+        return {
+            "email": normalize_email(email),
+            "entries": [],
+            "created_at": "",
+            "updated_at": "",
+        }
+    return {
+        "email": normalize_email(row["email"]),
+        "entries": normalize_lecture_timetable_entries(safe_json_loads(row["entries_json"], [])),
+        "created_at": row["created_at"] or "",
+        "updated_at": row["updated_at"] or "",
+    }
+
+
+def get_lecture_timetable_for_user(email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM lecture_timetables WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+    return serialize_lecture_timetable_row(row, normalized_email)
+
+
+def save_lecture_timetable_for_user(email: str, payload: LectureTimetableRequest) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    entries = normalize_lecture_timetable_entries(payload.entries if isinstance(payload.entries, list) else [])
+    ensure_json_payload_size(entries, max_chars=50000, label="Lecture timetable")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        existing = connection.execute(
+            "SELECT created_at FROM lecture_timetables WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+        created_at = existing["created_at"] if existing else now_iso
+        connection.execute(
+            """
+            INSERT INTO lecture_timetables (email, entries_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                entries_json = excluded.entries_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_email,
+                json.dumps(entries, ensure_ascii=False),
+                created_at,
+                now_iso,
+            ),
+        )
+    return get_lecture_timetable_for_user(normalized_email)
 
 
 REALTIME_TUTOR_VOICE_OPTIONS = (
@@ -11910,6 +12012,31 @@ async def save_study_timetable(
         metadata={"subjects": len(timetable.get("subjects") or []), "sessions": len(timetable.get("sessions") or [])},
     )
     return {"timetable": timetable}
+
+
+@app.get("/lecture-timetable")
+async def get_lecture_timetable(current_user: str = Depends(require_authenticated_user)):
+    return {"lecture_timetable": get_lecture_timetable_for_user(current_user)}
+
+
+@app.put("/lecture-timetable")
+async def save_lecture_timetable(
+    payload: LectureTimetableRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    lecture_timetable = await asyncio.to_thread(save_lecture_timetable_for_user, current_user, payload)
+    record_audit_log(
+        action="lecture_timetable.saved",
+        email=current_user,
+        request=request,
+        resource_type="lecture_timetable",
+        resource_name="weekly",
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+        metadata={"entries": len(lecture_timetable.get("entries") or [])},
+    )
+    return {"lecture_timetable": lecture_timetable}
 
 
 @app.get("/admin/dashboard")

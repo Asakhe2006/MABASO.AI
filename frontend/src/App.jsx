@@ -6201,6 +6201,11 @@ export default function App() {
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
   const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
   const [isReschedulingTimetableRecovery, setIsReschedulingTimetableRecovery] = useState(false);
+  const [timetableViewMode, setTimetableViewMode] = useState("study");
+  const [lectureTimetableEntries, setLectureTimetableEntries] = useState([]);
+  const [isLoadingLectureTimetable, setIsLoadingLectureTimetable] = useState(false);
+  const [isSavingLectureTimetable, setIsSavingLectureTimetable] = useState(false);
+  const [lectureTimetableMessage, setLectureTimetableMessage] = useState("");
   const [timetableMessage, setTimetableMessage] = useState("");
   const [timetableCoachPrompt, setTimetableCoachPrompt] = useState(null);
   const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
@@ -9536,6 +9541,56 @@ export default function App() {
           </div>
         </div>
 
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <button type="button" onClick={() => setTimetableViewMode("study")} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "study" ? "border-emerald-300/45 bg-emerald-400/15 text-white shadow-[0_0_28px_rgba(16,185,129,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Current system</p>
+            <h3 className="mt-2 text-2xl font-semibold">My Timetable</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-300">Study planner, current subject countdown, missed-work recovery, and weekly study blocks.</p>
+          </button>
+          <button type="button" onClick={() => { setTimetableViewMode("lecture"); if (!lectureTimetableEntries.length) loadLectureTimetable().catch(() => {}); }} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "lecture" ? "border-sky-300/45 bg-sky-400/15 text-white shadow-[0_0_28px_rgba(14,165,233,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
+            <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Class schedule</p>
+            <h3 className="mt-2 text-2xl font-semibold">Lecture Timetable</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-300">Manually save modules, lecturers, days, times, and venues.</p>
+          </button>
+        </div>
+
+        {timetableViewMode === "lecture" ? (
+          <div className="mt-5 rounded-[28px] border border-sky-300/20 bg-slate-950/75 p-5">
+            <div className="force-mobile-stack flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-sky-100/75">Lecture Timetable</p>
+                <h3 className="mt-2 text-2xl font-semibold text-white">Your weekly classes</h3>
+                <p className="mt-2 text-sm leading-7 text-slate-300">Add each class manually. Press Save Lecture Timetable when you are done.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={loadLectureTimetable} disabled={isLoadingLectureTimetable} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isLoadingLectureTimetable ? "Loading..." : "Load"}</button>
+                <button type="button" onClick={addLectureTimetableEntry} className="rounded-full border border-sky-300/25 bg-sky-300/10 px-4 py-2 text-sm font-semibold text-sky-50">Add Lecture</button>
+                <button type="button" onClick={saveLectureTimetable} disabled={isSavingLectureTimetable} className="rounded-full bg-[linear-gradient(135deg,#0284c7,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isSavingLectureTimetable ? "Saving..." : "Save Lecture Timetable"}</button>
+              </div>
+            </div>
+            {lectureTimetableMessage ? <p className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-300/10 px-4 py-3 text-sm text-sky-50">{lectureTimetableMessage}</p> : null}
+            <div className="mt-5 space-y-3">
+              {lectureTimetableEntries.length ? lectureTimetableEntries.map((entry) => (
+                <div key={entry.id} className="grid gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 xl:grid-cols-[1.1fr_1fr_130px_130px_130px_1fr_auto] xl:items-end">
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Module<input value={entry.module} onChange={(event) => updateLectureTimetableEntry(entry.id, "module", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Mathematics 101" /></label>
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Lecturer<input value={entry.lecturer} onChange={(event) => updateLectureTimetableEntry(entry.id, "lecturer", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Dr Mokoena" /></label>
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Day<select value={entry.day} onChange={(event) => updateLectureTimetableEntry(entry.id, "day", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">{TIMETABLE_DAY_KEYS.map((day) => <option key={day.id} value={day.label}>{day.label}</option>)}</select></label>
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<TimetableTimePicker value={entry.start} onChange={(value) => updateLectureTimetableEntry(entry.id, "start", value)} /></label>
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<TimetableTimePicker value={entry.end} onChange={(value) => updateLectureTimetableEntry(entry.id, "end", value)} /></label>
+                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Venue<input value={entry.venue} onChange={(event) => updateLectureTimetableEntry(entry.id, "venue", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Room B12" /></label>
+                  <button type="button" onClick={() => removeLectureTimetableEntry(entry.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Delete</button>
+                </div>
+              )) : (
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300">
+                  No lecture timetable entries yet. Press Add Lecture to start.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {timetableViewMode === "study" ? (
+        <>
         {isTimetableLoaderVisible ? renderTimetableLoadingScreen({
           subjectName: timetableLoadingSubjectName,
           previewItems: timetableLoadingPreviewItems,
@@ -9887,6 +9942,8 @@ export default function App() {
         ) : null}
           </>
         )}
+        </>
+        ) : null}
       </section>
     );
   };
@@ -15317,6 +15374,79 @@ export default function App() {
   const getFreeStudyTimetableStorageKey = () => `mabaso-free-study-timetable-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getStudyTimetableCacheStorageKey = () => `${TIMETABLE_CACHE_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getTimetableCoachPromptStorageKey = () => `${TIMETABLE_COACH_PROMPT_STORAGE_KEY}:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
+  const createLectureTimetableEntry = () => ({
+    id: `lecture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    module: "",
+    lecturer: "",
+    day: "Monday",
+    start: "08:00",
+    end: "09:00",
+    venue: "",
+  });
+  const normalizeLectureTimetableEntries = (entries = []) => (
+    Array.isArray(entries) ? entries : []
+  ).map((entry) => ({
+    id: String(entry?.id || `lecture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    module: String(entry?.module || entry?.subject || "").slice(0, 120),
+    lecturer: String(entry?.lecturer || "").slice(0, 120),
+    day: String(entry?.day || "Monday").slice(0, 24),
+    start: String(entry?.start || entry?.time || "").slice(0, 12),
+    end: String(entry?.end || "").slice(0, 12),
+    venue: String(entry?.venue || entry?.room || "").slice(0, 120),
+  })).filter((entry) => entry.module || entry.lecturer || entry.venue || entry.start || entry.end);
+  const addLectureTimetableEntry = () => {
+    setLectureTimetableEntries((current) => [...current, createLectureTimetableEntry()]);
+    setLectureTimetableMessage("");
+  };
+  const updateLectureTimetableEntry = (entryId, field, value) => {
+    setLectureTimetableEntries((current) => current.map((entry) => (
+      entry.id === entryId ? { ...entry, [field]: value } : entry
+    )));
+    setLectureTimetableMessage("");
+  };
+  const removeLectureTimetableEntry = (entryId) => {
+    setLectureTimetableEntries((current) => current.filter((entry) => entry.id !== entryId));
+    setLectureTimetableMessage("Lecture removed. Press Save Lecture Timetable to keep this change.");
+  };
+  const loadLectureTimetable = async () => {
+    if (!authToken) return;
+    setIsLoadingLectureTimetable(true);
+    try {
+      const response = await authFetch("/lecture-timetable", { timeoutMs: 60000 });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not load your lecture timetable.");
+      setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []));
+      setLectureTimetableMessage("");
+    } catch (err) {
+      setLectureTimetableMessage(getReadableRequestError(err) || "Could not load your lecture timetable.");
+    } finally {
+      setIsLoadingLectureTimetable(false);
+    }
+  };
+  const saveLectureTimetable = async () => {
+    if (!authToken) {
+      setLectureTimetableMessage("Sign in before saving your lecture timetable.");
+      return;
+    }
+    setIsSavingLectureTimetable(true);
+    try {
+      const entries = normalizeLectureTimetableEntries(lectureTimetableEntries);
+      const response = await authFetch("/lecture-timetable", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries }),
+        timeoutMs: 60000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not save your lecture timetable.");
+      setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || entries));
+      setLectureTimetableMessage("Lecture timetable saved.");
+    } catch (err) {
+      setLectureTimetableMessage(getReadableRequestError(err) || "Could not save your lecture timetable.");
+    } finally {
+      setIsSavingLectureTimetable(false);
+    }
+  };
   const hasStudyTimetablePayloadContent = (payload = {}) => Boolean(
     payload
     && typeof payload === "object"
