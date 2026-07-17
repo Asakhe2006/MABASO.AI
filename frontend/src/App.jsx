@@ -14521,6 +14521,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/google`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credential }),
       }, 45000);
@@ -14541,6 +14542,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/apple`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           authorization_code: authorizationCode,
@@ -14611,6 +14613,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/login`, {
         method: "POST",
+        credentials: "include",
         headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
@@ -14690,6 +14693,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/verify-code`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email,
@@ -14732,6 +14736,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/register/complete`, {
         method: "POST",
+        credentials: "include",
         headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
@@ -14826,6 +14831,7 @@ export default function App() {
     try {
       const response = await fetchWithTimeout(`${API_BASE_URL}/auth/email-password/verify-code`, {
         method: "POST",
+        credentials: "include",
         headers: withDeviceHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           email,
@@ -24642,14 +24648,23 @@ export default function App() {
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
-            <div className="grid w-full gap-2 sm:grid-cols-3 lg:max-w-3xl">
-              {WORKSPACE_TOOL_GROUPS.map((group) => (
-                <button key={group.id} type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`rounded-2xl border px-4 py-3 text-left transition ${workspaceToolGroup === group.id ? "border-emerald-300/35 bg-emerald-300/12 text-white" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>
-                  <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">{group.eyebrow}</span>
-                  <span className="mt-1 block text-sm font-semibold">{group.label}</span>
-                </button>
-              ))}
-            </div>
+            <details className="w-full rounded-2xl border border-white/10 bg-white/5 p-3 lg:max-w-3xl">
+              <summary className="cursor-pointer list-none text-left">
+                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">Tool category</span>
+                <span className="mt-1 flex items-center justify-between gap-3 text-sm font-semibold text-white">
+                  {activeWorkspaceToolGroup.label}
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Change</span>
+                </span>
+              </summary>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {WORKSPACE_TOOL_GROUPS.map((group) => (
+                  <button key={group.id} type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`rounded-2xl border px-4 py-3 text-left transition ${workspaceToolGroup === group.id ? "border-emerald-300/35 bg-emerald-300/12 text-white" : "border-white/10 bg-slate-950/65 text-slate-200 hover:bg-white/10"}`}>
+                    <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">{group.eyebrow}</span>
+                    <span className="mt-1 block text-sm font-semibold">{group.label}</span>
+                  </button>
+                ))}
+              </div>
+            </details>
           </div>
 
           <div className="mt-6 space-y-5">
@@ -24663,11 +24678,16 @@ export default function App() {
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {activeWorkspaceToolGroup.tools.map((tool) => (
-                  <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`group rounded-2xl border p-4 text-left transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
-                    <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-sm font-black text-emerald-100">{tool.diagram}</span>
-                    <span className="mt-4 block text-base font-semibold text-white">{tool.label}</span>
-                    <span className="mt-2 block text-xs leading-5 text-slate-400">{tool.description}</span>
-                  </button>
+                  <div key={tool.id} className={`rounded-2xl border p-3 transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
+                    <button type="button" onClick={() => openWorkspaceToolCard(tool)} className="flex w-full items-center gap-3 text-left">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-xs font-black text-emerald-100">{tool.diagram}</span>
+                      <span className="min-w-0 text-sm font-semibold text-white">{tool.label}</span>
+                    </button>
+                    <details className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
+                      <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">About</summary>
+                      <p className="mt-2 text-xs leading-5 text-slate-400">{tool.description}</p>
+                    </details>
+                  </div>
                 ))}
               </div>
             </div>
