@@ -1,4 +1,4 @@
-import { lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, CalendarDays, CreditCard, FolderOpen, GraduationCap, UploadCloud, UsersRound } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
@@ -599,6 +599,7 @@ const tabs = [
   { id: "report", label: "Academic Report" },
   { id: "mindmap", label: "Mind Map Generator" },
   { id: "chat", label: "Study Chat" },
+  { id: "quality", label: "Note Quality Checker" },
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
@@ -626,7 +627,7 @@ const WORKSPACE_TOOL_GROUPS = [
       { id: "mindmap", label: "Exam Mind Map Generator", diagram: "MM", targetTab: "mindmap", description: "Create a visual exam revision map." },
       { id: "quiz", label: "Exam", diagram: "EX", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
       { id: "oral", label: "Oral Exam", diagram: "OE", targetPage: "voice", description: "Practice spoken answers with the voice assistant." },
-      { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "chat", prompt: "Check my notes for missing concepts, weak definitions, unclear examples, and exam risks. Give a corrected study version.", description: "Ask AI to audit and improve your notes." },
+      { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "quality", description: "Write what you understood, then get an exam-readiness rating and focus guide." },
     ],
   },
   {
@@ -6240,6 +6241,9 @@ export default function App() {
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isAskingChat, setIsAskingChat] = useState(false);
+  const [noteQualityDraft, setNoteQualityDraft] = useState("");
+  const [noteQualityResult, setNoteQualityResult] = useState("");
+  const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
   const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
@@ -6327,6 +6331,8 @@ export default function App() {
   const activeStudySessionImageInputRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
+  const studyChatEndRef = useRef(null);
+  const browserVoiceEndRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
   const activeStudyMotivationTimerRef = useRef(null);
@@ -9186,9 +9192,8 @@ export default function App() {
             openProtectedAppPage("workspace");
           }, "Back to study chat")}
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Browser Voice Practice</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Speak about this lecture without paid voice model costs.</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">This page uses your browser microphone, browser speech playback, and the lecture material already loaded in Mabaso AI. It does not call the live OpenAI tutor.</p>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Oral Exam</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">Practice your answers by voice.</h2>
           </div>
         </div>
       </div>
@@ -9703,7 +9708,7 @@ export default function App() {
                       </td>
                     </tr>
                   ) : groupedLectureTimetableEntries.map((group) => (
-                    <React.Fragment key={group.day.id}>
+                    <Fragment key={group.day.id}>
                       <tr className="bg-slate-900/75">
                         <td colSpan={8} className="border-y border-white/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-sky-100">{group.day.label}</td>
                       </tr>
@@ -9728,7 +9733,7 @@ export default function App() {
                           <td colSpan={7} className="px-3 py-3 text-sm text-slate-400">No {group.day.label} lectures yet.</td>
                         </tr>
                       )}
-                    </React.Fragment>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -14034,6 +14039,14 @@ export default function App() {
     if (authToken) return;
     authTokenRef.current = "";
   }, [authToken]);
+
+  useEffect(() => {
+    studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [chatMessages.length, isAskingChat]);
+
+  useEffect(() => {
+    browserVoiceEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [browserVoiceMessages.length, isBrowserVoiceSpeaking, isBrowserVoiceListening]);
 
   useEffect(() => {
     try {
@@ -22045,9 +22058,94 @@ export default function App() {
     }
   };
 
-  const renderStudyChatPanel = ({ includeAssistantPanel = false, compact = false } = {}) => (
+  const rateNoteQuality = async () => {
+    const learnerSummary = noteQualityDraft.trim();
+    if (!learnerSummary) {
+      setError("Write your summary first so Mabaso can rate your understanding.");
+      return;
+    }
+    setError("");
+    setIsRatingNoteQuality(true);
+    setNoteQualityResult("");
+    try {
+      const answer = await requestStudyAssistantAnswer({
+        question: [
+          "Rate this learner's understanding from 0% to 100% for exam readiness.",
+          "Return a clear percentage first, then explain likely exam performance, missing concepts, weak areas, and exactly what to focus on next.",
+          "Be honest but supportive. Use the study guide, transcript, formulas, notes, slides, and past papers as the marking reference.",
+          "",
+          "Learner summary:",
+          learnerSummary,
+        ].join("\n"),
+        history: [],
+        deliveryMode: "chat",
+        currentSection: "note-quality-checker",
+        responseLength: "detailed",
+      });
+      setNoteQualityResult(answer);
+      setStatus("Note quality rating ready.");
+    } catch (err) {
+      setError(err.message || "Could not rate your note quality right now.");
+      setNoteQualityResult(err.message || "Could not rate your note quality right now.");
+    } finally {
+      setIsRatingNoteQuality(false);
+    }
+  };
+
+  const renderNoteQualityPanel = () => (
+    <div className="space-y-5">
+      <div className="rounded-[28px] border border-emerald-300/15 bg-slate-950/85 p-5">
+        <div className="force-mobile-stack flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Note Quality Checker</p>
+            <h4 className="mt-2 text-2xl font-semibold text-white">Write what you understood.</h4>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">Mabaso will rate your understanding, estimate exam readiness, and show what to focus on next.</p>
+          </div>
+          <button type="button" onClick={rateNoteQuality} disabled={isRatingNoteQuality} className="rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">
+            {isRatingNoteQuality ? "Rating..." : "Rate Understanding"}
+          </button>
+        </div>
+        <textarea
+          value={noteQualityDraft}
+          onChange={(event) => setNoteQualityDraft(event.target.value)}
+          rows={12}
+          className="mt-5 min-h-[320px] w-full resize-y rounded-[24px] border border-white/10 bg-black/35 px-5 py-4 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500"
+          placeholder="Write your own summary here. Explain the topic in your own words, include formulas you remember, examples, and anything that still confuses you..."
+        />
+      </div>
+      <div className="rounded-[28px] border border-white/10 bg-slate-950/80 p-5">
+        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Rating Result</p>
+        {noteQualityResult ? (
+          <div className="notes-markdown mt-4 max-w-none whitespace-pre-wrap text-sm leading-7 text-slate-200">
+            <MobileFirstMarkdown>{noteQualityResult}</MobileFirstMarkdown>
+          </div>
+        ) : (
+          <p className="mt-4 text-sm leading-7 text-slate-300">Your percentage, exam prediction, and focus guide will appear here after rating.</p>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderOralExamPanel = ({ compact = false } = {}) => (
+    <div className={`rounded-[24px] border border-cyan-300/15 bg-slate-950/85 p-4 ${compact ? "" : "sm:p-5"}`}>
+      <div className="force-mobile-stack flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Oral Exam</p>
+          <h4 className="mt-2 text-2xl font-semibold text-white">Practice by speaking.</h4>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">Use voice practice for spoken answers, friendly questions, and mixed-language study conversation.</p>
+        </div>
+        <button type="button" onClick={() => openProtectedAppPage("voice")} className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-50">Open Oral Exam</button>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Language</p><p className="mt-2 text-sm font-semibold text-white">{outputLanguage}</p></div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Voice</p><p className="mt-2 text-sm font-semibold text-white">{selectedTeacherVoiceName || "Default"}</p></div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Attempts</p><p className="mt-2 text-sm font-semibold text-white">Uses voice plan limits</p></div>
+      </div>
+    </div>
+  );
+
+  const renderStudyChatPanel = ({ compact = false } = {}) => (
     <>
-      {includeAssistantPanel ? <LectureAssistantPanel assistant={lectureAssistant} /> : null}
       <div className={`space-y-4 ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
         <div className="force-mobile-stack flex items-start justify-between gap-3">
           <div>
@@ -22109,6 +22207,7 @@ export default function App() {
           )) : (
             <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">No study chat messages yet.</div>
           )}
+          <div ref={studyChatEndRef} />
         </div>
       </div>
     </>
@@ -24613,7 +24712,7 @@ export default function App() {
                       </div>
                     )}
 
-                    <LectureAssistantPanel assistant={lectureAssistant} />
+                    {renderOralExamPanel({ compact: true })}
                     {renderStudyChatPanel({ compact: true })}
                   </div>
                 ) : null}
@@ -24733,7 +24832,8 @@ export default function App() {
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
-                {activeTab === "chat" ? renderStudyChatPanel({ includeAssistantPanel: true }) : null}
+                {activeTab === "quality" ? renderNoteQualityPanel() : null}
+                {activeTab === "chat" ? <div className="space-y-5">{renderOralExamPanel()}{renderStudyChatPanel()}</div> : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
