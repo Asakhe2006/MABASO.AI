@@ -15388,7 +15388,7 @@ export default function App() {
     return error;
   };
 
-  const getResolvedCurrentPlanId = () => {
+  function getResolvedCurrentPlanId() {
     const planId = String(
       billingUsage?.plan_id
       || billingSubscription?.plan_id
@@ -15399,9 +15399,11 @@ export default function App() {
     if (planId) return planId;
     if (authSessionMode === "admin" || authAvailableModes.includes("admin")) return "premium_student";
     return "free";
-  };
+  }
 
-  const getCurrentPlanIdForLimits = () => getResolvedCurrentPlanId();
+  function getCurrentPlanIdForLimits() {
+    return getResolvedCurrentPlanId();
+  }
 
   const getSourceMaterialLimitMbForCurrentPlan = () => {
     const planId = getCurrentPlanIdForLimits();
@@ -15515,18 +15517,32 @@ export default function App() {
     return true;
   };
 
-  const getCurrentPlanTier = () => {
+  function getCurrentPlanTier() {
     const planId = getResolvedCurrentPlanId();
     if (planId.includes("premium")) return "premium";
     if (planId.includes("pro")) return "pro";
     return "free";
-  };
+  }
 
-  const getCurrentPlanEntitlements = () => planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
-  const canUsePremiumStudyImages = () => getCurrentPlanTier() !== "free";
-  const getVisibleStudyImages = (images = studyImages) => (canUsePremiumStudyImages() ? (images || []) : []);
-  const getAllowedPodcastSpeakerCount = () => (getCurrentPlanTier() === "free" ? 2 : 3);
-  const isPodcastSpeakerCountAllowed = (count = podcastSpeakerCount) => Number(count || 2) <= getAllowedPodcastSpeakerCount();
+  function getCurrentPlanEntitlements() {
+    return planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
+  }
+
+  function canUsePremiumStudyImages() {
+    return getCurrentPlanTier() !== "free";
+  }
+
+  function getVisibleStudyImages(images = studyImages) {
+    return canUsePremiumStudyImages() ? (images || []) : [];
+  }
+
+  function getAllowedPodcastSpeakerCount() {
+    return getCurrentPlanTier() === "free" ? 2 : 3;
+  }
+
+  function isPodcastSpeakerCountAllowed(count = podcastSpeakerCount) {
+    return Number(count || 2) <= getAllowedPodcastSpeakerCount();
+  }
 
   const getSiteRatingPromptStorageKey = () => `mabaso-site-rating-prompts-v1:${normalizeHistoryOwnerEmail(authEmail) || "__guest__"}`;
   const getStoredSiteRatingPromptCount = () => {
