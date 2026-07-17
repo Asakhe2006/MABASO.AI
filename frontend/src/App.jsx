@@ -598,7 +598,7 @@ const tabs = [
   { id: "podcast", label: "Podcast Generator" },
   { id: "report", label: "Academic Report" },
   { id: "mindmap", label: "Mind Map Generator" },
-  { id: "chat", label: "AI Notes" },
+  { id: "chat", label: "Study Chat" },
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
@@ -619,13 +619,12 @@ const WORKSPACE_TOOL_GROUPS = [
     id: "ai",
     label: "AI Generator",
     eyebrow: "Practice and thinking",
-    description: "AI notes, flashcards, exam mind map, debate, oral exam, and marking tools.",
+    description: "Study chat, flashcards, exam mind map, oral exam, and marking tools.",
     tools: [
-      { id: "chat", label: "AI Notes", diagram: "AI", targetTab: "chat", description: "Ask questions, upload photos, and continue study chat." },
+      { id: "chat", label: "Study Chat", diagram: "AI", targetTab: "chat", description: "Ask questions, upload photos, and continue study chat." },
       { id: "flashcards", label: "Flashcards", diagram: "FC", targetTab: "flashcards", description: "Generate quick memory cards from your lecture." },
       { id: "mindmap", label: "Exam Mind Map Generator", diagram: "MM", targetTab: "mindmap", description: "Create a visual exam revision map." },
-      { id: "quiz", label: "Exam & Image Marker", diagram: "MK", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
-      { id: "debate", label: "Debate Coach", diagram: "DB", targetTab: "chat", prompt: "Debate this topic with me. Challenge my reasoning, ask one question at a time, and then give a balanced conclusion.", description: "Use the assistant as a debate partner for arguments and counterarguments." },
+      { id: "quiz", label: "Exam", diagram: "EX", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
       { id: "oral", label: "Oral Exam", diagram: "OE", targetPage: "voice", description: "Practice spoken answers with the voice assistant." },
       { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "chat", prompt: "Check my notes for missing concepts, weak definitions, unclear examples, and exam risks. Give a corrected study version.", description: "Ask AI to audit and improve your notes." },
     ],
@@ -9612,6 +9611,12 @@ export default function App() {
         label: normalizeTimetableSubjectName(session.title, session.type === "break" ? "Break" : "Study Session"),
         time: `${session.start} - ${session.end}`,
       }));
+    const groupedLectureTimetableEntries = LECTURE_TIMETABLE_DAY_OPTIONS.map((day) => ({
+      day,
+      entries: normalizeLectureTimetableEntries(lectureTimetableEntries)
+        .filter((entry) => normalizeLectureTimetableDay(entry.day) === day.id)
+        .sort((left, right) => `${left.start || "99:99"} ${left.module}`.localeCompare(`${right.start || "99:99"} ${right.module}`)),
+    }));
 
     return (
       <section className="min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6">
@@ -9669,43 +9674,64 @@ export default function App() {
               </div>
             </div>
             {lectureTimetableMessage ? <p className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-300/10 px-4 py-3 text-sm text-sky-50">{lectureTimetableMessage}</p> : null}
-            <div className="mt-5 overflow-x-auto rounded-2xl border border-white/10">
-              {lectureTimetableEntries.length ? (
-                <table className="min-w-[980px] w-full border-collapse text-left text-sm">
-                  <thead className="bg-slate-900/90 text-xs uppercase tracking-[0.18em] text-slate-400">
+            <div className="mt-5 min-h-[260px] overflow-x-auto rounded-2xl border border-white/10">
+              <table className="min-w-[1080px] w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-900/90 text-xs uppercase tracking-[0.18em] text-slate-400">
+                  <tr>
+                    <th className="border-b border-white/10 px-3 py-3">Day Group</th>
+                    <th className="border-b border-white/10 px-3 py-3">Module</th>
+                    <th className="border-b border-white/10 px-3 py-3">Lecturer</th>
+                    <th className="border-b border-white/10 px-3 py-3">Move Day</th>
+                    <th className="border-b border-white/10 px-3 py-3">Start</th>
+                    <th className="border-b border-white/10 px-3 py-3">End</th>
+                    <th className="border-b border-white/10 px-3 py-3">Venue</th>
+                    <th className="border-b border-white/10 px-3 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {isLoadingLectureTimetable ? (
                     <tr>
-                      <th className="border-b border-white/10 px-3 py-3">Module</th>
-                      <th className="border-b border-white/10 px-3 py-3">Lecturer</th>
-                      <th className="border-b border-white/10 px-3 py-3">Day</th>
-                      <th className="border-b border-white/10 px-3 py-3">Start</th>
-                      <th className="border-b border-white/10 px-3 py-3">End</th>
-                      <th className="border-b border-white/10 px-3 py-3">Venue</th>
-                      <th className="border-b border-white/10 px-3 py-3 text-right">Action</th>
+                      <td colSpan={8} className="px-4 py-8">
+                        <div className="flex items-center gap-3 text-sm text-slate-300">
+                          <span className="inline-flex h-8 w-8 items-end justify-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-1.5 py-1">
+                            <span className="h-3 w-1 rounded-full bg-sky-200 animate-pulse" />
+                            <span className="h-5 w-1 rounded-full bg-emerald-200 animate-pulse" />
+                            <span className="h-4 w-1 rounded-full bg-slate-200 animate-pulse" />
+                          </span>
+                          <span>Loading your lecture timetable...</span>
+                        </div>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {lectureTimetableEntries.map((entry) => (
-                      <tr key={entry.id} className="border-b border-white/10 bg-black/25 last:border-b-0">
-                        <td className="px-3 py-3 align-top"><input aria-label="Module" value={entry.module} onChange={(event) => updateLectureTimetableEntry(entry.id, "module", event.target.value)} className="w-full min-w-[170px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Mathematics 101" /></td>
-                        <td className="px-3 py-3 align-top"><input aria-label="Lecturer" value={entry.lecturer} onChange={(event) => updateLectureTimetableEntry(entry.id, "lecturer", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Dr Mokoena" /></td>
-                        <td className="px-3 py-3 align-top">
-                          <select aria-label="Day" value={normalizeLectureTimetableDay(entry.day)} onChange={(event) => updateLectureTimetableEntry(entry.id, "day", event.target.value)} className="w-full min-w-[130px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">
-                            {LECTURE_TIMETABLE_DAY_OPTIONS.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.start} onChange={(value) => updateLectureTimetableEntry(entry.id, "start", value)} /></td>
-                        <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.end} onChange={(value) => updateLectureTimetableEntry(entry.id, "end", value)} /></td>
-                        <td className="px-3 py-3 align-top"><input aria-label="Venue" value={entry.venue} onChange={(event) => updateLectureTimetableEntry(entry.id, "venue", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Room B12" /></td>
-                        <td className="px-3 py-3 text-right align-top"><button type="button" onClick={() => removeLectureTimetableEntry(entry.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Delete</button></td>
+                  ) : groupedLectureTimetableEntries.map((group) => (
+                    <React.Fragment key={group.day.id}>
+                      <tr className="bg-slate-900/75">
+                        <td colSpan={8} className="border-y border-white/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-sky-100">{group.day.label}</td>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300">
-                  {isLoadingLectureTimetable ? "Loading your lecture timetable..." : "No lecture timetable entries yet. Press Add Lecture to start."}
-                </div>
-              )}
+                      {group.entries.length ? group.entries.map((entry) => (
+                        <tr key={entry.id} className="border-b border-white/10 bg-black/25 last:border-b-0">
+                          <td className="px-3 py-3 align-top text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{formatLectureTimetableDay(entry.day)}</td>
+                          <td className="px-3 py-3 align-top"><input aria-label="Module" value={entry.module} onChange={(event) => updateLectureTimetableEntry(entry.id, "module", event.target.value)} className="w-full min-w-[170px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Mathematics 101" /></td>
+                          <td className="px-3 py-3 align-top"><input aria-label="Lecturer" value={entry.lecturer} onChange={(event) => updateLectureTimetableEntry(entry.id, "lecturer", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Dr Mokoena" /></td>
+                          <td className="px-3 py-3 align-top">
+                            <select aria-label="Day" value={normalizeLectureTimetableDay(entry.day)} onChange={(event) => updateLectureTimetableEntry(entry.id, "day", event.target.value)} className="w-full min-w-[130px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">
+                              {LECTURE_TIMETABLE_DAY_OPTIONS.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.start} onChange={(value) => updateLectureTimetableEntry(entry.id, "start", value)} /></td>
+                          <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.end} onChange={(value) => updateLectureTimetableEntry(entry.id, "end", value)} /></td>
+                          <td className="px-3 py-3 align-top"><input aria-label="Venue" value={entry.venue} onChange={(event) => updateLectureTimetableEntry(entry.id, "venue", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Room B12" /></td>
+                          <td className="px-3 py-3 text-right align-top"><button type="button" onClick={() => removeLectureTimetableEntry(entry.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Delete</button></td>
+                        </tr>
+                      )) : (
+                        <tr className="border-b border-white/10 bg-black/15">
+                          <td className="px-3 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{group.day.label}</td>
+                          <td colSpan={7} className="px-3 py-3 text-sm text-slate-400">No {group.day.label} lectures yet.</td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : null}
@@ -14019,10 +14045,10 @@ export default function App() {
 
   useEffect(() => {
     const matchingGroupId = WORKSPACE_TOOL_GROUP_BY_TAB[activeTab];
-    if (matchingGroupId && matchingGroupId !== workspaceToolGroup) {
-      setWorkspaceToolGroup(matchingGroupId);
+    if (matchingGroupId) {
+      setWorkspaceToolGroup((current) => (current === matchingGroupId ? current : matchingGroupId));
     }
-  }, [activeTab, workspaceToolGroup]);
+  }, [activeTab]);
 
   useEffect(() => {
     try {
@@ -15547,13 +15573,13 @@ export default function App() {
   };
   const loadLectureTimetable = async () => {
     if (!authToken) return;
+    hasLoadedLectureTimetableRef.current = true;
     setIsLoadingLectureTimetable(true);
     try {
       const response = await authFetch("/lecture-timetable", { timeoutMs: 60000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your lecture timetable.");
       setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []));
-      hasLoadedLectureTimetableRef.current = true;
       setLectureTimetableMessage("");
     } catch (err) {
       setLectureTimetableMessage(getReadableRequestError(err) || "Could not load your lecture timetable.");
@@ -21956,10 +21982,11 @@ export default function App() {
       setError("Ask a question first.");
       return;
     }
-    if (chatReferenceImages.length) {
-      setChatReferenceImages([]);
-      setStatus("The new lecture assistant sent your text question without image attachments.");
-    }
+    const referenceImagesForQuestion = chatReferenceImages.map((image) => ({
+      id: image.id,
+      name: image.name,
+      dataUrl: image.dataUrl,
+    }));
     const hasStudyChatContext = Boolean(
       String(transcript || "").trim()
       || String(summary || "").trim()
@@ -21972,14 +21999,13 @@ export default function App() {
       || lectureAssistant.hasLectureContext,
     );
     if (!hasStudyChatContext) {
-      setError("Generate a transcript or study guide first.");
-      return;
+      setStatus("MABASO is answering without lecture context.");
     }
     setError("");
     setStatus("MABASO is answering your study question...");
     setIsAskingChat(true);
     const chatTurnId = `study-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question };
+    const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question, images: referenceImagesForQuestion };
     const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
@@ -21988,9 +22014,11 @@ export default function App() {
       const answer = await requestStudyAssistantAnswer({
         question,
         history: updatedHistory.slice(-6),
+        referenceImages: referenceImagesForQuestion,
         deliveryMode: "chat",
         currentSection: activeTab,
       });
+      setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
@@ -22016,6 +22044,75 @@ export default function App() {
       setIsAskingChat(false);
     }
   };
+
+  const renderStudyChatPanel = ({ includeAssistantPanel = false, compact = false } = {}) => (
+    <>
+      {includeAssistantPanel ? <LectureAssistantPanel assistant={lectureAssistant} /> : null}
+      <div className={`space-y-4 ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
+        <div className="force-mobile-stack flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Chat</p>
+            <h4 className="mt-2 text-2xl font-semibold text-white">Ask Mabaso anything.</h4>
+            <p className="mt-2 text-sm leading-6 text-slate-300">Ask about the guide, a photo, an exam question, or a general question.</p>
+          </div>
+          <button type="button" onClick={lectureAssistant.createConversation} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">New Chat</button>
+        </div>
+
+        <div className="rounded-[24px] border border-white/10 bg-slate-950/85 p-4">
+          <div className="force-mobile-stack flex items-end gap-3">
+            <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_IMAGES} className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl font-semibold text-white disabled:opacity-50" aria-label="Add question photo">+</button>
+            <textarea
+              value={chatQuestion}
+              onChange={(event) => setChatQuestion(event.target.value)}
+              onKeyDown={handleStudyChatKeyDown}
+              rows={compact ? 2 : 3}
+              className="min-h-[72px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500"
+              placeholder="Ask a question or describe the photo..."
+            />
+            <button
+              type="button"
+              onClick={askStudyAssistant}
+              disabled={isAskingChat}
+              className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
+              aria-label="Send study chat question"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+                <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+              </svg>
+            </button>
+          </div>
+          <input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
+          {chatReferenceImages.length ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {chatReferenceImages.map((image) => (
+                <span key={image.id} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200">
+                  <span className="max-w-[160px] truncate">{image.name || "Photo"}</span>
+                  <button type="button" onClick={() => removeChatReferenceImage(image.id)} className="font-black text-white" aria-label="Remove chat photo">x</button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <p className="mt-3 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : lectureAssistant.statusText}</p>
+        </div>
+
+        <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+          {chatMessages.length ? chatMessages.slice(-8).map((message, index) => (
+            <div key={message.id || `${message.role}-${index}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+              {Array.isArray(message.images) && message.images.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.images.map((image) => <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />)}
+                </div>
+              ) : null}
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
+            </div>
+          )) : (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">No study chat messages yet.</div>
+          )}
+        </div>
+      </div>
+    </>
+  );
 
   const speakTeacherQuestionAnswer = (answerText = "", { onComplete } = {}) => {
     const cleanedAnswer = String(answerText || "").trim();
@@ -22346,7 +22443,7 @@ export default function App() {
     }
     if (tool.prompt) {
       setChatQuestion(tool.prompt);
-      setStatus(`${tool.label} opened in AI Notes.`);
+      setStatus(`${tool.label} opened in Study Chat.`);
     }
     openTutorWorkspaceTool(tool.targetTab || "guide");
   };
@@ -24517,6 +24614,7 @@ export default function App() {
                     )}
 
                     <LectureAssistantPanel assistant={lectureAssistant} />
+                    {renderStudyChatPanel({ compact: true })}
                   </div>
                 ) : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
@@ -24635,105 +24733,7 @@ export default function App() {
                 {activeTab === "podcast" ? renderPodcastPanel() : null}
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
-                {activeTab === "chat" ? (<>
-                  <LectureAssistantPanel assistant={lectureAssistant} />
-                  <div className="space-y-4">
-                    <div className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(15,23,42,0.82))] p-5 sm:p-6">
-                      <div className="force-mobile-stack flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Modern Conversation</p>
-                          <h3 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">Your lecture chat now lives in the floating assistant.</h3>
-                          <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">
-                            It streams replies from the backend, remembers past messages in this browser, supports voice input, and keeps one voice provider locked for each active voice session.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              lectureAssistant.openPanel?.({ focusComposer: true });
-                              window.setTimeout(() => lectureAssistant.openPanel?.({ focusComposer: true }), 90);
-                              setStatus("Lecture assistant opened.");
-                            }}
-                            className="rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] px-4 py-2 text-sm font-semibold text-white"
-                          >
-                            Open Assistant
-                          </button>
-                          <button
-                            type="button"
-                            onClick={lectureAssistant.createConversation}
-                            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
-                          >
-                            New Chat
-                          </button>
-                          <button
-                            type="button"
-                            onClick={lectureAssistant.startListening}
-                            className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${lectureAssistant.isListening ? "border-fuchsia-300/30 bg-fuchsia-400/15 text-fuchsia-100" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}
-                          >
-                            {lectureAssistant.isListening ? "Stop Mic" : "Use Mic"}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 flex flex-wrap gap-2">
-                        <span className="rounded-full bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50">Streaming replies</span>
-                        <span className="rounded-full bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100">{lectureAssistant.providerLabel || "OpenAI text / locked voice provider"}</span>
-                        <span className={`rounded-full px-3 py-2 text-xs font-semibold ${lectureAssistant.ttsEnabled ? "bg-fuchsia-400/10 text-fuchsia-100" : "bg-white/5 text-slate-300"}`}>
-                          {lectureAssistant.ttsEnabled ? "Voice replies on" : "Voice replies off"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                      <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Quick question</p>
-                        <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/85 p-4">
-                          <div className="force-mobile-stack flex items-end gap-3">
-                            <textarea
-                              value={chatQuestion}
-                              onChange={(event) => setChatQuestion(event.target.value)}
-                              onKeyDown={handleStudyChatKeyDown}
-                              rows={2}
-                              className="min-h-[72px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500"
-                              placeholder="Ask anything from this lecture..."
-                            />
-                            <button
-                              type="button"
-                              onClick={askStudyAssistant}
-                              disabled={isAskingChat}
-                              className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
-                              aria-label="Send lecture question"
-                            >
-                              <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                                <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                              </svg>
-                            </button>
-                          </div>
-                        </div>
-                        <p className="mt-3 text-xs text-slate-400">{lectureAssistant.statusText}</p>
-                      </div>
-
-                      <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
-                        <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest reply</p>
-                        {chatMessages.length ? (
-                          <div className="mt-4 max-h-[360px] space-y-3 overflow-y-auto pr-1">
-                            {chatMessages.slice(-6).map((message, index) => (
-                              <div key={message.id || `${message.role}-${index}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
-                                <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
-                                <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
-                              </div>
-                            ))}
-                          </div>
-                        ) : latestLectureAssistantReply ? (
-                          <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{latestLectureAssistantReply.content}</p>
-                        ) : (
-                          <p className="mt-4 text-sm leading-7 text-slate-300">Open the assistant and ask your first follow-up question. Your saved chats stay in this browser for the current signed-in user.</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </>) : null}
+                {activeTab === "chat" ? renderStudyChatPanel({ includeAssistantPanel: true }) : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
