@@ -6832,11 +6832,7 @@ export default function App() {
           </div>
           <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
         </div>
-        {billingCheckoutMessage ? (
-          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
-            {billingCheckoutMessage}
-          </div>
-        ) : upgradeLimitMessage ? (
+        {upgradeLimitMessage ? (
           <div className="mt-4 rounded-2xl border border-rose-300/25 bg-rose-500/10 px-4 py-3 text-sm font-semibold leading-7 text-rose-50">
             {renderCaptureErrorMessage(upgradeLimitMessage)}
           </div>
@@ -6887,6 +6883,11 @@ export default function App() {
                 <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Manual verification happens before the plan activates.</span>
               </button>
             </div>
+            {billingCheckoutMessage ? (
+              <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
+                {billingCheckoutMessage}
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -7456,6 +7457,14 @@ export default function App() {
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
+  const getGuideSectionSourceLabel = () => {
+    if (lectureNoteSources.length) return "Source: lecture notes";
+    if (lectureSlideSources.length) return "Source: lecture slides";
+    if (pastQuestionPaperSources.length) return "Source: past papers";
+    if (transcript.trim()) return "Source: lecture transcript";
+    return "Mabaso";
+  };
+  const canUseSubtopicExplainMore = getCurrentPlanTier() !== "free";
   useEffect(() => {
     if (activeTab !== "tutor") return;
     setActiveTab("guide");
@@ -7636,32 +7645,56 @@ export default function App() {
       setBrowserVoiceStatus("Browser speech playback is not available here, but the written answer is ready below.");
       return;
     }
-    const spokenText = String(text || "").trim();
+    const spokenText = normalizeRenderedMathText(String(text || ""))
+      .replace(/[`*_#>[\]{}|~]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!spokenText) return;
     const selectedVoice = resolveTeacherVoice(teacherVoiceOptions, selectedTeacherVoiceName, outputLanguage);
     const runId = browserVoiceAnswerRunRef.current + 1;
     browserVoiceAnswerRunRef.current = runId;
     window.speechSynthesis.cancel();
-    const utterance = new window.SpeechSynthesisUtterance(spokenText);
-    utterance.lang = resolveSpeechLocale(outputLanguage);
-    utterance.rate = getTeacherSpeechRate("balanced", "answer");
-    if (selectedVoice) utterance.voice = selectedVoice;
-    utterance.onstart = () => {
+    const chunks = buildSpeechChunks(spokenText, 240);
+    const speakChunk = (chunkIndex = 0) => {
       if (browserVoiceAnswerRunRef.current !== runId) return;
-      setIsBrowserVoiceSpeaking(true);
-      setBrowserVoiceStatus("Speaking the answer from your browser voice.");
+      if (chunkIndex >= chunks.length) {
+        setIsBrowserVoiceSpeaking(false);
+        setBrowserVoiceStatus("Answer ready. Ask another question when you are ready.");
+        return;
+      }
+      const utterance = new window.SpeechSynthesisUtterance(chunks[chunkIndex]);
+      utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
+      utterance.rate = Math.min(1.06, Math.max(0.92, getTeacherSpeechRate("balanced", "answer")));
+      utterance.pitch = 1;
+      if (selectedVoice) utterance.voice = selectedVoice;
+      utterance.onstart = () => {
+        if (browserVoiceAnswerRunRef.current !== runId) return;
+        setIsBrowserVoiceSpeaking(true);
+        setBrowserVoiceStatus("Speaking the answer.");
+      };
+      utterance.onend = () => {
+        if (browserVoiceAnswerRunRef.current !== runId) return;
+        window.setTimeout(() => speakChunk(chunkIndex + 1), 60);
+      };
+      utterance.onerror = (event) => {
+        if (browserVoiceAnswerRunRef.current !== runId) return;
+        const errorName = String(event?.error || "").toLowerCase();
+        if (["interrupted", "canceled", "cancelled"].includes(errorName)) return;
+        if (chunkIndex + 1 < chunks.length) {
+          window.setTimeout(() => speakChunk(chunkIndex + 1), 80);
+          return;
+        }
+        setIsBrowserVoiceSpeaking(false);
+        setBrowserVoiceStatus("The written answer is ready. Your browser could not play the final voice part.");
+      };
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        setIsBrowserVoiceSpeaking(false);
+        setBrowserVoiceStatus("The written answer is ready. Your browser could not start voice playback.");
+      }
     };
-    utterance.onend = () => {
-      if (browserVoiceAnswerRunRef.current !== runId) return;
-      setIsBrowserVoiceSpeaking(false);
-      setBrowserVoiceStatus("Answer ready. Ask another question when you are ready.");
-    };
-    utterance.onerror = () => {
-      if (browserVoiceAnswerRunRef.current !== runId) return;
-      setIsBrowserVoiceSpeaking(false);
-      setBrowserVoiceStatus("The browser could not read that answer aloud, but the written answer is still available.");
-    };
-    window.speechSynthesis.speak(utterance);
+    window.setTimeout(() => speakChunk(0), 80);
   };
   const submitBrowserVoicePrompt = (rawQuestion = "") => {
     const question = String(rawQuestion || "").trim();
@@ -9261,6 +9294,7 @@ export default function App() {
                   Say a question like “Explain the main concept again” or “Which formula do I use here?” and this page will answer from the study material already on screen.
                 </div>
               )}
+              <div ref={browserVoiceEndRef} />
             </div>
           </div>
 
@@ -17307,7 +17341,7 @@ export default function App() {
       return;
     }
     const provider = String(paymentProvider || "").trim().toLowerCase() === "payfast" ? "payfast" : "payshap";
-    setBillingCheckoutMessage("");
+    setBillingCheckoutMessage(provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
     setBillingCheckoutPlanId(`${provider}:${plan.id}`);
     try {
       if (provider === "payfast") {
@@ -17320,7 +17354,7 @@ export default function App() {
           },
           { timeoutMs: 30000, retries: 1 },
         );
-        setBillingCheckoutMessage("Opening PayFast checkout. Your plan will activate automatically after payment is confirmed.");
+        setBillingCheckoutMessage("PayFast page is opening. Your plan will activate automatically after payment is confirmed.");
         submitExternalCheckoutForm(data);
         return;
       }
@@ -21961,7 +21995,7 @@ export default function App() {
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeoutMs: 90000,
+      timeoutMs: 150000,
       body: JSON.stringify({
         question,
         transcript,
@@ -21986,7 +22020,9 @@ export default function App() {
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Study chat failed.");
-    return data.answer || "No answer returned.";
+    const answer = String(data.answer || "").trim();
+    if (!answer) throw new Error("Mabaso could not generate a clear answer. Please try again.");
+    return answer;
   };
 
   const askStudyAssistant = async () => {
@@ -22043,16 +22079,17 @@ export default function App() {
       });
       setStatus("Study chat answer ready.");
     } catch (err) {
+      const readableError = getReadableRequestError(err);
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
         if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
-          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: err.message || "Study chat could not answer right now." };
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: readableError || "Study chat could not answer right now." };
           return next;
         }
         return next;
       });
-      setError(err.message || "Study chat failed.");
+      setError(readableError || "Study chat failed.");
     } finally {
       setIsAskingChat(false);
     }
@@ -24687,7 +24724,7 @@ export default function App() {
                             : false;
                           const sectionStudyImages = getStudyImagesForSection(getVisibleStudyImages(studyImages), section, index, visibleGuideSections);
                           return (
-                            <article
+                            <details
                               key={`${section.heading}-${index}`}
                               ref={(node) => {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
@@ -24696,12 +24733,20 @@ export default function App() {
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
-                              <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
-                              <div className="phone-safe-copy mt-3 max-w-none">
+                              <summary className="cursor-pointer list-none">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                                    <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{getGuideSectionSourceLabel(section)}</p>
+                                  </div>
+                                  {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => event.preventDefault()} className="shrink-0 rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700" title="Explain this subtopic another way">↻</button> : null}
+                                </div>
+                              </summary>
+                              <div className="phone-safe-copy mt-4 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
-                            </article>
+                            </details>
                           );
                         })}
                       </div>

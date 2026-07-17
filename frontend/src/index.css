@@ -40,7 +40,8 @@ body {
     radial-gradient(circle at top right, rgba(74, 222, 128, 0.14), transparent 30%),
     linear-gradient(180deg, #020805 0%, #04110a 45%, #07170d 100%);
   color: var(--text-main);
-  font-family: "IBM Plex Sans", sans-serif;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
 }
 
 a {
@@ -82,10 +83,22 @@ iframe {
   overflow-x: hidden;
 }
 
+.mobile-app-main {
+  width: 100%;
+  max-width: min(100vw, 1760px) !important;
+  margin-inline: auto;
+  padding-left: clamp(12px, 1.4vw, 24px) !important;
+  padding-right: clamp(12px, 1.4vw, 24px) !important;
+}
+
 .report-viewer {
   font-family: "Times New Roman", Arial, Calibri, sans-serif;
   line-height: 1.5;
   color: #000;
+}
+
+.study-guide-section-card > summary::-webkit-details-marker {
+  display: none;
 }
 
 .report-viewer h1 {
@@ -723,15 +736,21 @@ iframe {
   }
 
   body {
-    font-size: 14px;
+    font-size: 16px;
     background: linear-gradient(180deg, #020805 0%, #05110b 52%, #07140c 100%);
+  }
+
+  #root {
+    margin: 0;
+    padding: 0;
   }
 
   main {
     width: 100%;
-    max-width: 100vw;
-    padding-left: 0.75rem !important;
-    padding-right: 0.75rem !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
+    padding-right: max(12px, env(safe-area-inset-right)) !important;
   }
 
   img,
@@ -762,6 +781,12 @@ iframe {
   }
 
   .mobile-app-main {
+    width: 100vw !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding-top: 12px !important;
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
+    padding-right: max(12px, env(safe-area-inset-right)) !important;
     padding-bottom: calc(9.5rem + env(safe-area-inset-bottom)) !important;
   }
 
@@ -782,6 +807,17 @@ iframe {
   .mobile-app-main aside,
   .mobile-app-main article {
     scroll-margin-bottom: 10rem;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .mobile-app-main > section,
+  .mobile-app-main > aside,
+  .mobile-app-main > article {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    border-left-color: rgba(255, 255, 255, 0.08);
+    border-right-color: rgba(255, 255, 255, 0.08);
   }
 
   .mobile-app-main .rounded-\[32px\],
@@ -818,19 +854,19 @@ iframe {
   .notes-markdown li,
   .study-guide-markdown p,
   .study-guide-markdown li {
-    font-size: 0.94rem;
-    line-height: 1.72;
+    font-size: 16px;
+    line-height: 1.5;
   }
 
   .notes-markdown h1,
   .notes-markdown h2 {
-    font-size: 1.28rem;
+    font-size: 26px;
     line-height: 1.25;
   }
 
   .notes-markdown h3,
   .notes-markdown h4 {
-    font-size: 1.08rem;
+    font-size: 18px;
     line-height: 1.3;
   }
 
