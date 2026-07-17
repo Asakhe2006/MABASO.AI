@@ -546,7 +546,7 @@ function buildBrowserVoiceAnswer({
   const entries = buildBrowserVoiceEntries({ guideSections, exampleSections, transcript, formulaRows });
   if (!entries.length) {
     return {
-      answer: "Generate a study guide, transcript, formulas, or worked examples first. Then this browser voice page can answer from that lecture without paid AI calls.",
+      answer: "I can help with that. Add your lecture notes, transcript, formulas, or worked examples first, then I can teach from your own material. You can still ask a general study question here.",
       sources: [],
     };
   }
@@ -556,7 +556,7 @@ function buildBrowserVoiceAnswer({
     const formulaEntry = buildBrowserVoiceEntries({ formulaRows })[0];
     if (formulaEntry) {
       return {
-        answer: `From your lecture formula sheet for ${guideTopic || "this topic"}: ${formulaEntry.content}.`,
+        answer: `Sure, let's go through the formula clearly. According to your lecture, the key formula is ${formulaEntry.content}. The important thing is to understand what each part represents before you substitute values. Would you like me to show you how to use it in an example?`,
         sources: [formulaEntry.title],
       };
     }
@@ -573,13 +573,15 @@ function buildBrowserVoiceAnswer({
   const primarySnippet = extractBrowserVoiceSnippet(primaryMatch?.content || "", 2, 360);
   const secondarySnippet = secondaryMatch ? extractBrowserVoiceSnippet(secondaryMatch.content || "", 1, 220) : "";
   const answerParts = [
-    guideTopic ? `Here is the best match I found in ${guideTopic}.` : "Here is the best match I found in your lecture material.",
-    primaryMatch?.title ? `${primaryMatch.title}: ${primarySnippet}` : primarySnippet,
+    guideTopic ? `That's a great question. Based on your ${guideTopic} lecture, let me explain it simply.` : "That's a great question. Let me explain it simply.",
+    primarySnippet ? `The main idea is this: ${primarySnippet}` : "",
   ];
 
   if (secondaryMatch && secondarySnippet && secondaryMatch.id !== primaryMatch?.id) {
-    answerParts.push(`Also check ${secondaryMatch.title}: ${secondarySnippet}`);
+    answerParts.push(`Another useful point from your lecture is this: ${secondarySnippet}`);
   }
+  answerParts.push("Think of it as building understanding step by step, not just memorising words.");
+  answerParts.push("Does that make sense, or would you like another example?");
 
   return {
     answer: answerParts.filter(Boolean).join(" "),
@@ -24666,10 +24668,10 @@ export default function App() {
             </div>
             <details className="w-full rounded-2xl border border-white/10 bg-white/5 p-3 lg:max-w-3xl">
               <summary className="cursor-pointer list-none text-left">
-                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">Tool category</span>
+                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">Study Workspace ▼</span>
                 <span className="mt-1 flex items-center justify-between gap-3 text-sm font-semibold text-white">
-                  {activeWorkspaceToolGroup.label}
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Change</span>
+                  {activeWorkspaceToolGroup.label} ▼
+                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Change ▼</span>
                 </span>
               </summary>
               <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -24695,12 +24697,13 @@ export default function App() {
               <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {activeWorkspaceToolGroup.tools.map((tool) => (
                   <div key={tool.id} className={`rounded-2xl border p-3 transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
-                    <button type="button" onClick={() => openWorkspaceToolCard(tool)} className="flex w-full items-center gap-3 text-left">
+                    <button type="button" onClick={() => openWorkspaceToolCard(tool)} className="flex min-h-[64px] w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-white/[0.06]">
                       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-xs font-black text-emerald-100">{tool.diagram}</span>
-                      <span className="min-w-0 text-sm font-semibold text-white">{tool.label}</span>
+                      <span className="min-w-0 flex-1 text-sm font-semibold text-white">{tool.label}</span>
+                      <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-50">Open</span>
                     </button>
                     <details className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
-                      <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">About</summary>
+                      <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">About ▼</summary>
                       <p className="mt-2 text-xs leading-5 text-slate-400">{tool.description}</p>
                     </details>
                   </div>
