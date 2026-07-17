@@ -245,12 +245,24 @@ const ADMIN_DASHBOARD_RANGE_OPTIONS = [
 const outputLanguageOptions = [
   { value: "English", label: "English" },
   { value: "isiZulu", label: "isiZulu" },
-  { value: "Afrikaans", label: "Afrikaans" },
   { value: "isiXhosa", label: "isiXhosa" },
+  { value: "Afrikaans", label: "Afrikaans" },
   { value: "Sesotho", label: "Sesotho" },
+  { value: "Sepedi", label: "Sepedi" },
   { value: "Setswana", label: "Setswana" },
+  { value: "Siswati", label: "Siswati" },
+  { value: "Tshivenda", label: "Tshivenda" },
+  { value: "XiTsonga", label: "XiTsonga" },
+  { value: "isiNdebele", label: "isiNdebele" },
   { value: "French", label: "French" },
   { value: "Portuguese", label: "Portuguese" },
+  { value: "Spanish", label: "Spanish" },
+  { value: "German", label: "German" },
+  { value: "Italian", label: "Italian" },
+  { value: "Arabic", label: "Arabic" },
+  { value: "Hindi", label: "Hindi" },
+  { value: "Swahili", label: "Swahili" },
+  { value: "Mandarin Chinese", label: "Mandarin Chinese" },
 ];
 const DEFAULT_SUPPORT_CONTACT_CATEGORY = SUPPORT_CONTACT_CATEGORIES.includes("General feedback")
   ? "General feedback"
@@ -262,9 +274,21 @@ function resolveSpeechLocale(language = "English") {
   if (normalized === "afrikaans") return "af-ZA";
   if (normalized === "isixhosa") return "xh-ZA";
   if (normalized === "sesotho") return "st-ZA";
+  if (normalized === "sepedi") return "nso-ZA";
   if (normalized === "setswana") return "tn-ZA";
+  if (normalized === "siswati") return "ss-ZA";
+  if (normalized === "tshivenda") return "ve-ZA";
+  if (normalized === "xitsonga") return "ts-ZA";
+  if (normalized === "isindebele") return "nr-ZA";
   if (normalized === "french") return "fr-FR";
   if (normalized === "portuguese") return "pt-PT";
+  if (normalized === "spanish") return "es-ES";
+  if (normalized === "german") return "de-DE";
+  if (normalized === "italian") return "it-IT";
+  if (normalized === "arabic") return "ar-SA";
+  if (normalized === "hindi") return "hi-IN";
+  if (normalized === "swahili") return "sw-KE";
+  if (normalized === "mandarin chinese") return "zh-CN";
   return "en-ZA";
 }
 
@@ -578,6 +602,53 @@ const tabs = [
   { id: "collaboration", label: "Collaboration" },
 ];
 const workspaceTabs = tabs.filter((tab) => tab.id !== "collaboration");
+const WORKSPACE_TOOL_GROUPS = [
+  {
+    id: "study",
+    label: "Study Guide",
+    eyebrow: "Core learning",
+    description: "Study guide, transcript analyzer, formulas, and worked examples.",
+    tools: [
+      { id: "guide", label: "Study Guide Generator", diagram: "SG", targetTab: "guide", description: "Generate and read your main structured study guide." },
+      { id: "transcript", label: "Transcript Analyzer", diagram: "TA", targetTab: "transcript", description: "Inspect the cleaned transcript and source material." },
+      { id: "formulas", label: "Formulas", diagram: "fx", targetTab: "formulas", description: "Open important formulas, units, and exam-use notes." },
+      { id: "examples", label: "Worked Examples", diagram: "01", targetTab: "examples", description: "Study solved examples with step-by-step reasoning." },
+    ],
+  },
+  {
+    id: "ai",
+    label: "AI Generator",
+    eyebrow: "Practice and thinking",
+    description: "AI notes, flashcards, exam mind map, debate, oral exam, and marking tools.",
+    tools: [
+      { id: "chat", label: "AI Notes", diagram: "AI", targetTab: "chat", description: "Ask questions, upload photos, and continue study chat." },
+      { id: "flashcards", label: "Flashcards", diagram: "FC", targetTab: "flashcards", description: "Generate quick memory cards from your lecture." },
+      { id: "mindmap", label: "Exam Mind Map Generator", diagram: "MM", targetTab: "mindmap", description: "Create a visual exam revision map." },
+      { id: "quiz", label: "Exam & Image Marker", diagram: "MK", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
+      { id: "debate", label: "Debate Coach", diagram: "DB", targetTab: "chat", prompt: "Debate this topic with me. Challenge my reasoning, ask one question at a time, and then give a balanced conclusion.", description: "Use the assistant as a debate partner for arguments and counterarguments." },
+      { id: "oral", label: "Oral Exam", diagram: "OE", targetPage: "voice", description: "Practice spoken answers with the voice assistant." },
+      { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "chat", prompt: "Check my notes for missing concepts, weak definitions, unclear examples, and exam risks. Give a corrected study version.", description: "Ask AI to audit and improve your notes." },
+    ],
+  },
+  {
+    id: "advanced",
+    label: "Advanced Learning",
+    eyebrow: "Exports and media",
+    description: "PowerPoint presentations, academic reports, podcasts, and collaboration.",
+    tools: [
+      { id: "presentation", label: "PowerPoint Presentation", diagram: "PPT", targetTab: "presentation", description: "Create a slide deck from your lecture." },
+      { id: "report", label: "Academic Report", diagram: "AR", targetTab: "report", description: "Generate a structured academic report." },
+      { id: "podcast", label: "Podcast", diagram: "PX", targetTab: "podcast", description: "Turn the lecture into a study podcast." },
+      { id: "collaboration", label: "Collaboration", diagram: "CO", targetPage: "collaboration", description: "Open shared rooms, group notes, and room chat." },
+    ],
+  },
+];
+const WORKSPACE_TOOL_GROUP_BY_TAB = WORKSPACE_TOOL_GROUPS.reduce((accumulator, group) => {
+  group.tools.forEach((tool) => {
+    if (tool.targetTab) accumulator[tool.targetTab] = group.id;
+  });
+  return accumulator;
+}, {});
 const collaborationMaterialTabs = [
   { id: "guide", label: "Study Guide" },
   { id: "formulas", label: "Formulas" },
@@ -834,6 +905,7 @@ const TIMETABLE_EXAM_DEFAULT_MINUTES = 120;
 const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_LOADING_STORAGE_KEY = "mabaso-study-timetable-loader-v1";
+const TIMETABLE_VIEW_STORAGE_KEY = "mabaso-study-timetable-view-v1";
 const TIMETABLE_LOADING_MESSAGE_MS = 5000;
 const TIMETABLE_LOADING_MIN_MS = TIMETABLE_LOADING_MESSAGE_MS * 3;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
@@ -887,6 +959,31 @@ const TIMETABLE_LOADING_MESSAGE_ENDS = [
   "when you keep going after the easy part.",
   "when your plan becomes action.",
 ];
+const LECTURE_TIMETABLE_DAY_OPTIONS = TIMETABLE_DAY_KEYS.map((day) => ({
+  ...day,
+  label: `${day.id.charAt(0).toUpperCase()}${day.id.slice(1)}`,
+}));
+
+function normalizeLectureTimetableDay(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  const matchingDay = LECTURE_TIMETABLE_DAY_OPTIONS.find((day) => (
+    day.id === normalized || day.short.toLowerCase() === normalized || day.label.toLowerCase() === normalized
+  ));
+  return matchingDay?.id || "monday";
+}
+
+function formatLectureTimetableDay(value = "") {
+  const normalized = normalizeLectureTimetableDay(value);
+  return LECTURE_TIMETABLE_DAY_OPTIONS.find((day) => day.id === normalized)?.label || "Monday";
+}
+
+function loadStoredTimetableViewMode() {
+  try {
+    return window.localStorage.getItem(TIMETABLE_VIEW_STORAGE_KEY) === "lecture" ? "lecture" : "study";
+  } catch {
+    return "study";
+  }
+}
 const TIMETABLE_LOADING_DIRECT_MESSAGES = [
   "Starting is often harder than studying.",
   "Five minutes of study beats one hour of guilt.",
@@ -6106,6 +6203,7 @@ export default function App() {
   const [monitorSharedAudioDuringRecording, setMonitorSharedAudioDuringRecording] = useState(true);
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
+  const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -6201,7 +6299,7 @@ export default function App() {
   const [isSavingTimetable, setIsSavingTimetable] = useState(false);
   const [isDownloadingTimetableImage, setIsDownloadingTimetableImage] = useState(false);
   const [isReschedulingTimetableRecovery, setIsReschedulingTimetableRecovery] = useState(false);
-  const [timetableViewMode, setTimetableViewMode] = useState("study");
+  const [timetableViewMode, setTimetableViewMode] = useState(loadStoredTimetableViewMode);
   const [lectureTimetableEntries, setLectureTimetableEntries] = useState([]);
   const [isLoadingLectureTimetable, setIsLoadingLectureTimetable] = useState(false);
   const [isSavingLectureTimetable, setIsSavingLectureTimetable] = useState(false);
@@ -6270,6 +6368,7 @@ export default function App() {
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
   const hasLoadedTimetableRef = useRef(false);
+  const hasLoadedLectureTimetableRef = useRef(false);
   const loadedTimetableModeRef = useRef("");
   const timetablePlanningStateRef = useRef({ isEditing: false, hasPlanPreview: false });
   const timetableExportRef = useRef(null);
@@ -7351,6 +7450,7 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
+  const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
   useEffect(() => {
     if (activeTab !== "tutor") return;
     setActiveTab("guide");
@@ -9547,7 +9647,7 @@ export default function App() {
             <h3 className="mt-2 text-2xl font-semibold">My Timetable</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">Study planner, current subject countdown, missed-work recovery, and weekly study blocks.</p>
           </button>
-          <button type="button" onClick={() => { setTimetableViewMode("lecture"); if (!lectureTimetableEntries.length) loadLectureTimetable().catch(() => {}); }} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "lecture" ? "border-sky-300/45 bg-sky-400/15 text-white shadow-[0_0_28px_rgba(14,165,233,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
+          <button type="button" onClick={() => setTimetableViewMode("lecture")} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "lecture" ? "border-sky-300/45 bg-sky-400/15 text-white shadow-[0_0_28px_rgba(14,165,233,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
             <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Class schedule</p>
             <h3 className="mt-2 text-2xl font-semibold">Lecture Timetable</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">Manually save modules, lecturers, days, times, and venues.</p>
@@ -9569,20 +9669,41 @@ export default function App() {
               </div>
             </div>
             {lectureTimetableMessage ? <p className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-300/10 px-4 py-3 text-sm text-sky-50">{lectureTimetableMessage}</p> : null}
-            <div className="mt-5 space-y-3">
-              {lectureTimetableEntries.length ? lectureTimetableEntries.map((entry) => (
-                <div key={entry.id} className="grid gap-3 rounded-2xl border border-white/10 bg-black/35 p-3 xl:grid-cols-[1.1fr_1fr_130px_130px_130px_1fr_auto] xl:items-end">
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Module<input value={entry.module} onChange={(event) => updateLectureTimetableEntry(entry.id, "module", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Mathematics 101" /></label>
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Lecturer<input value={entry.lecturer} onChange={(event) => updateLectureTimetableEntry(entry.id, "lecturer", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Dr Mokoena" /></label>
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Day<select value={entry.day} onChange={(event) => updateLectureTimetableEntry(entry.id, "day", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">{TIMETABLE_DAY_KEYS.map((day) => <option key={day.id} value={day.label}>{day.label}</option>)}</select></label>
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Start<TimetableTimePicker value={entry.start} onChange={(value) => updateLectureTimetableEntry(entry.id, "start", value)} /></label>
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">End<TimetableTimePicker value={entry.end} onChange={(value) => updateLectureTimetableEntry(entry.id, "end", value)} /></label>
-                  <label className="block text-xs uppercase tracking-[0.16em] text-slate-400">Venue<input value={entry.venue} onChange={(event) => updateLectureTimetableEntry(entry.id, "venue", event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Room B12" /></label>
-                  <button type="button" onClick={() => removeLectureTimetableEntry(entry.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Delete</button>
-                </div>
-              )) : (
+            <div className="mt-5 overflow-x-auto rounded-2xl border border-white/10">
+              {lectureTimetableEntries.length ? (
+                <table className="min-w-[980px] w-full border-collapse text-left text-sm">
+                  <thead className="bg-slate-900/90 text-xs uppercase tracking-[0.18em] text-slate-400">
+                    <tr>
+                      <th className="border-b border-white/10 px-3 py-3">Module</th>
+                      <th className="border-b border-white/10 px-3 py-3">Lecturer</th>
+                      <th className="border-b border-white/10 px-3 py-3">Day</th>
+                      <th className="border-b border-white/10 px-3 py-3">Start</th>
+                      <th className="border-b border-white/10 px-3 py-3">End</th>
+                      <th className="border-b border-white/10 px-3 py-3">Venue</th>
+                      <th className="border-b border-white/10 px-3 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lectureTimetableEntries.map((entry) => (
+                      <tr key={entry.id} className="border-b border-white/10 bg-black/25 last:border-b-0">
+                        <td className="px-3 py-3 align-top"><input aria-label="Module" value={entry.module} onChange={(event) => updateLectureTimetableEntry(entry.id, "module", event.target.value)} className="w-full min-w-[170px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Mathematics 101" /></td>
+                        <td className="px-3 py-3 align-top"><input aria-label="Lecturer" value={entry.lecturer} onChange={(event) => updateLectureTimetableEntry(entry.id, "lecturer", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Dr Mokoena" /></td>
+                        <td className="px-3 py-3 align-top">
+                          <select aria-label="Day" value={normalizeLectureTimetableDay(entry.day)} onChange={(event) => updateLectureTimetableEntry(entry.id, "day", event.target.value)} className="w-full min-w-[130px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none">
+                            {LECTURE_TIMETABLE_DAY_OPTIONS.map((day) => <option key={day.id} value={day.id}>{day.label}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.start} onChange={(value) => updateLectureTimetableEntry(entry.id, "start", value)} /></td>
+                        <td className="px-3 py-3 align-top"><TimetableTimePicker value={entry.end} onChange={(value) => updateLectureTimetableEntry(entry.id, "end", value)} /></td>
+                        <td className="px-3 py-3 align-top"><input aria-label="Venue" value={entry.venue} onChange={(event) => updateLectureTimetableEntry(entry.id, "venue", event.target.value)} className="w-full min-w-[150px] rounded-xl border border-white/10 bg-black/45 px-3 py-2 text-sm text-white outline-none" placeholder="Room B12" /></td>
+                        <td className="px-3 py-3 text-right align-top"><button type="button" onClick={() => removeLectureTimetableEntry(entry.id)} className="rounded-xl border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-100">Delete</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
                 <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300">
-                  No lecture timetable entries yet. Press Add Lecture to start.
+                  {isLoadingLectureTimetable ? "Loading your lecture timetable..." : "No lecture timetable entries yet. Press Add Lecture to start."}
                 </div>
               )}
             </div>
@@ -13897,6 +14018,21 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    const matchingGroupId = WORKSPACE_TOOL_GROUP_BY_TAB[activeTab];
+    if (matchingGroupId && matchingGroupId !== workspaceToolGroup) {
+      setWorkspaceToolGroup(matchingGroupId);
+    }
+  }, [activeTab, workspaceToolGroup]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TIMETABLE_VIEW_STORAGE_KEY, timetableViewMode === "lecture" ? "lecture" : "study");
+    } catch {
+      // Keep the timetable usable if local storage is unavailable.
+    }
+  }, [timetableViewMode]);
+
+  useEffect(() => {
     if (!authEmailInput.trim()) return;
     window.localStorage.setItem(REMEMBERED_EMAIL_KEY, authEmailInput.trim());
   }, [authEmailInput]);
@@ -13920,6 +14056,7 @@ export default function App() {
     const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
     historyOwnerEmailRef.current = normalizedEmail;
     hasLoadedTimetableRef.current = false;
+    hasLoadedLectureTimetableRef.current = false;
     loadedTimetableModeRef.current = "";
     skipNextHistorySyncRef.current = true;
     const cachedHistoryItems = loadHistoryItems(normalizedEmail);
@@ -15378,7 +15515,7 @@ export default function App() {
     id: `lecture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     module: "",
     lecturer: "",
-    day: "Monday",
+    day: "monday",
     start: "08:00",
     end: "09:00",
     venue: "",
@@ -15389,7 +15526,7 @@ export default function App() {
     id: String(entry?.id || `lecture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
     module: String(entry?.module || entry?.subject || "").slice(0, 120),
     lecturer: String(entry?.lecturer || "").slice(0, 120),
-    day: String(entry?.day || "Monday").slice(0, 24),
+    day: normalizeLectureTimetableDay(entry?.day || "monday"),
     start: String(entry?.start || entry?.time || "").slice(0, 12),
     end: String(entry?.end || "").slice(0, 12),
     venue: String(entry?.venue || entry?.room || "").slice(0, 120),
@@ -15416,6 +15553,7 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your lecture timetable.");
       setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []));
+      hasLoadedLectureTimetableRef.current = true;
       setLectureTimetableMessage("");
     } catch (err) {
       setLectureTimetableMessage(getReadableRequestError(err) || "Could not load your lecture timetable.");
@@ -15440,6 +15578,7 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your lecture timetable.");
       setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || entries));
+      hasLoadedLectureTimetableRef.current = true;
       setLectureTimetableMessage("Lecture timetable saved.");
     } catch (err) {
       setLectureTimetableMessage(getReadableRequestError(err) || "Could not save your lecture timetable.");
@@ -16991,6 +17130,16 @@ export default function App() {
     }
     loadStudyTimetable().catch(() => {});
   }, [authAvailableModes, authChecked, authSessionMode, authToken, billingSubscription?.plan_id, billingUsage?.plan_id, currentPage]);
+
+  useEffect(() => {
+    if (!authChecked || !authToken) {
+      hasLoadedLectureTimetableRef.current = false;
+      return;
+    }
+    if (currentPage !== "timetable" || timetableViewMode !== "lecture") return;
+    if (hasLoadedLectureTimetableRef.current || isLoadingLectureTimetable) return;
+    loadLectureTimetable().catch(() => {});
+  }, [authChecked, authToken, currentPage, timetableViewMode, isLoadingLectureTimetable]);
 
   const buildPlanLockedMessage = (itemLabel, requiredPlan = "a higher plan") => (
     `${itemLabel} is locked on your current ${getCurrentPlanEntitlements().label} plan. Upgrade to ${requiredPlan} to use it.`
@@ -22185,6 +22334,23 @@ export default function App() {
     openProtectedAppPage("workspace");
   };
 
+  const openWorkspaceToolCard = (tool) => {
+    if (!tool) return;
+    if (tool.targetPage === "collaboration") {
+      openCollaborationPage();
+      return;
+    }
+    if (tool.targetPage === "voice") {
+      openProtectedAppPage("voice");
+      return;
+    }
+    if (tool.prompt) {
+      setChatQuestion(tool.prompt);
+      setStatus(`${tool.label} opened in AI Notes.`);
+    }
+    openTutorWorkspaceTool(tool.targetTab || "guide");
+  };
+
   const copyTeacherTranscript = async () => {
     const transcriptText = teacherTranscriptText.trim();
     if (!transcriptText) {
@@ -24243,10 +24409,35 @@ export default function App() {
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
-            <div className="stable-horizontal-scroll pb-1"><div className="flex min-w-max gap-2">{workspaceTabs.map((tab) => <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`rounded-full px-4 py-2 text-sm transition ${activeTab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>{tab.label}</button>)}<button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 transition hover:bg-emerald-300/15">Collaboration</button></div></div>
+            <div className="grid w-full gap-2 sm:grid-cols-3 lg:max-w-3xl">
+              {WORKSPACE_TOOL_GROUPS.map((group) => (
+                <button key={group.id} type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`rounded-2xl border px-4 py-3 text-left transition ${workspaceToolGroup === group.id ? "border-emerald-300/35 bg-emerald-300/12 text-white" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}>
+                  <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">{group.eyebrow}</span>
+                  <span className="mt-1 block text-sm font-semibold">{group.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="mt-6 space-y-5">
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-4">
+              <div className="force-mobile-stack flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">{activeWorkspaceToolGroup.eyebrow}</p>
+                  <h3 className="mt-2 text-2xl font-semibold text-white">{activeWorkspaceToolGroup.label}</h3>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{activeWorkspaceToolGroup.description}</p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {activeWorkspaceToolGroup.tools.map((tool) => (
+                  <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`group rounded-2xl border p-4 text-left transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
+                    <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-sm font-black text-emerald-100">{tool.diagram}</span>
+                    <span className="mt-4 block text-base font-semibold text-white">{tool.label}</span>
+                    <span className="mt-2 block text-xs leading-5 text-slate-400">{tool.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="min-w-0 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
               <>
                 <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">

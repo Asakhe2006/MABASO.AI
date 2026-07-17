@@ -889,7 +889,7 @@ Do not force sections unnecessarily.
 OUTPUT STYLE
 - Return clean Markdown.
 - Start with one H1 line only: # Topic Title
-- After the title, include a short overview section using either ## SHORT SUMMARY or ## Introduction / Overview.
+- After the title, include a short overview section. If the output language is English, use ## SHORT SUMMARY or ## Introduction / Overview. If the output language is not English, translate the visible heading naturally into that language.
 - Use clear headings and subheadings.
 - Mix bullets with short explanations.
 - Keep paragraphs short.
@@ -922,17 +922,19 @@ MOBILE-FIRST READABILITY RULES
 - Prioritize readability, mobile responsiveness, visual clarity, professional academic structure, and simple scanning over compactness.
 
 MANDATORY COMPATIBILITY RULES
-- Because the app builds formulas, worked-example, quiz, tutor-session, and presentation assets from the guide, keep these exact headings whenever the content supports them:
+- Because the app builds formulas, worked-example, quiz, tutor-session, and presentation assets from the guide, keep the meaning and order of these required sections whenever the content supports them:
   - ## IMPORTANT FORMULAS
   - ## WORKED EXAMPLES
   - ## STEP-BY-STEP EXPLANATIONS
   - ## PRACTICE QUESTIONS AND ANSWERS
-- If the topic includes formulas, always include ## IMPORTANT FORMULAS.
-- If the topic includes calculations, derivations, worked procedures, or problem-solving, always include ## WORKED EXAMPLES.
-- Always include ## STEP-BY-STEP EXPLANATIONS with 3 to 6 clear sequenced steps or step-labeled bullets that teach the learner how to move through the method, process, argument, or reasoning. This section is mandatory and is never optional.
-- Always include ## PRACTICE QUESTIONS AND ANSWERS with 4 to 8 short exam-style questions and brief model answers.
+- If the output language is English, use the exact English heading names above.
+- If the output language is not English, translate every visible heading naturally into the requested language. Do not leave headings such as SHORT SUMMARY, IMPORTANT FORMULAS, WORKED EXAMPLES, STEP-BY-STEP EXPLANATIONS, PRACTICE QUESTIONS AND ANSWERS, REAL-WORLD APPLICATIONS, COMMON MISTAKES, EXAM TIPS, or TEACHER NOTES in English.
+- If the topic includes formulas, always include an Important Formulas section in the selected language.
+- If the topic includes calculations, derivations, worked procedures, or problem-solving, always include a Worked Examples section in the selected language.
+- Always include a Step-by-Step Explanations section in the selected language with 3 to 6 clear sequenced steps or step-labeled bullets that teach the learner how to move through the method, process, argument, or reasoning. This section is mandatory and is never optional.
+- Always include a Practice Questions and Answers section in the selected language with 4 to 8 short exam-style questions and brief model answers.
 - Do not include a FLASHCARDS section in the study guide. Flashcards are generated separately only when the user presses Generate Flashcards.
-- Always include ## REAL-WORLD APPLICATIONS at the end. Explain careers, industries, professional use, and why students are learning the topic. Use South African examples when appropriate, such as Shoprite, Pick n Pay, Checkers, Capitec, FNB, Standard Bank, SARS, Transnet, MultiChoice, MTN, and Vodacom when they genuinely fit the subject.
+- Always include a Real-World Applications section at the end in the selected language. Explain careers, industries, professional use, and why students are learning the topic. Use South African examples when appropriate, such as Shoprite, Pick n Pay, Checkers, Capitec, FNB, Standard Bank, SARS, Transnet, MultiChoice, MTN, and Vodacom when they genuinely fit the subject.
 
 PREMIUM DEPTH RULES
 - Make the guide detailed enough for serious exam revision, especially when the supplied notes, slides, transcript, or past papers contain enough information.
@@ -2758,10 +2760,39 @@ SUPPORTED_OUTPUT_LANGUAGES: dict[str, str] = {
     "sepedi": "Sepedi",
     "northern sotho": "Sepedi",
     "nso": "Sepedi",
+    "siswati": "Siswati",
+    "swati": "Siswati",
+    "ss": "Siswati",
+    "tshivenda": "Tshivenda",
+    "venda": "Tshivenda",
+    "ve": "Tshivenda",
+    "xitsonga": "XiTsonga",
+    "tsonga": "XiTsonga",
+    "xi tsonga": "XiTsonga",
+    "ts": "XiTsonga",
+    "isindebele": "isiNdebele",
+    "ndebele": "isiNdebele",
+    "nr": "isiNdebele",
     "portuguese": "Portuguese",
     "pt": "Portuguese",
     "french": "French",
     "fr": "French",
+    "spanish": "Spanish",
+    "es": "Spanish",
+    "german": "German",
+    "de": "German",
+    "italian": "Italian",
+    "it": "Italian",
+    "arabic": "Arabic",
+    "ar": "Arabic",
+    "hindi": "Hindi",
+    "hi": "Hindi",
+    "swahili": "Swahili",
+    "sw": "Swahili",
+    "mandarin": "Mandarin Chinese",
+    "mandarin chinese": "Mandarin Chinese",
+    "chinese": "Mandarin Chinese",
+    "zh": "Mandarin Chinese",
 }
 
 
