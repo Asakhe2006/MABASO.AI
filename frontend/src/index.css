@@ -500,6 +500,16 @@ iframe {
 
 .study-guide-section-card {
   border-left: 5px solid var(--study-blue);
+  min-height: 96px;
+}
+
+.study-guide-section-card > summary {
+  min-height: 76px;
+}
+
+.study-guide-section-card .study-guide-section-heading {
+  font-size: 1.12rem;
+  line-height: 1.35;
 }
 
 .study-guide-section-info {
@@ -733,9 +743,12 @@ iframe {
   .mobile-app-main > section,
   .mobile-app-main > aside,
   .mobile-app-main > article,
+  .mobile-app-main > div,
   .mobile-app-main section > aside,
+  .mobile-app-main section > div,
   .workspace-shell,
   .workspace-layout,
+  .workspace-mobile-tool-nav,
   .content-panel {
     width: 100% !important;
     max-width: 100% !important;
@@ -744,6 +757,7 @@ iframe {
   }
 
   .mobile-app-main > section,
+  .mobile-app-main > div,
   .mobile-app-main section > aside,
   .workspace-shell {
     padding-left: 10px !important;
@@ -857,6 +871,7 @@ iframe {
   .workspace-layout,
   .workspace-layout > *,
   .workspace-tool-grid,
+  .workspace-mobile-tool-nav,
   .workspace-mobile-accordion,
   .content-panel,
   .study-guide-shell,
@@ -867,6 +882,15 @@ iframe {
     max-width: 100% !important;
     margin-left: 0 !important;
     margin-right: 0 !important;
+  }
+
+  .study-guide-section-card {
+    min-height: 108px;
+    padding: 16px !important;
+  }
+
+  .study-guide-section-card > summary {
+    min-height: 82px;
   }
 
   .workspace-shell {

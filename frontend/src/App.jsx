@@ -672,7 +672,7 @@ const MOBILE_APP_NAV_ITEMS = [
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
   { id: "voice", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
-  { id: "more", label: "More", icon: Ellipsis },
+  { id: "more", label: "...", icon: Ellipsis },
 ];
 const MOBILE_MORE_NAV_ITEMS = [
   { id: "capture", label: "Capture", icon: UploadCloud },
@@ -6222,6 +6222,7 @@ export default function App() {
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [regeneratingGuideSectionKey, setRegeneratingGuideSectionKey] = useState("");
   const [isGeneratingPresentation, setIsGeneratingPresentation] = useState(false);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
   const [isGeneratingTeacherLesson, setIsGeneratingTeacherLesson] = useState(false);
@@ -15542,12 +15543,8 @@ export default function App() {
     return planEntitlements[getCurrentPlanTier()] || planEntitlements.free;
   }
 
-  function canUsePremiumStudyImages() {
-    return getCurrentPlanTier() !== "free";
-  }
-
   function getVisibleStudyImages(images = studyImages) {
-    return canUsePremiumStudyImages() ? (images || []) : [];
+    return images || [];
   }
 
   function getAllowedPodcastSpeakerCount() {
@@ -22061,6 +22058,82 @@ export default function App() {
     return answer;
   };
 
+  const replaceGuideSectionInSummary = (guideText, targetSection, nextContent) => {
+    const originalText = String(guideText || "");
+    const cleanedContent = String(nextContent || "").trim();
+    const targetKey = targetSection?.normalizedHeading || normalizeGuideHeading(targetSection?.displayHeading || targetSection?.heading);
+    if (!originalText.trim() || !targetKey || !cleanedContent) {
+      return [originalText, `\n\n## ${targetSection?.displayHeading || targetSection?.heading || "Updated Subtopic"}\n${cleanedContent}`].filter(Boolean).join("");
+    }
+
+    const lines = originalText.split(/\r?\n/);
+    const headingIndex = lines.findIndex((line) => {
+      const parsedHeading = parseGuideHeadingLine(line, { allowUnknownHeadings: true });
+      return parsedHeading && normalizeGuideHeading(parsedHeading.heading || parsedHeading.originalHeading) === targetKey;
+    });
+
+    if (headingIndex < 0) {
+      return `${originalText.trim()}\n\n## ${targetSection?.displayHeading || targetSection?.heading || "Updated Subtopic"}\n${cleanedContent}`;
+    }
+
+    let nextHeadingIndex = lines.length;
+    for (let index = headingIndex + 1; index < lines.length; index += 1) {
+      const parsedHeading = parseGuideHeadingLine(lines[index], { allowUnknownHeadings: true });
+      if (parsedHeading) {
+        nextHeadingIndex = index;
+        break;
+      }
+    }
+
+    return [
+      ...lines.slice(0, headingIndex + 1),
+      "",
+      cleanedContent,
+      "",
+      ...lines.slice(nextHeadingIndex),
+    ].join("\n").replace(/\n{4,}/g, "\n\n\n").trim();
+  };
+
+  const regenerateGuideSection = async (section) => {
+    const sectionKey = section?.normalizedHeading || normalizeGuideHeading(section?.displayHeading || section?.heading);
+    const sectionTitle = section?.displayHeading || section?.heading || "this subtopic";
+    if (!sectionKey || regeneratingGuideSectionKey || loading || isGeneratingSummary) return;
+    setError("");
+    setStatus(`Regenerating ${sectionTitle}...`);
+    setRegeneratingGuideSectionKey(sectionKey);
+    try {
+      const answer = await requestStudyAssistantAnswer({
+        question: [
+          `Regenerate only the study-guide subtopic "${sectionTitle}".`,
+          "Improve the explanation quality, make it human-readable, and keep it useful for exams.",
+          "Return only the replacement content for this subtopic.",
+          "Do not include the subtopic heading, source labels, markdown title markers, or unrelated sections.",
+          "Use clear paragraphs, readable equations, examples where useful, and no raw *, #, or % formatting noise.",
+          "",
+          "Current subtopic content:",
+          section?.content || "",
+        ].join("\n"),
+        history: [],
+        referenceImages: getSafeAiReferenceImageUrls(visualReferences),
+        deliveryMode: "chat",
+        currentSection: sectionTitle,
+        responseLength: "detailed",
+      });
+      const cleanedAnswer = normalizeRenderedMathText(prettifyMathText(answer))
+        .replace(/^#{1,6}\s+.+$/m, "")
+        .replace(/^\*\*.+?\*\*\s*:?\s*/m, "")
+        .trim();
+      if (!cleanedAnswer) throw new Error("MABASO could not regenerate this subtopic clearly. Please try again.");
+      setSummary((current) => replaceGuideSectionInSummary(current || summary || formattedGuide, section, cleanedAnswer));
+      setStatus(`${sectionTitle} regenerated.`);
+    } catch (err) {
+      const readableError = getReadableRequestError(err);
+      setError(readableError || `Could not regenerate ${sectionTitle}. Please try again.`);
+    } finally {
+      setRegeneratingGuideSectionKey("");
+    }
+  };
+
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
     if (!question) {
@@ -24735,7 +24808,7 @@ export default function App() {
               </div>
             </aside>
             <div className="min-w-0 space-y-5">
-            <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-4">
+            <div className="workspace-mobile-tool-nav rounded-[28px] border border-white/10 bg-slate-950/70 p-4 lg:hidden">
               <div className="force-mobile-stack flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">{activeWorkspaceToolGroup.eyebrow}</p>
@@ -24743,7 +24816,7 @@ export default function App() {
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{activeWorkspaceToolGroup.description}</p>
                 </div>
               </div>
-              <div className="workspace-mobile-accordion mt-4 space-y-3 lg:hidden">
+              <div className="workspace-mobile-accordion mt-4 space-y-3">
                 {WORKSPACE_TOOL_GROUPS.map((group) => {
                   const isOpenGroup = workspaceToolGroup === group.id;
                   return (
@@ -24765,7 +24838,7 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="workspace-tool-grid mt-4 hidden gap-3 sm:grid-cols-2 lg:grid xl:grid-cols-4">
+              <div className="hidden">
                 {activeWorkspaceToolGroup.tools.map((tool) => (
                   <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`group flex min-h-[118px] w-full flex-col justify-between rounded-2xl border p-4 text-left transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
                     <span className="flex items-start gap-3">
@@ -24851,8 +24924,8 @@ export default function App() {
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
-                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); generateStudyGuide(); }} disabled={loading} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700 disabled:opacity-50" title="Regenerate the study guide">↻</button> : null}
-                                    <span className="text-lg font-semibold text-slate-500">⌄</span>
+                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50" title="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? "..." : "Regenerate"}</button> : null}
+                                    <span className="text-xl font-semibold text-slate-500">{"\u2304"}</span>
                                   </div>
                                 </div>
                               </summary>
