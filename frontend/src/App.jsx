@@ -636,11 +636,19 @@ const WORKSPACE_TOOL_GROUPS = [
     id: "advanced",
     label: "Advanced Learning",
     eyebrow: "Exports and media",
-    description: "PowerPoint presentations, academic reports, podcasts, and collaboration.",
+    description: "PowerPoint presentations, academic reports, and podcasts.",
     tools: [
       { id: "presentation", label: "PowerPoint Presentation", diagram: "PPT", targetTab: "presentation", description: "Create a slide deck from your lecture." },
       { id: "report", label: "Academic Report", diagram: "AR", targetTab: "report", description: "Generate a structured academic report." },
       { id: "podcast", label: "Podcast", diagram: "PX", targetTab: "podcast", description: "Turn the lecture into a study podcast." },
+    ],
+  },
+  {
+    id: "collaboration",
+    label: "Collaboration",
+    eyebrow: "Shared study",
+    description: "Shared rooms, group notes, and room chat.",
+    tools: [
       { id: "collaboration", label: "Collaboration", diagram: "CO", targetPage: "collaboration", description: "Open shared rooms, group notes, and room chat." },
     ],
   },
@@ -660,15 +668,18 @@ const collaborationMaterialTabs = [
 ];
 const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"];
 const MOBILE_APP_NAV_ITEMS = [
-  { id: "capture", label: "Capture", icon: UploadCloud },
+  { id: "capture", label: "Home", icon: UploadCloud },
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
   { id: "voice", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
-  { id: "materials", label: "My Materials", icon: FolderOpen },
+  { id: "more", label: "More", icon: FolderOpen },
 ];
 const MOBILE_MORE_NAV_ITEMS = [
-  { id: "payments", label: "Pay", icon: CreditCard },
+  { id: "capture", label: "Capture", icon: UploadCloud },
+  { id: "materials", label: "My Materials", icon: FolderOpen },
+  { id: "payments", label: "Payments", icon: CreditCard },
   { id: "collaboration", label: "Rooms", icon: UsersRound, requiresResults: true },
+  { id: "upgrade", label: "Pro", icon: CreditCard },
 ];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
 const reportTypes = [
@@ -6206,6 +6217,7 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
+  const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -24446,6 +24458,15 @@ export default function App() {
       : "";
   const renderMobileAppNavigation = () => {
     const handleMobileNavClick = (item) => {
+      if (item.id === "more") {
+        setIsMobileMoreMenuOpen((current) => !current);
+        return;
+      }
+      setIsMobileMoreMenuOpen(false);
+      if (item.id === "upgrade") {
+        openUpgradeModal();
+        return;
+      }
       if (item.id === "payments") {
         openPaymentsNavigationTarget();
         return;
@@ -24460,7 +24481,11 @@ export default function App() {
     const renderItem = (item) => {
       const Icon = item.icon;
       const disabled = Boolean(item.requiresResults && !hasResults);
-      const active = currentPage === item.id || (item.id === "timetable" && Boolean(activeTimetableNavItem));
+      const morePageActive = item.id === "more" && (
+        isMobileMoreMenuOpen
+        || ["materials", "payments", "collaboration"].includes(currentPage)
+      );
+      const active = morePageActive || currentPage === item.id || (item.id === "timetable" && Boolean(activeTimetableNavItem));
       return (
         <button
           key={item.id}
@@ -24479,14 +24504,29 @@ export default function App() {
 
     return (
       <nav className="mobile-app-nav sm:hidden" aria-label="Mabaso mobile navigation">
+        {isMobileMoreMenuOpen ? (
+          <div className="mobile-app-nav__more-menu" role="menu" aria-label="More Mabaso pages">
+            {MOBILE_MORE_NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const disabled = Boolean(item.requiresResults && !hasResults);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleMobileNavClick(item)}
+                  disabled={disabled}
+                  className="mobile-app-nav__more-item"
+                  role="menuitem"
+                >
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         <div className="mobile-app-nav__rail">
           {MOBILE_APP_NAV_ITEMS.map(renderItem)}
-        </div>
-        <div className="mobile-app-nav__secondary">
-          {MOBILE_MORE_NAV_ITEMS.map(renderItem)}
-          <button type="button" onClick={openUpgradeModal} className="mobile-app-nav__upgrade">
-            Pro
-          </button>
         </div>
       </nav>
     );
@@ -24660,32 +24700,41 @@ export default function App() {
             </aside>
         </section> : null}
 
-        {currentPage === "workspace" ? <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-          <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
+        {currentPage === "workspace" ? <section className="workspace-shell overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+          <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-start gap-4">
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
             </div>
-            <details className="w-full rounded-2xl border border-white/10 bg-white/5 p-3 lg:max-w-3xl">
-              <summary className="cursor-pointer list-none text-left">
-                <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">Study Workspace ▼</span>
-                <span className="mt-1 flex items-center justify-between gap-3 text-sm font-semibold text-white">
-                  {activeWorkspaceToolGroup.label} ▼
-                  <span className="text-xs uppercase tracking-[0.2em] text-slate-400">Change ▼</span>
-                </span>
-              </summary>
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                {WORKSPACE_TOOL_GROUPS.map((group) => (
-                  <button key={group.id} type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`rounded-2xl border px-4 py-3 text-left transition ${workspaceToolGroup === group.id ? "border-emerald-300/35 bg-emerald-300/12 text-white" : "border-white/10 bg-slate-950/65 text-slate-200 hover:bg-white/10"}`}>
-                    <span className="block text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-100/70">{group.eyebrow}</span>
-                    <span className="mt-1 block text-sm font-semibold">{group.label}</span>
-                  </button>
-                ))}
-              </div>
-            </details>
+            <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">{activeWorkspaceToolGroup.label}</div>
           </div>
 
-          <div className="mt-6 space-y-5">
+          <div className="workspace-layout mt-6 grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <aside className="workspace-sidebar hidden lg:block">
+              <div className="sticky top-5 rounded-[26px] border border-white/10 bg-slate-950/78 p-4">
+                {WORKSPACE_TOOL_GROUPS.map((group) => (
+                  <div key={group.id} className="border-b border-white/10 py-4 first:pt-0 last:border-b-0 last:pb-0">
+                    <button type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.22em] transition ${workspaceToolGroup === group.id ? "bg-emerald-300/10 text-emerald-100" : "text-slate-400 hover:bg-white/[0.05] hover:text-white"}`}>
+                      <span>{group.eyebrow}</span>
+                      <span>{workspaceToolGroup === group.id ? "Active" : ""}</span>
+                    </button>
+                    <div className="mt-2 space-y-1">
+                      {group.tools.map((tool) => {
+                        const isActiveTool = activeTab === tool.targetTab;
+                        return (
+                          <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`flex min-h-[48px] w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition ${isActiveTool ? "border border-emerald-300/30 bg-emerald-300/12 text-white" : "text-slate-300 hover:bg-white/[0.06] hover:text-white"}`}>
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-[10px] font-black text-emerald-100">{tool.diagram}</span>
+                            <span className="min-w-0 flex-1 text-sm font-semibold">{tool.label}</span>
+                            <span className="text-emerald-200">→</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+            <div className="min-w-0 space-y-5">
             <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-4">
               <div className="force-mobile-stack flex items-start justify-between gap-3">
                 <div>
@@ -24694,19 +24743,40 @@ export default function App() {
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">{activeWorkspaceToolGroup.description}</p>
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                {activeWorkspaceToolGroup.tools.map((tool) => (
-                  <div key={tool.id} className={`rounded-2xl border p-3 transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
-                    <button type="button" onClick={() => openWorkspaceToolCard(tool)} className="flex min-h-[64px] w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition hover:bg-white/[0.06]">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-xs font-black text-emerald-100">{tool.diagram}</span>
-                      <span className="min-w-0 flex-1 text-sm font-semibold text-white">{tool.label}</span>
-                      <span className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-50">Open</span>
-                    </button>
-                    <details className="mt-3 rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2">
-                      <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">About ▼</summary>
-                      <p className="mt-2 text-xs leading-5 text-slate-400">{tool.description}</p>
+              <div className="workspace-mobile-accordion mt-4 space-y-3 lg:hidden">
+                {WORKSPACE_TOOL_GROUPS.map((group) => {
+                  const isOpenGroup = workspaceToolGroup === group.id;
+                  return (
+                    <details key={group.id} open={isOpenGroup} className="rounded-[22px] border border-white/10 bg-slate-950/75 p-3">
+                      <summary onClick={(event) => { event.preventDefault(); setWorkspaceToolGroup(group.id); }} className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-2 text-sm font-semibold text-white">
+                        <span>{isOpenGroup ? "\u25BE" : "\u25B8"} {group.label}</span>
+                        <span className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{group.eyebrow}</span>
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        {group.tools.map((tool) => (
+                          <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`flex min-h-[58px] w-full items-center gap-3 rounded-2xl border px-3 py-2 text-left transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10 text-white" : "border-white/10 bg-black/25 text-slate-200 hover:bg-white/[0.06]"}`}>
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-[10px] font-black text-emerald-100">{tool.diagram}</span>
+                            <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-white">{tool.label}</span><span className="mt-1 block text-xs leading-5 text-slate-400">{tool.description}</span></span>
+                            <span className="text-lg text-emerald-200">→</span>
+                          </button>
+                        ))}
+                      </div>
                     </details>
-                  </div>
+                  );
+                })}
+              </div>
+              <div className="workspace-tool-grid mt-4 hidden gap-3 sm:grid-cols-2 lg:grid xl:grid-cols-4">
+                {activeWorkspaceToolGroup.tools.map((tool) => (
+                  <button key={tool.id} type="button" onClick={() => openWorkspaceToolCard(tool)} className={`group flex min-h-[118px] w-full flex-col justify-between rounded-2xl border p-4 text-left transition ${activeTab === tool.targetTab ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-black/25 hover:border-white/20 hover:bg-white/[0.06]"}`}>
+                    <span className="flex items-start gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-xs font-black text-emerald-100">{tool.diagram}</span>
+                      <span className="min-w-0">
+                        <span className="block text-base font-semibold text-white">{tool.label}</span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-400">{tool.description}</span>
+                      </span>
+                    </span>
+                    <span className="mt-3 self-end text-lg text-emerald-200 transition group-hover:translate-x-1">→</span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -24773,18 +24843,44 @@ export default function App() {
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <summary className="cursor-pointer list-none">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
+                                <div className="flex min-h-[58px] items-center justify-between gap-3">
+                                  <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-sm font-black text-emerald-700">{index + 1}</span>
+                                    <div className="min-w-0">
                                     <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
-                                    <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{getGuideSectionSourceLabel(section)}</p>
+                                    <p className="mt-1 text-xs font-semibold text-slate-500">{getGuideSectionSourceLabel(section)}</p>
+                                    </div>
                                   </div>
-                                  {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => event.preventDefault()} className="shrink-0 rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700" title="Explain this subtopic another way">↻</button> : null}
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => event.preventDefault()} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700" title="Explain this subtopic another way">↻</button> : null}
+                                    <span className="text-lg font-semibold text-slate-500">⌄</span>
+                                  </div>
                                 </div>
                               </summary>
                               <div className="phone-safe-copy mt-4 max-w-none">
                                 <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
+                              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                <details className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">▶ Practice & Thinking</summary>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {["chat", "flashcards", "quiz", "mindmap"].map((tabId) => {
+                                      const tool = WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools).find((item) => item.targetTab === tabId);
+                                      return tool ? <button key={`${section.heading}-${tabId}`} type="button" onClick={() => openWorkspaceToolCard(tool)} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{tool.label}</button> : null;
+                                    })}
+                                  </div>
+                                </details>
+                                <details className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">▶ Exports & Media</summary>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {["presentation", "report", "podcast"].map((tabId) => {
+                                      const tool = WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools).find((item) => item.targetTab === tabId);
+                                      return tool ? <button key={`${section.heading}-${tabId}`} type="button" onClick={() => openWorkspaceToolCard(tool)} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{tool.label}</button> : null;
+                                    })}
+                                  </div>
+                                </details>
+                              </div>
                             </details>
                           );
                         })}
