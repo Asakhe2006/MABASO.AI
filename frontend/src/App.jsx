@@ -672,7 +672,7 @@ const MOBILE_APP_NAV_ITEMS = [
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
   { id: "voice", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
-  { id: "more", label: "...", icon: Ellipsis },
+  { id: "more", label: "More", icon: Ellipsis },
 ];
 const MOBILE_MORE_NAV_ITEMS = [
   { id: "capture", label: "Capture", icon: UploadCloud },
@@ -6225,6 +6225,7 @@ export default function App() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [regeneratingGuideSectionKey, setRegeneratingGuideSectionKey] = useState("");
+  const [copiedGuideSectionKey, setCopiedGuideSectionKey] = useState("");
   const [isGeneratingPresentation, setIsGeneratingPresentation] = useState(false);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState(false);
   const [isGeneratingTeacherLesson, setIsGeneratingTeacherLesson] = useState(false);
@@ -6262,6 +6263,7 @@ export default function App() {
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
   const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
+  const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
   const [activeRoomId, setActiveRoomId] = useState("");
@@ -8428,6 +8430,7 @@ export default function App() {
     setHistoryItems([]);
     setActiveHistoryId("");
     setStatus("History cleared for this email.");
+    setIsClearHistoryConfirmOpen(false);
   };
 
   const removeHistoryItem = (itemId) => {
@@ -8477,7 +8480,7 @@ export default function App() {
   );
 
   const historyPanel = showHistoryPanel ? (
-    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="materials-panel overflow-hidden p-3 sm:p-5 xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-4">
           <button
@@ -8492,15 +8495,26 @@ export default function App() {
           </button>
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Materials</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">All saved history for this email.</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Open any saved lecture workspace, download its study pack, or remove old material you no longer need.</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">Saved materials</h2>
           </div>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
           <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{historyItems.length} saved item{historyItems.length === 1 ? "" : "s"}</div>
-          <button type="button" onClick={clearHistory} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Clear History</button>
+          <button type="button" onClick={() => setIsClearHistoryConfirmOpen(true)} disabled={!historyItems.length} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Clear History</button>
         </div>
       </div>
+      {isClearHistoryConfirmOpen ? (
+        <div className="confirm-overlay" role="dialog" aria-modal="true" aria-label="Confirm clear history">
+          <div className="confirm-panel">
+            <h3>Clear saved materials?</h3>
+            <p>This will delete this email's saved history from this browser and cannot be restored.</p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setIsClearHistoryConfirmOpen(false)} className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+              <button type="button" onClick={clearHistory} className="rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white">Yes, clear history</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
       {collaborationMaterialsSection}
     </section>
@@ -23456,6 +23470,23 @@ export default function App() {
     }
   };
 
+  const copyGuideSection = async (section) => {
+    const sectionKey = section?.normalizedHeading || normalizeGuideHeading(section?.displayHeading || section?.heading);
+    const text = [
+      section?.displayHeading || section?.heading || "",
+      section?.content || "",
+    ].filter(Boolean).join("\n\n").trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedGuideSectionKey(sectionKey);
+      setStatus("Section copied.");
+      window.setTimeout(() => setCopiedGuideSectionKey((current) => (current === sectionKey ? "" : current)), 2000);
+    } catch (err) {
+      setError("Could not copy this section. Please try again.");
+    }
+  };
+
   const downloadActiveContent = async () => {
     try {
       const baseTitle = extractHistoryTitle(summary, file?.name || workspaceFileLabel || currentTabLabel);
@@ -24688,7 +24719,7 @@ export default function App() {
         </header> : null}
         {collaborationInvitePrompt}
 
-        {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
+        {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
             <div className="flex flex-wrap items-center gap-4">
@@ -24943,18 +24974,17 @@ export default function App() {
             </div>
             <div className="workspace-content-surface min-w-0 p-1 sm:p-3">
               <>
-                <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
-                  <div className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.25em] text-slate-300">{hasResults ? "Generated" : "Awaiting lecture"}</div>
-                </div>
-                <div className="force-mobile-stack mb-4 flex flex-wrap gap-3">
-                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white disabled:opacity-50">Copy Current Section</button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Copy</button>
                   <div className="relative">
-                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Download</button>
+                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Download</button>
                     {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
                   </div>
-                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-white">Share Current Tool</button> : null}
-                  <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Open Collaboration Page</button>
+                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
+                  <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
+                  </div>
                 </div>
               </>
 
@@ -25012,7 +25042,8 @@ export default function App() {
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
-                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50" title="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? "..." : "Regenerate"}</button> : null}
+                                    <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? "Copied" : "Copy"}</button>
+                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? "..." : "Regenerate"}</button> : null}
                                     <span className="text-xl font-semibold text-slate-500">{"\u2304"}</span>
                                   </div>
                                 </div>

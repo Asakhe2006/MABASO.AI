@@ -225,12 +225,62 @@ iframe {
   position: absolute;
   inset-block: 0;
   left: 0;
-  width: min(320px, 88vw);
+  width: min(320px, 54vw);
+  min-width: 220px;
   overflow-y: auto;
   background: rgba(2, 8, 23, 0.98);
   padding: 1rem;
   box-shadow: 20px 0 60px rgba(0, 0, 0, 0.42);
   animation: workspaceDrawerIn 180ms ease both;
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 8, 23, 0.58);
+  padding: 1rem;
+}
+
+.confirm-panel {
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.98);
+  padding: 1.1rem;
+  color: #0f172a;
+  box-shadow: 0 24px 70px rgba(2, 8, 23, 0.32);
+}
+
+.confirm-panel h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 750;
+}
+
+.confirm-panel p {
+  margin: 0.65rem 0 0;
+  color: #475569;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.study-guide-section-copy-button,
+.study-guide-section-regenerate-button {
+  min-height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 0.35rem 0.7rem;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.study-guide-section-regenerate-button:disabled {
+  opacity: 0.5;
 }
 
 .workspace-sidebar-folder {
@@ -953,8 +1003,8 @@ iframe {
     width: 100vw !important;
     max-width: none !important;
     margin: 0 !important;
-    padding-left: max(8px, env(safe-area-inset-left)) !important;
-    padding-right: max(8px, env(safe-area-inset-right)) !important;
+    padding-left: max(6px, env(safe-area-inset-left)) !important;
+    padding-right: max(6px, env(safe-area-inset-right)) !important;
   }
 
   .mobile-app-main > section,
@@ -977,8 +1027,34 @@ iframe {
   .mobile-app-main > div,
   .mobile-app-main section > aside,
   .workspace-shell {
-    padding-left: 10px !important;
-    padding-right: 10px !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .compact-profile-strip {
+    top: 0;
+    margin-bottom: 0.35rem;
+    padding-right: 2px;
+  }
+
+  .workspace-topbar {
+    position: sticky;
+    top: 3rem;
+    z-index: 32;
+    margin-inline: -2px;
+    background: rgba(4, 17, 10, 0.94);
+    padding: 0.55rem 0.25rem 0.75rem;
+    backdrop-filter: blur(14px);
+  }
+
+  .materials-panel,
+  .capture-panel,
+  .workspace-shell,
+  .content-panel,
+  .study-guide-shell {
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
   }
 
   .hero-glow-left,
@@ -1041,8 +1117,8 @@ iframe {
     width: 100%;
     max-width: none !important;
     margin: 0 !important;
-    padding-left: max(12px, env(safe-area-inset-left)) !important;
-    padding-right: max(12px, env(safe-area-inset-right)) !important;
+    padding-left: max(6px, env(safe-area-inset-left)) !important;
+    padding-right: max(6px, env(safe-area-inset-right)) !important;
   }
 
   img,
@@ -1077,8 +1153,8 @@ iframe {
     max-width: none !important;
     margin: 0 !important;
     padding-top: 12px !important;
-    padding-left: max(12px, env(safe-area-inset-left)) !important;
-    padding-right: max(12px, env(safe-area-inset-right)) !important;
+    padding-left: max(6px, env(safe-area-inset-left)) !important;
+    padding-right: max(6px, env(safe-area-inset-right)) !important;
     padding-bottom: calc(9.5rem + env(safe-area-inset-bottom)) !important;
   }
 
@@ -1112,7 +1188,12 @@ iframe {
 
   .workspace-shell {
     border-radius: 20px !important;
-    padding: 12px !important;
+    padding: 6px !important;
+  }
+
+  .capture-panel {
+    border-radius: 0 !important;
+    padding: 6px !important;
   }
 
   .workspace-layout {
@@ -1121,8 +1202,8 @@ iframe {
 
   .workspace-shell .rounded-\[28px\],
   .workspace-shell .rounded-\[24px\] {
-    padding-left: 12px !important;
-    padding-right: 12px !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
   }
 
   .workspace-mobile-accordion details,
@@ -1136,6 +1217,44 @@ iframe {
     padding: 1rem !important;
     box-shadow: 0 18px 42px rgba(2, 8, 23, 0.28);
     backdrop-filter: blur(10px);
+  }
+
+  .study-guide-title-card,
+  .study-guide-section-card {
+    border-radius: 16px !important;
+  }
+
+  .study-guide-section-card > summary > div {
+    align-items: flex-start;
+  }
+
+  .study-guide-section-card > summary > div > div:last-child {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .study-guide-section-copy-button,
+  .study-guide-section-regenerate-button {
+    min-height: 34px !important;
+    padding: 0.35rem 0.65rem !important;
+    font-size: 0.76rem !important;
+  }
+
+  .study-guide-markdown,
+  .notes-markdown {
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .study-guide-section-card img,
+  .study-guide-title-card img,
+  .study-guide-shell img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border-radius: 14px;
+    margin-top: 12px;
+    margin-bottom: 16px;
   }
 
   .mobile-app-main header .brand-mark {
