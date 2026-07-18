@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, CreditCard, FolderOpen, GraduationCap, UploadCloud, UsersRound } from "lucide-react";
+import { Bot, CalendarDays, CreditCard, Ellipsis, FolderOpen, GraduationCap, UploadCloud, UsersRound } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -672,7 +672,7 @@ const MOBILE_APP_NAV_ITEMS = [
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
   { id: "voice", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
-  { id: "more", label: "More", icon: FolderOpen },
+  { id: "more", label: "More", icon: Ellipsis },
 ];
 const MOBILE_MORE_NAV_ITEMS = [
   { id: "capture", label: "Capture", icon: UploadCloud },
@@ -7732,7 +7732,7 @@ export default function App() {
       { id: `voice-assistant-${Date.now() + 1}`, role: "assistant", content: response.answer, sources: response.sources },
     ]);
     setBrowserVoiceDraft("");
-    setBrowserVoiceStatus(response.sources?.length ? `Answered from ${response.sources.join(", ")}.` : "Answered from the lecture currently loaded in your browser.");
+    setBrowserVoiceStatus("MABASO answered your question. Ask another one when you are ready.");
     speakBrowserVoiceAnswer(response.answer);
   };
   const startBrowserVoiceListening = () => {
@@ -24839,20 +24839,19 @@ export default function App() {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
                               }}
-                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-5 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <summary className="cursor-pointer list-none">
-                                <div className="flex min-h-[58px] items-center justify-between gap-3">
+                                <div className="flex min-h-[72px] items-center justify-between gap-3">
                                   <div className="flex min-w-0 items-center gap-3">
-                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-sm font-black text-emerald-700">{index + 1}</span>
+                                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-base font-black text-emerald-700">{index + 1}</span>
                                     <div className="min-w-0">
                                     <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
-                                    <p className="mt-1 text-xs font-semibold text-slate-500">{getGuideSectionSourceLabel(section)}</p>
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
-                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => event.preventDefault()} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700" title="Explain this subtopic another way">↻</button> : null}
+                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); generateStudyGuide(); }} disabled={loading} className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700 disabled:opacity-50" title="Regenerate the study guide">↻</button> : null}
                                     <span className="text-lg font-semibold text-slate-500">⌄</span>
                                   </div>
                                 </div>
