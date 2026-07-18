@@ -285,8 +285,7 @@ iframe {
   backdrop-filter: blur(18px);
 }
 
-.mobile-app-nav__rail,
-.mobile-app-nav__secondary {
+.mobile-app-nav__rail {
   display: grid;
   gap: 0.45rem;
 }
@@ -295,13 +294,8 @@ iframe {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
-.mobile-app-nav__secondary {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 0.45rem;
-}
-
 .mobile-app-nav__item,
-.mobile-app-nav__upgrade {
+.mobile-app-nav__more-item {
   display: inline-flex;
   min-width: 0;
   min-height: 48px;
@@ -320,6 +314,24 @@ iframe {
 
 .mobile-app-nav__item {
   flex-direction: column;
+}
+
+.mobile-app-nav__more-menu {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.55rem;
+  padding: 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  background: rgba(2, 8, 23, 0.96);
+  box-shadow: 0 -16px 36px rgba(0, 0, 0, 0.34);
+  animation: mobileMenuRise 180ms ease both;
+}
+
+.mobile-app-nav__more-item {
+  justify-content: flex-start;
+  padding: 0 0.85rem;
+  font-size: 0.78rem;
 }
 
 .mobile-app-nav__item svg {
@@ -352,17 +364,25 @@ iframe {
 }
 
 .mobile-app-nav__item:active,
-.mobile-app-nav__upgrade:active {
+.mobile-app-nav__more-item:active {
   transform: translateY(1px) scale(0.98);
 }
 
-.mobile-app-nav__item:disabled {
+.mobile-app-nav__item:disabled,
+.mobile-app-nav__more-item:disabled {
   opacity: 0.38;
 }
 
-.mobile-app-nav__upgrade {
-  background: #f8fafc;
-  color: #020617;
+@keyframes mobileMenuRise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .notes-markdown {
@@ -788,6 +808,44 @@ iframe {
     padding-left: max(12px, env(safe-area-inset-left)) !important;
     padding-right: max(12px, env(safe-area-inset-right)) !important;
     padding-bottom: calc(9.5rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  .mobile-app-main,
+  .mobile-app-main > *,
+  .workspace-shell,
+  .workspace-layout,
+  .workspace-layout > *,
+  .workspace-tool-grid,
+  .workspace-mobile-accordion,
+  .content-panel,
+  .study-guide-shell,
+  .study-guide-title-card,
+  .study-guide-section-card {
+    box-sizing: border-box;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  .workspace-shell {
+    border-radius: 20px !important;
+    padding: 12px !important;
+  }
+
+  .workspace-layout {
+    display: block !important;
+  }
+
+  .workspace-shell .rounded-\[28px\],
+  .workspace-shell .rounded-\[24px\] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .workspace-mobile-accordion details,
+  .workspace-mobile-accordion button {
+    width: 100%;
   }
 
   .mobile-app-main header {

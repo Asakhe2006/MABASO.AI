@@ -25019,6 +25019,7 @@ export default function App() {
             </div>
 
           </div>
+          </div>
         </section> : null}
 
         {currentPage === "about" ? renderHelpAboutPage() : null}
