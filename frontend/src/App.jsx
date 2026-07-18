@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, CreditCard, Ellipsis, FolderOpen, GraduationCap, UploadCloud, UsersRound } from "lucide-react";
+import { Bot, CalendarDays, CreditCard, Ellipsis, FolderOpen, GraduationCap, LogOut, Menu, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -6218,6 +6218,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isWorkspaceMobileSidebarOpen, setIsWorkspaceMobileSidebarOpen] = useState(false);
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -24605,6 +24607,45 @@ export default function App() {
     );
   };
 
+  const profileDisplayName = authEmail
+    ? titleCaseWords(String(authEmail).split("@")[0].replace(/[._-]+/g, " "))
+    : "Mabaso Learner";
+  const renderCompactProfileMenu = () => (
+    <div className="profile-menu-anchor">
+      <button
+        type="button"
+        onClick={() => setIsProfileMenuOpen((current) => !current)}
+        className="profile-menu-button"
+        aria-haspopup="menu"
+        aria-expanded={isProfileMenuOpen}
+      >
+        <UserRound className="h-4 w-4" aria-hidden="true" />
+        <span>Profile</span>
+      </button>
+      {isProfileMenuOpen ? (
+        <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
+          <div className="profile-menu-user">
+            <span className="profile-menu-avatar">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
+            <span className="min-w-0">
+              <span className="phone-safe-copy block text-sm font-semibold text-slate-950">{profileDisplayName}</span>
+              <span className="phone-safe-copy mt-0.5 block text-xs text-slate-500">{authEmail || "Signed in"}</span>
+            </span>
+          </div>
+          <label className="profile-menu-row">
+            <span>Language</span>
+            <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="profile-menu-select">
+              {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => { setIsProfileMenuOpen(false); logout(); }} className="profile-menu-row profile-menu-logout" role="menuitem">
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+            <span>Log out</span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -24615,7 +24656,12 @@ export default function App() {
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
       <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
-        <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        {currentPage !== "capture" ? (
+          <div className="compact-profile-strip">
+            {renderCompactProfileMenu()}
+          </div>
+        ) : null}
+        {currentPage === "capture" ? <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
           <div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div>
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
@@ -24639,7 +24685,7 @@ export default function App() {
               <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
             </div>
           </div>
-        </header>
+        </header> : null}
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
@@ -24773,18 +24819,60 @@ export default function App() {
             </aside>
         </section> : null}
 
-        {currentPage === "workspace" ? <section className="workspace-shell overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-          <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
+        {currentPage === "workspace" ? <section className="workspace-shell overflow-hidden p-2 sm:p-4">
+          <div className="workspace-topbar flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-start gap-4">
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
-              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">Choose the tool you want to use now.</h2></div>
+              <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(true)} className="workspace-mobile-sidebar-button lg:hidden" aria-label="Open Study Workspace sidebar">
+                <Menu className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2></div>
             </div>
             <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">{activeWorkspaceToolGroup.label}</div>
           </div>
 
+          {isWorkspaceMobileSidebarOpen ? (
+            <div className="workspace-mobile-sidebar-layer lg:hidden">
+              <button type="button" className="workspace-mobile-sidebar-scrim" aria-label="Close Study Workspace sidebar" onClick={() => setIsWorkspaceMobileSidebarOpen(false)} />
+              <aside className="workspace-mobile-sidebar-drawer" aria-label="Study Workspace mobile sidebar">
+                <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Workspace</p>
+                    <p className="mt-1 text-lg font-semibold text-white">{activeWorkspaceToolGroup.label}</p>
+                  </div>
+                  <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(false)} className="workspace-mobile-sidebar-close" aria-label="Close sidebar">
+                    <X className="h-5 w-5" aria-hidden="true" />
+                  </button>
+                </div>
+                <div className="mt-4 space-y-4">
+                  {WORKSPACE_TOOL_GROUPS.map((group) => {
+                    const isOpenGroup = workspaceToolGroup === group.id;
+                    return (
+                      <div key={`mobile-drawer-${group.id}`} className="workspace-sidebar-folder">
+                        <button type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`workspace-sidebar-folder-button ${isOpenGroup ? "is-open" : ""}`}>
+                          <span>{isOpenGroup ? "\u25BE" : "\u25B8"} {group.eyebrow}</span>
+                        </button>
+                        {isOpenGroup ? (
+                          <div className="mt-2 space-y-1">
+                            {group.tools.map((tool) => (
+                              <button key={`mobile-drawer-${tool.id}`} type="button" onClick={() => { openWorkspaceToolCard(tool); setIsWorkspaceMobileSidebarOpen(false); }} className={`workspace-sidebar-tool ${activeTab === tool.targetTab ? "is-active" : ""}`}>
+                                <span className="workspace-sidebar-tool-icon">{tool.diagram}</span>
+                                <span>{tool.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </aside>
+            </div>
+          ) : null}
+
           <div className="workspace-layout mt-6 grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
             <aside className="workspace-sidebar hidden lg:block">
-              <div className="sticky top-5 rounded-[26px] border border-white/10 bg-slate-950/78 p-4">
+              <div className="sticky top-5 p-2">
                 {WORKSPACE_TOOL_GROUPS.map((group) => (
                   <div key={group.id} className="border-b border-white/10 py-4 first:pt-0 last:border-b-0 last:pb-0">
                     <button type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.22em] transition ${workspaceToolGroup === group.id ? "bg-emerald-300/10 text-emerald-100" : "text-slate-400 hover:bg-white/[0.05] hover:text-white"}`}>
@@ -24808,7 +24896,7 @@ export default function App() {
               </div>
             </aside>
             <div className="min-w-0 space-y-5">
-            <div className="workspace-mobile-tool-nav rounded-[28px] border border-white/10 bg-slate-950/70 p-4 lg:hidden">
+            <div className="hidden">
               <div className="force-mobile-stack flex items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">{activeWorkspaceToolGroup.eyebrow}</p>
@@ -24853,7 +24941,7 @@ export default function App() {
                 ))}
               </div>
             </div>
-            <div className="min-w-0 rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
+            <div className="workspace-content-surface min-w-0 p-1 sm:p-3">
               <>
                 <div className="force-mobile-stack mb-4 flex flex-wrap items-center justify-between gap-4">
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>

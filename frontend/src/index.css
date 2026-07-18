@@ -91,6 +91,223 @@ iframe {
   padding-right: clamp(12px, 1.4vw, 24px) !important;
 }
 
+.compact-profile-strip {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.75rem;
+  padding-top: 0.25rem;
+}
+
+.profile-menu-anchor {
+  position: relative;
+  z-index: 45;
+}
+
+.profile-menu-button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(2, 8, 23, 0.72);
+  padding: 0.45rem 0.78rem;
+  color: rgba(248, 250, 252, 0.95);
+  font-size: 0.82rem;
+  font-weight: 700;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+}
+
+.profile-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  width: min(300px, calc(100vw - 24px));
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.98);
+  padding: 0.75rem;
+  color: #0f172a;
+  box-shadow: 0 22px 60px rgba(2, 8, 23, 0.24);
+}
+
+.profile-menu-user {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 0.35rem 0.35rem 0.7rem;
+}
+
+.profile-menu-avatar {
+  display: inline-flex;
+  width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #10b981;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.profile-menu-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 14px;
+  padding: 0.55rem 0.65rem;
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.profile-menu-row:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.profile-menu-select {
+  max-width: 150px;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 700;
+  outline: none;
+}
+
+.profile-menu-logout {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-mobile-sidebar-button,
+.workspace-mobile-sidebar-close {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+}
+
+.workspace-mobile-sidebar-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.workspace-mobile-sidebar-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: rgba(2, 8, 23, 0.56);
+}
+
+.workspace-mobile-sidebar-drawer {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: min(320px, 88vw);
+  overflow-y: auto;
+  background: rgba(2, 8, 23, 0.98);
+  padding: 1rem;
+  box-shadow: 20px 0 60px rgba(0, 0, 0, 0.42);
+  animation: workspaceDrawerIn 180ms ease both;
+}
+
+.workspace-sidebar-folder {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.75rem;
+}
+
+.workspace-sidebar-folder-button {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  padding: 0 0.45rem;
+  color: rgba(203, 213, 225, 0.92);
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.workspace-sidebar-folder-button.is-open {
+  color: #bbf7d0;
+}
+
+.workspace-sidebar-tool {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  gap: 0.65rem;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  padding: 0.55rem 0.7rem;
+  color: rgba(226, 232, 240, 0.9);
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.workspace-sidebar-tool:hover,
+.workspace-sidebar-tool.is-active {
+  border-left-color: #34d399;
+  background: rgba(16, 185, 129, 0.1);
+  color: white;
+}
+
+.workspace-sidebar-tool-icon {
+  display: inline-flex;
+  width: 1.85rem;
+  height: 1.85rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #bbf7d0;
+  font-size: 0.64rem;
+  font-weight: 900;
+}
+
+@keyframes workspaceDrawerIn {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 .report-viewer {
   font-family: "Times New Roman", Arial, Calibri, sans-serif;
   line-height: 1.5;
