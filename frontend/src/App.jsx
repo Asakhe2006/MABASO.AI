@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, Copy, CreditCard, Download, Ellipsis, FolderOpen, GraduationCap, LoaderCircle, LogOut, Menu, RefreshCw, Search, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FolderOpen, GraduationCap, LoaderCircle, LogOut, Menu, RefreshCw, Search, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -6273,6 +6273,7 @@ export default function App() {
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
   const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
+  const [isHistoryLoadingFromServer, setIsHistoryLoadingFromServer] = useState(false);
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
@@ -8530,7 +8531,7 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">Your saved workspace history will appear here after the first successful study guide on any device signed in with this email.</div>}</div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">{isHistoryLoadingFromServer ? "Loading your saved materials for this email..." : "Your saved workspace history will appear here after the first successful study guide on this account."}</div>}</div>
       {collaborationMaterialsSection}
     </section>
   ) : null;
@@ -8609,7 +8610,7 @@ export default function App() {
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
+      className="sticky-back-button inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-slate-950/80 text-white transition hover:bg-white/10"
     >
       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
         <path d="M15 6 9 12l6 6M9 12h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
@@ -18923,6 +18924,7 @@ export default function App() {
     let cancelled = false;
     const normalizedHistoryOwnerEmail = normalizeHistoryOwnerEmail(authEmail);
     historyHydratingRef.current = true;
+    setIsHistoryLoadingFromServer(true);
 
     const hydrateHistory = async () => {
       try {
@@ -18951,7 +18953,10 @@ export default function App() {
           setAuthMessage((current) => current || (err.message || "Could not sync your history right now."));
         }
       } finally {
-        if (!cancelled) historyHydratingRef.current = false;
+        if (!cancelled) {
+          historyHydratingRef.current = false;
+          setIsHistoryLoadingFromServer(false);
+        }
       }
     };
 
@@ -18960,11 +18965,13 @@ export default function App() {
     return () => {
       cancelled = true;
       historyHydratingRef.current = false;
+      setIsHistoryLoadingFromServer(false);
     };
   }, [authChecked, authEmail, authToken]);
 
   useEffect(() => {
     if (!authChecked || !authToken || !authEmail) return undefined;
+    if (isHistoryLoadingFromServer) return undefined;
     if (historyHydratingRef.current) return undefined;
     if (historyOwnerEmailRef.current !== normalizeHistoryOwnerEmail(authEmail)) return undefined;
     if (skipNextHistorySyncRef.current) {
@@ -18984,7 +18991,7 @@ export default function App() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [authChecked, authEmail, authToken, historyItems]);
+  }, [authChecked, authEmail, authToken, historyItems, isHistoryLoadingFromServer]);
 
   const refreshCollaborationRooms = async (silent = false) => {
     if (!authToken) return;
@@ -25104,14 +25111,14 @@ export default function App() {
                                 <div className="flex min-h-[72px] items-center justify-between gap-3">
                                   <div className="flex min-w-0 items-center gap-3">
                                     <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-base font-black text-emerald-700">{index + 1}</span>
-                                    <div className="min-w-0">
+                                    <div className="study-guide-section-title-row min-w-0">
                                     <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                                    <ChevronDown className="study-guide-section-chevron h-4 w-4" aria-hidden="true" />
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
                                     {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title="Regenerate" aria-label="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button> : null}
-                                    <span className="text-xl font-semibold text-slate-500">{"\u2304"}</span>
                                   </div>
                                 </div>
                               </summary>

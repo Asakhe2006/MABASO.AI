@@ -99,6 +99,9 @@ iframe {
   justify-content: flex-end;
   margin-bottom: 0.75rem;
   padding-top: 0.25rem;
+  background: rgba(4, 17, 10, 0.92);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 28px rgba(2, 8, 23, 0.12);
 }
 
 .profile-menu-anchor {
@@ -310,16 +313,47 @@ iframe {
   transform: scale(0.96);
 }
 
+.sticky-back-button {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 33;
+  box-shadow: 0 12px 28px rgba(2, 8, 23, 0.2);
+  backdrop-filter: blur(12px);
+}
+
 .workspace-sidebar {
   position: sticky;
   top: 5.5rem;
   align-self: start;
 }
 
+@media (min-width: 1024px) {
+  .workspace-shell {
+    min-height: calc(100vh - 32px);
+  }
+
+  .workspace-layout {
+    min-height: calc(100vh - 132px);
+  }
+
+  .workspace-sidebar {
+    max-height: calc(100vh - 104px);
+    overflow-y: auto;
+  }
+
+  .workspace-content-surface {
+    max-height: calc(100vh - 132px);
+    overflow-y: auto;
+    padding-right: 0.35rem;
+  }
+}
+
 .workspace-mobile-sidebar-layer {
   position: fixed;
   inset: 0;
   z-index: 70;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .workspace-mobile-sidebar-scrim {
@@ -334,13 +368,14 @@ iframe {
   position: absolute;
   inset-block: 0;
   left: 0;
-  width: min(320px, 54vw);
-  min-width: 220px;
+  width: min(320px, 74vw);
+  min-width: 236px;
   overflow-y: auto;
   background: rgba(2, 8, 23, 0.98);
   padding: 1rem;
+  border-radius: 0 20px 20px 0;
   box-shadow: 20px 0 60px rgba(0, 0, 0, 0.42);
-  animation: workspaceDrawerIn 180ms ease both;
+  animation: workspaceDrawerIn 260ms ease-in-out both;
 }
 
 .confirm-overlay {
@@ -891,6 +926,28 @@ iframe {
 .study-guide-section-card .study-guide-section-heading {
   font-size: 1.12rem;
   line-height: 1.35;
+}
+
+.study-guide-section-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.study-guide-section-chevron {
+  flex: 0 0 auto;
+  color: #64748b;
+  transition: transform 220ms ease, color 180ms ease;
+}
+
+.study-guide-section-card[open] .study-guide-section-chevron {
+  transform: rotate(180deg);
+  color: #059669;
+}
+
+.study-guide-section-card[open] > summary {
+  border-radius: 18px;
+  background: rgba(16, 185, 129, 0.06);
 }
 
 .study-guide-section-info {
