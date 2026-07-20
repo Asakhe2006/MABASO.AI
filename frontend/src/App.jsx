@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, CreditCard, Ellipsis, FolderOpen, GraduationCap, LogOut, Menu, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
+import { Bot, CalendarDays, Check, Copy, CreditCard, Download, Ellipsis, FolderOpen, GraduationCap, LoaderCircle, LogOut, Menu, RefreshCw, Search, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -542,11 +542,18 @@ function buildBrowserVoiceAnswer({
   transcript = "",
   formulaRows = [],
 }) {
+  const normalizedQuestion = String(question || "").trim().toLowerCase();
+  if (/^(hi|hello|hey|how are you|what'?s your name|who are you)\b/.test(normalizedQuestion)) {
+    return {
+      answer: "I'm Mabaso AI, your study assistant. I can explain your lecture, help with exam practice, or answer a general academic question. What would you like to learn next?",
+      sources: [],
+    };
+  }
   const tokens = tokenizeBrowserVoiceText(question);
   const entries = buildBrowserVoiceEntries({ guideSections, exampleSections, transcript, formulaRows });
   if (!entries.length) {
     return {
-      answer: "I can help with that. Add your lecture notes, transcript, formulas, or worked examples first, then I can teach from your own material. You can still ask a general study question here.",
+      answer: "I can help with that. I do not have lecture material loaded yet, but I can still explain the concept in a simple way. Ask the question again with the topic name, and I will teach it step by step.",
       sources: [],
     };
   }
@@ -556,7 +563,7 @@ function buildBrowserVoiceAnswer({
     const formulaEntry = buildBrowserVoiceEntries({ formulaRows })[0];
     if (formulaEntry) {
       return {
-        answer: `Sure, let's go through the formula clearly. According to your lecture, the key formula is ${formulaEntry.content}. The important thing is to understand what each part represents before you substitute values. Would you like me to show you how to use it in an example?`,
+        answer: `Sure, let's go through the formula clearly. The key formula here is ${formulaEntry.content}. First understand what each symbol means, then substitute the values carefully. Would you like me to show one worked example?`,
         sources: [formulaEntry.title],
       };
     }
@@ -573,15 +580,15 @@ function buildBrowserVoiceAnswer({
   const primarySnippet = extractBrowserVoiceSnippet(primaryMatch?.content || "", 2, 360);
   const secondarySnippet = secondaryMatch ? extractBrowserVoiceSnippet(secondaryMatch.content || "", 1, 220) : "";
   const answerParts = [
-    guideTopic ? `That's a great question. Based on your ${guideTopic} lecture, let me explain it simply.` : "That's a great question. Let me explain it simply.",
+    guideTopic ? `That's a great question. In ${guideTopic}, the idea is easier if we break it into small steps.` : "That's a great question. Let me explain it simply.",
     primarySnippet ? `The main idea is this: ${primarySnippet}` : "",
   ];
 
   if (secondaryMatch && secondarySnippet && secondaryMatch.id !== primaryMatch?.id) {
-    answerParts.push(`Another useful point from your lecture is this: ${secondarySnippet}`);
+    answerParts.push(`Another useful point is this: ${secondarySnippet}`);
   }
   answerParts.push("Think of it as building understanding step by step, not just memorising words.");
-  answerParts.push("Does that make sense, or would you like another example?");
+  answerParts.push("Can you tell me which part you want me to explain with an example?");
 
   return {
     answer: answerParts.filter(Boolean).join(" "),
@@ -6220,6 +6227,9 @@ export default function App() {
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isWorkspaceMobileSidebarOpen, setIsWorkspaceMobileSidebarOpen] = useState(false);
+  const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
+  const [copiedActiveContent, setCopiedActiveContent] = useState(false);
+  const [downloadActionState, setDownloadActionState] = useState("");
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -7476,6 +7486,11 @@ export default function App() {
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
+  const workspaceSearchResults = workspaceSearchQuery.trim()
+    ? WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => ({ ...tool, groupLabel: group.label, groupId: group.id })))
+      .filter((tool) => `${tool.label} ${tool.description} ${tool.groupLabel}`.toLowerCase().includes(workspaceSearchQuery.trim().toLowerCase()))
+      .slice(0, 8)
+    : [];
   const getGuideSectionSourceLabel = () => {
     if (lectureNoteSources.length) return "Source: lecture notes";
     if (lectureSlideSources.length) return "Source: lecture slides";
@@ -22036,7 +22051,7 @@ export default function App() {
     referenceImages = [],
     deliveryMode = "chat",
     currentSection = "",
-    responseLength = teacherResponseLength,
+    responseLength = deliveryMode === "voice" ? "concise" : teacherResponseLength,
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
@@ -22044,7 +22059,7 @@ export default function App() {
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeoutMs: 150000,
+      timeoutMs: 240000,
       body: JSON.stringify({
         question,
         transcript,
@@ -23464,7 +23479,9 @@ export default function App() {
   const copyActiveContent = async () => {
     try {
       await navigator.clipboard.writeText(getActiveContent());
+      setCopiedActiveContent(true);
       setStatus(`${currentTabLabel} copied to clipboard.`);
+      window.setTimeout(() => setCopiedActiveContent(false), 2200);
     } catch {
       setError("Copy failed. Your browser may be blocking clipboard access.");
     }
@@ -23484,6 +23501,18 @@ export default function App() {
       window.setTimeout(() => setCopiedGuideSectionKey((current) => (current === sectionKey ? "" : current)), 2000);
     } catch (err) {
       setError("Could not copy this section. Please try again.");
+    }
+  };
+
+  const runDownloadAction = async (actionKey, action) => {
+    setDownloadActionState(actionKey);
+    try {
+      await action();
+      setDownloadActionState(`${actionKey}:done`);
+      window.setTimeout(() => setDownloadActionState(""), 2200);
+    } catch (err) {
+      setDownloadActionState("");
+      throw err;
     }
   };
 
@@ -24687,7 +24716,7 @@ export default function App() {
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
       <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
-        {currentPage !== "capture" ? (
+        {currentPage !== "capture" && currentPage !== "workspace" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
           </div>
@@ -24859,7 +24888,41 @@ export default function App() {
               </button>
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2></div>
             </div>
-            <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">{activeWorkspaceToolGroup.label}</div>
+            <div className="workspace-top-actions">
+              <div className="workspace-search-box">
+                <Search className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                <input
+                  value={workspaceSearchQuery}
+                  onChange={(event) => setWorkspaceSearchQuery(event.target.value)}
+                  className="workspace-search-input"
+                  placeholder="Search tools"
+                  aria-label="Search study tools"
+                />
+                {workspaceSearchResults.length ? (
+                  <div className="workspace-search-results">
+                    {workspaceSearchResults.map((tool) => (
+                      <button
+                        key={`workspace-search-${tool.id}`}
+                        type="button"
+                        onClick={() => {
+                          setWorkspaceToolGroup(tool.groupId);
+                          setWorkspaceSearchQuery("");
+                          openWorkspaceToolCard(tool);
+                        }}
+                        className="workspace-search-result"
+                      >
+                        <span className="workspace-sidebar-tool-icon">{tool.diagram}</span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-white">{tool.label}</span>
+                          <span className="block text-xs text-slate-400">{tool.groupLabel}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {renderCompactProfileMenu()}
+            </div>
           </div>
 
           {isWorkspaceMobileSidebarOpen ? (
@@ -24977,10 +25040,14 @@ export default function App() {
                 <div className="workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Copy</button>
+                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy current section">
+                    {copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                  </button>
                   <div className="relative">
-                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Download</button>
-                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadFullStudyPackPdf(); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadQuizPdf(); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPresentationFile(); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadPodcastAudio(); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await downloadActiveContent(); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
+                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download">
+                      {downloadActionState.endsWith(":done") ? <Check className="h-4 w-4" aria-hidden="true" /> : downloadActionState ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+                    </button>
+                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("current", downloadActiveContent); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full", downloadFullStudyPackPdf); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("quiz", downloadQuizPdf); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("presentation", downloadPresentationFile); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("podcast", downloadPodcastAudio); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("report", downloadActiveContent); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
                   </div>
                   {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
                   <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
@@ -25042,8 +25109,8 @@ export default function App() {
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
-                                    <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? "Copied" : "Copy"}</button>
-                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? "..." : "Regenerate"}</button> : null}
+                                    <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
+                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title="Regenerate" aria-label="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button> : null}
                                     <span className="text-xl font-semibold text-slate-500">{"\u2304"}</span>
                                   </div>
                                 </div>
