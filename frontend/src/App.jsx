@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FolderOpen, GraduationCap, LoaderCircle, LogOut, Menu, RefreshCw, Search, UploadCloud, UserRound, UsersRound, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, Headphones, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -6221,12 +6221,14 @@ export default function App() {
   const [recording, setRecording] = useState(false);
   const [includeSystemAudioInRecording, setIncludeSystemAudioInRecording] = useState(true);
   const [monitorSharedAudioDuringRecording, setMonitorSharedAudioDuringRecording] = useState(true);
+  const [isRecordingCaptureOpen, setIsRecordingCaptureOpen] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isWorkspaceMobileSidebarOpen, setIsWorkspaceMobileSidebarOpen] = useState(false);
+  const [isMobileVoiceSetupOpen, setIsMobileVoiceSetupOpen] = useState(false);
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
   const [copiedActiveContent, setCopiedActiveContent] = useState(false);
   const [downloadActionState, setDownloadActionState] = useState("");
@@ -7376,6 +7378,17 @@ export default function App() {
   }, [currentPage]);
 
   useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const previousOverflow = document.body.style.overflow;
+    if (isWorkspaceMobileSidebarOpen) {
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isWorkspaceMobileSidebarOpen]);
+
+  useEffect(() => {
     const nextInviteRoomId = parseRoomInviteIdFromLocation();
     if (!nextInviteRoomId) return;
     persistPendingRoomInviteId(nextInviteRoomId);
@@ -7732,6 +7745,7 @@ export default function App() {
     window.setTimeout(() => speakChunk(0), 80);
   };
   const submitBrowserVoicePrompt = (rawQuestion = "") => {
+    const voiceTurnStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const question = String(rawQuestion || "").trim();
     if (!question) {
       setBrowserVoiceStatus("Say or type a question first.");
@@ -7753,6 +7767,12 @@ export default function App() {
       { id: `voice-assistant-${Date.now() + 1}`, role: "assistant", content: response.answer, sources: response.sources },
     ]);
     setBrowserVoiceDraft("");
+    const answerReadyAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    console.info("[MABASO timing] browser voice answer", {
+      buildAnswerMs: Math.round(answerReadyAt - voiceTurnStartedAt),
+      sources: response.sources?.length || 0,
+      messageCount: browserVoiceMessages.length + 2,
+    });
     setBrowserVoiceStatus("MABASO answered your question. Ask another one when you are ready.");
     speakBrowserVoiceAnswer(response.answer);
   };
@@ -22063,6 +22083,7 @@ export default function App() {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
     }
+    const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -22090,6 +22111,15 @@ export default function App() {
       }),
     });
     const data = await parseJsonSafe(response);
+    const requestEndedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    console.info("[MABASO timing] study assistant request", {
+      deliveryMode,
+      responseLength,
+      status: response.status,
+      durationMs: Math.round(requestEndedAt - requestStartedAt),
+      historyMessages: Array.isArray(history) ? history.length : 0,
+      referenceImages: Array.isArray(referenceImages) ? referenceImages.length : 0,
+    });
     if (!response.ok) throw new Error(data.detail || "Study chat failed.");
     const answer = String(data.answer || "").trim();
     if (!answer) throw new Error("Mabaso could not generate a clear answer. Please try again.");
@@ -22206,6 +22236,7 @@ export default function App() {
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
+    const chatStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     try {
       const answer = await requestStudyAssistantAnswer({
         question,
@@ -22225,7 +22256,18 @@ export default function App() {
         return [...next, { id: `${chatTurnId}-assistant-complete`, role: "assistant", content: answer }];
       });
       setStatus("Study chat answer ready.");
+      const chatEndedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      console.info("[MABASO timing] study chat turn", {
+        totalMs: Math.round(chatEndedAt - chatStartedAt),
+        textLength: answer.length,
+        images: referenceImagesForQuestion.length,
+      });
     } catch (err) {
+      const chatFailedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      console.warn("[MABASO timing] study chat failed", {
+        totalMs: Math.round(chatFailedAt - chatStartedAt),
+        message: err?.message || "unknown",
+      });
       const readableError = getReadableRequestError(err);
       setChatMessages((current) => {
         const next = [...current];
@@ -22398,6 +22440,7 @@ export default function App() {
   );
 
   const speakTeacherQuestionAnswer = (answerText = "", { onComplete } = {}) => {
+    const ttsStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const cleanedAnswer = String(answerText || "").trim();
     if (!cleanedAnswer) {
       onComplete?.();
@@ -22436,6 +22479,12 @@ export default function App() {
       utterance.volume = isTeacherMuted ? 0 : 1;
       utterance.onstart = () => {
         if (teacherAnswerRunRef.current !== runId) return;
+        const playbackStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+        console.info("[MABASO timing] oral exam speech playback", {
+          firstChunkStartMs: Math.round(playbackStartedAt - ttsStartedAt),
+          chunks: speechChunks.length,
+          voice: selectedVoice?.name || selectedTeacherVoiceName || "default",
+        });
         setIsTeacherAnswering(true);
         setTeacherQuestionStatus("Tutor is answering your question...");
         setStatus("Tutor is answering your question.");
@@ -22478,6 +22527,7 @@ export default function App() {
     });
     const requestRunId = teacherQuestionRequestRunRef.current + 1;
     teacherQuestionRequestRunRef.current = requestRunId;
+    const teacherQuestionStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
 
     try {
       const currentSection = [activeTeacherSegment?.sectionHeading, activeTeacherSegment?.prompt].filter(Boolean).join(" - ");
@@ -22491,6 +22541,11 @@ export default function App() {
         currentSection,
       });
       if (teacherQuestionRequestRunRef.current !== requestRunId) return;
+      const teacherAnswerReadyAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      console.info("[MABASO timing] oral exam answer ready", {
+        requestMs: Math.round(teacherAnswerReadyAt - teacherQuestionStartedAt),
+        answerChars: answer.length,
+      });
       setTeacherQuestionAnswer(answer);
       appendTeacherTranscriptEntry({
         speaker: "AI Tutor",
@@ -22511,6 +22566,11 @@ export default function App() {
       });
     } catch (err) {
       if (teacherQuestionRequestRunRef.current !== requestRunId) return;
+      const teacherQuestionFailedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+      console.warn("[MABASO timing] oral exam answer failed", {
+        requestMs: Math.round(teacherQuestionFailedAt - teacherQuestionStartedAt),
+        message: err?.message || "unknown",
+      });
       setIsTeacherQuestionLoading(false);
       setTeacherQuestionStatus("Tutor could not answer that question right now.");
       setError(err.message || "Tutor question failed.");
@@ -24757,10 +24817,16 @@ export default function App() {
 
         {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
-            <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 2 of 4</div>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <button type="button" onClick={() => openProtectedAppPage("voice")} className="capture-ai-chat-button">
+                <MessageCircle className="h-5 w-5" aria-hidden="true" />
+                <span>AI Chat</span>
+              </button>
+              <p className="hidden max-w-[22rem] text-sm leading-6 text-slate-300 sm:block">Get instant help from MABASO about any topic.</p>
+            </div>
             <div className="flex flex-wrap items-center gap-4">
-              <button type="button" onClick={() => navigateToPath("/company/about")} className="text-sm font-medium text-slate-300 transition hover:text-white">Help and About</button>
-              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="text-sm font-medium text-slate-300 transition hover:text-white">Support and Contact</button>
+              <button type="button" onClick={() => navigateToPath("/company/about")} className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition hover:text-white"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition hover:text-white"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
             </div>
           </div>
 
@@ -24770,21 +24836,26 @@ export default function App() {
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
                   <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></button>
-                    <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></button>
-                    <button type="button" onClick={recording ? stopRecording : startRecording} disabled={loading} className={`min-h-[72px] rounded-2xl px-4 py-3 text-left text-sm font-semibold ${recording ? "bg-rose-500 text-white" : "border border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="block">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>{recording ? "Saving when stopped" : includeSystemAudioInRecording ? "Mic plus shared tab or app audio" : "Microphone only"}</span></button>
-                    <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-white disabled:opacity-50"><span className="block text-sm font-semibold">Upload Notes</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">TXT MD PDF DOCX IMG</span></button>
-                    <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Slides</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
-                    <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Upload Past Paper</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></button>
-                    <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="min-h-[72px] rounded-2xl border border-emerald-300/20 bg-slate-950/75 px-4 py-3 text-left text-emerald-50 disabled:opacity-50"><span className="block text-sm font-semibold">Use Video Link</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">YouTube or public URL</span></button>
+                    <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="capture-source-button border-white/10 bg-white/5 text-white disabled:opacity-50"><span className="capture-source-icon"><Video className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></span></button>
+                    <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-emerald-300/10 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><FileText className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></span></button>
+                    <button type="button" onClick={() => { setIsRecordingCaptureOpen(true); (recording ? stopRecording : startRecording)(); }} disabled={loading} className={`capture-source-button ${recording ? "border-rose-400/20 bg-rose-500 text-white" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"} disabled:opacity-50`}><span className="capture-source-icon"><Mic className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">{recording ? "Stop Recording" : "Record Live Lecture"}</span><span className={`mt-2 block text-[10px] uppercase tracking-[0.22em] ${recording ? "text-rose-50/80" : "text-emerald-100/80"}`}>{recording ? "Saving when stopped" : includeSystemAudioInRecording ? "Mic plus shared tab" : "Microphone only"}</span></span></button>
+                    <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-white/10 bg-white/5 text-white disabled:opacity-50"><span className="capture-source-icon"><UploadCloud className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Upload Notes</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">TXT MD PDF DOCX IMG</span></span></button>
+                    <button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-emerald-300/10 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><Image className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Upload Slides</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></span></button>
+                    <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-slate-950/75 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><FileText className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Upload Past Paper</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">IMG TXT MD PDF PPTX DOCX</span></span></button>
+                    <button type="button" onClick={() => videoUrlInputRef.current?.focus()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-slate-950/75 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><Link className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Use Video Link</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">YouTube or public URL</span></span></button>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <button type="button" onClick={() => setIsRecordingCaptureOpen((current) => !current)} className="flex w-full items-center justify-between gap-3 text-left">
                       <div>
                         <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Recording capture</p>
                         <p className="mt-2 text-sm font-semibold text-white">Include audio from YouTube, browser tabs, and supported apps</p>
-                        <p className="mt-2 text-xs leading-6 text-slate-300">{canShareSystemAudio ? "When this is on, the browser asks you to share a tab, window, or screen. For the clearest YouTube capture, choose the playing browser tab and turn on Share audio or system audio in the browser prompt." : "This browser can only do microphone capture here right now. Desktop Chrome or Edge usually gives the best tab or system audio support."}</p>
-                        <p className="mt-2 text-xs leading-6 text-slate-400">MABASO can keep shared lecture audio audible during recording, but your phone or browser still decides whether that sound goes to the loudspeaker or to connected headphones.</p>
+                      </div>
+                      <ChevronDown className={`h-5 w-5 shrink-0 text-slate-300 transition ${isRecordingCaptureOpen ? "rotate-180" : ""}`} aria-hidden="true" />
+                    </button>
+                    {isRecordingCaptureOpen ? <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <p className="text-xs leading-6 text-slate-300">{canShareSystemAudio ? "Choose tab or app audio when the lecture is playing online. Pick the active browser tab and enable audio sharing in the browser prompt." : "This browser can only use microphone capture here. Desktop Chrome or Edge usually gives the best tab audio support."}</p>
+                        <p className="mt-2 text-xs leading-6 text-slate-400">Audio preview depends on the phone, browser, and connected speakers or headphones.</p>
                       </div>
                       <div className="grid gap-3 sm:min-w-[260px]">
                         <label className="inline-flex items-center gap-3 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-medium text-emerald-50">
@@ -24796,7 +24867,7 @@ export default function App() {
                           <span>{canMonitorSharedAudio ? (monitorSharedAudioDuringRecording ? "Hear tab audio while recording" : "Do not play tab audio") : "Audio preview not available here"}</span>
                         </label>
                       </div>
-                    </div>
+                    </div> : null}
                   </div>
                   <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4">
                     <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Video Link</p>
@@ -24804,7 +24875,6 @@ export default function App() {
                       <input ref={videoUrlInputRef} value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none" placeholder="Paste a YouTube or public video URL here" />
                       <button type="button" onClick={transcribeVideoLink} disabled={loading || !videoUrl.trim()} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isTranscribingVideo ? "Reading Link..." : "Transcribe Video Link"}</button>
                     </div>
-                    <p className="mt-3 text-xs leading-6 text-slate-300">Use this when the lecture already exists online and you want the study guide, test, formulas, and worked examples from that video. Public captions help most, and some YouTube links still need backend cookies or a proxy when the server cannot read the link directly.</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4">
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
