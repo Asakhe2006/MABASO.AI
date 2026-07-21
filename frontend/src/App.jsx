@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, Headphones, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
