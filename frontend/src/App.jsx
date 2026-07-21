@@ -11884,6 +11884,7 @@ export default function App() {
                       <th className="px-3 py-2">Role</th>
                       <th className="px-3 py-2">Status</th>
                       <th className="px-3 py-2">Last Login</th>
+                      <th className="px-3 py-2">Location</th>
                       <th className="px-3 py-2">Sessions</th>
                       <th className="px-3 py-2">Uploads</th>
                       <th className="px-3 py-2">Generated</th>
@@ -11902,6 +11903,10 @@ export default function App() {
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(user.status)}`}>{titleCaseWords(user.status)}</span>
                         </td>
                         <td className="px-3 py-4 text-sm text-slate-700">{user.last_login_at ? formatAdminDateTime(user.last_login_at) : "Never"}</td>
+                        <td className="px-3 py-4 text-sm text-slate-700">
+                          <p>{formatAdminLocation(user.last_login_country, user.last_login_city)}</p>
+                          <p className="mt-2 text-xs text-slate-500">{user.last_login_ip || "No IP"}</p>
+                        </td>
                         <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.sessions_count || 0)}</td>
                         <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.total_uploads || 0)}</td>
                         <td className="px-3 py-4 text-sm font-semibold text-slate-900">{formatAdminInteger(user.total_generations || 0)}</td>
@@ -12479,8 +12484,8 @@ export default function App() {
     const failedLoginCount = (security.failed_logins || []).length;
     const normalizedSearchQuery = adminSearchQuery.toLowerCase().trim();
     const matchesSearch = (value) => !normalizedSearchQuery || String(value || "").toLowerCase().includes(normalizedSearchQuery);
-    const filteredUsers = users.filter((user) => matchesSearch(`${user.email} ${user.role} ${user.status} ${user.next_timeout_at}`));
-    const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address}`));
+    const filteredUsers = users.filter((user) => matchesSearch(`${user.email} ${user.role} ${user.status} ${user.next_timeout_at} ${user.last_login_country || ""} ${user.last_login_city || ""}`));
+    const filteredLogs = activityLogs.filter((log) => matchesSearch(`${log.user} ${log.action} ${log.resource} ${log.status} ${log.ip_address} ${log.country || ""} ${log.city || ""}`));
     const filteredContent = (content.items || []).filter((item) => matchesSearch(`${item.file_name} ${item.owner_email} ${item.title}`));
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
     const filteredRatings = ratingItems.filter((item) => matchesSearch(`${item.email} ${item.stars} ${item.comment}`));
@@ -12883,6 +12888,7 @@ export default function App() {
                 "Role",
                 "Status",
                 "Last Login",
+                "Location",
                 "Live Sessions",
                 `Sessions (${selectedAdminRange.shortLabel})`,
                 `Lectures (${selectedAdminRange.shortLabel})`,
@@ -12907,6 +12913,10 @@ export default function App() {
                         ? `Seen in ${selectedAdminRange.shortLabel}: ${formatAdminDateTime(user.last_login_in_range_at)}`
                         : `No login in ${selectedAdminRange.shortLabel}`}
                     </p>
+                  </td>
+                  <td className="px-3 py-4 text-sm text-slate-700">
+                    <p>{formatAdminLocation(user.last_login_country, user.last_login_city)}</p>
+                    <p className="mt-2 text-xs text-slate-500">{user.last_login_ip || "No IP"}</p>
                   </td>
                   <td className="px-3 py-4 text-sm text-slate-700">
                     <p>{formatAdminInteger(user.active_sessions_now ?? user.sessions_count ?? 0)}</p>
@@ -12949,7 +12959,7 @@ export default function App() {
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredLogs.length)} rows</span>
             </div>
             {renderSimpleTable(
-              ["User", "Event", "Status", "Resource", "Time", "IP Address", "Duration"],
+              ["User", "Event", "Status", "Resource", "Time", "IP / Location", "Duration"],
               filteredLogs.map((log, index) => (
                 <tr key={`${log.timestamp}-${index}`} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
                   <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">
@@ -12964,7 +12974,10 @@ export default function App() {
                   <td className="px-3 py-4"><span className={`rounded-full px-3 py-1 text-xs font-semibold ${getAdminHealthTone(log.status)}`}>{titleCaseWords(log.status || "success")}</span></td>
                   <td className="px-3 py-4 text-sm text-slate-700">{log.resource || "No resource recorded"}</td>
                   <td className="px-3 py-4 text-sm text-slate-700">{formatAdminDateTime(log.timestamp)}</td>
-                  <td className="px-3 py-4 text-sm text-slate-700">{log.ip_address || "--"}</td>
+                  <td className="px-3 py-4 text-sm text-slate-700">
+                    <p>{log.ip_address || "--"}</p>
+                    <p className="mt-2 text-xs text-slate-500">{formatAdminLocation(log.country, log.city)}</p>
+                  </td>
                   <td className="rounded-r-[24px] px-3 py-4 text-sm text-slate-700">{formatAdminDuration(log.duration_ms || 0)}</td>
                 </tr>
               )),
@@ -24845,7 +24858,7 @@ export default function App() {
         {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <button type="button" onClick={() => openProtectedAppPage("voice")} className="capture-ai-chat-button">
+              <button type="button" onClick={() => { setActiveTab("chat"); setWorkspaceToolGroup("practice"); openProtectedAppPage("workspace"); }} className="capture-ai-chat-button">
                 <MessageCircle className="h-5 w-5" aria-hidden="true" />
                 <span>AI Chat</span>
               </button>
