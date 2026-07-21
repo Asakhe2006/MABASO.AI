@@ -4447,6 +4447,11 @@ function formatAdminDuration(valueMs) {
   return `${Math.round(ms)} ms`;
 }
 
+function formatAdminLocation(country = "", city = "") {
+  const parts = [city, country].map((value) => String(value || "").trim()).filter(Boolean);
+  return parts.length ? parts.join(", ") : "Unknown location";
+}
+
 function formatAdminSecondsDuration(valueSeconds) {
   return formatAdminDuration(toFiniteNumber(valueSeconds) * 1000);
 }
@@ -7838,7 +7843,7 @@ export default function App() {
       }
       if (latestTranscript.trim()) {
         setBrowserVoiceDraft(latestTranscript.trim());
-        setBrowserVoiceStatus("Speech captured. Press Ask from browser to send it, or speak again.");
+        setBrowserVoiceStatus("Speech captured. Press Ask to send it, or speak again.");
         return;
       }
       setBrowserVoiceStatus("Listening stopped before a full question was captured.");
@@ -9284,7 +9289,7 @@ export default function App() {
   );
 
   const renderBrowserVoicePage = () => (
-    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="browser-voice-page overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="border-b border-white/10 pb-5">
         <div className="flex items-start gap-4">
           {renderBackButton(() => {
@@ -9295,12 +9300,32 @@ export default function App() {
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Oral Exam</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">Practice your answers by voice.</h2>
           </div>
+          <div className="mobile-voice-setup-wrap ml-auto">
+            <button type="button" onClick={() => setIsMobileVoiceSetupOpen((current) => !current)} className="mobile-voice-setup-trigger" aria-expanded={isMobileVoiceSetupOpen}>
+              <UserRound className="h-4 w-4" aria-hidden="true" />
+              <span>Voice</span>
+            </button>
+            {isMobileVoiceSetupOpen ? <div className="mobile-voice-setup-popover">
+              <label>
+                <span>Language</span>
+                <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)}>
+                  {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
+              <label>
+                <span>Browser voice</span>
+                <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)}>
+                  {teacherVoiceOptions.length ? teacherVoiceOptions.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} ({voice.lang})</option>) : <option value="">Default browser voice</option>}
+                </select>
+              </label>
+            </div> : null}
+          </div>
         </div>
       </div>
 
       <div className="mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
         <div className="space-y-5">
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <div className="browser-voice-setup-card rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Voice Setup</p>
             <div className="mt-4 space-y-4">
               <div>
@@ -9324,7 +9349,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <div className="browser-voice-status-card rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Status</p>
             <p className="mt-3 text-sm leading-7 text-slate-300">{browserVoiceStatus}</p>
             <div className="mt-4 flex flex-wrap gap-3">
@@ -9343,7 +9368,7 @@ export default function App() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Voice Conversation</p>
-                <h3 className="mt-2 text-2xl font-semibold text-white">Ask from your lecture context</h3>
+                <h3 className="browser-voice-conversation-heading mt-2 text-2xl font-semibold text-white">Ask Mabaso anything</h3>
               </div>
               <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
                 Browser only
@@ -9358,7 +9383,7 @@ export default function App() {
                 </div>
               )) : (
                 <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">
-                  Say a question like “Explain the main concept again” or “Which formula do I use here?” and this page will answer from the study material already on screen.
+                  Ask a question and MABASO will answer like a tutor.
                 </div>
               )}
               <div ref={browserVoiceEndRef} />
@@ -9374,7 +9399,7 @@ export default function App() {
                 </svg>
               </button>
               <button type="button" onClick={() => submitBrowserVoicePrompt(browserVoiceDraft)} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white">
-                Ask from browser
+                Ask
               </button>
             </div>
           </div>
@@ -11571,8 +11596,8 @@ export default function App() {
     const failedJobs = aiGeneration.failed_jobs || [];
     const failedLoginCount = (security.failed_logins || []).length;
     const normalizedSearchQuery = adminSearchQuery.toLowerCase();
-    const filteredUsers = users.filter((user) => `${user.email} ${user.role} ${user.status}`.toLowerCase().includes(normalizedSearchQuery));
-    const filteredLogs = activityLogs.filter((log) => `${log.user} ${log.action} ${log.resource}`.toLowerCase().includes(normalizedSearchQuery));
+    const filteredUsers = users.filter((user) => `${user.email} ${user.role} ${user.status} ${user.last_login_country || ""} ${user.last_login_city || ""}`.toLowerCase().includes(normalizedSearchQuery));
+    const filteredLogs = activityLogs.filter((log) => `${log.user} ${log.action} ${log.resource} ${log.country || ""} ${log.city || ""}`.toLowerCase().includes(normalizedSearchQuery));
     const filteredContent = (content.items || []).filter((item) => `${item.file_name} ${item.owner_email} ${item.title}`.toLowerCase().includes(normalizedSearchQuery));
     const dailyActivitySeries = (overviewCharts.daily_active_users || []).map((item) => ({
       label: formatAdminDate(item.date),
@@ -14064,7 +14089,6 @@ export default function App() {
     }
     setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
     setAuthServerStateReady(false);
-    setAuthChecked(true);
     apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
@@ -14108,7 +14132,10 @@ export default function App() {
         );
       }
     }).finally(() => {
-      if (!cancelled) setAuthServerStateReady(true);
+      if (!cancelled) {
+        setAuthServerStateReady(true);
+        setAuthChecked(true);
+      }
     });
     return () => {
       cancelled = true;

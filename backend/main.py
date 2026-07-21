@@ -3364,7 +3364,12 @@ def record_audit_log(
 ):
     normalized_email = normalize_email(email)
     safe_status = (status or "success").strip().lower() or "success"
-    payload = metadata or {}
+    payload = dict(metadata or {})
+    country, city = get_request_location(request)
+    if country and "country" not in payload:
+        payload["country"] = country
+    if city and "city" not in payload:
+        payload["city"] = city
     with get_db_connection() as connection:
         connection.execute(
             """
@@ -8831,6 +8836,8 @@ def load_audit_logs(limit: int = 400, *, days: int = 30) -> list[dict[str, Any]]
                 "duration_ms": int(row["duration_ms"] or 0),
                 "status": row["status"],
                 "metadata": metadata if isinstance(metadata, dict) else {},
+                "country": compact_text(metadata.get("country", "")) if isinstance(metadata, dict) else "",
+                "city": compact_text(metadata.get("city", "")) if isinstance(metadata, dict) else "",
                 "created_at": row["created_at"],
                 "created_at_dt": parse_history_datetime(row["created_at"], utc_now()),
             }
@@ -9810,6 +9817,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             login_map[email] = {
                 "created_at": log.get("created_at", ""),
                 "ip_address": log.get("ip_address", ""),
+                "country": log.get("country", ""),
+                "city": log.get("city", ""),
             }
         return login_map
 
@@ -9915,8 +9924,12 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 "created_at": created_at,
                 "last_login_at": last_login.get("created_at", ""),
                 "last_login_ip": last_login.get("ip_address", ""),
+                "last_login_country": last_login.get("country", ""),
+                "last_login_city": last_login.get("city", ""),
                 "last_login_in_range_at": last_login_in_range.get("created_at", ""),
                 "last_login_in_range_ip": last_login_in_range.get("ip_address", ""),
+                "last_login_in_range_country": last_login_in_range.get("country", ""),
+                "last_login_in_range_city": last_login_in_range.get("city", ""),
                 "sessions_count": sessions_by_email.get(email, 0),
                 "active_sessions_now": session_profile.get("active_sessions", sessions_by_email.get(email, 0)),
                 "tracked_sessions_in_range": session_profile.get("total_sessions_in_range", 0),
@@ -10200,6 +10213,8 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "user": log["email"] or "anonymous",
             "user_activity_count": activity_count_by_user.get(normalize_email(log["email"] or "anonymous") or "anonymous", 1),
             "ip_address": log["ip_address"],
+            "country": log.get("country", ""),
+            "city": log.get("city", ""),
             "device": log["user_agent"],
             "action": log["action"],
             "resource": log["resource_name"] or log["resource_type"],
