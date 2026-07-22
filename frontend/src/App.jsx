@@ -7521,14 +7521,6 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
-  const studyChatMaterialKey = activeHistoryId
-    || [
-      workspaceFileLabel,
-      extractHistoryTitle(summary, workspaceFileLabel),
-      String(summary || transcript || lectureNotes || lectureSlides || pastQuestionPapers || "").slice(0, 120),
-    ].filter(Boolean).join("|")
-    || "current-material";
-  const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey);
   const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
   const workspaceSearchResults = workspaceSearchQuery.trim()
     ? WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => ({ ...tool, groupLabel: group.label, groupId: group.id })))
@@ -7614,6 +7606,14 @@ export default function App() {
     lectureSlideFileNames,
     pastQuestionPaperFileNames,
   });
+  const studyChatMaterialKey = activeHistoryId
+    || [
+      workspaceFileLabel,
+      extractHistoryTitle(summary, workspaceFileLabel),
+      String(summary || transcript || lectureNotes || lectureSlides || pastQuestionPapers || "").slice(0, 120),
+    ].filter(Boolean).join("|")
+    || "current-material";
+  const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey);
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
