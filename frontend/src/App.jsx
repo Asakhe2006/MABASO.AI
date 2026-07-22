@@ -1,6 +1,10 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -2919,7 +2923,8 @@ function getPresentationDesignTokens(design) {
   };
 }
 
-function convertMarkdownTablesToMobileCards(markdown = "") {
+function convertMarkdownTablesToMobileCards(markdown = "", { preserveTables = false } = {}) {
+  if (preserveTables) return String(markdown || "");
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const output = [];
   const parseRow = (line) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim()).filter(Boolean);
@@ -2966,8 +2971,55 @@ function convertMarkdownTablesToMobileCards(markdown = "") {
   return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+const STUDY_GUIDE_CALLOUT_PATTERNS = [
+  ["definition", /definition/i],
+  ["exam-tip", /exam\s*tip|exam\s*focus|exam\s*intelligence/i],
+  ["common-mistake", /common\s*mistake|mistake|warning/i],
+  ["remember", /remember|memory\s*trick|important\s*note/i],
+  ["worked-example", /worked\s*example|example/i],
+  ["deep-dive", /deep\s*dive|genius\s*mode|advanced/i],
+  ["key-takeaway", /key\s*takeaway|takeaway|summary/i],
+];
+
+function getMarkdownChildText(children) {
+  return Array.isArray(children)
+    ? children.map(getMarkdownChildText).join(" ")
+    : typeof children === "string" || typeof children === "number"
+      ? String(children)
+      : children?.props?.children
+        ? getMarkdownChildText(children.props.children)
+        : "";
+}
+
+function getStudyGuideCalloutTone(children) {
+  const text = getMarkdownChildText(children).replace(/\s+/g, " ").trim();
+  const match = STUDY_GUIDE_CALLOUT_PATTERNS.find(([, pattern]) => pattern.test(text));
+  return match?.[0] || "note";
+}
+
+const studyGuideMarkdownComponents = {
+  blockquote: ({ children, ...props }) => (
+    <blockquote className={`study-guide-callout study-guide-callout-${getStudyGuideCalloutTone(children)}`} {...props}>
+      {children}
+    </blockquote>
+  ),
+  table: (props) => (
+    <div className="study-guide-table-wrap">
+      <table {...props} />
+    </div>
+  ),
+};
+
 function MobileFirstMarkdown({ children }) {
-  return <ReactMarkdown>{convertMarkdownTablesToMobileCards(children || "")}</ReactMarkdown>;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={studyGuideMarkdownComponents}
+    >
+      {convertMarkdownTablesToMobileCards(children || "", { preserveTables: true })}
+    </ReactMarkdown>
+  );
 }
 
 function StudyToolMarkdownCard({ content = "", emptyMessage = "" }) {
@@ -3518,39 +3570,83 @@ function inlineStudyGuideMarkdownToHtml(value = "") {
 function markdownToEditableStudyGuideHtml(markdown = "") {
   const lines = String(markdown || "").split(/\r?\n/);
   const htmlParts = [];
-  let listOpen = false;
+  let listType = "";
+  const parseTableRow = (line) => line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  const isTableSeparator = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || "");
   const closeList = () => {
-    if (listOpen) {
-      htmlParts.push("</ul>");
-      listOpen = false;
+    if (listType) {
+      htmlParts.push(`</${listType}>`);
+      listType = "";
     }
   };
-  lines.forEach((rawLine) => {
+  const openList = (type) => {
+    if (listType === type) return;
+    closeList();
+    htmlParts.push(`<${type}>`);
+    listType = type;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
     const line = rawLine.trim();
     if (!line) {
       closeList();
       htmlParts.push("<p><br></p>");
-      return;
+      continue;
     }
+
+    if (line.startsWith("|") && isTableSeparator(lines[index + 1] || "")) {
+      closeList();
+      const headers = parseTableRow(line);
+      const rows = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim().startsWith("|")) {
+        rows.push(parseTableRow(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      const headerHtml = headers.map((cell) => `<th>${inlineStudyGuideMarkdownToHtml(cell)}</th>`).join("");
+      const rowHtml = rows
+        .map((row) => `<tr>${row.map((cell) => `<td>${inlineStudyGuideMarkdownToHtml(cell)}</td>`).join("")}</tr>`)
+        .join("");
+      htmlParts.push(`<table><thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table>`);
+      continue;
+    }
+
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       closeList();
       const level = Math.min(6, Math.max(3, heading[1].length + 2));
       htmlParts.push(`<h${level}>${inlineStudyGuideMarkdownToHtml(heading[2])}</h${level}>`);
-      return;
+      continue;
+    }
+    const quote = line.match(/^>\s+(.+)$/);
+    if (quote) {
+      closeList();
+      htmlParts.push(`<blockquote>${inlineStudyGuideMarkdownToHtml(quote[1])}</blockquote>`);
+      continue;
     }
     const bullet = line.match(/^[-*]\s+(.+)$/);
     if (bullet) {
-      if (!listOpen) {
-        htmlParts.push("<ul>");
-        listOpen = true;
-      }
+      openList("ul");
       htmlParts.push(`<li>${inlineStudyGuideMarkdownToHtml(bullet[1])}</li>`);
-      return;
+      continue;
     }
+    const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+    if (numbered) {
+      openList("ol");
+      htmlParts.push(`<li>${inlineStudyGuideMarkdownToHtml(numbered[1])}</li>`);
+      continue;
+    }
+
     closeList();
     htmlParts.push(`<p>${inlineStudyGuideMarkdownToHtml(line)}</p>`);
-  });
+  }
   closeList();
   return htmlParts.join("");
 }
@@ -3560,7 +3656,7 @@ function sanitizeStudyGuideDocumentHtml(html = "") {
   if (typeof window === "undefined" || typeof window.DOMParser === "undefined") {
     return trimmed.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "").replace(/\son\w+="[^"]*"/gi, "");
   }
-  const allowedTags = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "MARK", "SPAN"]);
+  const allowedTags = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "MARK", "SPAN"]);
   const parser = new window.DOMParser();
   const doc = parser.parseFromString(`<div>${trimmed}</div>`, "text/html");
   const cleanNode = (node) => {
@@ -6407,6 +6503,7 @@ export default function App() {
   const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
   const guideEditSaveTimerRef = useRef(null);
   const studyGuideEditorRefs = useRef({});
+  const activeGuideSelectionRef = useRef(null);
   const studyGuideDocumentSaveInProgressRef = useRef(false);
   const lastSummarySignatureRef = useRef("");
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
@@ -22571,6 +22668,7 @@ export default function App() {
     if (!sectionKey) return;
     const cleanedHtml = sanitizeStudyGuideDocumentHtml(html);
     setStudyGuideDocumentHtml((current) => {
+      if (current[sectionKey] === cleanedHtml) return current;
       const next = { ...current, [sectionKey]: cleanedHtml };
       queueStudyGuideDocumentSave(next);
       return next;
@@ -22585,6 +22683,40 @@ export default function App() {
     if (!mark?.parentNode) return;
     while (mark.firstChild) mark.parentNode.insertBefore(mark.firstChild, mark);
     mark.remove();
+  };
+
+  const captureGuideEditorSelection = (sectionKey, editor) => {
+    if (typeof window === "undefined" || !sectionKey || !editor) return;
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer?.nodeType === 1
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer?.parentElement;
+    if (!container || !editor.contains(container)) return;
+    activeGuideSelectionRef.current = {
+      sectionKey,
+      range: range.cloneRange(),
+    };
+    setActiveGuideEditorSectionKey(sectionKey);
+  };
+
+  const restoreGuideEditorSelection = () => {
+    if (typeof window === "undefined") return null;
+    const savedSelection = activeGuideSelectionRef.current;
+    if (!savedSelection?.range || !savedSelection.sectionKey) return null;
+    const editor = studyGuideEditorRefs.current[savedSelection.sectionKey];
+    if (!editor) return null;
+    const container = savedSelection.range.commonAncestorContainer?.nodeType === 1
+      ? savedSelection.range.commonAncestorContainer
+      : savedSelection.range.commonAncestorContainer?.parentElement;
+    if (!container || !editor.contains(container)) return null;
+    const selection = window.getSelection?.();
+    if (!selection) return null;
+    selection.removeAllRanges();
+    selection.addRange(savedSelection.range.cloneRange());
+    setActiveGuideEditorSectionKey(savedSelection.sectionKey);
+    return editor;
   };
 
   const getActiveGuideEditor = () => {
@@ -22604,13 +22736,17 @@ export default function App() {
 
   const applyWorkspaceHighlight = (color = activeHighlightColor) => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
+    const restoredEditor = restoreGuideEditorSelection();
     const selection = window.getSelection?.();
-    const editor = getActiveGuideEditor();
-    if (!selection || selection.isCollapsed || !editor || !editor.contains(selection.anchorNode)) {
+    const editor = restoredEditor || getActiveGuideEditor();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const container = range?.commonAncestorContainer?.nodeType === 1
+      ? range.commonAncestorContainer
+      : range?.commonAncestorContainer?.parentElement;
+    if (!selection || !range || range.collapsed || !editor || !container || !editor.contains(container)) {
       setStatus("Select text in the study guide first, then choose a highlight colour.");
       return;
     }
-    const range = selection.getRangeAt(0);
     const mark = document.createElement("mark");
     mark.style.backgroundColor = color;
     mark.dataset.mabasoHighlight = "true";
@@ -22627,8 +22763,9 @@ export default function App() {
 
   const eraseSelectedWorkspaceHighlight = () => {
     if (typeof window === "undefined") return;
+    const restoredEditor = restoreGuideEditorSelection();
     const selection = window.getSelection?.();
-    const editor = getActiveGuideEditor();
+    const editor = restoredEditor || getActiveGuideEditor();
     if (!selection || !editor) return;
     const node = selection.anchorNode?.nodeType === 1 ? selection.anchorNode : selection.anchorNode?.parentElement;
     const selectedMark = node?.closest?.("mark");
@@ -25678,14 +25815,21 @@ export default function App() {
                                     contentEditable={isWorkspaceEditMode}
                                     suppressContentEditableWarning
                                     data-section-key={getGuideSectionEditKey(section)}
-                                    onFocus={() => setActiveGuideEditorSectionKey(getGuideSectionEditKey(section))}
-                                    onMouseUp={() => setActiveGuideEditorSectionKey(getGuideSectionEditKey(section))}
+                                    tabIndex={isWorkspaceEditMode || isWorkspaceHighlightMode ? 0 : undefined}
+                                    onFocus={(event) => setActiveGuideEditorSectionKey(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section))}
+                                    onMouseUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
+                                    onPointerUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
+                                    onTouchEnd={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                     onKeyUp={(event) => {
                                       const sectionKey = getGuideSectionEditKey(section);
-                                      setActiveGuideEditorSectionKey(sectionKey);
+                                      captureGuideEditorSelection(sectionKey, event.currentTarget);
                                       if (isWorkspaceEditMode) updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
                                     }}
-                                    onInput={(event) => updateStudyGuideSectionHtml(getGuideSectionEditKey(section), event.currentTarget.innerHTML)}
+                                    onInput={(event) => {
+                                      const sectionKey = getGuideSectionEditKey(section);
+                                      captureGuideEditorSelection(sectionKey, event.currentTarget);
+                                      updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    }}
                                     dangerouslySetInnerHTML={{ __html: getStudyGuideSectionHtml(section) }}
                                   />
                                 ) : (
