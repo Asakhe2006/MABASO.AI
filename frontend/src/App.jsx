@@ -103,6 +103,7 @@ const TEACHER_REALTIME_CONNECTION_STATES = {
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const STUDY_CHAT_STORAGE_KEY = "mabaso-study-chat-v1";
+const STUDY_GUIDE_DOCUMENT_STORAGE_KEY = "mabaso-study-guide-document-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
@@ -134,6 +135,7 @@ const MAX_QUIZ_ANSWER_IMAGES = 6;
 const MAX_STORAGE_TRANSCRIPT_CHARS = 120000;
 const MAX_STORAGE_SUMMARY_CHARS = 90000;
 const MAX_STORAGE_SECTION_TEXT_CHARS = 50000;
+const MAX_STUDY_GUIDE_DOCUMENT_HTML_CHARS = 120000;
 const MAX_STORAGE_SOURCE_TEXT_CHARS = 18000;
 const MAX_STORAGE_IMAGE_URL_LENGTH = 2400;
 const MAX_AI_REFERENCE_IMAGES = 4;
@@ -3498,6 +3500,101 @@ function saveBillingStatusCache(email = "", snapshot = null) {
   }
 }
 
+function escapeStudyGuideHtml(value = "") {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function inlineStudyGuideMarkdownToHtml(value = "") {
+  return escapeStudyGuideHtml(value)
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>");
+}
+
+function markdownToEditableStudyGuideHtml(markdown = "") {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const htmlParts = [];
+  let listOpen = false;
+  const closeList = () => {
+    if (listOpen) {
+      htmlParts.push("</ul>");
+      listOpen = false;
+    }
+  };
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      closeList();
+      htmlParts.push("<p><br></p>");
+      return;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = Math.min(6, Math.max(3, heading[1].length + 2));
+      htmlParts.push(`<h${level}>${inlineStudyGuideMarkdownToHtml(heading[2])}</h${level}>`);
+      return;
+    }
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!listOpen) {
+        htmlParts.push("<ul>");
+        listOpen = true;
+      }
+      htmlParts.push(`<li>${inlineStudyGuideMarkdownToHtml(bullet[1])}</li>`);
+      return;
+    }
+    closeList();
+    htmlParts.push(`<p>${inlineStudyGuideMarkdownToHtml(line)}</p>`);
+  });
+  closeList();
+  return htmlParts.join("");
+}
+
+function sanitizeStudyGuideDocumentHtml(html = "") {
+  const trimmed = String(html || "").slice(0, MAX_STUDY_GUIDE_DOCUMENT_HTML_CHARS);
+  if (typeof window === "undefined" || typeof window.DOMParser === "undefined") {
+    return trimmed.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "").replace(/\son\w+="[^"]*"/gi, "");
+  }
+  const allowedTags = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "MARK", "SPAN"]);
+  const parser = new window.DOMParser();
+  const doc = parser.parseFromString(`<div>${trimmed}</div>`, "text/html");
+  const cleanNode = (node) => {
+    [...node.childNodes].forEach((child) => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        if (!allowedTags.has(child.tagName)) {
+          child.replaceWith(...child.childNodes);
+          return;
+        }
+        [...child.attributes].forEach((attribute) => {
+          const attrName = attribute.name.toLowerCase();
+          if (attrName === "style") {
+            const background = child.style.backgroundColor || "";
+            child.removeAttribute("style");
+            if (background && /^#|rgb|hsl|[a-z]/i.test(background)) child.style.backgroundColor = background;
+            return;
+          }
+          child.removeAttribute(attribute.name);
+        });
+        cleanNode(child);
+      }
+    });
+  };
+  cleanNode(doc.body);
+  return doc.body.firstElementChild?.innerHTML || "";
+}
+
+function getPlainTextFromStudyGuideHtml(html = "") {
+  if (typeof document === "undefined") return String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const node = document.createElement("div");
+  node.innerHTML = sanitizeStudyGuideDocumentHtml(html);
+  return node.innerText || node.textContent || "";
+}
+
 function getWorkspaceDraftStorageKey(email = "") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email);
   return normalizedEmail ? `${WORKSPACE_DRAFT_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_DRAFT_STORAGE_KEY;
@@ -3512,6 +3609,17 @@ function getStudyChatStorageKey(email = "", materialKey = "") {
     .replace(/^-+|-+$/g, "")
     .slice(0, 90) || "__current__";
   return `${STUDY_CHAT_STORAGE_KEY}:${normalizedEmail}:${normalizedMaterialKey}`;
+}
+
+function getStudyGuideDocumentStorageKey(email = "", materialKey = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email) || "__guest__";
+  const normalizedMaterialKey = String(materialKey || "__current__")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 90) || "__current__";
+  return `${STUDY_GUIDE_DOCUMENT_STORAGE_KEY}:${normalizedEmail}:${normalizedMaterialKey}`;
 }
 
 function getPendingJobStorageKey(email = "") {
@@ -4216,6 +4324,12 @@ function sanitizeHistoryItemForStorage(item = {}) {
     ...item,
     transcript: truncateStoredText(item?.transcript || "", MAX_STORAGE_TRANSCRIPT_CHARS),
     summary: truncateStoredText(item?.summary || "", MAX_STORAGE_SUMMARY_CHARS),
+    studyGuideDocumentHtml: item?.studyGuideDocumentHtml && typeof item.studyGuideDocumentHtml === "object"
+      ? Object.fromEntries(Object.entries(item.studyGuideDocumentHtml).map(([key, html]) => [
+        String(key).slice(0, 120),
+        sanitizeStudyGuideDocumentHtml(html),
+      ]))
+      : {},
     formula: truncateStoredText(item?.formula || "", MAX_STORAGE_SECTION_TEXT_CHARS),
     example: truncateStoredText(item?.example || "", MAX_STORAGE_SECTION_TEXT_CHARS),
     lectureNotes: truncateStoredText(item?.lectureNotes || "", MAX_STORAGE_SECTION_TEXT_CHARS),
@@ -4238,6 +4352,12 @@ function sanitizeWorkspaceSnapshotForStorage(snapshot = {}) {
     ...snapshot,
     transcript: truncateStoredText(snapshot?.transcript || "", MAX_STORAGE_TRANSCRIPT_CHARS),
     summary: truncateStoredText(snapshot?.summary || "", MAX_STORAGE_SUMMARY_CHARS),
+    studyGuideDocumentHtml: snapshot?.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object"
+      ? Object.fromEntries(Object.entries(snapshot.studyGuideDocumentHtml).map(([key, html]) => [
+        String(key).slice(0, 120),
+        sanitizeStudyGuideDocumentHtml(html),
+      ]))
+      : {},
     formula: truncateStoredText(snapshot?.formula || "", MAX_STORAGE_SECTION_TEXT_CHARS),
     example: truncateStoredText(snapshot?.example || "", MAX_STORAGE_SECTION_TEXT_CHARS),
     studyImages: sanitizeStudyImagesForStorage(snapshot?.studyImages),
@@ -6252,7 +6372,9 @@ export default function App() {
   const [isWorkspaceEditMode, setIsWorkspaceEditMode] = useState(false);
   const [isWorkspaceHighlightMode, setIsWorkspaceHighlightMode] = useState(false);
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState("");
-  const [guideEditDrafts, setGuideEditDrafts] = useState({});
+  const [studyGuideDocumentHtml, setStudyGuideDocumentHtml] = useState({});
+  const [activeHighlightColor, setActiveHighlightColor] = useState("#fef08a");
+  const [activeGuideEditorSectionKey, setActiveGuideEditorSectionKey] = useState("");
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -6284,6 +6406,9 @@ export default function App() {
   const [siteRatingMessage, setSiteRatingMessage] = useState("");
   const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
   const guideEditSaveTimerRef = useRef(null);
+  const studyGuideEditorRefs = useRef({});
+  const studyGuideDocumentSaveInProgressRef = useRef(false);
+  const lastSummarySignatureRef = useRef("");
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
   const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
   const [roomQuizResults, setRoomQuizResults] = useState({});
@@ -7609,11 +7734,14 @@ export default function App() {
   const studyChatMaterialKey = activeHistoryId
     || [
       workspaceFileLabel,
-      extractHistoryTitle(summary, workspaceFileLabel),
-      String(summary || transcript || lectureNotes || lectureSlides || pastQuestionPapers || "").slice(0, 120),
+      videoUrl,
+      lectureNoteFileNames.join("-"),
+      lectureSlideFileNames.join("-"),
+      pastQuestionPaperFileNames.join("-"),
     ].filter(Boolean).join("|")
     || "current-material";
   const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey);
+  const studyGuideDocumentStorageKey = getStudyGuideDocumentStorageKey(authEmail, studyChatMaterialKey);
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
@@ -7999,6 +8127,7 @@ export default function App() {
     videoUrl: overrides.videoUrl ?? videoUrl,
     transcript: overrides.transcript ?? transcript,
     summary: overrides.summary ?? summary,
+    studyGuideDocumentHtml: overrides.studyGuideDocumentHtml ?? studyGuideDocumentHtml,
     formula: overrides.formula ?? formula,
     example: overrides.example ?? example,
     flashcards: overrides.flashcards ?? flashcards,
@@ -8058,6 +8187,7 @@ export default function App() {
       setFile(null);
       setTranscript(snapshot.transcript || "");
       setSummary(snapshot.summary || "");
+      setStudyGuideDocumentHtml(snapshot.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object" ? snapshot.studyGuideDocumentHtml : {});
       setFormula(snapshot.formula || "");
       setExample(snapshot.example || "");
       setFlashcards(Array.isArray(snapshot.flashcards) ? snapshot.flashcards : []);
@@ -14251,6 +14381,66 @@ export default function App() {
   }, [chatMessages, studyChatStorageKey]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const fromHistory = activeHistoryItem?.studyGuideDocumentHtml;
+    if (fromHistory && typeof fromHistory === "object" && Object.keys(fromHistory).length) {
+      setStudyGuideDocumentHtml(fromHistory);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(studyGuideDocumentStorageKey) || "{}");
+      setStudyGuideDocumentHtml(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {});
+    } catch {
+      setStudyGuideDocumentHtml({});
+    }
+  }, [activeHistoryItem?.id, studyGuideDocumentStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(studyGuideDocumentStorageKey, JSON.stringify(studyGuideDocumentHtml));
+    } catch {
+      // Rich notes are best-effort in browser storage; history sync also stores them.
+    }
+  }, [studyGuideDocumentHtml, studyGuideDocumentStorageKey]);
+
+  useEffect(() => {
+    const signature = String(summary || "").slice(0, 4000);
+    if (!signature) {
+      lastSummarySignatureRef.current = "";
+      return;
+    }
+    if (!lastSummarySignatureRef.current) {
+      lastSummarySignatureRef.current = signature;
+      return;
+    }
+    if (lastSummarySignatureRef.current === signature) return;
+    if (studyGuideDocumentSaveInProgressRef.current) {
+      lastSummarySignatureRef.current = signature;
+      return;
+    }
+    if (Object.keys(studyGuideDocumentHtml || {}).length) {
+      const keepEdited = typeof window !== "undefined"
+        ? window.confirm("MABASO generated a new study guide. Keep your edited/highlighted version instead of replacing it?")
+        : false;
+      if (keepEdited) {
+        const editedSummary = rebuildSummaryFromStudyGuideDocument(studyGuideDocumentHtml);
+        studyGuideDocumentSaveInProgressRef.current = true;
+        setSummary(editedSummary);
+        window.setTimeout(() => {
+          studyGuideDocumentSaveInProgressRef.current = false;
+        }, 0);
+        lastSummarySignatureRef.current = editedSummary.slice(0, 4000);
+        return;
+      }
+      setStudyGuideDocumentHtml({});
+      setWorkspaceSaveStatus("New AI guide loaded. Old highlights removed.");
+      window.setTimeout(() => setWorkspaceSaveStatus(""), 2500);
+    }
+    lastSummarySignatureRef.current = signature;
+  }, [summary, studyGuideDocumentHtml]);
+
+  useEffect(() => {
     browserVoiceEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [browserVoiceMessages.length, isBrowserVoiceSpeaking, isBrowserVoiceListening]);
 
@@ -19415,6 +19605,7 @@ export default function App() {
     persistWorkspaceDraft({
       activeHistoryId: nextItem.id,
       summary: nextItem.summary ?? summary,
+      studyGuideDocumentHtml: nextItem.studyGuideDocumentHtml ?? studyGuideDocumentHtml,
       transcript: nextItem.transcript ?? transcript,
       formula: nextItem.formula ?? formula,
       example: nextItem.example ?? example,
@@ -19485,6 +19676,7 @@ export default function App() {
     startTransition(() => {
       setTranscript(item.transcript || "");
       setSummary(item.summary || "");
+      setStudyGuideDocumentHtml(item.studyGuideDocumentHtml && typeof item.studyGuideDocumentHtml === "object" ? item.studyGuideDocumentHtml : {});
       setFormula(item.formula || "");
       setExample(item.example || "");
       setFlashcards(item.flashcards || []);
@@ -22312,28 +22504,152 @@ export default function App() {
     || normalizeGuideHeading(section?.displayHeading || section?.heading || "")
   );
 
-  const updateGuideSectionEditDraft = (section, value) => {
+  const getStudyGuideSectionHtml = (section) => {
     const sectionKey = getGuideSectionEditKey(section);
-    if (!sectionKey) return;
-    setGuideEditDrafts((current) => ({ ...current, [sectionKey]: value }));
+    return sanitizeStudyGuideDocumentHtml(
+      studyGuideDocumentHtml[sectionKey]
+      || markdownToEditableStudyGuideHtml(section?.content || "")
+    );
+  };
+
+  const rebuildSummaryFromStudyGuideDocument = (nextDocumentHtml = studyGuideDocumentHtml) => {
+    const baseSummary = summary || formattedGuide || "";
+    return (visibleGuideSections || []).reduce((currentSummary, section) => {
+      const sectionKey = getGuideSectionEditKey(section);
+      const html = nextDocumentHtml[sectionKey];
+      if (!html) return currentSummary;
+      const plainText = getPlainTextFromStudyGuideHtml(html).trim();
+      return plainText ? replaceGuideSectionInSummary(currentSummary, section, plainText) : currentSummary;
+    }, baseSummary);
+  };
+
+  const queueStudyGuideDocumentSave = (nextDocumentHtml = studyGuideDocumentHtml) => {
     setWorkspaceSaveStatus("Saving...");
     if (guideEditSaveTimerRef.current) window.clearTimeout(guideEditSaveTimerRef.current);
     guideEditSaveTimerRef.current = window.setTimeout(() => {
-      setSummary((current) => replaceGuideSectionInSummary(current || summary || formattedGuide, section, value));
+      const nextSummary = rebuildSummaryFromStudyGuideDocument(nextDocumentHtml);
+      studyGuideDocumentSaveInProgressRef.current = true;
+      setSummary(nextSummary);
+      addHistoryItem({
+        id: activeHistoryId || "",
+        title: extractHistoryTitle(nextSummary, workspaceFileLabel),
+        fileName: workspaceFileLabel,
+        summary: nextSummary,
+        studyGuideDocumentHtml: nextDocumentHtml,
+        transcript,
+        formula,
+        example,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes,
+        lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames,
+        lectureSlides,
+        lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers,
+        pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+        presentationData: sanitizePresentationForHistory(presentationData),
+        podcastData: sanitizePodcastForHistory(podcastData),
+        teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+        reportData: normalizeReportData(reportData),
+        mindMapData: normalizeMindMapData(mindMapData),
+      });
       setWorkspaceSaveStatus("Saved ✓");
+      window.setTimeout(() => {
+        studyGuideDocumentSaveInProgressRef.current = false;
+      }, 0);
       window.setTimeout(() => setWorkspaceSaveStatus(""), 1800);
     }, 750);
   };
 
-  const applyWorkspaceHighlight = (color) => {
-    if (typeof document === "undefined") return;
+  const updateStudyGuideSectionHtml = (sectionKey, html, { immediate = false } = {}) => {
+    if (!sectionKey) return;
+    const cleanedHtml = sanitizeStudyGuideDocumentHtml(html);
+    setStudyGuideDocumentHtml((current) => {
+      const next = { ...current, [sectionKey]: cleanedHtml };
+      queueStudyGuideDocumentSave(next);
+      return next;
+    });
+    if (immediate) {
+      setWorkspaceSaveStatus("Saved ✓");
+      window.setTimeout(() => setWorkspaceSaveStatus(""), 1600);
+    }
+  };
+
+  const unwrapMarkElement = (mark) => {
+    if (!mark?.parentNode) return;
+    while (mark.firstChild) mark.parentNode.insertBefore(mark.firstChild, mark);
+    mark.remove();
+  };
+
+  const getActiveGuideEditor = () => {
     const selection = window.getSelection?.();
-    if (!selection || selection.isCollapsed) {
+    const anchor = selection?.anchorNode;
+    const fromSelection = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+    return fromSelection?.closest?.(".study-guide-rich-editor")
+      || studyGuideEditorRefs.current[activeGuideEditorSectionKey]
+      || null;
+  };
+
+  const saveActiveGuideEditor = (editor) => {
+    const sectionKey = editor?.dataset?.sectionKey || activeGuideEditorSectionKey;
+    if (!sectionKey || !editor) return;
+    updateStudyGuideSectionHtml(sectionKey, editor.innerHTML, { immediate: true });
+  };
+
+  const applyWorkspaceHighlight = (color = activeHighlightColor) => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const selection = window.getSelection?.();
+    const editor = getActiveGuideEditor();
+    if (!selection || selection.isCollapsed || !editor || !editor.contains(selection.anchorNode)) {
       setStatus("Select text in the study guide first, then choose a highlight colour.");
       return;
     }
-    document.execCommand("backColor", false, color);
-    setStatus("Highlighted selected text.");
+    const range = selection.getRangeAt(0);
+    const mark = document.createElement("mark");
+    mark.style.backgroundColor = color;
+    mark.dataset.mabasoHighlight = "true";
+    try {
+      mark.appendChild(range.extractContents());
+      range.insertNode(mark);
+      selection.removeAllRanges();
+      saveActiveGuideEditor(editor);
+      setStatus("Highlight saved.");
+    } catch {
+      setStatus("That exact selection could not be highlighted. Try selecting a smaller phrase.");
+    }
+  };
+
+  const eraseSelectedWorkspaceHighlight = () => {
+    if (typeof window === "undefined") return;
+    const selection = window.getSelection?.();
+    const editor = getActiveGuideEditor();
+    if (!selection || !editor) return;
+    const node = selection.anchorNode?.nodeType === 1 ? selection.anchorNode : selection.anchorNode?.parentElement;
+    const selectedMark = node?.closest?.("mark");
+    if (selectedMark && editor.contains(selectedMark)) {
+      unwrapMarkElement(selectedMark);
+      saveActiveGuideEditor(editor);
+      setStatus("Highlight removed.");
+      return;
+    }
+    setStatus("Tap or select highlighted text first.");
+  };
+
+  const clearActiveWorkspaceHighlights = () => {
+    const editor = getActiveGuideEditor();
+    if (!editor) {
+      setStatus("Open or select a study guide section first.");
+      return;
+    }
+    editor.querySelectorAll("mark").forEach(unwrapMarkElement);
+    saveActiveGuideEditor(editor);
+    setStatus("Highlights cleared for this section.");
   };
 
   const askStudyAssistant = async () => {
@@ -25276,9 +25592,10 @@ export default function App() {
                           ["Pink", "#fbcfe8"],
                           ["Orange", "#fed7aa"],
                         ].map(([label, color]) => (
-                          <button key={label} type="button" onClick={() => applyWorkspaceHighlight(color)} style={{ backgroundColor: color }} aria-label={`Highlight ${label}`} title={label} />
+                          <button key={label} type="button" onClick={() => { setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
                         ))}
-                        <button type="button" onClick={() => applyWorkspaceHighlight("transparent")} className="workspace-highlight-clear" title="Remove highlight" aria-label="Remove highlight">×</button>
+                        <button type="button" onClick={eraseSelectedWorkspaceHighlight} className="workspace-highlight-tool" title="Erase selected highlight" aria-label="Erase selected highlight">Erase</button>
+                        <button type="button" onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
                       </div>
                     ) : null}
                   </div>
@@ -25350,16 +25667,29 @@ export default function App() {
                                 </div>
                               </summary>
                               <div className="phone-safe-copy mt-4 max-w-none">
-                                {isWorkspaceEditMode ? (
-                                  <textarea
-                                    value={guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content}
-                                    onChange={(event) => updateGuideSectionEditDraft(section, event.target.value)}
-                                    className="study-guide-editable-area"
-                                    rows={Math.min(18, Math.max(8, Math.ceil(String((guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content) || "").length / 120)))}
-                                    aria-label={`Edit ${section.displayHeading || section.heading}`}
+                                {isWorkspaceEditMode || isWorkspaceHighlightMode || studyGuideDocumentHtml[getGuideSectionEditKey(section)] ? (
+                                  <div
+                                    ref={(node) => {
+                                      const sectionKey = getGuideSectionEditKey(section);
+                                      if (node) studyGuideEditorRefs.current[sectionKey] = node;
+                                      else delete studyGuideEditorRefs.current[sectionKey];
+                                    }}
+                                    className={`study-guide-rich-editor ${isWorkspaceEditMode ? "is-editing" : ""} ${isWorkspaceHighlightMode ? "is-highlighting" : ""}`}
+                                    contentEditable={isWorkspaceEditMode}
+                                    suppressContentEditableWarning
+                                    data-section-key={getGuideSectionEditKey(section)}
+                                    onFocus={() => setActiveGuideEditorSectionKey(getGuideSectionEditKey(section))}
+                                    onMouseUp={() => setActiveGuideEditorSectionKey(getGuideSectionEditKey(section))}
+                                    onKeyUp={(event) => {
+                                      const sectionKey = getGuideSectionEditKey(section);
+                                      setActiveGuideEditorSectionKey(sectionKey);
+                                      if (isWorkspaceEditMode) updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    }}
+                                    onInput={(event) => updateStudyGuideSectionHtml(getGuideSectionEditKey(section), event.currentTarget.innerHTML)}
+                                    dangerouslySetInnerHTML={{ __html: getStudyGuideSectionHtml(section) }}
                                   />
                                 ) : (
-                                  <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content} />
+                                  <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
                                 )}
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
