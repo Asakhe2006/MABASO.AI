@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -102,6 +102,7 @@ const TEACHER_REALTIME_CONNECTION_STATES = {
 };
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
+const STUDY_CHAT_STORAGE_KEY = "mabaso-study-chat-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
@@ -3070,9 +3071,9 @@ function buildSpeechChunks(text = "", maxLength = 420) {
 
 function getTeacherSpeechRate(pace = "balanced", mode = "lesson") {
   const normalizedPace = String(pace || "balanced").toLowerCase();
-  if (normalizedPace === "slow") return mode === "answer" ? 0.86 : 0.82;
-  if (normalizedPace === "fast") return mode === "answer" ? 0.98 : 0.94;
-  return mode === "answer" ? 0.92 : 0.88;
+  if (normalizedPace === "slow") return mode === "answer" ? 0.92 : 0.84;
+  if (normalizedPace === "fast") return mode === "answer" ? 1.08 : 0.98;
+  return mode === "answer" ? 1.02 : 0.9;
 }
 
 function formatTutorTimestampLabel(value = "") {
@@ -3500,6 +3501,17 @@ function saveBillingStatusCache(email = "", snapshot = null) {
 function getWorkspaceDraftStorageKey(email = "") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email);
   return normalizedEmail ? `${WORKSPACE_DRAFT_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_DRAFT_STORAGE_KEY;
+}
+
+function getStudyChatStorageKey(email = "", materialKey = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email) || "__guest__";
+  const normalizedMaterialKey = String(materialKey || "__current__")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 90) || "__current__";
+  return `${STUDY_CHAT_STORAGE_KEY}:${normalizedEmail}:${normalizedMaterialKey}`;
 }
 
 function getPendingJobStorageKey(email = "") {
@@ -6237,6 +6249,10 @@ export default function App() {
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
   const [copiedActiveContent, setCopiedActiveContent] = useState(false);
   const [downloadActionState, setDownloadActionState] = useState("");
+  const [isWorkspaceEditMode, setIsWorkspaceEditMode] = useState(false);
+  const [isWorkspaceHighlightMode, setIsWorkspaceHighlightMode] = useState(false);
+  const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState("");
+  const [guideEditDrafts, setGuideEditDrafts] = useState({});
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -6267,6 +6283,7 @@ export default function App() {
   const [siteRatingComment, setSiteRatingComment] = useState("");
   const [siteRatingMessage, setSiteRatingMessage] = useState("");
   const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
+  const guideEditSaveTimerRef = useRef(null);
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
   const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
   const [roomQuizResults, setRoomQuizResults] = useState({});
@@ -7504,6 +7521,14 @@ export default function App() {
   const formulaRows = parseFormulaRows(formattedFormula);
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
+  const studyChatMaterialKey = activeHistoryId
+    || [
+      workspaceFileLabel,
+      extractHistoryTitle(summary, workspaceFileLabel),
+      String(summary || transcript || lectureNotes || lectureSlides || pastQuestionPapers || "").slice(0, 120),
+    ].filter(Boolean).join("|")
+    || "current-material";
+  const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey);
   const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
   const workspaceSearchResults = workspaceSearchQuery.trim()
     ? WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => ({ ...tool, groupLabel: group.label, groupId: group.id })))
@@ -9370,7 +9395,7 @@ export default function App() {
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Voice Conversation</p>
                 <h3 className="browser-voice-conversation-heading mt-2 text-2xl font-semibold text-white">Ask Mabaso anything</h3>
               </div>
-              <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
+              <div className="browser-only-badge rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">
                 Browser only
               </div>
             </div>
@@ -9382,7 +9407,7 @@ export default function App() {
                   {message.role === "assistant" && message.sources?.length ? <p className="mt-3 text-xs text-emerald-100/70">Source: {message.sources.join(", ")}</p> : null}
                 </div>
               )) : (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">
+                <div className="browser-voice-empty-copy rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-sm leading-7 text-slate-300">
                   Ask a question and MABASO will answer like a tutor.
                 </div>
               )}
@@ -14184,6 +14209,46 @@ export default function App() {
   useEffect(() => {
     studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [chatMessages.length, isAskingChat]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(studyChatStorageKey) || "[]");
+      if (!Array.isArray(parsed)) {
+        setChatMessages([]);
+        return;
+      }
+      setChatMessages(parsed
+        .filter((message) => message && ["user", "assistant"].includes(message.role))
+        .slice(-60)
+        .map((message, index) => ({
+          id: String(message.id || `stored-study-chat-${index}`),
+          role: message.role,
+          content: String(message.content || ""),
+          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_IMAGES) : [],
+        })));
+    } catch {
+      setChatMessages([]);
+    }
+  }, [studyChatStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const persistableMessages = chatMessages
+        .filter((message) => message && ["user", "assistant"].includes(message.role) && message.content !== "Thinking...")
+        .slice(-60)
+        .map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: String(message.content || "").slice(0, 12000),
+          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_IMAGES) : [],
+        }));
+      window.localStorage.setItem(studyChatStorageKey, JSON.stringify(persistableMessages));
+    } catch {
+      // Keep chat persistence best-effort so a full browser storage quota never breaks the app.
+    }
+  }, [chatMessages, studyChatStorageKey]);
 
   useEffect(() => {
     browserVoiceEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -22242,6 +22307,35 @@ export default function App() {
     }
   };
 
+  const getGuideSectionEditKey = (section) => (
+    section?.normalizedHeading
+    || normalizeGuideHeading(section?.displayHeading || section?.heading || "")
+  );
+
+  const updateGuideSectionEditDraft = (section, value) => {
+    const sectionKey = getGuideSectionEditKey(section);
+    if (!sectionKey) return;
+    setGuideEditDrafts((current) => ({ ...current, [sectionKey]: value }));
+    setWorkspaceSaveStatus("Saving...");
+    if (guideEditSaveTimerRef.current) window.clearTimeout(guideEditSaveTimerRef.current);
+    guideEditSaveTimerRef.current = window.setTimeout(() => {
+      setSummary((current) => replaceGuideSectionInSummary(current || summary || formattedGuide, section, value));
+      setWorkspaceSaveStatus("Saved ✓");
+      window.setTimeout(() => setWorkspaceSaveStatus(""), 1800);
+    }, 750);
+  };
+
+  const applyWorkspaceHighlight = (color) => {
+    if (typeof document === "undefined") return;
+    const selection = window.getSelection?.();
+    if (!selection || selection.isCollapsed) {
+      setStatus("Select text in the study guide first, then choose a highlight colour.");
+      return;
+    }
+    document.execCommand("backColor", false, color);
+    setStatus("Highlighted selected text.");
+  };
+
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
     if (!question) {
@@ -22280,7 +22374,7 @@ export default function App() {
     try {
       const answer = await requestStudyAssistantAnswer({
         question,
-        history: updatedHistory.slice(-6),
+        history: updatedHistory.slice(-4),
         referenceImages: referenceImagesForQuestion,
         deliveryMode: "chat",
         currentSection: activeTab,
@@ -22412,17 +22506,33 @@ export default function App() {
 
   const renderStudyChatPanel = ({ compact = false } = {}) => (
     <>
-      <div className={`space-y-4 ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
+      <div className={`study-chat-panel ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
         <div className="force-mobile-stack flex items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Chat</p>
             <h4 className="mt-2 text-2xl font-semibold text-white">Ask Mabaso anything.</h4>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Ask about the guide, a photo, an exam question, or a general question.</p>
           </div>
           <button type="button" onClick={lectureAssistant.createConversation} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">New Chat</button>
         </div>
 
-        <div className="rounded-[24px] border border-white/10 bg-slate-950/85 p-4">
+        <div className="study-chat-messages">
+          {chatMessages.length ? chatMessages.slice(-12).map((message, index) => (
+            <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}>
+              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+              {Array.isArray(message.images) && message.images.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.images.map((image) => <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />)}
+                </div>
+              ) : null}
+              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
+            </div>
+          )) : (
+            <div className="study-chat-empty">Start a conversation with MABASO.</div>
+          )}
+          <div ref={studyChatEndRef} />
+        </div>
+
+        <div className="study-chat-composer rounded-[24px] border border-white/10 bg-slate-950/85 p-4">
           <div className="force-mobile-stack flex items-end gap-3">
             <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_IMAGES} className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xl font-semibold text-white disabled:opacity-50" aria-label="Add question photo">+</button>
             <textarea
@@ -22458,23 +22568,6 @@ export default function App() {
           ) : null}
           <p className="mt-3 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : lectureAssistant.statusText}</p>
         </div>
-
-        <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
-          {chatMessages.length ? chatMessages.slice(-8).map((message, index) => (
-            <div key={message.id || `${message.role}-${index}`} className={`rounded-2xl border px-4 py-3 ${message.role === "assistant" ? "border-emerald-300/20 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
-              <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
-              {Array.isArray(message.images) && message.images.length ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {message.images.map((image) => <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />)}
-                </div>
-              ) : null}
-              <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
-            </div>
-          )) : (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">No study chat messages yet.</div>
-          )}
-          <div ref={studyChatEndRef} />
-        </div>
       </div>
     </>
   );
@@ -22497,7 +22590,7 @@ export default function App() {
 
     const voices = window.speechSynthesis.getVoices();
     const selectedVoice = resolveTeacherVoice(voices, selectedTeacherVoiceName, outputLanguage);
-    const speechChunks = buildSpeechChunks(cleanedAnswer, 360);
+    const speechChunks = buildSpeechChunks(cleanedAnswer, 280);
     if (!speechChunks.length) {
       onComplete?.();
       return;
@@ -22534,7 +22627,7 @@ export default function App() {
         teacherSpeechTimerRef.current = window.setTimeout(() => {
           teacherSpeechTimerRef.current = null;
           speakChunk(chunkIndex + 1);
-        }, 150);
+        }, 35);
       };
       utterance.onerror = () => {
         if (teacherAnswerRunRef.current !== runId) return;
@@ -22574,11 +22667,12 @@ export default function App() {
       const answer = await requestStudyAssistantAnswer({
         question,
         history: [
-          ...chatMessages.slice(-4),
+          ...chatMessages.slice(-2),
           ...(currentSection ? [{ role: "assistant", content: `Tutor was currently teaching: ${currentSection}` }] : []),
         ],
         deliveryMode: "teacher_interrupt",
         currentSection,
+        responseLength: "concise",
       });
       if (teacherQuestionRequestRunRef.current !== requestRunId) return;
       const teacherAnswerReadyAt = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -25166,6 +25260,29 @@ export default function App() {
                     </button>
                     {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("current", downloadActiveContent); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full", downloadFullStudyPackPdf); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("quiz", downloadQuizPdf); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("presentation", downloadPresentationFile); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("podcast", downloadPodcastAudio); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("report", downloadActiveContent); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
                   </div>
+                  <button type="button" onClick={() => setIsWorkspaceEditMode((current) => !current)} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide">
+                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <div className="relative">
+                    <button type="button" onClick={() => setIsWorkspaceHighlightMode((current) => !current)} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text">
+                      <Highlighter className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                    {isWorkspaceHighlightMode ? (
+                      <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours">
+                        {[
+                          ["Yellow", "#fef08a"],
+                          ["Green", "#bbf7d0"],
+                          ["Blue", "#bfdbfe"],
+                          ["Pink", "#fbcfe8"],
+                          ["Orange", "#fed7aa"],
+                        ].map(([label, color]) => (
+                          <button key={label} type="button" onClick={() => applyWorkspaceHighlight(color)} style={{ backgroundColor: color }} aria-label={`Highlight ${label}`} title={label} />
+                        ))}
+                        <button type="button" onClick={() => applyWorkspaceHighlight("transparent")} className="workspace-highlight-clear" title="Remove highlight" aria-label="Remove highlight">×</button>
+                      </div>
+                    ) : null}
+                  </div>
+                  {workspaceSaveStatus ? <span className="workspace-save-status">{workspaceSaveStatus}</span> : null}
                   {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
                   <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
                   </div>
@@ -25233,7 +25350,17 @@ export default function App() {
                                 </div>
                               </summary>
                               <div className="phone-safe-copy mt-4 max-w-none">
-                                <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={section.content} />
+                                {isWorkspaceEditMode ? (
+                                  <textarea
+                                    value={guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content}
+                                    onChange={(event) => updateGuideSectionEditDraft(section, event.target.value)}
+                                    className="study-guide-editable-area"
+                                    rows={Math.min(18, Math.max(8, Math.ceil(String((guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content) || "").length / 120)))}
+                                    aria-label={`Edit ${section.displayHeading || section.heading}`}
+                                  />
+                                ) : (
+                                  <StudyGuideVisualGallery sectionHeading={section.displayHeading || section.heading} content={guideEditDrafts[getGuideSectionEditKey(section)] ?? section.content} />
+                                )}
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
                               <div className="mt-4 grid gap-3 md:grid-cols-2">

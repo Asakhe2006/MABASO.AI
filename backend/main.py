@@ -858,6 +858,15 @@ The notes should feel like:
 - visually organized,
 - optimized for exam revision.
 
+GAMMA-LEVEL EDUCATIONAL QUALITY RULES
+- Make the guide feel like premium lecture material, not a plain transcript summary.
+- Each major topic should flow through a short introduction, key concept, explanation, example, practical application, important note, common mistake, exam tip, and quick summary when those parts genuinely fit.
+- Use educational highlight blocks such as Definition, Remember, Exam Tip, Warning, Worked Example, Formula, Shortcut, and Key Takeaway only when they improve learning.
+- When images or suggested visuals are useful, explain why the visual belongs there, what it shows, and how it connects back to the lesson.
+- Prefer diagrams, flowcharts, process illustrations, timelines, labelled components, graphs, or comparison cards when they teach better than a generic photo.
+- At the end of major topics, include revision support such as Key Points, Quick Revision, Common Exam Questions, Memory Tricks, Important Formulas, or Common Mistakes when relevant.
+- Write with smooth transitions, natural academic language, and lecturer-level clarity. Remove robotic wording, duplicated explanations, repeated headings, and filler.
+
 WORLDWIDE LANGUAGE QUALITY RULES
 - Write the final study guide naturally in the requested output language. Never perform literal word-for-word translation.
 - First understand the lecture content, then rewrite it as if an experienced lecturer, textbook author, or tutor originally wrote it in that language.
@@ -17572,6 +17581,10 @@ VISUAL RULES:
 - Use elegant dividers
 - Use premium color contrast
 - Use modern alignment systems
+- Choose visuals for teaching value, not decoration.
+- Prefer diagrams, flowcharts, labelled components, timelines, process illustrations, charts, or architecture sketches when they explain the topic better than a photo.
+- Every visual idea must have a clear educational purpose, a concise caption, and a connection to the slide's main lesson.
+- Never place unexplained images or generic stock-like visuals.
 
 FONT PAIRING RULES:
 - Headings use premium modern fonts
@@ -20287,6 +20300,9 @@ async def generate_academic_report_package(
         "You are an elite academic report generation engine for university and professional students. "
         "Create deeply structured, submission-ready reports from the provided lecture and study material. "
         "Write naturally and academically, with clear reasoning, varied sentence structure, and strong transitions. "
+        "Upgrade the report to Gamma-level quality: premium hierarchy, polished section flow, clear explanatory blocks, "
+        "high-value examples, practical applications, concise tables only when they improve understanding, and strong visual organization in Markdown. "
+        "Every major section should teach, analyze, and guide the reader instead of simply listing information. "
         "Do not fabricate exact statistics, URLs, DOIs, page numbers, or direct quotations. "
         "When external references are needed, use credible field-standard sources and avoid unverifiable precision. "
         "Return strict JSON only with keys: report_title, report_body, report_sections. "
