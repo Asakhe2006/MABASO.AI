@@ -4393,6 +4393,9 @@ function sanitizeStudyImagesForStorage(images) {
       matched_section: image?.matched_section || "",
       key_highlight: truncateStoredText(image?.key_highlight || "", 260),
       diagram_label: image?.diagram_label || "",
+      caption: truncateStoredText(image?.caption || "", 360),
+      ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
+      figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
     }))
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
     .slice(0, 6);
@@ -4410,6 +4413,9 @@ function sanitizeStudyImagesForCollaboration(images) {
       matched_section: image?.matched_section || "",
       key_highlight: truncateStoredText(image?.key_highlight || "", 260),
       diagram_label: image?.diagram_label || "",
+      caption: truncateStoredText(image?.caption || "", 360),
+      ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
+      figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
     }))
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
     .slice(0, 6);
@@ -6224,23 +6230,34 @@ function StudyGuideImageCards({ images = [] }) {
   if (!images.length) return null;
   return (
     <div className="mt-4 grid gap-4 md:grid-cols-2">
-      {images.map((image, index) => (
-        <figure key={`${image.image_url || image.title || "study-image"}-${index}`} className="overflow-hidden rounded-[22px] border border-slate-200 bg-slate-950 shadow-[0_16px_34px_rgba(15,23,42,0.14)]" onContextMenu={(event) => event.preventDefault()}>
-          <img
-            src={image.image_url}
-            alt={image.title || image.query || `Study visual ${index + 1}`}
-            className="h-56 w-full select-none object-cover"
-            draggable={false}
-            loading="lazy"
-            referrerPolicy="no-referrer"
-          />
-          <figcaption className="space-y-2 p-4">
-            <p className="text-sm font-semibold text-white">{image.title || image.query || `Study visual ${index + 1}`}</p>
-            <p className="text-xs uppercase tracking-[0.18em] text-emerald-200/70">{image.matched_section || image.query || "Visual learning"}</p>
-            <p className="text-sm leading-6 text-slate-300">{image.key_highlight || image.diagram_label || "Use this image as a visual anchor for this explanation."}</p>
-          </figcaption>
-        </figure>
-      ))}
+      {images.map((image, index) => {
+        const figureNumber = Number(image.figure_number || image.figureNumber || index + 1);
+        const title = image.title || image.query || image.diagram_label || `Study visual ${figureNumber}`;
+        const caption = image.caption || image.key_highlight || image.diagram_label || "Use this visual as a study anchor for the explanation beside it.";
+        const explanation = image.ai_explanation || image.explanation || image.purpose || caption;
+        return (
+          <figure key={`${image.image_url || image.title || "study-image"}-${index}`} className="study-guide-figure overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-[0_12px_28px_rgba(15,23,42,0.08)]" onContextMenu={(event) => event.preventDefault()}>
+            <img
+              src={image.image_url}
+              alt={title}
+              className="h-56 w-full select-none object-cover"
+              draggable={false}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+            />
+            <figcaption className="space-y-3 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Figure {figureNumber}</p>
+              <p className="text-base font-semibold leading-6 text-slate-950">{title}</p>
+              <p className="text-sm leading-6 text-slate-600">{caption}</p>
+              <details className="study-guide-figure-explainer rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">Explain this figure</summary>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{explanation}</p>
+                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{image.matched_section || "Study visual"}</p>
+              </details>
+            </figcaption>
+          </figure>
+        );
+      })}
     </div>
   );
 }
@@ -6503,6 +6520,7 @@ export default function App() {
   const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
   const guideEditSaveTimerRef = useRef(null);
   const studyGuideEditorRefs = useRef({});
+  const studyGuideDocumentDraftRef = useRef({});
   const activeGuideSelectionRef = useRef(null);
   const studyGuideDocumentSaveInProgressRef = useRef(false);
   const lastSummarySignatureRef = useRef("");
@@ -15988,7 +16006,10 @@ export default function App() {
   }
 
   function getVisibleStudyImages(images = studyImages) {
-    return images || [];
+    return (images || []).map((image, index) => ({
+      ...image,
+      figure_number: Number(image?.figure_number || image?.figureNumber || 0) || index + 1,
+    }));
   }
 
   function getAllowedPodcastSpeakerCount() {
@@ -19667,8 +19688,14 @@ export default function App() {
     };
   }, [activePodcastSegment?.objectUrl, activePodcastSegmentIndex, isPodcastAutoPlaying]);
 
+  const getCurrentStudyGuideContent = () => (
+    Object.keys(collectCurrentStudyGuideDocumentHtml?.() || {}).length
+      ? rebuildSummaryFromStudyGuideDocument(collectCurrentStudyGuideDocumentHtml())
+      : (formattedGuide || summary || "")
+  );
+
   const getActiveContent = () => {
-    if (activeTab === "guide") return formattedGuide || "No study guide generated yet.";
+    if (activeTab === "guide") return getCurrentStudyGuideContent() || "No study guide generated yet.";
     if (activeTab === "transcript") return transcript || "No transcript generated yet.";
     if (activeTab === "formulas") return formattedFormula || "No formulas generated yet.";
     if (activeTab === "examples") return cleanedExampleContent || "No worked examples generated yet.";
@@ -19683,7 +19710,7 @@ export default function App() {
   };
 
   const buildCurrentStudyPackSections = () => [
-    { title: "Study Guide", content: formattedGuide || summary, images: sanitizeStudyImagesForStorage(getVisibleStudyImages(studyImages)) },
+    { title: "Study Guide", content: getCurrentStudyGuideContent() || formattedGuide || summary, images: sanitizeStudyImagesForStorage(getVisibleStudyImages(studyImages)) },
     { title: "Transcript", content: transcript },
     { title: "Past Question Paper References", content: pastQuestionPapers },
     { title: "Formulas", content: formattedFormula || formula },
@@ -22604,9 +22631,24 @@ export default function App() {
   const getStudyGuideSectionHtml = (section) => {
     const sectionKey = getGuideSectionEditKey(section);
     return sanitizeStudyGuideDocumentHtml(
-      studyGuideDocumentHtml[sectionKey]
+      studyGuideDocumentDraftRef.current[sectionKey]
+      || studyGuideEditorRefs.current[sectionKey]?.innerHTML
+      || studyGuideDocumentHtml[sectionKey]
       || markdownToEditableStudyGuideHtml(section?.content || "")
     );
+  };
+
+  const collectCurrentStudyGuideDocumentHtml = (baseDocumentHtml = studyGuideDocumentHtml) => {
+    const nextDocumentHtml = {
+      ...(baseDocumentHtml || {}),
+      ...(studyGuideDocumentDraftRef.current || {}),
+    };
+    Object.entries(studyGuideEditorRefs.current || {}).forEach(([sectionKey, editor]) => {
+      if (sectionKey && editor?.innerHTML) {
+        nextDocumentHtml[sectionKey] = sanitizeStudyGuideDocumentHtml(editor.innerHTML);
+      }
+    });
+    return nextDocumentHtml;
   };
 
   const rebuildSummaryFromStudyGuideDocument = (nextDocumentHtml = studyGuideDocumentHtml) => {
@@ -22624,15 +22666,18 @@ export default function App() {
     setWorkspaceSaveStatus("Saving...");
     if (guideEditSaveTimerRef.current) window.clearTimeout(guideEditSaveTimerRef.current);
     guideEditSaveTimerRef.current = window.setTimeout(() => {
-      const nextSummary = rebuildSummaryFromStudyGuideDocument(nextDocumentHtml);
+      const syncedDocumentHtml = collectCurrentStudyGuideDocumentHtml(nextDocumentHtml);
+      const nextSummary = rebuildSummaryFromStudyGuideDocument(syncedDocumentHtml);
       studyGuideDocumentSaveInProgressRef.current = true;
+      studyGuideDocumentDraftRef.current = {};
+      setStudyGuideDocumentHtml(syncedDocumentHtml);
       setSummary(nextSummary);
       addHistoryItem({
         id: activeHistoryId || "",
         title: extractHistoryTitle(nextSummary, workspaceFileLabel),
         fileName: workspaceFileLabel,
         summary: nextSummary,
-        studyGuideDocumentHtml: nextDocumentHtml,
+        studyGuideDocumentHtml: syncedDocumentHtml,
         transcript,
         formula,
         example,
@@ -22667,13 +22712,18 @@ export default function App() {
   const updateStudyGuideSectionHtml = (sectionKey, html, { immediate = false } = {}) => {
     if (!sectionKey) return;
     const cleanedHtml = sanitizeStudyGuideDocumentHtml(html);
-    setStudyGuideDocumentHtml((current) => {
-      if (current[sectionKey] === cleanedHtml) return current;
-      const next = { ...current, [sectionKey]: cleanedHtml };
-      queueStudyGuideDocumentSave(next);
-      return next;
-    });
+    const currentHtml = studyGuideDocumentDraftRef.current[sectionKey] || studyGuideDocumentHtml[sectionKey] || "";
+    if (currentHtml === cleanedHtml) return;
+    const next = {
+      ...studyGuideDocumentHtml,
+      ...studyGuideDocumentDraftRef.current,
+      [sectionKey]: cleanedHtml,
+    };
+    studyGuideDocumentDraftRef.current = next;
+    queueStudyGuideDocumentSave(next);
     if (immediate) {
+      studyGuideDocumentDraftRef.current = {};
+      setStudyGuideDocumentHtml(next);
       setWorkspaceSaveStatus("Saved ✓");
       window.setTimeout(() => setWorkspaceSaveStatus(""), 1600);
     }
@@ -22768,7 +22818,13 @@ export default function App() {
     const editor = restoredEditor || getActiveGuideEditor();
     if (!selection || !editor) return;
     const node = selection.anchorNode?.nodeType === 1 ? selection.anchorNode : selection.anchorNode?.parentElement;
-    const selectedMark = node?.closest?.("mark");
+    const range = selection.rangeCount ? selection.getRangeAt(0) : null;
+    const rangeContainer = range?.commonAncestorContainer?.nodeType === 1
+      ? range.commonAncestorContainer
+      : range?.commonAncestorContainer?.parentElement;
+    const selectedMark = node?.closest?.("mark")
+      || rangeContainer?.closest?.("mark")
+      || [...editor.querySelectorAll("mark")].find((mark) => selection.containsNode?.(mark, true));
     if (selectedMark && editor.contains(selectedMark)) {
       unwrapMarkElement(selectedMark);
       saveActiveGuideEditor(editor);
@@ -24130,6 +24186,28 @@ export default function App() {
     window.URL.revokeObjectURL(url);
   };
 
+  const exportStudyPackDocx = async (title, sections) => {
+    const response = await authFetch("/export-study-pack-docx/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, sections }),
+      timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
+    });
+    if (!response.ok) {
+      const data = await parseJsonSafe(response);
+      throw new Error(data.detail || "DOCX export failed.");
+    }
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${sanitizeFileName(title)}.docx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
   const copyActiveContent = async () => {
     try {
       await navigator.clipboard.writeText(getActiveContent());
@@ -24143,9 +24221,10 @@ export default function App() {
 
   const copyGuideSection = async (section) => {
     const sectionKey = section?.normalizedHeading || normalizeGuideHeading(section?.displayHeading || section?.heading);
+    const editedText = getPlainTextFromStudyGuideHtml(studyGuideDocumentHtml[sectionKey] || "").trim();
     const text = [
       section?.displayHeading || section?.heading || "",
-      section?.content || "",
+      editedText || section?.content || "",
     ].filter(Boolean).join("\n\n").trim();
     if (!text) return;
     try {
@@ -24184,6 +24263,20 @@ export default function App() {
     }
   };
 
+  const downloadActiveContentDocx = async () => {
+    try {
+      const baseTitle = extractHistoryTitle(summary, file?.name || workspaceFileLabel || currentTabLabel);
+      await exportStudyPackDocx(`${baseTitle} - ${currentTabLabel}`, [{
+        title: currentTabLabel,
+        content: getActiveContent(),
+        images: activeTab === "guide" ? sanitizeStudyImagesForStorage(getVisibleStudyImages(studyImages)) : [],
+      }]);
+      setStatus(`${currentTabLabel} DOCX downloaded.`);
+    } catch (err) {
+      setError(err.message || "DOCX download failed.");
+    }
+  };
+
   const downloadFullStudyPackPdf = async () => {
     try {
       const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Pack");
@@ -24191,6 +24284,16 @@ export default function App() {
       setStatus("Full study pack PDF downloaded.");
     } catch (err) {
       setError(err.message || "Could not create the full study pack PDF.");
+    }
+  };
+
+  const downloadFullStudyPackDocx = async () => {
+    try {
+      const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Pack");
+      await exportStudyPackDocx(title, buildCurrentStudyPackSections());
+      setStatus("Full study pack DOCX downloaded.");
+    } catch (err) {
+      setError(err.message || "Could not create the full study pack DOCX.");
     }
   };
 
@@ -24204,6 +24307,31 @@ export default function App() {
       setError(err.message || "Could not create the test PDF.");
     }
   };
+
+  const renderDownloadMenu = () => (
+    <div className="absolute left-0 top-full z-20 mt-2 min-w-[250px] rounded-[18px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]">
+      <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("current", downloadActiveContent); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
+        <span>Current section PDF</span>
+        <span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span>
+      </button>
+      <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("current-docx", downloadActiveContentDocx); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
+        <span>Current section DOCX</span>
+        <span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span>
+      </button>
+      <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full", downloadFullStudyPackPdf); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
+        <span>Full study pack PDF</span>
+        <span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span>
+      </button>
+      <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full-docx", downloadFullStudyPackDocx); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
+        <span>Full study pack DOCX</span>
+        <span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span>
+      </button>
+      {activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("quiz", downloadQuizPdf); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}
+      {activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("presentation", downloadPresentationFile); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}
+      {activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("podcast", downloadPodcastAudio); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}
+      {activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("report", downloadActiveContent); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}
+    </div>
+  );
 
   const downloadPresentationFile = async () => {
     if (!presentationData.jobId) return setError("Generate the PowerPoint presentation again to download the file.");
@@ -25711,7 +25839,7 @@ export default function App() {
                     <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download">
                       {downloadActionState.endsWith(":done") ? <Check className="h-4 w-4" aria-hidden="true" /> : downloadActionState ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
                     </button>
-                    {isDownloadMenuOpen ? <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-[22px] border border-white/10 bg-slate-950/95 p-2 shadow-[0_18px_40px_rgba(2,8,23,0.45)]"><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("current", downloadActiveContent); }} disabled={!canExportCurrent} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Current section PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span></button><button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full", downloadFullStudyPackPdf); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Full study pack PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span></button>{activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("quiz", downloadQuizPdf); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}{activeTab === "presentation" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("presentation", downloadPresentationFile); }} disabled={!presentationData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>PowerPoint file</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PPTX</span></button> : null}{activeTab === "podcast" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("podcast", downloadPodcastAudio); }} disabled={!podcastData.jobId} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Podcast audio</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">MP3</span></button> : null}{activeTab === "report" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("report", downloadActiveContent); }} disabled={!(reportData && (reportData.jobId || (reportData.body || "").trim()))} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Academic Report PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">PDF</span></button> : null}</div> : null}
+                    {isDownloadMenuOpen ? renderDownloadMenu() : null}
                   </div>
                   <button type="button" onClick={() => setIsWorkspaceEditMode((current) => !current)} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide">
                     <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -25729,10 +25857,10 @@ export default function App() {
                           ["Pink", "#fbcfe8"],
                           ["Orange", "#fed7aa"],
                         ].map(([label, color]) => (
-                          <button key={label} type="button" onClick={() => { setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
+                          <button key={label} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
                         ))}
-                        <button type="button" onClick={eraseSelectedWorkspaceHighlight} className="workspace-highlight-tool" title="Erase selected highlight" aria-label="Erase selected highlight">Erase</button>
-                        <button type="button" onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={eraseSelectedWorkspaceHighlight} className="workspace-highlight-tool" title="Erase selected highlight" aria-label="Erase selected highlight">Erase</button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
                       </div>
                     ) : null}
                   </div>
@@ -25812,11 +25940,22 @@ export default function App() {
                                       else delete studyGuideEditorRefs.current[sectionKey];
                                     }}
                                     className={`study-guide-rich-editor ${isWorkspaceEditMode ? "is-editing" : ""} ${isWorkspaceHighlightMode ? "is-highlighting" : ""}`}
-                                    contentEditable={isWorkspaceEditMode}
+                                    contentEditable={isWorkspaceEditMode || isWorkspaceHighlightMode}
                                     suppressContentEditableWarning
                                     data-section-key={getGuideSectionEditKey(section)}
                                     tabIndex={isWorkspaceEditMode || isWorkspaceHighlightMode ? 0 : undefined}
-                                    onFocus={(event) => setActiveGuideEditorSectionKey(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section))}
+                                    onFocus={(event) => {
+                                      const sectionKey = event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section);
+                                      setActiveGuideEditorSectionKey(sectionKey);
+                                      captureGuideEditorSelection(sectionKey, event.currentTarget);
+                                    }}
+                                    onBeforeInput={(event) => {
+                                      if (!isWorkspaceEditMode) event.preventDefault();
+                                    }}
+                                    onPaste={(event) => {
+                                      if (!isWorkspaceEditMode) event.preventDefault();
+                                    }}
+                                    onBlur={(event) => updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true })}
                                     onMouseUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                     onPointerUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                     onTouchEnd={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}

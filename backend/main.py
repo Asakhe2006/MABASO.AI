@@ -860,11 +860,14 @@ The notes should feel like:
 
 GAMMA-LEVEL EDUCATIONAL QUALITY RULES
 - Make the guide feel like premium lecture material, not a plain transcript summary.
-- Each major topic should flow through a short introduction, key concept, explanation, example, practical application, important note, common mistake, exam tip, and quick summary when those parts genuinely fit.
-- Use educational highlight blocks such as Definition, Remember, Exam Tip, Warning, Worked Example, Formula, Shortcut, and Key Takeaway only when they improve learning.
-- When images or suggested visuals are useful, explain why the visual belongs there, what it shows, and how it connects back to the lesson.
+- Replace long AI-style openings with a concise, engaging introduction that tells the student what they will learn and why it matters.
+- Each major topic should follow this teaching flow whenever it fits: Definition -> Explanation -> Diagram or suggested visual -> Example -> Exam Tip -> Key Takeaway -> Summary.
+- Use educational callout blocks such as Definition, Remember, Exam Tip, Common Mistake, Worked Example, Deep Dive, Formula, Shortcut, and Key Takeaway only when they improve learning.
+- Format callouts as Markdown blockquotes, for example: > **Exam Tip:** Focus on the command word before choosing the formula.
+- When images or suggested visuals are useful, explain why the visual belongs there, what it shows, and what students should notice for exams.
 - Prefer diagrams, flowcharts, process illustrations, timelines, labelled components, graphs, or comparison cards when they teach better than a generic photo.
-- At the end of major topics, include revision support such as Key Points, Quick Revision, Common Exam Questions, Memory Tricks, Important Formulas, or Common Mistakes when relevant.
+- At the end of every major topic with enough content, include Quick Summary, Key Points, Common Mistakes, and Quick Revision Questions.
+- Choose the best format for each concept automatically: paragraph, compact table, labelled diagram suggestion, timeline, flowchart, worked example, comparison block, or infographic idea.
 - Write with smooth transitions, natural academic language, and lecturer-level clarity. Remove robotic wording, duplicated explanations, repeated headings, and filler.
 
 WORLDWIDE LANGUAGE QUALITY RULES
@@ -904,7 +907,8 @@ Do not force sections unnecessarily.
 OUTPUT STYLE
 - Return clean Markdown.
 - Start with one H1 line only: # Topic Title
-- After the title, include a short overview section. If the output language is English, use ## SHORT SUMMARY or ## Introduction / Overview. If the output language is not English, translate the visible heading naturally into that language.
+- After the title, include a short overview section of 2 to 4 sentences. If the output language is English, use ## SHORT SUMMARY or ## Introduction / Overview. If the output language is not English, translate the visible heading naturally into that language.
+- Never begin with filler such as "In this study guide, we will..." unless it is the shortest natural wording.
 - Use clear headings and subheadings.
 - Mix bullets with short explanations.
 - Keep paragraphs short.
@@ -920,11 +924,11 @@ OUTPUT STYLE
 
 MOBILE-FIRST READABILITY RULES
 - Assume the student is reading from a phone screen first.
+- Use compact Markdown tables only when a table is the clearest way to compare ideas, formulas, steps, causes, effects, or examples.
 - Never generate large Markdown tables.
-- Never create tables with more than 3 columns.
+- Never create tables with more than 4 columns.
 - Never place long paragraphs inside table cells.
 - Never generate wide comparison tables.
-- Avoid Markdown tables completely unless the information is extremely small and simple.
 - If a table would reduce readability, replace it with vertically stacked content blocks.
 - Prefer modern section cards, bullet groups, stacked comparison blocks, labeled vertical layouts, timelines, key-point containers, question-answer layouts, expandable-style topic sections, and structured note cards.
 - When comparing items, use a vertical format:
@@ -1000,11 +1004,12 @@ VISUAL LEARNING RULES
   - [Suggested Visual: Flowchart of cellular respiration]
   - [Suggested Visual: Diagram comparing Functionalism vs Conflict Theory]
 - Only suggest visuals that improve understanding.
-- Make each suggested visual explicit enough for the app to render it. Include the main stages, compared sides, plotted signals, axes, or labels inside the suggestion itself.
+- Make each suggested visual explicit enough for the app to render it. Include the main stages, compared sides, plotted signals, axes, labels, figure title, caption idea, and exam detail inside the suggestion itself.
 - Prefer render-friendly phrasing such as:
   - [Suggested Visual: Flowchart - Input -> Transform -> Output]
   - [Suggested Visual: Stacked comparison cards - Continuous vs Discrete | formula, operation, output]
   - [Suggested Visual: Plot - x(t), h(t), y(t)]
+- Prefer educational visuals over generic photos: flowcharts, timelines, labelled diagrams, architecture diagrams, process graphics, cause-effect diagrams, concept maps, and worked-example infographics.
 - If the lecture covers concrete physical things such as organs, instruments, valves, structures, machines, or components, mention the visual subtypes students should recognize.
 - Only include charts, graphs, axes, or trend sketches when the lecture discusses data or variable relationships. Do not invent fake numerical data.
 
@@ -4923,8 +4928,10 @@ def build_realtime_tutor_instructions(
         "Teach naturally, warmly, and clearly through short realtime voice turns. "
         "Do not sound like a chatbot and do not read textbook-sized paragraphs aloud. "
         "For small confirmations like switching tools or refreshing notes, keep the spoken reply extremely short. "
-        "Use the study guide, transcript, formulas, worked examples, notes, and past papers as shared workspace memory. "
-        "If a worked example or formula is useful, refer to it naturally, for example: 'open the worked examples tool and look at example 2.' "
+            "Use the study guide, transcript, formulas, worked examples, notes, and past papers as shared workspace memory. "
+            "Treat uploaded material as priority context, not a boundary. If a student's oral exam question is outside, broader than, or only partly covered by the uploaded material, say that briefly and then answer from reliable general academic knowledge. "
+            "Never refuse a normal academic question just because it is not in the uploaded files. "
+            "If a worked example or formula is useful, refer to it naturally, for example: 'open the worked examples tool and look at example 2.' "
         "The student can move between the Study Guide Generator, Transcript Analyzer, Worked Examples, Flashcards, Quizzes, AI Notes, and Revision Planner while you keep teaching. "
         "When a concept is difficult, break it into smaller parts, slow down, and use concrete examples. "
         "If the speech was unclear, say you did not fully catch it and ask for a repeat in one short sentence. "
@@ -5489,6 +5496,68 @@ def run_post_auth_background_sync(
         logger.exception("Post-auth audit log failed for %s", email)
 
 
+def normalize_export_match_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", compact_text(value).lower()).strip()
+
+
+def export_image_key(image: dict[str, Any]) -> str:
+    return "|".join(
+        compact_text(image.get(key))
+        for key in ("image_url", "source_url", "title", "matched_section", "diagram_label")
+        if compact_text(image.get(key))
+    )
+
+
+def study_image_matches_heading(image: dict[str, Any], heading: str) -> bool:
+    normalized_heading = normalize_export_match_text(heading)
+    if not normalized_heading:
+        return False
+    candidates = [
+        image.get("matched_section"),
+        image.get("diagram_label"),
+        image.get("title"),
+        image.get("query"),
+    ]
+    for candidate in candidates:
+        normalized_candidate = normalize_export_match_text(candidate)
+        if normalized_candidate and (
+            normalized_heading in normalized_candidate
+            or normalized_candidate in normalized_heading
+        ):
+            return True
+    return False
+
+
+def build_study_image_caption_lines(image: dict[str, Any], fallback_number: int = 0) -> list[str]:
+    try:
+        figure_number = int(image.get("figure_number") or image.get("figureNumber") or fallback_number or 0)
+    except (TypeError, ValueError):
+        figure_number = int(fallback_number or 0)
+    figure_label = f"Figure {figure_number}" if figure_number else "Figure"
+    title = compact_text(image.get("title") or image.get("query") or image.get("diagram_label"), "Study visual")
+    caption = compact_text(
+        image.get("caption")
+        or image.get("key_highlight")
+        or image.get("diagram_label")
+        or "Use this visual as a study anchor for the explanation beside it."
+    )
+    explanation = compact_text(
+        image.get("ai_explanation")
+        or image.get("explanation")
+        or image.get("purpose")
+        or caption
+    )
+    matched_section = compact_text(image.get("matched_section"))
+    lines = [f"{figure_label}: {title}"]
+    if caption:
+        lines.append(f"Caption: {caption}")
+    if explanation:
+        lines.append(f"AI explanation: {explanation}")
+    if matched_section:
+        lines.append(f"Linked section: {matched_section}")
+    return lines
+
+
 def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     if A4 is None:
         raise HTTPException(
@@ -5789,8 +5858,11 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
             logger.warning("Skipping PDF study image: %s", exc)
             return None
 
-    def append_pdf_images(images: list[dict[str, Any]]) -> None:
-        for image in images or []:
+    def append_pdf_images(images: list[dict[str, Any]], placed_keys: set[str] | None = None) -> None:
+        for image_index, image in enumerate(images or [], start=1):
+            image_key = export_image_key(image)
+            if placed_keys is not None and image_key and image_key in placed_keys:
+                continue
             image_sources: list[str] = []
             for candidate in (image.get("image_url"), image.get("source_url")):
                 cleaned_candidate = compact_text(candidate)
@@ -5812,20 +5884,11 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 pdf_image.drawWidth *= scale
                 pdf_image.drawHeight *= scale
                 story.append(pdf_image)
-                caption = compact_text(
-                    " - ".join(
-                        part
-                        for part in [
-                            compact_text(image.get("title") or image.get("query")),
-                            compact_text(image.get("matched_section")),
-                            compact_text(image.get("key_highlight") or image.get("diagram_label")),
-                        ]
-                        if part
-                    )
-                )
-                if caption:
-                    story.append(Paragraph(build_pdf_markup(caption), caption_style))
+                for caption_line in build_study_image_caption_lines(image, image_index):
+                    story.append(Paragraph(build_pdf_markup(caption_line), caption_style))
                 story.append(Spacer(1, 8))
+                if placed_keys is not None and image_key:
+                    placed_keys.add(image_key)
             except Exception as exc:
                 logger.warning("Could not embed study image in PDF: %s", exc)
 
@@ -5836,13 +5899,27 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         story.append(Paragraph(build_pdf_markup(text), body_style))
         story.append(Spacer(1, 6))
 
-    def append_structured_pdf_content(value: str) -> None:
+    def append_structured_pdf_content(
+        value: str,
+        images: list[dict[str, Any]] | None = None,
+        placed_keys: set[str] | None = None,
+    ) -> None:
         cleaned = (value or "").replace("\r\n", "\n").strip()
         if not cleaned:
             return
         lines = cleaned.splitlines()
         paragraph_lines: list[str] = []
         index = 0
+
+        def append_matching_heading_images(heading_text: str) -> None:
+            if placed_keys is None:
+                return
+            matching_images = [
+                image
+                for image in images or []
+                if study_image_matches_heading(image, heading_text)
+            ]
+            append_pdf_images(matching_images, placed_keys)
 
         while index < len(lines):
             line = lines[index].rstrip()
@@ -5878,6 +5955,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 style = heading_style if level <= 2 else subheading_style if level == 3 else minor_heading_style
                 story.append(Paragraph(build_pdf_markup(heading_text), style))
                 story.append(Spacer(1, 4))
+                append_matching_heading_images(heading_text)
                 index += 1
                 continue
 
@@ -5885,8 +5963,10 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
             if bold_heading_match:
                 flush_paragraph_lines(paragraph_lines)
                 paragraph_lines = []
-                story.append(Paragraph(build_pdf_markup(bold_heading_match.group(1).strip()), minor_heading_style))
+                heading_text = bold_heading_match.group(1).strip()
+                story.append(Paragraph(build_pdf_markup(heading_text), minor_heading_style))
                 story.append(Spacer(1, 4))
+                append_matching_heading_images(heading_text)
                 index += 1
                 continue
 
@@ -5917,9 +5997,10 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     for section in sections:
         if not section.content.strip() and not section.images:
             continue
+        placed_image_keys: set[str] = set()
         story.append(Paragraph(section.title, heading_style))
-        append_structured_pdf_content(section.content)
-        append_pdf_images(section.images)
+        append_structured_pdf_content(section.content, section.images, placed_image_keys)
+        append_pdf_images(section.images, placed_image_keys)
         story.append(Spacer(1, 6))
 
     document.build(story)
@@ -5985,6 +6066,287 @@ def build_docx_document(title: str, content: str) -> bytes:
         archive.writestr("[Content_Types].xml", content_types_xml)
         archive.writestr("_rels/.rels", rels_xml)
         archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
+def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> bytes:
+    def clean_docx_text(text: str) -> str:
+        cleaned = compact_text(text)
+        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+        cleaned = re.sub(r"\*(.*?)\*", r"\1", cleaned)
+        cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
+        return cleaned
+
+    def run_xml(text: str, *, bold: bool = False, size: int = 24) -> str:
+        escaped = html.escape(clean_docx_text(text), quote=True)
+        bold_xml = "<w:b/>" if bold else ""
+        return (
+            "<w:r>"
+            f"<w:rPr><w:rFonts w:ascii=\"Aptos\" w:hAnsi=\"Aptos\"/>{bold_xml}<w:sz w:val=\"{size}\"/></w:rPr>"
+            f"<w:t xml:space=\"preserve\">{escaped}</w:t>"
+            "</w:r>"
+        )
+
+    def paragraph_xml(text: str, *, style: str = "body", bullet: bool = False) -> str:
+        if not text:
+            return "<w:p/>"
+        if style == "title":
+            size, bold, spacing_after = 34, True, 260
+        elif style == "heading":
+            size, bold, spacing_after = 30, True, 220
+        elif style == "subheading":
+            size, bold, spacing_after = 26, True, 160
+        elif style == "caption":
+            size, bold, spacing_after = 20, False, 140
+        else:
+            size, bold, spacing_after = 23, False, 150
+        indent_xml = "<w:ind w:left=\"360\" w:hanging=\"180\"/>" if bullet else ""
+        return (
+            "<w:p>"
+            f"<w:pPr><w:spacing w:after=\"{spacing_after}\" w:line=\"330\" w:lineRule=\"auto\"/>{indent_xml}</w:pPr>"
+            f"{run_xml(text, bold=bold, size=size)}"
+            "</w:p>"
+        )
+
+    def parse_docx_table_row(line: str) -> list[str]:
+        return [
+            cell.strip()
+            for cell in line.strip().strip("|").split("|")
+        ]
+
+    def is_docx_table_separator(line: str) -> bool:
+        stripped = line.strip()
+        return bool(stripped) and set(stripped) <= {"|", "-", ":", " "}
+
+    def table_xml(table_lines: list[str]) -> str:
+        rows = [
+            parse_docx_table_row(line)
+            for line in table_lines
+            if line.strip().startswith("|") and not is_docx_table_separator(line)
+        ]
+        rows = [row for row in rows if any(cell for cell in row)]
+        if not rows:
+            return ""
+        column_count = max(len(row) for row in rows)
+        cell_width = max(1200, int(9000 / max(1, column_count)))
+        row_xml_parts: list[str] = []
+        for row_index, row in enumerate(rows):
+            cells = row + [""] * (column_count - len(row))
+            cell_xml = "".join(
+                "<w:tc>"
+                f"<w:tcPr><w:tcW w:w=\"{cell_width}\" w:type=\"dxa\"/><w:shd w:fill=\"{'EFF6FF' if row_index == 0 else 'FFFFFF'}\"/></w:tcPr>"
+                f"{paragraph_xml(cell, style='body')}"
+                "</w:tc>"
+                for cell in cells
+            )
+            row_xml_parts.append(f"<w:tr>{cell_xml}</w:tr>")
+        return (
+            "<w:tbl>"
+            "<w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>"
+            "<w:top w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
+            "<w:left w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
+            "<w:bottom w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
+            "<w:right w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
+            "<w:insideH w:val=\"single\" w:sz=\"6\" w:color=\"DBEAFE\"/>"
+            "<w:insideV w:val=\"single\" w:sz=\"6\" w:color=\"DBEAFE\"/>"
+            "</w:tblBorders></w:tblPr>"
+            + "".join(row_xml_parts)
+            + "</w:tbl>"
+        )
+
+    def load_docx_image(image: dict[str, Any]) -> tuple[bytes, str] | None:
+        image_sources = [
+            compact_text(image.get("image_url")),
+            compact_text(image.get("source_url")),
+        ]
+        for source in [item for item in image_sources if item]:
+            try:
+                if source.startswith("data:image/") and "," in source:
+                    header, encoded = source.split(",", 1)
+                    mime_match = re.match(r"data:(image/[-+.\w]+)", header, flags=re.IGNORECASE)
+                    mime_type = (mime_match.group(1).lower() if mime_match else "image/png")
+                    return base64.b64decode(encoded, validate=False), mime_type
+                if source.startswith(("http://", "https://")):
+                    response = requests.get(source, timeout=15, headers={"User-Agent": YOUTUBE_USER_AGENT})
+                    response.raise_for_status()
+                    mime_type = response.headers.get("content-type", "image/png").split(";", 1)[0].lower()
+                    if mime_type.startswith("image/"):
+                        return response.content, mime_type
+            except Exception as exc:
+                logger.warning("Skipping DOCX study image: %s", exc)
+        return None
+
+    media_parts: list[tuple[str, bytes]] = []
+    image_relationships: list[str] = []
+    document_parts: list[str] = [paragraph_xml(title or "MABASO Study Pack", style="title")]
+    image_counter = 0
+
+    def append_docx_images(images: list[dict[str, Any]], placed_keys: set[str] | None = None) -> None:
+        nonlocal image_counter
+        for image_index, image in enumerate(images or [], start=1):
+            key = export_image_key(image)
+            if placed_keys is not None and key and key in placed_keys:
+                continue
+            loaded_image = load_docx_image(image)
+            if not loaded_image:
+                continue
+            image_bytes, mime_type = loaded_image
+            extension = {
+                "image/jpeg": "jpg",
+                "image/jpg": "jpg",
+                "image/png": "png",
+                "image/webp": "webp",
+            }.get(mime_type, "png")
+            image_counter += 1
+            relationship_id = f"rIdImage{image_counter}"
+            media_name = f"image{image_counter}.{extension}"
+            media_parts.append((media_name, image_bytes))
+            image_relationships.append(
+                f"<Relationship Id=\"{relationship_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{media_name}\"/>"
+            )
+            doc_pr_id = image_counter
+            document_parts.append(
+                "<w:p><w:r><w:drawing>"
+                "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
+                "<wp:extent cx=\"5000000\" cy=\"3000000\"/>"
+                f"<wp:docPr id=\"{doc_pr_id}\" name=\"Figure {doc_pr_id}\"/>"
+                "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+                "<pic:pic><pic:nvPicPr>"
+                f"<pic:cNvPr id=\"{doc_pr_id}\" name=\"{html.escape(media_name, quote=True)}\"/>"
+                "<pic:cNvPicPr/>"
+                "</pic:nvPicPr><pic:blipFill>"
+                f"<a:blip r:embed=\"{relationship_id}\"/>"
+                "<a:stretch><a:fillRect/></a:stretch>"
+                "</pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"5000000\" cy=\"3000000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
+                "</a:graphicData></a:graphic>"
+                "</wp:inline></w:drawing></w:r></w:p>"
+            )
+            for line in build_study_image_caption_lines(image, image_index):
+                document_parts.append(paragraph_xml(line, style="caption"))
+            if placed_keys is not None and key:
+                placed_keys.add(key)
+
+    def append_docx_content(content: str, images: list[dict[str, Any]], placed_keys: set[str]) -> None:
+        lines = (content or "").replace("\r\n", "\n").splitlines()
+        paragraph_lines: list[str] = []
+
+        def flush_paragraph() -> None:
+            nonlocal paragraph_lines
+            text = " ".join(line.strip() for line in paragraph_lines if line.strip()).strip()
+            if text:
+                document_parts.append(paragraph_xml(text))
+            paragraph_lines = []
+
+        def append_heading_images(heading_text: str) -> None:
+            append_docx_images(
+                [image for image in images or [] if study_image_matches_heading(image, heading_text)],
+                placed_keys,
+            )
+
+        index = 0
+        while index < len(lines):
+            line = lines[index].rstrip()
+            stripped = line.strip()
+            next_line = lines[index + 1].rstrip() if index + 1 < len(lines) else ""
+            if not stripped:
+                flush_paragraph()
+                index += 1
+                continue
+            if stripped.startswith("|") and next_line.strip().startswith("|") and is_docx_table_separator(next_line):
+                flush_paragraph()
+                table_lines = [line, next_line]
+                index += 2
+                while index < len(lines) and lines[index].strip().startswith("|"):
+                    table_lines.append(lines[index].rstrip())
+                    index += 1
+                rendered_table = table_xml(table_lines)
+                if rendered_table:
+                    document_parts.append(rendered_table)
+                continue
+            heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+            if heading_match:
+                flush_paragraph()
+                level = len(heading_match.group(1))
+                heading_text = heading_match.group(2).strip().strip("*").strip()
+                document_parts.append(paragraph_xml(heading_text, style="heading" if level <= 2 else "subheading"))
+                append_heading_images(heading_text)
+                index += 1
+                continue
+            bold_heading_match = re.match(r"^\*\*(.+?)\*\*\s*:?\s*$", stripped)
+            if bold_heading_match:
+                flush_paragraph()
+                heading_text = bold_heading_match.group(1).strip()
+                document_parts.append(paragraph_xml(heading_text, style="subheading"))
+                append_heading_images(heading_text)
+                index += 1
+                continue
+            bullet_match = re.match(r"^([-*])\s+(.*)$", stripped)
+            numbered_match = re.match(r"^(\d+\.)\s+(.*)$", stripped)
+            if bullet_match or numbered_match:
+                flush_paragraph()
+                prefix = "•" if bullet_match else numbered_match.group(1)
+                text = bullet_match.group(2) if bullet_match else numbered_match.group(2)
+                document_parts.append(paragraph_xml(f"{prefix} {text}", bullet=True))
+                index += 1
+                continue
+            paragraph_lines.append(stripped)
+            index += 1
+        flush_paragraph()
+
+    for section in sections:
+        if not section.content.strip() and not section.images:
+            continue
+        placed_keys: set[str] = set()
+        document_parts.append(paragraph_xml(section.title, style="heading"))
+        append_docx_content(section.content, section.images, placed_keys)
+        append_docx_images(section.images, placed_keys)
+
+    document_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<w:document "
+        "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+        "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+        "<w:body>"
+        + "".join(document_parts)
+        + "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"900\" w:right=\"900\" w:bottom=\"900\" w:left=\"900\"/></w:sectPr>"
+        "</w:body></w:document>"
+    )
+    content_types_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Default Extension=\"png\" ContentType=\"image/png\"/>"
+        "<Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>"
+        "<Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>"
+        "<Default Extension=\"webp\" ContentType=\"image/webp\"/>"
+        "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+        "</Types>"
+    )
+    rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>"
+        "</Relationships>"
+    )
+    document_rels_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        + "".join(image_relationships)
+        + "</Relationships>"
+    )
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+        for media_name, image_bytes in media_parts:
+            archive.writestr(f"word/media/{media_name}", image_bytes)
     return buffer.getvalue()
 
 
@@ -6108,7 +6470,9 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "A student has interrupted a spoken lesson with a question. "
             "Classify the question first: lecture-based, general academic, conversation, motivation, entertainment, casual, or off-topic factual. "
             "Use the lecture context when it is relevant, but do not force unrelated questions into the uploaded lecture. "
+            "Treat uploaded material as priority context, not the boundary of what you can answer. "
             "If the lecture does not cover a general academic question, briefly say the lecture does not go into that detail, then teach the concept from general knowledge. "
+            "Never refuse a normal oral-exam or academic question only because it is not in the uploaded material. "
             "For friendly questions, answer naturally as MABASO AI. "
             "Sound like a premium human-like lecturer speaking aloud: direct, clear, warm, and easy to follow. "
             f"{teaching_style_instruction} "
@@ -6129,6 +6493,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "You are MABASO.AI inside a focused active study session. "
             "Answer exactly what the student asked. "
             "Use the lecture context when it is relevant, but you may also answer general subject, calculation, definition, and study-help questions. "
+            "Treat uploaded material as priority context, not the only source of truth. "
             "Keep answers short, accurate, and direct: maximum 2 to 3 short paragraphs. "
             "Avoid long essays, diagrams, ASCII art, mind maps, and unnecessary formatting. "
             "Do not ask a follow-up question at the end. "
@@ -6139,6 +6504,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "You are MABASO AI, a friendly academic tutor and study chat assistant. "
             "Classify each user message first: lecture-based, general academic, conversation, motivation, jokes or entertainment, casual conversation, or off-topic factual. "
             "Use the uploaded lecture, slides, notes, formulas, and past papers when they are relevant. "
+            "Treat uploaded material as priority context, not the boundary of what you can answer. "
             "Do not force unrelated questions into the uploaded lecture. "
             "If the question is general academic, answer it from reliable general knowledge even when it is not in the lecture. "
             "If the current lecture does not cover the topic, briefly say it is not covered in detail, then continue teaching the concept clearly. "
@@ -6173,7 +6539,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         user_content: list[dict[str, object]] = [
             {
                 "type": "text",
-                "text": f"{question_text}\n\nUse the attached reference image(s) only if they help answer the question from the lecture context.",
+                "text": f"{question_text}\n\nUse the attached reference image(s) only if they help answer the question. Prioritize lecture context when relevant, but use general academic knowledge when the uploaded material is missing or too narrow.",
             }
         ]
         for image in reference_images:
@@ -6457,7 +6823,9 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         rules.append(f"Current lecture label: {lecture_label}.")
     if context_text:
         rules.append("Use the lecture context below whenever it is relevant.")
-        rules.append("If the lecture context does not clearly support an answer, say that clearly instead of pretending.")
+        rules.append("Treat the lecture context as priority material, not the only source of truth.")
+        rules.append("If the lecture context does not clearly support an academic answer, say that briefly and then continue from reliable general academic knowledge.")
+        rules.append("Do not refuse normal academic, study, exam, definition, calculation, or explanation questions only because they are not in the uploaded material.")
         rules.append(f"Lecture context:\n\n{context_text}")
     else:
         rules.append("No lecture transcript or study guide is loaded yet.")
@@ -15106,6 +15474,8 @@ def normalize_ai_study_image_specs(value: Any, limit: int) -> list[dict[str, str
             continue
         subtopic = compact_text(item.get("subtopic") or item.get("matched_section") or item.get("title"))
         explanation = compact_text(item.get("explanation") or item.get("key_highlight") or item.get("purpose"))
+        caption = compact_text(item.get("caption") or item.get("figure_caption") or item.get("key_highlight"))
+        ai_explanation = compact_text(item.get("ai_explanation") or item.get("exam_explanation") or explanation)
         prompt = compact_text(item.get("prompt") or item.get("image_prompt"))
         if not subtopic or not explanation:
             continue
@@ -15121,8 +15491,11 @@ def normalize_ai_study_image_specs(value: Any, limit: int) -> list[dict[str, str
                 "subtopic": subtopic,
                 "matched_section": compact_text(item.get("matched_section"), subtopic),
                 "explanation": explanation,
+                "caption": caption or f"This visual explains {subtopic} and the key detail students should remember.",
+                "ai_explanation": ai_explanation or explanation,
                 "prompt": prompt[:1600],
                 "purpose": compact_text(item.get("purpose"), "Help students visualize and remember this concept."),
+                "visual_type": compact_text(item.get("visual_type"), "educational diagram"),
             }
         )
         if len(normalized) >= limit:
@@ -15147,6 +15520,8 @@ def build_fallback_ai_study_image_specs(summary: str, limit: int) -> list[dict[s
                 "subtopic": heading,
                 "matched_section": heading,
                 "explanation": explanation,
+                "caption": f"This visual summarizes the key idea in {heading}.",
+                "ai_explanation": f"Students should connect the labels, stages, or compared parts in this visual to the exam explanation for {heading}.",
                 "prompt": (
                     f"Premium educational textbook illustration for '{heading}'. "
                     f"Visualize this explanation accurately: {explanation}. "
@@ -15154,6 +15529,7 @@ def build_fallback_ai_study_image_specs(summary: str, limit: int) -> list[dict[s
                     "with a clean classroom textbook style and no unrelated stock-photo elements."
                 ),
                 "purpose": "Make the explanation easier to visualize and remember.",
+                "visual_type": "educational diagram",
             }
         )
         if len(specs) >= limit:
@@ -15194,13 +15570,15 @@ async def build_ai_study_image_specs(
                     "content": (
                         "You design prompts for AI-generated educational images inside a premium study guide. "
                         "Return strict JSON only in this shape: "
-                        "{\"images\":[{\"title\":\"...\",\"subtopic\":\"...\",\"matched_section\":\"...\",\"explanation\":\"...\",\"prompt\":\"...\",\"purpose\":\"...\"}]}.\n\n"
+                        "{\"images\":[{\"title\":\"...\",\"subtopic\":\"...\",\"matched_section\":\"...\",\"visual_type\":\"flowchart|timeline|labelled diagram|architecture diagram|process graphic|infographic\",\"caption\":\"...\",\"ai_explanation\":\"...\",\"explanation\":\"...\",\"prompt\":\"...\",\"purpose\":\"...\"}]}.\n\n"
                         "Rules:\n"
                         f"- Return {limit} image specs or fewer.\n"
                         "- Choose only major subtopics where a visual will directly improve understanding.\n"
                         "- The prompt must match the exact subtopic and explanation, never a random stock image.\n"
-                        "- Prefer textbook illustrations, scientific diagrams, legal classroom scenes, real-world simulations, or concept visualizations.\n"
+                        "- Prefer diagrams, flowcharts, timelines, labelled illustrations, architecture diagrams, process graphics, worked-example infographics, and concept visualizations.\n"
+                        "- Avoid generic photos and decorative stock-style scenes unless the topic requires recognising a real physical object.\n"
                         "- Include the subject-specific details that must appear in the image.\n"
+                        "- Caption must be short and specific. AI explanation must say what the figure shows, why it matters, and what students should notice for exams.\n"
                         "- Keep prompts classroom appropriate, accurate, and curriculum-aligned.\n"
                         "- Write labels and captions in the requested study-guide language where useful.\n"
                         "- Do not request logos, copyrighted characters, gore, nudity, weapons glamorization, or sensational scenes."
@@ -15297,6 +15675,7 @@ async def generate_ai_study_images(
             continue
         if not image_url:
             continue
+        figure_number = len(images) + 1
         images.append(
             {
                 "query": compact_text(spec.get("subtopic"), "AI educational image"),
@@ -15304,10 +15683,13 @@ async def generate_ai_study_images(
                 "image_url": image_url,
                 "source_url": "",
                 "source_type": "ai_generated",
-                "visual_type": "educational_illustration",
+                "visual_type": compact_text(spec.get("visual_type"), "educational_illustration"),
                 "matched_section": compact_text(spec.get("matched_section"), compact_text(spec.get("subtopic"), "Key concept")),
                 "key_highlight": compact_text(spec.get("explanation"), compact_text(spec.get("purpose"), "Use this image as a visual anchor for the explanation.")),
                 "diagram_label": compact_text(spec.get("subtopic"), compact_text(spec.get("title"), "AI visual")),
+                "caption": compact_text(spec.get("caption"), compact_text(spec.get("explanation"), "Study visual")),
+                "ai_explanation": compact_text(spec.get("ai_explanation"), compact_text(spec.get("explanation"), "This visual reinforces the main exam idea.")),
+                "figure_number": figure_number,
             }
         )
         if len(images) >= image_limit:
@@ -15329,6 +15711,11 @@ def parse_visual_analysis_items(content: str) -> list[dict[str, str]]:
                 "matched_section": compact_text(item.get("matched_section"), "Key concept"),
                 "key_highlight": compact_text(item.get("key_highlight"), "Useful visual from the uploaded lecture material."),
                 "diagram_label": compact_text(item.get("diagram_label"), compact_text(item.get("title"), "Lecture visual")),
+                "caption": compact_text(item.get("caption"), compact_text(item.get("key_highlight"), "Useful lecture visual for this section.")),
+                "ai_explanation": compact_text(
+                    item.get("ai_explanation") or item.get("exam_explanation"),
+                    compact_text(item.get("key_highlight"), "Notice the labelled parts, sequence, or comparison shown in this visual."),
+                ),
             }
         )
     return normalized
@@ -15363,7 +15750,7 @@ async def analyze_reference_images_for_study_guide(
                 "Detect whether the visual is a table, chart, diagram, process flow, equation snapshot, photo, or mixed slide visual.\n"
                 "Give each visual a short clear classroom label and one highlight explaining what a student should notice.\n"
                 "Return strict JSON in this shape only:\n"
-                '{"items":[{"title":"...","visual_type":"...","matched_section":"...","key_highlight":"...","diagram_label":"..."}]}'
+                '{"items":[{"title":"...","visual_type":"...","matched_section":"...","key_highlight":"...","diagram_label":"...","caption":"...","ai_explanation":"..."}]}'
             ),
         }
     ]
@@ -15401,6 +15788,8 @@ async def analyze_reference_images_for_study_guide(
                     "matched_section": "Key concept",
                     "key_highlight": "Review this uploaded lecture visual alongside the matching section in the study guide.",
                     "diagram_label": f"Visual {index}",
+                    "caption": "Review this uploaded lecture visual beside the matching explanation.",
+                    "ai_explanation": "Use this visual to connect the lecturer's labels or layout to the exam explanation.",
                 }
             )
         return fallback_items
@@ -15417,7 +15806,9 @@ def build_study_guide_visual_notes(visual_items: list[dict[str, str]]) -> str:
                 f"   Type: {compact_text(item.get('visual_type'), 'diagram')}\n"
                 f"   Matched section: {compact_text(item.get('matched_section'), 'Key concept')}\n"
                 f"   Diagram label: {compact_text(item.get('diagram_label'), f'Visual {index}')}\n"
-                f"   Key highlight: {compact_text(item.get('key_highlight'), 'Review this visual carefully.')}"
+                f"   Key highlight: {compact_text(item.get('key_highlight'), 'Review this visual carefully.')}\n"
+                f"   Caption: {compact_text(item.get('caption'), 'Use this visual beside the matching explanation.')}\n"
+                f"   AI explanation: {compact_text(item.get('ai_explanation'), 'Notice the exam-relevant labels, stages, or comparison.')}"
             )
         )
     return "\n".join(lines).strip()
@@ -15434,7 +15825,9 @@ def build_reference_image_catalog(visual_items: list[dict[str, str]]) -> str:
                 f"   Type: {compact_text(item.get('visual_type'), 'diagram')}\n"
                 f"   Best match: {compact_text(item.get('matched_section'), 'Key concept')}\n"
                 f"   Classroom label: {compact_text(item.get('diagram_label'), f'Visual {index + 1}')}\n"
-                f"   Key detail: {compact_text(item.get('key_highlight'), 'Review the important visual clue before using this image on a slide.')}"
+                f"   Key detail: {compact_text(item.get('key_highlight'), 'Review the important visual clue before using this image on a slide.')}\n"
+                f"   Caption: {compact_text(item.get('caption'), 'Use this visual beside the matching explanation.')}\n"
+                f"   AI explanation: {compact_text(item.get('ai_explanation'), 'Notice the exam-relevant labels, stages, or comparison.')}"
             )
         )
     return "\n".join(lines).strip()
@@ -15460,6 +15853,12 @@ def build_uploaded_study_visuals(
                 "matched_section": compact_text(visual.get("matched_section"), "Key concept"),
                 "key_highlight": compact_text(visual.get("key_highlight"), "Useful lecture visual for this section."),
                 "diagram_label": compact_text(visual.get("diagram_label"), f"Visual {index + 1}"),
+                "caption": compact_text(visual.get("caption"), compact_text(visual.get("key_highlight"), "Useful lecture visual for this section.")),
+                "ai_explanation": compact_text(
+                    visual.get("ai_explanation"),
+                    "This uploaded visual should be studied beside the matching section because it shows the labels, stages, or comparison students may need to explain.",
+                ),
+                "figure_number": index + 1,
             }
         )
     return uploaded_visuals[:MAX_STUDY_IMAGES]
@@ -19465,7 +19864,9 @@ async def generate_study_guide(
             "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
             "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic.\n"
             "- Label diagrams, stacked comparison cards, charts, and process visuals clearly inside the guide.\n"
-            "- Avoid wide Markdown tables. Use phone-readable vertical cards and labeled bullet groups when comparing ideas."
+            "- Use compact Markdown tables when they genuinely improve comparison or structure; avoid wide tables and long table cells.\n"
+            "- Use blockquote callouts such as > **Definition:**, > **Exam Tip:**, > **Common Mistake:**, > **Worked Example:**, > **Deep Dive:**, and > **Key Takeaway:** when useful.\n"
+            "- End major topics with Quick Summary, Key Points, Common Mistakes, and Quick Revision Questions when the source material supports that depth."
         )
     )
     combined_user_content = "\n\n".join(user_content_parts)
@@ -23830,6 +24231,21 @@ async def export_study_pack_pdf(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+    )
+
+
+@app.post("/export-study-pack-docx/")
+async def export_study_pack_docx(
+    payload: PdfExportRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    title = payload.title.strip() or "MABASO Study Pack"
+    docx_bytes = await asyncio.to_thread(build_docx_study_pack_document, title, payload.sections)
+    safe_name = sanitize_download_filename(title)
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
     )
 
 
