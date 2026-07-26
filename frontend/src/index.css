@@ -558,8 +558,8 @@ iframe {
   z-index: 20;
   min-height: 58px;
   justify-content: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.92);
+  border-bottom: 0;
+  background: rgba(0, 0, 0, 0.96);
   padding: 0.55rem 1rem;
   backdrop-filter: blur(14px);
 }
@@ -567,9 +567,10 @@ iframe {
 .study-chat-mode-tabs {
   display: inline-flex;
   overflow: hidden;
+  gap: 0.25rem;
   border-radius: 999px;
-  background: #1f1f1f;
-  padding: 0.18rem;
+  background: transparent;
+  padding: 0;
 }
 
 .study-chat-mode-tabs button {
@@ -584,7 +585,7 @@ iframe {
 }
 
 .study-chat-mode-tabs button.is-active {
-  background: #2b2b2b;
+  background: #1f1f1f;
   color: #fff;
 }
 
@@ -639,12 +640,57 @@ iframe {
   z-index: 18;
   margin: 0 auto;
   width: min(820px, calc(100% - 2rem));
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 0;
   border-radius: 28px;
   background: #262626;
   padding: 0.45rem 0.55rem;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
   transform: translateY(-1rem);
+}
+
+.study-guide-prompt-card {
+  border-radius: 22px;
+  border: 1px solid rgba(52, 211, 153, 0.14);
+  background: rgba(2, 8, 23, 0.72);
+  padding: 1rem;
+}
+
+.study-guide-prompt-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.65rem;
+}
+
+.study-guide-prompt-input {
+  min-height: 44px;
+  max-height: 150px;
+  flex: 1 1 auto;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(2, 8, 23, 0.82);
+  padding: 0.72rem 0.9rem;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.study-guide-prompt-input:focus {
+  border-color: rgba(52, 211, 153, 0.45);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.12);
+}
+
+.study-guide-prompt-add-button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #166534, #22c55e);
+  padding: 0 1.05rem;
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .study-chat-sidebar-scrim {
@@ -1873,6 +1919,15 @@ iframe {
     transform: translateY(-0.7rem);
   }
 
+  .study-guide-prompt-row {
+    align-items: stretch;
+  }
+
+  .study-guide-prompt-add-button {
+    min-width: 76px;
+    padding-inline: 0.9rem;
+  }
+
   .study-chat-composer-row {
     gap: 0.45rem;
   }
@@ -1966,12 +2021,14 @@ iframe {
   }
 
   .workspace-topbar {
-    position: sticky;
+    position: fixed;
     top: 0;
-    z-index: 96;
-    margin-inline: -12px;
-    background: rgba(4, 17, 10, 0.94);
-    padding: 0.55rem 12px 0.75rem;
+    left: 0;
+    right: 0;
+    z-index: 150;
+    margin-inline: 0;
+    background: rgba(4, 17, 10, 0.96);
+    padding: calc(0.45rem + env(safe-area-inset-top)) max(12px, env(safe-area-inset-left)) 0.58rem max(12px, env(safe-area-inset-right));
     backdrop-filter: blur(14px);
   }
 
@@ -2009,6 +2066,7 @@ iframe {
   .workspace-shell {
     overflow-x: clip !important;
     overflow-y: visible !important;
+    padding-top: calc(7.4rem + env(safe-area-inset-top)) !important;
   }
 
   .workspace-layout {
@@ -2018,20 +2076,22 @@ iframe {
 
   .workspace-content-surface {
     overflow: visible !important;
-    padding: 0 !important;
+    padding: 3.8rem 0 0 !important;
   }
 
   .workspace-tool-actions {
-    position: sticky;
-    top: calc(58px + env(safe-area-inset-top));
-    z-index: 82;
+    position: fixed;
+    top: calc(4.9rem + env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    z-index: 140;
     align-items: flex-start !important;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 18px;
-    background: rgba(2, 8, 23, 0.92);
-    padding: 0.7rem;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 14px 30px rgba(2, 8, 23, 0.22);
+    border: 0 !important;
+    border-radius: 0;
+    background: transparent !important;
+    padding: 0;
+    backdrop-filter: none;
+    box-shadow: none !important;
   }
 
   .workspace-tool-actions > div:first-child {
@@ -2061,7 +2121,7 @@ iframe {
     min-width: 42px;
     height: 42px;
     min-height: 42px;
-    border-radius: 13px;
+    border-radius: 999px;
   }
 
   .workspace-highlight-menu {
@@ -2227,7 +2287,11 @@ iframe {
 
   .workspace-shell {
     border-radius: 20px !important;
-    padding: 0 !important;
+    padding: calc(7rem + env(safe-area-inset-top)) 0 0 !important;
+  }
+
+  .workspace-content-surface {
+    padding-top: 3.3rem !important;
   }
 
   .capture-panel {
@@ -2365,15 +2429,18 @@ iframe {
   }
 
   .workspace-tool-actions {
-    position: sticky;
-    top: calc(48px + env(safe-area-inset-top));
-    z-index: 82;
+    position: fixed;
+    top: calc(4.55rem + env(safe-area-inset-top));
+    left: max(6px, env(safe-area-inset-left));
+    right: max(6px, env(safe-area-inset-right));
+    z-index: 140;
     margin-inline: 0;
-    border-radius: 14px;
-    background: rgba(2, 8, 23, 0.92);
-    padding: 0.45rem;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 14px 30px rgba(2, 8, 23, 0.22);
+    border: 0 !important;
+    border-radius: 0;
+    background: transparent !important;
+    padding: 0;
+    backdrop-filter: none;
+    box-shadow: none !important;
   }
 
   .workspace-tool-actions h3 {
@@ -2389,14 +2456,18 @@ iframe {
     min-width: 34px !important;
     height: 34px !important;
     min-height: 34px !important;
-    border-radius: 10px !important;
+    border-radius: 999px !important;
   }
 
   .workspace-topbar {
+    position: fixed;
     top: 0;
-    z-index: 96;
+    left: 0;
+    right: 0;
+    z-index: 150;
     gap: 0.55rem !important;
-    padding: 0.45rem 0.35rem 0.55rem !important;
+    margin-inline: 0 !important;
+    padding: calc(0.42rem + env(safe-area-inset-top)) max(8px, env(safe-area-inset-left)) 0.5rem max(8px, env(safe-area-inset-right)) !important;
   }
 
   .workspace-topbar > div:first-child {

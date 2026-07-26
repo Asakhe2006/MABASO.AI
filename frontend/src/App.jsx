@@ -6471,6 +6471,8 @@ export default function App() {
   const [isGeneratingFlashcards, setIsGeneratingFlashcards] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [studyImages, setStudyImages] = useState([]);
+  const [studyGuidePromptDraft, setStudyGuidePromptDraft] = useState("");
+  const [studyGuidePromptSource, setStudyGuidePromptSource] = useState(null);
   const [lectureNoteSources, setLectureNoteSources] = useState([]);
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
   const [pendingLectureSlideFiles, setPendingLectureSlideFiles] = useState([]);
@@ -7771,6 +7773,7 @@ export default function App() {
 
   const closePublicTermsPage = () => navigateToPath("/");
 
+  const studyGuidePromptText = normalizeStudySourceText(studyGuidePromptSource?.text || "");
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
   const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
   const lectureNotesFileName = formatGroupedSourceLabel(lectureNoteFileNames, "note file", "note files");
@@ -7793,7 +7796,7 @@ export default function App() {
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const canCancelTranscription = (isTranscribing || isTranscribingVideo) && ["transcription", "video"].includes(currentJobType) && !isGeneratingSummary && !isProcessingLectureBundle;
   const hasQueuedLectureSlides = pendingLectureSlideFiles.length > 0;
-  const hasStudyInputs = Boolean(transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim() || hasQueuedLectureSlides);
+  const hasStudyInputs = Boolean(transcript.trim() || studyGuidePromptText.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim() || hasQueuedLectureSlides);
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Reading slide sources..."
@@ -8376,6 +8379,8 @@ export default function App() {
       setQuizQuestions(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
       resetQuizSessionState(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
       setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
+      setStudyGuidePromptDraft("");
+      setStudyGuidePromptSource(null);
       setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
       setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
       setPendingLectureSlideFiles([]);
@@ -15928,6 +15933,27 @@ export default function App() {
       generateStudyGuideButtonRef.current?.focus?.({ preventScroll: true });
     }, delayMs);
   };
+  const resizeStudyGuidePromptInput = (element) => {
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 150)}px`;
+  };
+  const addStudyGuidePromptSource = () => {
+    const promptText = normalizeStudySourceText(studyGuidePromptDraft);
+    if (!promptText) {
+      setError("Write a study guide prompt before adding it.");
+      return;
+    }
+    setStudyGuidePromptSource(createStudySourceEntry("Prompt instructions", promptText, "STUDY PROMPT"));
+    setStudyGuidePromptDraft("");
+    setError("");
+    setStatus("Prompt added. Press Generate Study Guide when ready.");
+    scrollGenerateStudyGuideButtonIntoView(40);
+  };
+  const removeStudyGuidePromptSource = () => {
+    setStudyGuidePromptSource(null);
+    setStatus("Prompt removed.");
+  };
 
   useEffect(() => {
     if (isUpgradeModalOpen && selectedBillingPlan?.paymentType === "checkout") {
@@ -21063,6 +21089,26 @@ export default function App() {
         studySourceEntriesToText(resolvedPastQuestionPaperSources, "PAST QUESTION PAPER"),
         resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
       ].filter(Boolean).join("\n\n");
+    const resolvedStudyGuidePromptSource = sourceOverrides.studyGuidePromptSource === null
+      ? null
+      : (sourceOverrides.studyGuidePromptSource || studyGuidePromptSource);
+    if (resolvedStudyGuidePromptSource?.text) {
+      const promptSource = {
+        ...resolvedStudyGuidePromptSource,
+        text: normalizeStudySourceText(resolvedStudyGuidePromptSource.text),
+        prefix: resolvedStudyGuidePromptSource.prefix || "STUDY PROMPT",
+      };
+      if (promptSource.text) {
+        resolvedLectureNoteSources = [
+          promptSource,
+          ...resolvedLectureNoteSources.filter((source) => source.id !== promptSource.id),
+        ];
+        resolvedLectureNotes = [
+          studySourceEntriesToText([promptSource], "STUDY PROMPT"),
+          resolvedLectureNotes,
+        ].filter(Boolean).join("\n\n");
+      }
+    }
     const shouldReadQueuedSlidesForGuide = pendingLectureSlideFiles.length > 0
       && !Array.isArray(sourceOverrides.lectureSlideSources)
       && typeof sourceOverrides.lectureSlidesText !== "string";
@@ -21214,6 +21260,8 @@ export default function App() {
       });
       clearPendingJob();
       setFile(null);
+      setStudyGuidePromptSource(null);
+      setStudyGuidePromptDraft("");
       if (fileInputRef.current) fileInputRef.current.value = "";
       setUsedFallbackSummary(Boolean(job.used_fallback));
       if (autoOpenStudyGuideWhenReady) {
@@ -25501,7 +25549,6 @@ export default function App() {
       <div className="w-full max-w-sm rounded-[22px] border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_70px_rgba(2,8,23,0.5)]">
         <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Confirm logout</p>
         <h3 className="mt-2 text-xl font-semibold">Sign out of Mabaso AI?</h3>
-        <p className="mt-3 text-sm leading-6 text-slate-300">Your saved history stays linked to your email, but this device will leave the current session.</p>
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={() => setIsLogoutConfirmOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Cancel</button>
           <button type="button" onClick={confirmLogout} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white">Log out</button>
@@ -25856,6 +25903,8 @@ export default function App() {
       ? `${activeTimetableNavItem.title} - ${activeTimetableNavItem.remainingLabel}`
       : "";
   const renderMobileAppNavigation = () => {
+    if (isUpgradeModalOpen || isLogoutConfirmOpen || siteRatingPrompt) return null;
+
     const handleMobileNavClick = (item) => {
       if (item.id === "more") {
         setIsMobileMoreMenuOpen((current) => !current);
@@ -26082,6 +26131,37 @@ export default function App() {
                     <p className="mt-3 text-sm font-semibold text-white">{captureStatusMessage}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
                     {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{renderCaptureErrorMessage(error)}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
+                  </div>
+                  <div className="study-guide-prompt-card">
+                    <div className="force-mobile-stack flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Prompt to Study Workspace</p>
+                        <p className="mt-2 text-xs leading-6 text-slate-300">Write what the guide must cover, add it, then press Generate Study Guide.</p>
+                      </div>
+                      {studyGuidePromptSource ? (
+                        <button type="button" onClick={removeStudyGuidePromptSource} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10">Remove prompt</button>
+                      ) : null}
+                    </div>
+                    <div className="study-guide-prompt-row mt-3">
+                      <textarea
+                        value={studyGuidePromptDraft}
+                        onChange={(event) => {
+                          setStudyGuidePromptDraft(event.target.value);
+                          resizeStudyGuidePromptInput(event.currentTarget);
+                        }}
+                        onInput={(event) => resizeStudyGuidePromptInput(event.currentTarget)}
+                        rows={1}
+                        className="study-guide-prompt-input"
+                        placeholder="Example: Create a Grade 12 study guide on electrostatics with definitions, diagrams, examples, exam tips and revision questions."
+                      />
+                      <button type="button" onClick={addStudyGuidePromptSource} disabled={loading || !studyGuidePromptDraft.trim()} className="study-guide-prompt-add-button disabled:opacity-50">Add</button>
+                    </div>
+                    {studyGuidePromptSource ? (
+                      <div className="mt-3 rounded-2xl border border-emerald-300/15 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">
+                        <p className="font-semibold">Prompt added</p>
+                        <p className="phone-safe-copy mt-2 text-xs leading-6 text-emerald-50/80">{studyGuidePromptSource.text}</p>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className={`rounded-[22px] bg-[linear-gradient(135deg,#166534,#22c55e)] text-white ${!canCancelTranscription && (loading || !file) ? "opacity-50" : ""}`}>

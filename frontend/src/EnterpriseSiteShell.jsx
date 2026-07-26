@@ -6,9 +6,8 @@ import * as LucideIcons from "lucide-react";
 import { findFooterLinksByRoutes, footerLinkGroups } from "./sitePageConfig";
 
 const cardMotion = {
-  initial: { opacity: 0, y: 18 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.45, ease: "easeOut" },
+  initial: false,
+  transition: { duration: 0 },
 };
 
 function toPascalCase(value = "") {
@@ -84,12 +83,9 @@ function WorkspacePreview({ page }) {
           <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Live product surface</p>
           <div className="mt-4 grid gap-3">
             {previewHighlights.map((item, index) => (
-              <motion.div
+              <div
                 key={`${page.route}-preview-highlight-${item.title}`}
                 className="rounded-[22px] border border-white/8 bg-slate-950/50 p-4"
-                initial={{ opacity: 0.35, x: index * 18 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.6, delay: index * 0.08 }}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -101,7 +97,7 @@ function WorkspacePreview({ page }) {
                   </div>
                 </div>
                 <p className="mt-4 text-sm leading-7 text-slate-300">{item.description}</p>
-              </motion.div>
+              </div>
             ))}
           </div>
         </div>
@@ -546,11 +542,10 @@ export function EnterpriseSiteShell({
           <div className={`${isLocked ? "pointer-events-none select-none blur-[12px] saturate-[0.65] opacity-45" : ""}`}>
             {page.contains?.length ? (
               <section className="grid gap-4 xl:grid-cols-3">
-                {page.contains.map((item, index) => (
+                {page.contains.map((item) => (
                   <motion.div
                     key={`${page.route}-contains-${item.title}`}
                     {...cardMotion}
-                    transition={{ ...cardMotion.transition, delay: index * 0.05 }}
                     className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5 shadow-[0_18px_60px_rgba(2,8,23,0.25)]"
                   >
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-100">
@@ -608,7 +603,7 @@ export function EnterpriseSiteShell({
                 <h2 className="mt-3 text-2xl font-semibold text-white">Step-by-step platform flow</h2>
                 <div className="mt-6 grid gap-4 xl:grid-cols-3">
                   {page.workflow.map((item, index) => (
-                    <motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} transition={{ ...cardMotion.transition, delay: index * 0.05 }} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                    <motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
                       <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-400/12 text-sm font-semibold text-cyan-100">{index + 1}</div>
                         <p className="text-sm leading-7 text-slate-100">{item}</p>
