@@ -6257,14 +6257,34 @@ function getStudyImagesForSection(images = [], section = {}, sectionIndex = 0, s
 
 function StudyGuideImageCards({ images = [] }) {
   if (!images.length) return null;
+  const resolveStudyImageUrls = (image = {}) => (
+    [
+      image.image_url,
+      image.source_url,
+      image.url,
+      image.dataUrl,
+      image.data_url,
+      image.thumbnail_url,
+      image.display_url,
+      image.original_url,
+      image.secure_url,
+      image.src,
+      image.image,
+      ...(Array.isArray(image.urls) ? image.urls : []),
+      ...(Array.isArray(image.image_urls) ? image.image_urls : []),
+    ]
+      .filter((item) => typeof item === "string" && item.trim())
+      .map((item) => item.trim())
+  );
   return (
-    <div className="mt-4 grid gap-4 md:grid-cols-2">
+    <div className="study-guide-figure-grid mt-4 grid gap-4 md:grid-cols-2">
       {images.map((image, index) => {
         const figureNumber = Number(image.figure_number || image.figureNumber || index + 1);
         const title = image.title || image.query || image.diagram_label || `Study visual ${figureNumber}`;
         const caption = image.caption || image.key_highlight || image.diagram_label || "Use this visual as a study anchor for the explanation beside it.";
         const explanation = image.ai_explanation || image.explanation || image.purpose || caption;
-        const imageUrl = image.image_url || image.source_url || image.url || image.dataUrl || "";
+        const imageUrls = resolveStudyImageUrls(image);
+        const imageUrl = imageUrls[0] || "";
         return (
           <figure key={`${imageUrl || image.title || "study-image"}-${index}`} className="study-guide-figure" onContextMenu={(event) => event.preventDefault()}>
             {imageUrl ? (
@@ -6275,6 +6295,17 @@ function StudyGuideImageCards({ images = [] }) {
                 draggable={false}
                 loading="lazy"
                 referrerPolicy="no-referrer"
+                onError={(event) => {
+                  const currentIndex = Number(event.currentTarget.dataset.fallbackIndex || 0);
+                  const nextUrl = imageUrls[currentIndex + 1];
+                  if (nextUrl) {
+                    event.currentTarget.dataset.fallbackIndex = String(currentIndex + 1);
+                    event.currentTarget.src = nextUrl;
+                    return;
+                  }
+                  event.currentTarget.hidden = true;
+                  event.currentTarget.closest("figure")?.classList.add("study-guide-figure-image-missing");
+                }}
               />
             ) : (
               <div className="study-guide-figure-placeholder">Visual unavailable</div>
@@ -6662,6 +6693,8 @@ export default function App() {
   const [timetableTransitionPrompt, setTimetableTransitionPrompt] = useState(null);
   const [timetableCompletionPrompt, setTimetableCompletionPrompt] = useState(null);
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
+  const [isTimetableFocusMode, setIsTimetableFocusMode] = useState(false);
+  const [isTimetableRotated, setIsTimetableRotated] = useState(false);
   const [activeStudySessionId, setActiveStudySessionId] = useState("");
   const [activeStudySessionQuestion, setActiveStudySessionQuestion] = useState("");
   const [activeStudySessionNotesDraft, setActiveStudySessionNotesDraft] = useState("");
@@ -8409,10 +8442,12 @@ export default function App() {
       setVideoUrl(snapshot.videoUrl || "");
       setActiveHistoryId(snapshot.activeHistoryId || "");
       setActiveTab(restoredActiveTab);
-      const shouldKeepTimetablePage = currentPageRef.current === "timetable"
+      const shouldKeepCurrentUtilityPage = ["voice", "timetable"].includes(currentPageRef.current)
         || timetablePlanningStateRef.current.isEditing
         || timetablePlanningStateRef.current.hasPlanPreview;
-      setCurrentPage(shouldKeepTimetablePage ? "timetable" : restoredCurrentPage);
+      const nextCurrentPage = shouldKeepCurrentUtilityPage ? currentPageRef.current : restoredCurrentPage;
+      currentPageRef.current = nextCurrentPage;
+      setCurrentPage(nextCurrentPage);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
       setActiveTeacherSegmentIndex(-1);
@@ -10110,7 +10145,7 @@ export default function App() {
     }));
 
     return (
-      <section className="timetable-compact-surface min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6">
+      <section className={`timetable-compact-surface ${isTimetableFocusMode ? "is-focus-mode" : ""} ${isTimetableRotated ? "is-rotated" : ""} min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6`}>
         <div className="flex flex-col gap-5 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-4">
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
@@ -10121,6 +10156,8 @@ export default function App() {
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
+            <button type="button" onClick={() => setIsTimetableFocusMode((current) => !current)} className="timetable-focus-button rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">{isTimetableFocusMode ? "Close" : "Focus"}</button>
+            <button type="button" onClick={() => setIsTimetableRotated((current) => !current)} className="timetable-focus-button rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Rotate</button>
             {!isTimetableLoaderVisible && shouldShowTimetableGrid && timetableRows.length ? (
               <button type="button" onClick={downloadTimetableWeekImage} disabled={isDownloadingTimetableImage} className="rounded-[14px] border border-sky-300/35 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-50 disabled:opacity-60">
                 {isDownloadingTimetableImage ? "Downloading..." : "Download Week Image"}
@@ -10165,8 +10202,8 @@ export default function App() {
               </div>
             </div>
             {lectureTimetableMessage ? <p className="mt-4 rounded-2xl border border-sky-300/20 bg-sky-300/10 px-4 py-3 text-sm text-sky-50">{lectureTimetableMessage}</p> : null}
-            <div className="mt-5 min-h-[260px] overflow-x-auto rounded-2xl border border-white/10">
-              <table className="min-w-[1080px] w-full border-collapse text-left text-sm">
+            <div className="lecture-timetable-scroll mt-5 min-h-[260px] overflow-x-auto rounded-2xl border border-white/10">
+              <table className="lecture-timetable-table min-w-[1080px] w-full border-collapse text-left text-sm">
                 <thead className="bg-slate-900/90 text-xs uppercase tracking-[0.18em] text-slate-400">
                   <tr>
                     <th className="border-b border-white/10 px-3 py-3">Day Group</th>
@@ -10419,7 +10456,7 @@ export default function App() {
 
         {shouldShowTimetableGrid ? (
           <>
-        <div ref={timetableExportRef} className="mt-5">
+        <div ref={timetableExportRef} className="timetable-focus-body mt-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => shiftTimetableWeek(-1)} className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white" aria-label="Previous week">‹</button>
@@ -10444,8 +10481,8 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-5 overflow-x-auto rounded-[24px] border border-white/10 bg-black">
-          <div className="min-w-[980px]">
+        <div className="study-timetable-scroll mt-5 overflow-x-auto rounded-[24px] border border-white/10 bg-black">
+          <div className="study-timetable-grid min-w-[980px]">
             <div className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/10 text-center text-sm text-white">
               <div className="px-3 py-4 text-xs uppercase tracking-[0.18em] text-slate-400">Time</div>
               {TIMETABLE_DAY_KEYS.map((day, index) => <div key={day.id} className="border-l border-white/10 px-3 py-4"><p className="font-semibold">{day.short}</p><p className="mt-1 text-xs text-slate-300">{formatTimetableDate(addDays(timetableWeekStartIso, index))}</p></div>)}
@@ -14481,8 +14518,9 @@ export default function App() {
       setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
     }
     setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-    setAuthServerStateReady(false);
-    apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
+    setAuthChecked(true);
+    setAuthServerStateReady(true);
+    apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 3000).then(async (response) => {
       const data = await parseJsonSafe(response);
       if (cancelled) return;
       if (response.status === 401) {
@@ -25777,7 +25815,7 @@ export default function App() {
                   </div>
                 </div>
                 {showLandingAuthPanel ? (
-                  <div ref={landingAuthPanelRef} className="rounded-[24px] border border-emerald-300/15 bg-slate-950/80 p-4 shadow-[0_20px_60px_rgba(2,8,23,0.32)]">
+                  <div ref={landingAuthPanelRef} className="landing-auth-panel rounded-[24px] border border-emerald-300/15 bg-slate-950/80 p-4 shadow-[0_20px_60px_rgba(2,8,23,0.32)]">
                     <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Secure sign-in</p>
                     <p className="mt-2 text-sm leading-7 text-slate-300">Use your browser sign-in first. After login, Mabaso AI will open your capture workspace automatically.</p>
                     <div className="mt-4 flex justify-center">
@@ -26644,26 +26682,6 @@ export default function App() {
                                 />
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
-                              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                <details className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">▶ Practice & Thinking</summary>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {["chat", "flashcards", "quiz", "mindmap"].map((tabId) => {
-                                      const tool = WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools).find((item) => item.targetTab === tabId);
-                                      return tool ? <button key={`${section.heading}-${tabId}`} type="button" onClick={() => openWorkspaceToolCard(tool)} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{tool.label}</button> : null;
-                                    })}
-                                  </div>
-                                </details>
-                                <details className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                                  <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">▶ Exports & Media</summary>
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {["presentation", "report", "podcast"].map((tabId) => {
-                                      const tool = WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools).find((item) => item.targetTab === tabId);
-                                      return tool ? <button key={`${section.heading}-${tabId}`} type="button" onClick={() => openWorkspaceToolCard(tool)} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">{tool.label}</button> : null;
-                                    })}
-                                  </div>
-                                </details>
-                              </div>
                             </details>
                           );
                         })}

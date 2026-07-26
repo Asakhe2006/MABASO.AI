@@ -318,9 +318,9 @@ STUDY_IMAGE_MODEL = (os.getenv("STUDY_IMAGE_MODEL", "gpt-image-1") or "gpt-image
 STUDY_IMAGE_SIZE = (os.getenv("STUDY_IMAGE_SIZE", "1024x1024") or "1024x1024").strip()
 STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "high") or "high").strip()
 STUDY_IMAGE_GENERATION_TIMEOUT = float(os.getenv("STUDY_IMAGE_GENERATION_TIMEOUT", "120"))
-FREE_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("FREE_STUDENT_STUDY_IMAGES_PER_GUIDE", 2))
-PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", 2))
-PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", 3))
+FREE_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("FREE_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
+PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
+PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
@@ -15603,13 +15603,14 @@ def build_study_image_queries(
                 {
                     "role": "system",
                     "content": (
-                        "You pick real-photo search queries for a university study app. "
+                        "You pick clear, modern real-photo search queries for a university study app. "
                         "Return strict JSON only in this shape: {\"queries\": [\"...\"]}.\n\n"
                         "Rules:\n"
                         "- Return 0 to 6 short search queries.\n"
                         "- Only return queries for concrete things that students should literally see, such as organs, machines, lab tools, landmarks, species, hardware, or physical processes.\n"
                         "- If the topic is mostly abstract, symbolic, theoretical, or mathematical, return an empty array.\n"
-                        "- Prefer specific nouns over vague phrases.\n"
+                        "- Prefer specific nouns over vague phrases, and include visible subtype or component names when useful.\n"
+                        "- Prefer clear contemporary reference photos that show the object, specimen, tool, component, or process plainly.\n"
                         "- If the guide compares concrete subtypes, return one query per important subtype instead of one generic umbrella term.\n"
                         "- Do not return diagram, illustration, formula, or stock-photo style phrases."
                     ),
