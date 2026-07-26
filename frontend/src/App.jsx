@@ -126,6 +126,7 @@ const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
 const ACTIVE_COLLABORATION_ROOM_STORAGE_KEY = "mabaso-active-collaboration-room-v1";
 const ACTIVE_WORKSPACE_TAB_STORAGE_KEY = "mabaso-active-workspace-tab-v1";
+const AUTO_OPEN_STUDY_GUIDE_STORAGE_KEY = "mabaso-auto-open-study-guide-v1";
 const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
@@ -4694,8 +4695,23 @@ function formatAdminDuration(valueMs) {
   return `${Math.round(ms)} ms`;
 }
 
+function formatAdminCountry(value = "") {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "";
+  if (/^[A-Z]{2}$/i.test(cleaned) && typeof Intl !== "undefined" && Intl.DisplayNames) {
+    try {
+      const locale = typeof navigator !== "undefined" ? navigator.language || "en" : "en";
+      const displayNames = new Intl.DisplayNames([locale], { type: "region" });
+      return displayNames.of(cleaned.toUpperCase()) || cleaned.toUpperCase();
+    } catch {
+      return cleaned.toUpperCase();
+    }
+  }
+  return cleaned;
+}
+
 function formatAdminLocation(country = "", city = "") {
-  const parts = [city, country].map((value) => String(value || "").trim()).filter(Boolean);
+  const parts = [city, formatAdminCountry(country)].map((value) => String(value || "").trim()).filter(Boolean);
   return parts.length ? parts.join(", ") : "Unknown location";
 }
 
@@ -6248,17 +6264,22 @@ function StudyGuideImageCards({ images = [] }) {
         const title = image.title || image.query || image.diagram_label || `Study visual ${figureNumber}`;
         const caption = image.caption || image.key_highlight || image.diagram_label || "Use this visual as a study anchor for the explanation beside it.";
         const explanation = image.ai_explanation || image.explanation || image.purpose || caption;
+        const imageUrl = image.image_url || image.source_url || image.url || image.dataUrl || "";
         return (
-          <figure key={`${image.image_url || image.title || "study-image"}-${index}`} className="study-guide-figure overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-[0_12px_28px_rgba(15,23,42,0.08)]" onContextMenu={(event) => event.preventDefault()}>
-            <img
-              src={image.image_url}
-              alt={title}
-              className="h-56 w-full select-none object-cover"
-              draggable={false}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-            />
-            <figcaption className="space-y-3 p-4">
+          <figure key={`${imageUrl || image.title || "study-image"}-${index}`} className="study-guide-figure" onContextMenu={(event) => event.preventDefault()}>
+            {imageUrl ? (
+              <img
+                src={imageUrl}
+                alt={title}
+                className="study-guide-figure-image"
+                draggable={false}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="study-guide-figure-placeholder">Visual unavailable</div>
+            )}
+            <figcaption className="study-guide-figure-caption">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Figure {figureNumber}</p>
               <p className="text-base font-semibold leading-6 text-slate-950">{title}</p>
               <p className="text-sm leading-6 text-slate-600">{caption}</p>
@@ -6419,6 +6440,7 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
@@ -6498,6 +6520,14 @@ export default function App() {
   const [isWorkspaceEditMode, setIsWorkspaceEditMode] = useState(false);
   const [isWorkspaceHighlightMode, setIsWorkspaceHighlightMode] = useState(false);
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState("");
+  const [autoOpenStudyGuideWhenReady, setAutoOpenStudyGuideWhenReady] = useState(() => {
+    try {
+      const storedValue = window.localStorage.getItem(AUTO_OPEN_STUDY_GUIDE_STORAGE_KEY);
+      return storedValue ? storedValue === "true" : true;
+    } catch {
+      return true;
+    }
+  });
   const [studyGuideDocumentHtml, setStudyGuideDocumentHtml] = useState({});
   const [activeHighlightColor, setActiveHighlightColor] = useState("#fef08a");
   const [activeGuideEditorSectionKey, setActiveGuideEditorSectionKey] = useState("");
@@ -6532,6 +6562,7 @@ export default function App() {
   const [siteRatingMessage, setSiteRatingMessage] = useState("");
   const [isSubmittingSiteRating, setIsSubmittingSiteRating] = useState(false);
   const guideEditSaveTimerRef = useRef(null);
+  const siteRatingPromptTimerRef = useRef(null);
   const studyGuideEditorRefs = useRef({});
   const studyGuideDocumentDraftRef = useRef({});
   const activeGuideSelectionRef = useRef(null);
@@ -7660,6 +7691,9 @@ export default function App() {
 
   useEffect(() => {
     currentPageRef.current = currentPage;
+    if (currentPage !== "workspace") {
+      setIsWorkspaceMobileSidebarOpen(false);
+    }
   }, [currentPage]);
 
   useEffect(() => {
@@ -7677,6 +7711,13 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isWorkspaceMobileSidebarOpen]);
+
+  useEffect(() => () => {
+    if (siteRatingPromptTimerRef.current) {
+      window.clearTimeout(siteRatingPromptTimerRef.current);
+      siteRatingPromptTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const nextInviteRoomId = parseRoomInviteIdFromLocation();
@@ -12769,6 +12810,7 @@ export default function App() {
     const manualPaymentRequests = billing.manual_payment_requests || [];
     const billingSubscriptions = billing.subscriptions || [];
     const billingAiCosts = billing.ai_costs || {};
+    const studyGuideCostRows = Array.isArray(billingAiCosts.study_guide_by_user) ? billingAiCosts.study_guide_by_user : [];
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
     const ratings = dashboard.ratings || {};
@@ -14024,7 +14066,12 @@ export default function App() {
                 <div className="mt-5 space-y-3">
                   {billingProfitability.length ? billingProfitability.slice(0, 12).map((item) => (
                     <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
-                      <p className="text-sm font-semibold text-slate-900">{item.user}</p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.user}</p>
+                        <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+                          {formatAdminInteger(item.study_guide_count || 0)}x Study Guide - {formatAdminCurrency(item.study_guide_cost || 0)}
+                        </span>
+                      </div>
                       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
                         <span>Revenue: <strong className="text-slate-900">{formatAdminCurrency(item.revenue)}</strong></span>
                         <span>AI Cost: <strong className="text-slate-900">{formatAdminCurrency(item.ai_cost)}</strong></span>
@@ -14035,6 +14082,20 @@ export default function App() {
                 </div>
               </article>
             </div>
+
+            <article className={sectionCardClass}>
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Study Guide Generation Cost</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">Per-user Study Guide usage</h3>
+              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {studyGuideCostRows.length ? studyGuideCostRows.slice(0, 30).map((item) => (
+                  <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.user}</p>
+                    <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">{formatAdminInteger(item.count || 0)}x generated</p>
+                    <p className="mt-2 text-lg font-semibold text-slate-950">{formatAdminCurrency(item.cost || 0)}</p>
+                  </div>
+                )) : emptyPanel("Study Guide user costs appear after guide generation usage is recorded.")}
+              </div>
+            </article>
 
             <article className={sectionCardClass}>
               <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Per-Generation Cost Records</p>
@@ -15034,7 +15095,7 @@ export default function App() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credential }),
-      }, 45000);
+      }, 25000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
@@ -16073,10 +16134,47 @@ export default function App() {
     setSiteRatingMessage("");
     setSiteRatingPrompt({ promptCount: nextCount });
   };
+  const scheduleSiteRatingPrompt = (delayMs = 45000) => {
+    if (siteRatingPromptTimerRef.current) window.clearTimeout(siteRatingPromptTimerRef.current);
+    siteRatingPromptTimerRef.current = window.setTimeout(() => {
+      siteRatingPromptTimerRef.current = null;
+      maybeShowSiteRatingPrompt();
+    }, delayMs);
+  };
   const closeSiteRatingPrompt = () => {
     setSiteRatingPrompt(null);
     setSiteRatingMessage("");
     setIsSubmittingSiteRating(false);
+  };
+  const setAutoOpenStudyGuidePreference = (nextValue) => {
+    const enabled = Boolean(nextValue);
+    setAutoOpenStudyGuideWhenReady(enabled);
+    try {
+      window.localStorage.setItem(AUTO_OPEN_STUDY_GUIDE_STORAGE_KEY, String(enabled));
+      if (enabled && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => undefined);
+      }
+    } catch {
+      // Ignore local preference persistence failures.
+    }
+  };
+  const notifyStudyGuideReady = () => {
+    if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return;
+    if (document.visibilityState !== "hidden") return;
+    try {
+      const notification = new Notification("Study guide ready", {
+        body: "Mabaso AI finished your guide. Open the tab to continue reading.",
+        icon: BRAND_ART_URL,
+      });
+      notification.onclick = () => {
+        window.focus();
+        setCurrentPage("workspace");
+        setActiveTab("guide");
+        notification.close();
+      };
+    } catch {
+      // Ignore notification failures.
+    }
   };
   const submitSiteRating = async () => {
     if (!siteRatingStars) {
@@ -19970,7 +20068,8 @@ export default function App() {
     clearCancelledTranscriptionState();
   };
 
-  const logout = async () => {
+  const confirmLogout = async () => {
+    setIsLogoutConfirmOpen(false);
     try {
       if (authToken) await authFetch("/auth/logout", { method: "POST" });
     } catch {
@@ -19980,6 +20079,10 @@ export default function App() {
       setStatus("");
       setError("");
     }
+  };
+
+  const logout = () => {
+    setIsLogoutConfirmOpen(true);
   };
 
   const submitSupportRequest = async ({
@@ -21093,10 +21196,13 @@ export default function App() {
       });
       clearPendingJob();
       setUsedFallbackSummary(Boolean(job.used_fallback));
-      revealWorkspacePage("guide");
+      if (autoOpenStudyGuideWhenReady) {
+        revealWorkspacePage("guide");
+        notifyStudyGuideReady();
+      }
       setStatus(job.used_fallback ? "Fallback study guide ready." : "Study guide ready.");
       setProgress(100);
-      maybeShowSiteRatingPrompt();
+      scheduleSiteRatingPrompt(45000);
     } catch (err) {
       const message = String(err?.message || "").trim();
       const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
@@ -25248,55 +25354,74 @@ export default function App() {
   ) : null;
 
   const siteRatingModal = siteRatingPrompt ? (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-[28px] border border-emerald-300/25 bg-slate-950 p-6 text-white shadow-[0_30px_90px_rgba(2,8,23,0.55)]">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-3 py-4 backdrop-blur-[2px] sm:items-center">
+      <div className="site-rating-prompt w-full max-w-sm rounded-[22px] border border-emerald-300/20 bg-slate-950 p-4 text-white shadow-[0_22px_60px_rgba(2,8,23,0.45)]">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-emerald-200/70">Quick rating</p>
-            <h3 className="mt-2 text-3xl font-semibold text-white">
+            <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-200/70">Quick rating</p>
+            <h3 className="mt-1.5 text-xl font-semibold text-white">
               {Number(siteRatingPrompt?.promptCount || 0) >= 3 ? "How has our service been for you?" : "How was this study guide?"}
             </h3>
           </div>
-          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">
+          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">
             Close
           </button>
         </div>
-        <div className="mt-6 flex flex-wrap gap-2" aria-label="Choose a star rating">
+        <div className="mt-4 flex flex-wrap gap-1.5" aria-label="Choose a star rating">
           {[1, 2, 3, 4, 5].map((star) => (
             <button
               key={star}
               type="button"
               onClick={() => setSiteRatingStars(star)}
-              className={`flex h-12 w-12 items-center justify-center rounded-2xl border text-2xl transition ${siteRatingStars >= star ? "border-amber-300/60 bg-amber-300/20 text-amber-200" : "border-white/10 bg-white/5 text-slate-500 hover:text-amber-100"}`}
+              className={`flex h-9 w-9 items-center justify-center rounded-xl border text-lg transition ${siteRatingStars >= star ? "border-amber-300/60 bg-amber-300/20 text-amber-200" : "border-white/10 bg-white/5 text-slate-500 hover:text-amber-100"}`}
               aria-label={`${star} star${star === 1 ? "" : "s"}`}
             >
               ★
             </button>
           ))}
         </div>
-        <label className="mt-5 block">
+        <label className="mt-4 block">
           <span className="text-xs uppercase tracking-[0.22em] text-slate-400">Optional comment</span>
           <textarea
             value={siteRatingComment}
             onChange={(event) => setSiteRatingComment(limitSiteRatingComment(event.target.value))}
             rows={4}
-            className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm leading-7 text-white outline-none"
+            className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm leading-6 text-white outline-none"
             placeholder={Number(siteRatingPrompt?.promptCount || 0) >= 3 ? "Tell us what has worked well or what we should improve." : "Tell us what was missing or confusing."}
           />
         </label>
         <p className="mt-2 text-xs text-slate-400">{siteRatingComment.split(/\s+/).filter(Boolean).length}/50 words</p>
         {siteRatingMessage ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">{siteRatingMessage}</p> : null}
-        <div className="mt-6 flex flex-wrap justify-end gap-3">
-          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white">
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={closeSiteRatingPrompt} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-white">
             Not now
           </button>
-          <button type="button" onClick={submitSiteRating} disabled={isSubmittingSiteRating} className="rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60">
+          <button type="button" onClick={submitSiteRating} disabled={isSubmittingSiteRating} className="rounded-full bg-[linear-gradient(135deg,#16a34a,#22c55e)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60">
             {isSubmittingSiteRating ? "Saving..." : "Submit rating"}
           </button>
         </div>
       </div>
     </div>
   ) : null;
+
+  const logoutConfirmModal = isLogoutConfirmOpen ? (
+    <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-[22px] border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_70px_rgba(2,8,23,0.5)]">
+        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Confirm logout</p>
+        <h3 className="mt-2 text-xl font-semibold">Sign out of Mabaso AI?</h3>
+        <p className="mt-3 text-sm leading-6 text-slate-300">Your saved history stays linked to your email, but this device will leave the current session.</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={() => setIsLogoutConfirmOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Cancel</button>
+          <button type="button" onClick={confirmLogout} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white">Log out</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  if (isLogoutConfirmOpen) {
+    return logoutConfirmModal;
+  }
+
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -25306,6 +25431,21 @@ export default function App() {
             <p className="mt-4 text-sm text-slate-300">Checking your session...</p>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isGoogleSigningIn) {
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+        <main className="flex min-h-screen items-center justify-center px-4">
+          <section className="w-full max-w-sm rounded-[26px] border border-emerald-300/15 bg-slate-950/85 p-6 text-center shadow-[0_28px_80px_rgba(2,8,23,0.45)]">
+            <p className="brand-mark text-2xl font-black">Mabaso AI</p>
+            <div className="mx-auto mt-6 h-10 w-10 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
+            <h1 className="mt-5 text-xl font-semibold text-white">Opening your workspace</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-300">Finishing Google sign-in. This should only take a moment.</p>
+          </section>
+        </main>
       </div>
     );
   }
@@ -25874,6 +26014,15 @@ export default function App() {
                       ) : null}
                     </div>
                     <div>
+                      <button
+                        type="button"
+                        onClick={() => setAutoOpenStudyGuidePreference(!autoOpenStudyGuideWhenReady)}
+                        className={`mb-2 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${autoOpenStudyGuideWhenReady ? "border-emerald-300/30 bg-emerald-300/15 text-emerald-50" : "border-white/10 bg-white/5 text-slate-200"}`}
+                        aria-pressed={autoOpenStudyGuideWhenReady}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${autoOpenStudyGuideWhenReady ? "bg-emerald-300" : "bg-slate-500"}`} />
+                        <span>{autoOpenStudyGuideWhenReady ? "Auto-open guide on" : "Auto-open guide off"}</span>
+                      </button>
                       <button ref={generateStudyGuideButtonRef} type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
                         <span className="block text-base font-semibold">Generate Study Guide</span>
                         {guideActionMeta.showProgress ? (
