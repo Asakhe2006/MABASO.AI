@@ -434,6 +434,7 @@ iframe {
   position: sticky;
   top: 5.5rem;
   align-self: start;
+  min-width: 0;
 }
 
 @media (min-width: 1024px) {
@@ -442,25 +443,35 @@ iframe {
   }
 
   .workspace-layout {
+    align-items: start;
     min-height: calc(100vh - 132px);
   }
 
   .workspace-sidebar {
-    max-height: calc(100vh - 104px);
+    top: 6rem;
+    max-height: calc(100dvh - 7rem);
     overflow-y: auto;
+    border-radius: 24px;
+    scrollbar-gutter: stable;
+  }
+
+  .workspace-sidebar > div {
+    position: static !important;
+    top: auto !important;
   }
 
   .workspace-content-surface {
-    max-height: calc(100vh - 132px);
+    max-height: calc(100dvh - 132px);
     overflow-y: auto;
     padding-right: 0.35rem;
+    scrollbar-gutter: stable;
   }
 }
 
 .workspace-mobile-sidebar-layer {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 140;
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -477,14 +488,15 @@ iframe {
   position: absolute;
   inset-block: 0;
   left: 0;
-  width: min(320px, 74vw);
-  min-width: 236px;
+  width: min(360px, 88vw);
+  min-width: min(280px, 88vw);
   overflow-y: auto;
   background: rgba(2, 8, 23, 0.98);
-  padding: 1rem;
+  padding: 1rem 0.9rem calc(1.5rem + env(safe-area-inset-bottom));
   border-radius: 0 20px 20px 0;
   box-shadow: 20px 0 60px rgba(0, 0, 0, 0.42);
   animation: workspaceDrawerIn 260ms ease-in-out both;
+  -webkit-overflow-scrolling: touch;
 }
 
 .capture-ai-chat-button,
@@ -1551,7 +1563,7 @@ iframe {
   .workspace-topbar {
     position: sticky;
     top: 0;
-    z-index: 55;
+    z-index: 96;
     margin-inline: -12px;
     background: rgba(4, 17, 10, 0.94);
     padding: 0.55rem 12px 0.75rem;
@@ -1560,11 +1572,16 @@ iframe {
 
   .workspace-top-actions {
     width: 100%;
+    min-width: 0;
     justify-content: space-between;
+    gap: 0.45rem;
   }
 
   .workspace-search-box {
-    width: min(100%, calc(100vw - 104px));
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: calc(100vw - 118px);
     min-height: 38px;
   }
 
@@ -1582,6 +1599,75 @@ iframe {
     border: 0 !important;
     background: transparent !important;
     box-shadow: none !important;
+  }
+
+  .workspace-shell {
+    overflow-x: clip !important;
+    overflow-y: visible !important;
+  }
+
+  .workspace-layout {
+    display: block !important;
+    margin-top: 0.85rem !important;
+  }
+
+  .workspace-content-surface {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .workspace-tool-actions {
+    position: sticky;
+    top: calc(58px + env(safe-area-inset-top));
+    z-index: 82;
+    align-items: flex-start !important;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    background: rgba(2, 8, 23, 0.92);
+    padding: 0.7rem;
+    backdrop-filter: blur(14px);
+    box-shadow: 0 14px 30px rgba(2, 8, 23, 0.22);
+  }
+
+  .workspace-tool-actions > div:first-child {
+    min-width: 0;
+    flex: 1 1 150px;
+  }
+
+  .workspace-tool-actions h3 {
+    font-size: 1.05rem !important;
+    line-height: 1.25 !important;
+    overflow-wrap: anywhere;
+  }
+
+  .workspace-tool-actions p {
+    font-size: 0.66rem !important;
+    letter-spacing: 0.18em !important;
+  }
+
+  .workspace-tool-actions > div:last-child {
+    flex: 0 1 auto;
+    justify-content: flex-end;
+    gap: 0.4rem;
+  }
+
+  .workspace-icon-action {
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+    border-radius: 13px;
+  }
+
+  .workspace-highlight-menu {
+    position: fixed;
+    top: auto;
+    right: max(10px, env(safe-area-inset-right));
+    bottom: calc(5.6rem + env(safe-area-inset-bottom));
+    left: max(10px, env(safe-area-inset-left));
+    z-index: 130;
+    justify-content: center;
+    flex-wrap: wrap;
   }
 
   .hero-glow-left,
@@ -1751,7 +1837,11 @@ iframe {
   }
 
   .capture-ai-chat-button {
-    display: none !important;
+    display: inline-flex !important;
+    min-height: 44px;
+    padding: 0 0.85rem;
+    border-radius: 14px;
+    font-size: 0.86rem;
   }
 
   .capture-source-icon {
@@ -1847,24 +1937,25 @@ iframe {
 
   .workspace-tool-actions {
     position: sticky;
-    top: 68px;
-    z-index: 28;
-    margin-inline: -4px;
+    top: calc(58px + env(safe-area-inset-top));
+    z-index: 82;
+    margin-inline: 0;
     border-radius: 18px;
-    background: rgba(2, 8, 23, 0.84);
-    padding: 0.75rem;
+    background: rgba(2, 8, 23, 0.92);
+    padding: 0.65rem;
     backdrop-filter: blur(14px);
     box-shadow: 0 14px 30px rgba(2, 8, 23, 0.22);
   }
 
   .workspace-layout {
     display: block !important;
+    margin-top: 0.75rem !important;
   }
 
   .workspace-shell .rounded-\[28px\],
   .workspace-shell .rounded-\[24px\] {
-    padding-left: 8px !important;
-    padding-right: 8px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
   }
 
   .workspace-mobile-accordion details,

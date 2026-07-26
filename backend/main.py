@@ -4487,7 +4487,9 @@ def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for row in rows:
         try:
-            items.append(normalize_history_item_payload(json.loads(row["payload_json"])))
+            item = normalize_history_item_payload(json.loads(row["payload_json"]))
+            item["ownerEmail"] = normalized_email
+            items.append(item)
         except (json.JSONDecodeError, HTTPException):
             continue
     return sort_history_items(items)[:MAX_HISTORY_ITEMS]
@@ -4498,6 +4500,8 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
     if not normalized_email:
         return []
     normalized_items = sort_history_items([normalize_history_item_payload(item) for item in items])[:MAX_HISTORY_ITEMS]
+    for item in normalized_items:
+        item["ownerEmail"] = normalized_email
 
     with get_db_connection() as connection:
         connection.execute("DELETE FROM study_history_items WHERE lower(email) = ?", (normalized_email,))
@@ -4928,10 +4932,12 @@ def build_realtime_tutor_instructions(
         "Teach naturally, warmly, and clearly through short realtime voice turns. "
         "Do not sound like a chatbot and do not read textbook-sized paragraphs aloud. "
         "For small confirmations like switching tools or refreshing notes, keep the spoken reply extremely short. "
-            "Use the study guide, transcript, formulas, worked examples, notes, and past papers as shared workspace memory. "
-            "Treat uploaded material as priority context, not a boundary. If a student's oral exam question is outside, broader than, or only partly covered by the uploaded material, say that briefly and then answer from reliable general academic knowledge. "
-            "Never refuse a normal academic question just because it is not in the uploaded files. "
-            "If a worked example or formula is useful, refer to it naturally, for example: 'open the worked examples tool and look at example 2.' "
+        "Use the study guide, transcript, formulas, worked examples, notes, and past papers as shared workspace memory. "
+        "Treat uploaded material as priority context, not a boundary. If a student's oral exam question is outside, broader than, or only partly covered by the uploaded material, say that briefly and then answer from reliable general academic knowledge. "
+        "Never refuse a normal academic question just because it is not in the uploaded files. "
+        "Answer the exact words the student asked; do not repeat one of a few canned oral-exam responses. "
+        "Do not mention 'study guide', 'transcript', 'uploaded files', or source labels unless the student asks where the answer came from. "
+        "If a worked example or formula is useful, refer to it naturally, for example: 'open the worked examples tool and look at example 2.' "
         "The student can move between the Study Guide Generator, Transcript Analyzer, Worked Examples, Flashcards, Quizzes, AI Notes, and Revision Planner while you keep teaching. "
         "When a concept is difficult, break it into smaller parts, slow down, and use concrete examples. "
         "If the speech was unclear, say you did not fully catch it and ask for a repeat in one short sentence. "
@@ -6473,6 +6479,8 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "Treat uploaded material as priority context, not the boundary of what you can answer. "
             "If the lecture does not cover a general academic question, briefly say the lecture does not go into that detail, then teach the concept from general knowledge. "
             "Never refuse a normal oral-exam or academic question only because it is not in the uploaded material. "
+            "Answer the student's exact question; do not fall back to a generic oral-exam script. "
+            "Do not mention 'study guide', 'transcript', 'uploaded material', or source labels unless the student asks what came from the sources. "
             "For friendly questions, answer naturally as MABASO AI. "
             "Sound like a premium human-like lecturer speaking aloud: direct, clear, warm, and easy to follow. "
             f"{teaching_style_instruction} "
@@ -6494,6 +6502,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "Answer exactly what the student asked. "
             "Use the lecture context when it is relevant, but you may also answer general subject, calculation, definition, and study-help questions. "
             "Treat uploaded material as priority context, not the only source of truth. "
+            "Do not mention 'study guide', 'transcript', 'uploaded material', or source labels unless the student asks for source-specific evidence. "
             "Keep answers short, accurate, and direct: maximum 2 to 3 short paragraphs. "
             "Avoid long essays, diagrams, ASCII art, mind maps, and unnecessary formatting. "
             "Do not ask a follow-up question at the end. "
@@ -6508,6 +6517,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
             "Do not force unrelated questions into the uploaded lecture. "
             "If the question is general academic, answer it from reliable general knowledge even when it is not in the lecture. "
             "If the current lecture does not cover the topic, briefly say it is not covered in detail, then continue teaching the concept clearly. "
+            "Do not mention 'study guide', 'transcript', 'uploaded material', or source labels unless the student asks what came from the sources. "
             "If the user asks friendly questions such as your name, answer naturally as MABASO AI. "
             "Be helpful, concise, human, and use bullets only when they make the answer easier to study. "
             "Never say 'I searched', 'I found', 'the best match', or 'according to the transcript'. "
@@ -6523,9 +6533,9 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
 
     if context_text:
-        messages.append({"role": "system", "content": f"Lecture context:\n\n{context_text}"})
+        messages.append({"role": "system", "content": f"Optional workspace background for internal use only:\n\n{context_text}"})
     if current_section:
-        messages.append({"role": "system", "content": f"Current teacher section:\n{current_section}"})
+        messages.append({"role": "system", "content": f"Current app location for internal use only:\n{current_section}"})
 
     for turn in payload.history[-6:]:
         role = "assistant" if turn.role == "assistant" else "user"
@@ -6762,7 +6772,7 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
     wants_detail = lecture_assistant_voice_wants_detail(payload.question) if voice_mode else False
     rules = [
         LECTURE_ASSISTANT_VOICE_SYSTEM_PROMPT if voice_mode else LECTURE_ASSISTANT_TEXT_SYSTEM_PROMPT,
-        "You are answering inside Mabaso AI for a lecture-specific study workspace.",
+        "You are answering inside Mabaso AI as a general academic tutor with optional workspace background.",
         "Understand quickly and respond with the most helpful answer first.",
         "Do not repeat the user's question back to them.",
         f"Reply in {output_language}.",
@@ -6777,6 +6787,8 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
                 "Do not dump copied lecture paragraphs. Use the lecture material as background knowledge, then explain it naturally.",
                 "Answer with a teaching flow: direct answer first, simple explanation second, then a short example or analogy when useful.",
                 "If the lecture context is relevant, use it naturally without saying 'according to the transcript' or sounding like a document lookup.",
+                "Answer the exact question asked and do not reuse a generic oral-exam response.",
+                "Do not mention 'study guide', 'transcript', 'uploaded material', or source labels unless the learner asks what came from the sources.",
                 "If the lecture does not cover the question clearly, say 'Your lecture doesn't discuss this in detail, but here's the concept...' and continue teaching.",
                 "If the learner is wrong, be gentle. Say 'You're very close' or 'I can see why you thought that', then correct the idea clearly.",
                 "For exam questions, point out likely definitions, common mistakes, likely question styles, and memory tips when useful.",
@@ -6826,7 +6838,8 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         rules.append("Treat the lecture context as priority material, not the only source of truth.")
         rules.append("If the lecture context does not clearly support an academic answer, say that briefly and then continue from reliable general academic knowledge.")
         rules.append("Do not refuse normal academic, study, exam, definition, calculation, or explanation questions only because they are not in the uploaded material.")
-        rules.append(f"Lecture context:\n\n{context_text}")
+        rules.append("Do not mention source names such as study guide, transcript, notes, slides, or uploaded material unless the learner asks for source-specific evidence.")
+        rules.append(f"Optional workspace background for internal use only:\n\n{context_text}")
     else:
         rules.append("No lecture transcript or study guide is loaded yet.")
         rules.append("Answer as a general study assistant until lecture context is added.")

@@ -3450,6 +3450,13 @@ function normalizeHistoryOwnerEmail(email = "") {
   return (email || "").trim().toLowerCase();
 }
 
+function historyItemBelongsToOwner(item = {}, ownerEmail = "") {
+  const normalizedOwner = normalizeHistoryOwnerEmail(ownerEmail);
+  if (!normalizedOwner) return true;
+  const itemOwner = normalizeHistoryOwnerEmail(item?.ownerEmail || item?.owner_email || item?.email || "");
+  return !itemOwner || itemOwner === normalizedOwner;
+}
+
 function getSupportedRecordingMimeType() {
   if (typeof window === "undefined" || typeof window.MediaRecorder === "undefined") return "";
   if (typeof window.MediaRecorder.isTypeSupported !== "function") return "";
@@ -3765,9 +3772,14 @@ function mergeHistoryItems(...collections) {
 
 function loadHistoryItems(email = "") {
   try {
+    const normalizedEmail = normalizeHistoryOwnerEmail(email);
     const scopedKey = getHistoryStorageKey(email);
     const scopedValue = window.localStorage.getItem(scopedKey);
-    if (scopedValue) return normalizeHistoryItems(JSON.parse(scopedValue));
+    if (scopedValue) {
+      return normalizeHistoryItems(JSON.parse(scopedValue))
+        .filter((item) => historyItemBelongsToOwner(item, normalizedEmail));
+    }
+    if (normalizedEmail) return [];
 
     const legacyValue = window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]";
     return normalizeHistoryItems(JSON.parse(legacyValue));
@@ -4424,6 +4436,7 @@ function sanitizeStudyImagesForCollaboration(images) {
 function sanitizeHistoryItemForStorage(item = {}) {
   return {
     ...item,
+    ownerEmail: normalizeHistoryOwnerEmail(item?.ownerEmail || item?.owner_email || item?.email || ""),
     transcript: truncateStoredText(item?.transcript || "", MAX_STORAGE_TRANSCRIPT_CHARS),
     summary: truncateStoredText(item?.summary || "", MAX_STORAGE_SUMMARY_CHARS),
     studyGuideDocumentHtml: item?.studyGuideDocumentHtml && typeof item.studyGuideDocumentHtml === "object"
@@ -8364,14 +8377,16 @@ export default function App() {
     const { forceNew: _forceNew, ...safeItem } = item || {};
     const existingId = forceNew ? "" : item?.id || activeHistoryId || "";
     const existingItem = existingId ? historyItems.find((entry) => entry.id === existingId) : null;
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
     const nextItem = {
       ...(existingItem || {}),
       ...safeItem,
+      ownerEmail,
       id: existingId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: existingItem?.createdAt || item?.createdAt || timestamp,
       updatedAt: timestamp,
     };
-    historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    historyOwnerEmailRef.current = ownerEmail;
     setHistoryItems((current) => mergeHistoryItems([nextItem], current));
     setActiveHistoryId(nextItem.id);
     return nextItem;
@@ -14430,7 +14445,10 @@ export default function App() {
       const ownerEmail = historyOwnerEmailRef.current;
       if (!ownerEmail) return;
       const historyKey = getHistoryStorageKey(ownerEmail);
-      window.localStorage.setItem(historyKey, JSON.stringify(sanitizeHistoryItemsForStorage(historyItems)));
+      const ownedItems = normalizeHistoryItems(historyItems)
+        .filter((item) => historyItemBelongsToOwner(item, ownerEmail))
+        .map((item) => ({ ...item, ownerEmail }));
+      window.localStorage.setItem(historyKey, JSON.stringify(sanitizeHistoryItemsForStorage(ownedItems)));
     } catch {
       // Ignore storage errors.
     }
@@ -19214,10 +19232,14 @@ export default function App() {
   }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath]);
 
   const pushHistoryToServer = async (items) => {
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
+    const ownedItems = normalizeHistoryItems(items)
+      .filter((item) => historyItemBelongsToOwner(item, ownerEmail))
+      .map((item) => ({ ...item, ownerEmail }));
     const response = await authFetch("/history", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: sanitizeHistoryItemsForStorage(items) }),
+      body: JSON.stringify({ items: sanitizeHistoryItemsForStorage(ownedItems) }),
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Could not save history.");
@@ -19363,8 +19385,12 @@ export default function App() {
       try {
         const remoteItems = await loadHistoryFromServer();
         if (cancelled) return;
-        const serverItems = normalizeHistoryItems(remoteItems);
-        const localItems = loadHistoryItems(authEmail);
+        const serverItems = normalizeHistoryItems(remoteItems)
+          .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
+          .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
+        const localItems = loadHistoryItems(authEmail)
+          .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
+          .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
         const shouldImportLocalItems = serverItems.length === 0 && localItems.length > 0;
         const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : serverItems;
         if (cancelled) return;
@@ -19376,7 +19402,7 @@ export default function App() {
           setAuthMessage((current) => current || "Your saved materials were imported to your account.");
         }
         try {
-          window.localStorage.setItem(getHistoryStorageKey(authEmail), JSON.stringify(sanitizeHistoryItemsForStorage(accountItems)));
+          window.localStorage.setItem(getHistoryStorageKey(authEmail), JSON.stringify(sanitizeHistoryItemsForStorage(accountItems.map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail })))));
         } catch {
           // Ignore cache write errors; server history remains authoritative.
         }
