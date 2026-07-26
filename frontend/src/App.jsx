@@ -642,7 +642,7 @@ const WORKSPACE_TOOL_GROUPS = [
       { id: "flashcards", label: "Flashcards", diagram: "FC", targetTab: "flashcards", description: "Generate quick memory cards from your lecture." },
       { id: "mindmap", label: "Exam Mind Map Generator", diagram: "MM", targetTab: "mindmap", description: "Create a visual exam revision map." },
       { id: "quiz", label: "Exam", diagram: "EX", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
-      { id: "oral", label: "Oral Exam", diagram: "OE", targetPage: "voice", description: "Practice spoken answers with the voice assistant." },
+      { id: "study-chat", label: "Study Chat", diagram: "AI", targetTab: "chat", description: "Ask by text or tap the mic for spoken practice in the same chat." },
       { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "quality", description: "Write what you understood, then get an exam-readiness rating and focus guide." },
     ],
   },
@@ -684,7 +684,7 @@ const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetabl
 const MOBILE_APP_NAV_ITEMS = [
   { id: "capture", label: "Home", icon: UploadCloud },
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
-  { id: "voice", label: "AI", icon: Bot },
+  { id: "ai", label: "AI", icon: Bot },
   { id: "timetable", label: "Plan", icon: CalendarDays },
   { id: "more", label: "More", icon: Ellipsis },
 ];
@@ -6546,6 +6546,9 @@ export default function App() {
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isAskingChat, setIsAskingChat] = useState(false);
+  const [isStudyChatVoiceListening, setIsStudyChatVoiceListening] = useState(false);
+  const [isStudyChatVoiceAnswering, setIsStudyChatVoiceAnswering] = useState(false);
+  const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
@@ -6640,6 +6643,8 @@ export default function App() {
   const roomMessageInputRef = useRef(null);
   const studyChatEndRef = useRef(null);
   const browserVoiceEndRef = useRef(null);
+  const studyChatVoiceRecognitionRef = useRef(null);
+  const studyChatVoiceAnswerRunRef = useRef(0);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
   const activeStudyMotivationTimerRef = useRef(null);
@@ -7449,7 +7454,12 @@ export default function App() {
   };
 
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
-    const normalizedPageId = normalizeAppPageId(pageId, "capture");
+    const requestedPageId = pageId === "voice" ? "workspace" : pageId;
+    if (pageId === "voice") {
+      setActiveTab("chat");
+      setWorkspaceToolGroup("ai");
+    }
+    const normalizedPageId = normalizeAppPageId(requestedPageId, "capture");
     if (!authToken) {
       currentPageRef.current = normalizedPageId;
       setCurrentPage(normalizedPageId);
@@ -7655,11 +7665,16 @@ export default function App() {
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setIsWorkspaceMobileSidebarOpen(false);
+    };
     if (isWorkspaceMobileSidebarOpen) {
       document.body.style.overflow = "hidden";
+      document.addEventListener("keydown", handleKeyDown);
     }
     return () => {
       document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isWorkspaceMobileSidebarOpen]);
 
@@ -9582,8 +9597,8 @@ export default function App() {
             openProtectedAppPage("workspace");
           }, "Back to study chat")}
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Oral Exam</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Practice your answers by voice.</h2>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Chat</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white">Ask by text or voice.</h2>
           </div>
           <div className="mobile-voice-setup-wrap ml-auto">
             <button type="button" onClick={() => setIsMobileVoiceSetupOpen((current) => !current)} className="mobile-voice-setup-trigger" aria-expanded={isMobileVoiceSetupOpen}>
@@ -15442,7 +15457,7 @@ export default function App() {
     const nextPath = normalizedTarget === "admin"
       ? "/admin/dashboard"
       : normalizedTarget === "voice"
-        ? "/app/voice-study"
+        ? "/app/workspace"
         : normalizedTarget === "study-session"
           ? "/study-session"
           : `/app/${normalizedTarget}`;
@@ -22530,6 +22545,13 @@ export default function App() {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
     }
+    const normalizedReferenceImages = (Array.isArray(referenceImages) ? referenceImages : [])
+      .map((image) => {
+        if (typeof image === "string") return image;
+        return image?.dataUrl || image?.url || image?.image_url || "";
+      })
+      .filter(Boolean)
+      .slice(0, MAX_CHAT_REFERENCE_IMAGES);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
@@ -22545,7 +22567,7 @@ export default function App() {
         lecture_slides: lectureSlides,
         past_question_papers: pastQuestionPapers,
         history,
-        reference_images: referenceImages,
+        reference_images: normalizedReferenceImages,
         language: outputLanguage,
         delivery_mode: deliveryMode,
         current_section: currentSection,
@@ -22565,7 +22587,7 @@ export default function App() {
       status: response.status,
       durationMs: Math.round(requestEndedAt - requestStartedAt),
       historyMessages: Array.isArray(history) ? history.length : 0,
-      referenceImages: Array.isArray(referenceImages) ? referenceImages.length : 0,
+      referenceImages: normalizedReferenceImages.length,
     });
     if (!response.ok) throw new Error(data.detail || "Study chat failed.");
     const answer = String(data.answer || "").trim();
@@ -22953,6 +22975,213 @@ export default function App() {
     }
   };
 
+  const stopStudyChatVoiceCapture = () => {
+    const recognition = studyChatVoiceRecognitionRef.current;
+    studyChatVoiceRecognitionRef.current = null;
+    if (recognition) {
+      try {
+        recognition.stop();
+      } catch {
+        // Browser speech recognition can throw when it has already stopped.
+      }
+    }
+    setIsStudyChatVoiceListening(false);
+  };
+
+  const speakStudyChatVoiceAnswer = (answerText = "", { onComplete } = {}) => {
+    const cleanedAnswer = String(answerText || "").trim();
+    if (!cleanedAnswer) {
+      onComplete?.();
+      return;
+    }
+    if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+      setStudyChatVoiceStatus("Written answer ready. Voice playback is not available in this browser.");
+      onComplete?.();
+      return;
+    }
+    const runId = studyChatVoiceAnswerRunRef.current + 1;
+    studyChatVoiceAnswerRunRef.current = runId;
+    window.speechSynthesis.cancel();
+    const voices = window.speechSynthesis.getVoices();
+    const selectedVoice = resolveTeacherVoice(voices, selectedTeacherVoiceName, outputLanguage);
+    const speechChunks = buildSpeechChunks(cleanedAnswer, 260);
+    const speakChunk = (chunkIndex = 0) => {
+      if (studyChatVoiceAnswerRunRef.current !== runId) return;
+      if (chunkIndex >= speechChunks.length) {
+        setIsStudyChatVoiceAnswering(false);
+        setStudyChatVoiceStatus("Voice answer complete. Ask another question when ready.");
+        onComplete?.();
+        return;
+      }
+      const utterance = new window.SpeechSynthesisUtterance(speechChunks[chunkIndex]);
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice?.lang || resolveSpeechLocale(outputLanguage);
+      utterance.rate = getTeacherSpeechRate(teacherSpeechPace, "answer");
+      utterance.pitch = 1;
+      utterance.volume = isTeacherMuted ? 0 : 1;
+      utterance.onstart = () => {
+        if (studyChatVoiceAnswerRunRef.current !== runId) return;
+        setIsStudyChatVoiceAnswering(true);
+        setStudyChatVoiceStatus("Speaking the answer.");
+      };
+      utterance.onend = () => {
+        if (studyChatVoiceAnswerRunRef.current !== runId) return;
+        window.setTimeout(() => speakChunk(chunkIndex + 1), 35);
+      };
+      utterance.onerror = () => {
+        if (studyChatVoiceAnswerRunRef.current !== runId) return;
+        setIsStudyChatVoiceAnswering(false);
+        setStudyChatVoiceStatus("Written answer ready. Voice playback stopped.");
+        onComplete?.();
+      };
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        setIsStudyChatVoiceAnswering(false);
+        setStudyChatVoiceStatus("Written answer ready. Voice playback could not start.");
+        onComplete?.();
+      }
+    };
+    speakChunk(0);
+  };
+
+  const submitStudyChatVoiceQuestion = async (rawQuestion = "") => {
+    const question = String(rawQuestion || "").replace(/\s+/g, " ").trim();
+    if (!question) {
+      setStudyChatVoiceStatus("I did not catch a clear question. Tap the mic and try again.");
+      return;
+    }
+    const referenceImagesForQuestion = chatReferenceImages.map((image) => ({
+      id: image.id,
+      name: image.name,
+      dataUrl: image.dataUrl,
+    }));
+    setError("");
+    setStatus("MABASO is answering your voice question...");
+    setStudyChatVoiceStatus("Thinking through your question...");
+    setIsAskingChat(true);
+    const chatTurnId = `study-chat-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question, images: referenceImagesForQuestion };
+    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
+    const updatedHistory = [...chatMessages, userMessage];
+    setChatMessages([...updatedHistory, pendingAssistantMessage]);
+    setChatQuestion("");
+    const requestRunId = studyChatVoiceAnswerRunRef.current + 1;
+    studyChatVoiceAnswerRunRef.current = requestRunId;
+    try {
+      const answer = await requestStudyAssistantAnswer({
+        question,
+        history: updatedHistory.slice(-4),
+        referenceImages: referenceImagesForQuestion,
+        deliveryMode: "teacher_interrupt",
+        currentSection: activeTab,
+        responseLength: "concise",
+      });
+      if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
+      setChatReferenceImages([]);
+      setChatMessages((current) => {
+        const next = [...current];
+        const lastIndex = next.length - 1;
+        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
+          return next;
+        }
+        return [...next, { id: `${chatTurnId}-assistant-complete`, role: "assistant", content: answer }];
+      });
+      setIsAskingChat(false);
+      setStatus("Voice answer ready.");
+      speakStudyChatVoiceAnswer(answer);
+    } catch (err) {
+      if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
+      const readableError = getReadableRequestError(err);
+      setChatMessages((current) => {
+        const next = [...current];
+        const lastIndex = next.length - 1;
+        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: readableError || "Study chat could not answer right now." };
+        }
+        return next;
+      });
+      setStudyChatVoiceStatus("Voice question failed. You can type the question or try the mic again.");
+      setError(readableError || "Voice question failed.");
+      setIsAskingChat(false);
+      setIsStudyChatVoiceAnswering(false);
+    }
+  };
+
+  const startStudyChatVoiceCapture = () => {
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (!SpeechRecognitionCtor) {
+      setStudyChatVoiceStatus(`Voice input is not supported in ${detectSupportBrowser() || "this browser"}. Type the question instead.`);
+      return;
+    }
+    stopStudyChatVoiceCapture();
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    const recognition = new SpeechRecognitionCtor();
+    studyChatVoiceRecognitionRef.current = recognition;
+    recognition.lang = resolveSpeechLocale(outputLanguage);
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    let finalTranscript = "";
+    let latestTranscript = "";
+    recognition.onstart = () => {
+      setIsStudyChatVoiceListening(true);
+      setStudyChatVoiceStatus("Listening. Ask your question now.");
+    };
+    recognition.onresult = (event) => {
+      const transcriptText = Array.from(event.results || [])
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (transcriptText) {
+        latestTranscript = transcriptText;
+        setChatQuestion(transcriptText);
+      }
+      const completedText = Array.from(event.results || [])
+        .filter((result) => result.isFinal)
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (completedText) finalTranscript = completedText;
+    };
+    recognition.onerror = (event) => {
+      const errorCode = String(event?.error || "").trim().toLowerCase();
+      setIsStudyChatVoiceListening(false);
+      studyChatVoiceRecognitionRef.current = null;
+      if (errorCode === "not-allowed" || errorCode === "service-not-allowed") {
+        setStudyChatVoiceStatus("Microphone access was denied. Allow microphone access, then try again.");
+        return;
+      }
+      if (errorCode === "no-speech") {
+        setStudyChatVoiceStatus("I did not catch speech clearly. Tap the mic and try again.");
+        return;
+      }
+      setStudyChatVoiceStatus("Voice capture stopped. Type the question or try the mic again.");
+    };
+    recognition.onend = () => {
+      setIsStudyChatVoiceListening(false);
+      studyChatVoiceRecognitionRef.current = null;
+      const capturedQuestion = (finalTranscript || latestTranscript).trim();
+      if (capturedQuestion) {
+        submitStudyChatVoiceQuestion(capturedQuestion);
+        return;
+      }
+      setStudyChatVoiceStatus("Listening stopped before a clear question was captured.");
+    };
+    try {
+      recognition.start();
+    } catch {
+      setIsStudyChatVoiceListening(false);
+      studyChatVoiceRecognitionRef.current = null;
+      setStudyChatVoiceStatus("The browser could not start voice input. Type the question or try again.");
+    }
+  };
+
   const rateNoteQuality = async () => {
     const learnerSummary = noteQualityDraft.trim();
     if (!learnerSummary) {
@@ -23021,24 +23250,6 @@ export default function App() {
     </div>
   );
 
-  const renderOralExamPanel = ({ compact = false } = {}) => (
-    <div className={`rounded-[24px] border border-cyan-300/15 bg-slate-950/85 p-4 ${compact ? "" : "sm:p-5"}`}>
-      <div className="force-mobile-stack flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Oral Exam</p>
-          <h4 className="mt-2 text-2xl font-semibold text-white">Practice by speaking.</h4>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">Use voice practice for spoken answers, friendly questions, and mixed-language study conversation.</p>
-        </div>
-        <button type="button" onClick={() => openProtectedAppPage("voice")} className="rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-sm font-semibold text-cyan-50">Open Oral Exam</button>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Language</p><p className="mt-2 text-sm font-semibold text-white">{outputLanguage}</p></div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Voice</p><p className="mt-2 text-sm font-semibold text-white">{selectedTeacherVoiceName || "Default"}</p></div>
-        <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3"><p className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Attempts</p><p className="mt-2 text-sm font-semibold text-white">Uses voice plan limits</p></div>
-      </div>
-    </div>
-  );
-
   const renderStudyChatPanel = ({ compact = false } = {}) => (
     <>
       <div className={`study-chat-panel ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
@@ -23080,8 +23291,17 @@ export default function App() {
             />
             <button
               type="button"
+              onClick={isStudyChatVoiceListening ? stopStudyChatVoiceCapture : startStudyChatVoiceCapture}
+              disabled={isAskingChat || isStudyChatVoiceAnswering}
+              className={`flex h-12 w-12 items-center justify-center self-end rounded-full border text-white disabled:opacity-50 sm:self-auto ${isStudyChatVoiceListening ? "border-rose-300/30 bg-rose-500/20" : "border-white/10 bg-white/5"}`}
+              aria-label={isStudyChatVoiceListening ? "Stop voice question" : "Ask by voice"}
+            >
+              <Mic className="h-5 w-5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
               onClick={askStudyAssistant}
-              disabled={isAskingChat}
+              disabled={isAskingChat || isStudyChatVoiceListening}
               className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-white disabled:opacity-50 sm:self-auto"
               aria-label="Send study chat question"
             >
@@ -23101,7 +23321,7 @@ export default function App() {
               ))}
             </div>
           ) : null}
-          <p className="mt-3 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : lectureAssistant.statusText}</p>
+          <p className="mt-3 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : studyChatVoiceStatus || lectureAssistant.statusText}</p>
         </div>
       </div>
     </>
@@ -25414,6 +25634,12 @@ export default function App() {
         openPaymentsNavigationTarget();
         return;
       }
+      if (item.id === "ai") {
+        setActiveTab("chat");
+        setWorkspaceToolGroup("ai");
+        openProtectedAppPage("workspace");
+        return;
+      }
       if (item.id === "collaboration") {
         openCollaborationPage();
         return;
@@ -25428,7 +25654,7 @@ export default function App() {
         isMobileMoreMenuOpen
         || ["materials", "payments", "collaboration"].includes(currentPage)
       );
-      const active = morePageActive || currentPage === item.id || (item.id === "timetable" && Boolean(activeTimetableNavItem));
+      const active = morePageActive || currentPage === item.id || (item.id === "ai" && currentPage === "workspace" && activeTab === "chat") || (item.id === "timetable" && Boolean(activeTimetableNavItem));
       return (
         <button
           key={item.id}
@@ -26033,7 +26259,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {renderOralExamPanel({ compact: true })}
                     {renderStudyChatPanel({ compact: true })}
                   </div>
                 ) : null}
@@ -26154,7 +26379,7 @@ export default function App() {
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
-                {activeTab === "chat" ? <div className="space-y-5">{renderOralExamPanel()}{renderStudyChatPanel()}</div> : null}
+                {activeTab === "chat" ? renderStudyChatPanel() : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>
@@ -26167,7 +26392,7 @@ export default function App() {
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "timetable" ? renderStudyTimetablePage() : null}
-        {currentPage === "voice" ? renderBrowserVoicePage() : null}
+        {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}
 

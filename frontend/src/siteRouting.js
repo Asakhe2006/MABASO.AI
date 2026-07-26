@@ -11,7 +11,7 @@ export const APP_ROUTE_BY_PAGE = {
   payments: "/app/payments",
   timetable: "/app/timetable",
   collaboration: "/app/collaboration",
-  voice: "/app/voice-study",
+  voice: "/app/workspace",
   "study-session": "/study-session",
   admin: "/admin/dashboard",
 };
@@ -53,6 +53,7 @@ export function resolveAppRouteForPage(currentPage = "", authSessionMode = "user
 export function resolveCurrentPageFromRoute(route = "/") {
   const normalized = normalizeRoutePath(route);
   if (normalized === "/study-session" || normalized.startsWith("/study-session/")) return "study-session";
+  if (normalized === "/app/voice-study") return "workspace";
   const match = Object.entries(APP_ROUTE_BY_PAGE).find(([, value]) => value === normalized);
   return match?.[0] || "";
 }

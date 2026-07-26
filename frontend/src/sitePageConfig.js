@@ -2643,8 +2643,8 @@ export const protectedWorkspaceRoutes = [
   },
   {
     route: "/app/voice-study",
-    title: "Browser Voice Practice",
-    description: "Speak about your lecture with a browser-powered voice page that searches your guide, transcript, formulas, and examples without paid model calls.",
+    title: "Study Chat",
+    description: "Legacy voice-study link that opens the unified Study Chat workspace with text questions and mic-based spoken practice.",
     access: "login",
   },
   {

@@ -1837,11 +1837,7 @@ iframe {
   }
 
   .capture-ai-chat-button {
-    display: inline-flex !important;
-    min-height: 44px;
-    padding: 0 0.85rem;
-    border-radius: 14px;
-    font-size: 0.86rem;
+    display: none !important;
   }
 
   .capture-source-icon {
@@ -1892,7 +1888,7 @@ iframe {
   }
 
   .study-chat-panel {
-    min-height: 68vh;
+    min-height: calc(100dvh - 10rem);
   }
 
   .study-chat-messages {
@@ -1909,8 +1905,36 @@ iframe {
 
   .study-chat-composer {
     bottom: calc(5.25rem + env(safe-area-inset-bottom));
-    border-radius: 20px !important;
-    padding: 0.8rem !important;
+    border-radius: 18px !important;
+    padding: 0.55rem !important;
+  }
+
+  .study-chat-composer .force-mobile-stack {
+    flex-direction: row !important;
+    align-items: flex-end !important;
+    gap: 0.45rem !important;
+  }
+
+  .study-chat-composer .force-mobile-stack > * {
+    width: auto;
+    min-width: 0;
+  }
+
+  .study-chat-composer textarea {
+    min-height: 46px !important;
+    max-height: 130px;
+    flex: 1 1 auto;
+    padding-block: 0.6rem !important;
+    font-size: 15px !important;
+    line-height: 1.45 !important;
+  }
+
+  .study-chat-composer button {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    flex: 0 0 40px;
   }
 
   .study-guide-section-title-row {
@@ -1931,20 +1955,101 @@ iframe {
   .study-guide-markdown li,
   .notes-markdown p,
   .notes-markdown li {
-    font-size: 15px !important;
-    line-height: 1.6 !important;
+    font-size: 14px !important;
+    line-height: 1.55 !important;
   }
 
   .workspace-tool-actions {
     position: sticky;
-    top: calc(58px + env(safe-area-inset-top));
+    top: calc(48px + env(safe-area-inset-top));
     z-index: 82;
     margin-inline: 0;
-    border-radius: 18px;
+    border-radius: 14px;
     background: rgba(2, 8, 23, 0.92);
-    padding: 0.65rem;
+    padding: 0.45rem;
     backdrop-filter: blur(14px);
     box-shadow: 0 14px 30px rgba(2, 8, 23, 0.22);
+  }
+
+  .workspace-tool-actions h3 {
+    font-size: 0.92rem !important;
+  }
+
+  .workspace-tool-actions p {
+    font-size: 0.58rem !important;
+  }
+
+  .workspace-icon-action {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    border-radius: 10px !important;
+  }
+
+  .workspace-topbar {
+    top: 0;
+    z-index: 96;
+    gap: 0.55rem !important;
+    padding: 0.45rem 0.35rem 0.55rem !important;
+  }
+
+  .workspace-topbar > div:first-child {
+    display: grid !important;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: center !important;
+    gap: 0.45rem !important;
+  }
+
+  .workspace-topbar h2 {
+    margin-top: 0.12rem !important;
+    font-size: 1.12rem !important;
+    line-height: 1.15 !important;
+  }
+
+  .workspace-topbar p {
+    font-size: 0.58rem !important;
+    letter-spacing: 0.16em !important;
+  }
+
+  .sticky-back-button,
+  .workspace-mobile-sidebar-button,
+  .workspace-mobile-sidebar-close,
+  .profile-menu-button {
+    min-width: 40px !important;
+    min-height: 40px !important;
+    border-radius: 12px !important;
+    padding: 0.45rem 0.6rem !important;
+    font-size: 0.76rem !important;
+  }
+
+  .workspace-search-box {
+    width: 100%;
+    min-height: 38px;
+    border-radius: 13px;
+    padding-inline: 0.65rem;
+  }
+
+  .workspace-search-input {
+    font-size: 0.82rem !important;
+  }
+
+  .workspace-mobile-sidebar-layer {
+    z-index: 160;
+  }
+
+  .workspace-mobile-sidebar-drawer {
+    width: min(310px, 84vw);
+    min-width: 0;
+    padding: 0.8rem 0.7rem calc(1rem + env(safe-area-inset-bottom));
+    border-radius: 0 16px 16px 0;
+  }
+
+  .workspace-sidebar-tool {
+    min-height: 40px !important;
+    border-radius: 12px !important;
+    padding: 0.45rem 0.55rem !important;
+    font-size: 0.82rem !important;
   }
 
   .workspace-layout {
@@ -1995,8 +2100,24 @@ iframe {
 
   .study-guide-markdown,
   .notes-markdown {
-    font-size: 15px;
-    line-height: 1.6;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .study-guide-rich-editor {
+    min-height: 120px;
+    border-radius: 14px;
+    padding: 0.8rem;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .study-guide-rich-editor p,
+  .study-guide-rich-editor li,
+  .study-guide-rich-editor td,
+  .study-guide-rich-editor th {
+    font-size: 14px;
+    line-height: 1.55;
   }
 
   .study-guide-section-card img,
@@ -2066,7 +2187,7 @@ iframe {
   .notes-markdown li,
   .study-guide-markdown p,
   .study-guide-markdown li {
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1.5;
   }
 
