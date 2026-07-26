@@ -6571,6 +6571,10 @@ export default function App() {
   const activeGuideSelectionRef = useRef(null);
   const studyGuideDocumentSaveInProgressRef = useRef(false);
   const lastSummarySignatureRef = useRef("");
+  const workspaceMobileSidebarDrawerRef = useRef(null);
+  const workspaceMobileSidebarScrollTopRef = useRef(0);
+  const workspaceSidebarTouchStartXRef = useRef(0);
+  const workspaceSidebarTouchLatestXRef = useRef(0);
   const [roomQuizAnswers, setRoomQuizAnswers] = useState({});
   const [roomQuizAnswerImages, setRoomQuizAnswerImages] = useState({});
   const [roomQuizResults, setRoomQuizResults] = useState({});
@@ -23006,6 +23010,70 @@ export default function App() {
     updateStudyGuideSectionHtml(sectionKey, editor.innerHTML, { immediate: true });
   };
 
+  const focusStudyGuideEditor = () => {
+    if (typeof window === "undefined") return null;
+    const editor = getActiveGuideEditor()
+      || Object.values(studyGuideEditorRefs.current || {}).find(Boolean)
+      || null;
+    if (!editor) {
+      setStatus("Open a study guide section first.");
+      return null;
+    }
+    const sectionKey = editor.dataset?.sectionKey || activeGuideEditorSectionKey;
+    if (sectionKey) setActiveGuideEditorSectionKey(sectionKey);
+    window.requestAnimationFrame(() => {
+      editor.focus?.({ preventScroll: true });
+      captureGuideEditorSelection(sectionKey, editor);
+    });
+    return editor;
+  };
+
+  const toggleWorkspaceEditMode = () => {
+    setIsWorkspaceEditMode((current) => {
+      const next = !current;
+      window.requestAnimationFrame(() => {
+        const editor = focusStudyGuideEditor();
+        if (!next && editor) saveActiveGuideEditor(editor);
+      });
+      setStatus(next ? "Edit mode on. Tap inside the study guide and type." : "Edit mode off.");
+      return next;
+    });
+  };
+
+  const toggleWorkspaceHighlightMode = () => {
+    setIsWorkspaceHighlightMode((current) => {
+      const next = !current;
+      if (next) {
+        const editor = getActiveGuideEditor() || Object.values(studyGuideEditorRefs.current || {}).find(Boolean);
+        if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
+      }
+      setStatus(next ? "Highlight mode on. Select text, then choose a colour." : "Highlight mode off.");
+      return next;
+    });
+  };
+
+  const closeWorkspaceMobileSidebar = () => {
+    setIsWorkspaceMobileSidebarOpen(false);
+  };
+
+  const handleWorkspaceSidebarTouchStart = (event) => {
+    const touch = event.touches?.[0];
+    workspaceSidebarTouchStartXRef.current = touch?.clientX || 0;
+    workspaceSidebarTouchLatestXRef.current = touch?.clientX || 0;
+  };
+
+  const handleWorkspaceSidebarTouchMove = (event) => {
+    const touch = event.touches?.[0];
+    if (touch) workspaceSidebarTouchLatestXRef.current = touch.clientX;
+  };
+
+  const handleWorkspaceSidebarTouchEnd = () => {
+    const deltaX = workspaceSidebarTouchLatestXRef.current - workspaceSidebarTouchStartXRef.current;
+    if (deltaX < -56) closeWorkspaceMobileSidebar();
+    workspaceSidebarTouchStartXRef.current = 0;
+    workspaceSidebarTouchLatestXRef.current = 0;
+  };
+
   const applyWorkspaceHighlight = (color = activeHighlightColor) => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
     const restoredEditor = restoreGuideEditorSelection();
@@ -25892,10 +25960,6 @@ export default function App() {
     return renderActiveStudySessionPage();
   }
 
-  if (authToken && currentPage === "voice") {
-    return renderStudyChatFullPage();
-  }
-
   const activeTimetableNavItem = getActiveTimetableNavItem();
   const timetableNavStatusLabel = isTimetableDataLoadingForNav()
     ? "Loading timetable..."
@@ -26022,6 +26086,10 @@ export default function App() {
       ) : null}
     </div>
   );
+
+  if (authToken && currentPage === "voice") {
+    return renderStudyChatFullPage();
+  }
 
   return (
     <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -26294,29 +26362,47 @@ export default function App() {
 
           {isWorkspaceMobileSidebarOpen ? (
             <div className="workspace-mobile-sidebar-layer lg:hidden">
-              <button type="button" className="workspace-mobile-sidebar-scrim" aria-label="Close Study Workspace sidebar" onClick={() => setIsWorkspaceMobileSidebarOpen(false)} />
-              <aside className="workspace-mobile-sidebar-drawer" aria-label="Study Workspace mobile sidebar">
-                <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <button type="button" className="workspace-mobile-sidebar-scrim" aria-label="Close Study Workspace sidebar" onClick={closeWorkspaceMobileSidebar} />
+              <aside
+                ref={(node) => {
+                  workspaceMobileSidebarDrawerRef.current = node;
+                  if (node) node.scrollTop = workspaceMobileSidebarScrollTopRef.current;
+                }}
+                className="workspace-mobile-sidebar-drawer"
+                aria-label="Study Workspace mobile sidebar"
+                onScroll={(event) => {
+                  workspaceMobileSidebarScrollTopRef.current = event.currentTarget.scrollTop;
+                }}
+                onTouchStart={handleWorkspaceSidebarTouchStart}
+                onTouchMove={handleWorkspaceSidebarTouchMove}
+                onTouchEnd={handleWorkspaceSidebarTouchEnd}
+              >
+                <div className="workspace-mobile-sidebar-header">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Workspace</p>
-                    <p className="mt-1 text-lg font-semibold text-white">{activeWorkspaceToolGroup.label}</p>
+                    <p className="brand-mark text-lg font-black">MABASO AI</p>
+                    <p className="mt-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200/70">{activeWorkspaceToolGroup.label}</p>
                   </div>
-                  <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(false)} className="workspace-mobile-sidebar-close" aria-label="Close sidebar">
+                  <button type="button" onClick={closeWorkspaceMobileSidebar} className="workspace-mobile-sidebar-close" aria-label="Close sidebar">
                     <X className="h-5 w-5" aria-hidden="true" />
                   </button>
                 </div>
-                <div className="mt-4 space-y-4">
+                <div className="workspace-mobile-sidebar-content">
+                  <button type="button" onClick={() => { openProtectedAppPage("capture"); closeWorkspaceMobileSidebar(); }} className="workspace-mobile-primary-action">
+                    <ChevronDown className="h-4 w-4 rotate-90" aria-hidden="true" />
+                    <span>Back to Capture</span>
+                  </button>
                   {WORKSPACE_TOOL_GROUPS.map((group) => {
                     const isOpenGroup = workspaceToolGroup === group.id;
                     return (
-                      <div key={`mobile-drawer-${group.id}`} className="workspace-sidebar-folder">
+                      <div key={`mobile-drawer-${group.id}`} className="workspace-sidebar-folder workspace-mobile-sidebar-group">
                         <button type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`workspace-sidebar-folder-button ${isOpenGroup ? "is-open" : ""}`}>
-                          <span>{isOpenGroup ? "\u25BE" : "\u25B8"} {group.eyebrow}</span>
+                          <span>{group.eyebrow}</span>
+                          <span aria-hidden="true">{isOpenGroup ? "\u25BE" : "\u25B8"}</span>
                         </button>
                         {isOpenGroup ? (
                           <div className="mt-2 space-y-1">
                             {group.tools.map((tool) => (
-                              <button key={`mobile-drawer-${tool.id}`} type="button" onClick={() => { openWorkspaceToolCard(tool); setIsWorkspaceMobileSidebarOpen(false); }} className={`workspace-sidebar-tool ${activeTab === tool.targetTab ? "is-active" : ""}`}>
+                              <button key={`mobile-drawer-${tool.id}`} type="button" onClick={() => { openWorkspaceToolCard(tool); closeWorkspaceMobileSidebar(); }} className={`workspace-sidebar-tool ${activeTab === tool.targetTab ? "is-active" : ""}`}>
                                 <span className="workspace-sidebar-tool-icon">{tool.diagram}</span>
                                 <span>{tool.label}</span>
                               </button>
@@ -26326,6 +26412,17 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+                <div className="workspace-mobile-sidebar-profile">
+                  <div className="profile-menu-avatar">{profileDisplayName.slice(0, 2).toUpperCase()}</div>
+                  <div className="min-w-0 flex-1">
+                    <p className="phone-safe-copy text-sm font-semibold text-white">{profileDisplayName}</p>
+                    <p className="phone-safe-copy mt-0.5 text-xs text-slate-400">{authEmail || "Student account"}</p>
+                    <span className="mt-2 inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-100">{getCurrentPlanTier() === "free" ? "Free" : "Pro"}</span>
+                  </div>
+                  <button type="button" onClick={() => { closeWorkspaceMobileSidebar(); logout(); }} className="workspace-mobile-sidebar-logout" aria-label="Sign out">
+                    <LogOut className="h-4 w-4" aria-hidden="true" />
+                  </button>
                 </div>
               </aside>
             </div>
@@ -26416,11 +26513,11 @@ export default function App() {
                     </button>
                     {isDownloadMenuOpen ? renderDownloadMenu() : null}
                   </div>
-                  <button type="button" onClick={() => setIsWorkspaceEditMode((current) => !current)} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide">
+                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide">
                     <Pencil className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <div className="relative">
-                    <button type="button" onClick={() => setIsWorkspaceHighlightMode((current) => !current)} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text">
+                    <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text">
                       <Highlighter className="h-4 w-4" aria-hidden="true" />
                     </button>
                     {isWorkspaceHighlightMode ? (
