@@ -15,6 +15,7 @@ import {
   resolveMetadataForRoute,
 } from "./siteRouting";
 import { useLectureAssistant } from "./useLectureAssistant";
+import AssistantMarkdown from "./components/AssistantMarkdown";
 
 const ReactMarkdown = lazy(() => import("react-markdown"));
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
@@ -6649,6 +6650,37 @@ export default function App() {
   const [isAddingRoomMembers, setIsAddingRoomMembers] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return undefined;
+    const copyAllowedSelector = ".workspace-content-surface, .study-guide-shell, .study-guide-rich-editor, .content-panel";
+    document.body.classList.add("mabaso-copy-guard");
+
+    const isCopyAllowed = (event) => {
+      const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+      if (target?.closest?.(copyAllowedSelector)) return true;
+      const selection = window.getSelection?.();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer?.nodeType === 1
+        ? range.commonAncestorContainer
+        : range.commonAncestorContainer?.parentElement;
+      return Boolean(container?.closest?.(copyAllowedSelector));
+    };
+
+    const preventCopyOutsideWorkspace = (event) => {
+      if (isCopyAllowed(event)) return;
+      event.preventDefault();
+    };
+
+    document.addEventListener("copy", preventCopyOutsideWorkspace, true);
+    document.addEventListener("cut", preventCopyOutsideWorkspace, true);
+    return () => {
+      document.body.classList.remove("mabaso-copy-guard");
+      document.removeEventListener("copy", preventCopyOutsideWorkspace, true);
+      document.removeEventListener("cut", preventCopyOutsideWorkspace, true);
+    };
+  }, []);
   const [isUploadingRoomBoardImage, setIsUploadingRoomBoardImage] = useState(false);
   const [deletingRoomBoardImageId, setDeletingRoomBoardImageId] = useState("");
   const [supportMessageDraft, setSupportMessageDraft] = useState("");
@@ -22795,6 +22827,7 @@ export default function App() {
         reference_images: normalizedReferenceImages,
         language: outputLanguage,
         delivery_mode: deliveryMode,
+        voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
         current_section: currentSection,
         teaching_style: teacherTeachingStyle,
         response_length: responseLength,
@@ -23613,7 +23646,9 @@ export default function App() {
               {message.images.map((image) => <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />)}
             </div>
           ) : null}
-          <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
+          <div className="mabaso-ai-response mt-2">
+            <AssistantMarkdown content={message.content} theme="dark" />
+          </div>
         </div>
       )) : (
         <div className={fullPage ? "study-chat-page-empty" : "study-chat-empty"}>Ask anything. Mabaso can help with uploaded material or general academic questions.</div>
@@ -26225,7 +26260,7 @@ export default function App() {
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
-      <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"} ${currentPage === "capture" ? "mobile-capture-page" : ""}`}>
+      <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
         {currentPage !== "capture" && currentPage !== "workspace" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
@@ -26259,59 +26294,6 @@ export default function App() {
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
-          <div className="capture-mobile-workspace-shell sm:hidden">
-            <div className="capture-mobile-workspace-top">
-              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)} className="capture-mobile-icon-button" aria-label="Open Mabaso sidebar">
-                <Menu className="h-5 w-5" aria-hidden="true" />
-              </button>
-              <div className="capture-mobile-title">
-                <span className="capture-mobile-logo" aria-hidden="true">
-                  <img src="/favicon.svg" alt="" />
-                </span>
-                <span>
-                  <strong>Study Workspace</strong>
-                  <small>Study Guide Generator</small>
-                </span>
-              </div>
-              <div className="capture-mobile-profile">{renderCompactProfileMenu()}</div>
-            </div>
-            <div className="capture-mobile-search-row">
-              <label className="capture-mobile-search">
-                <Search className="h-4 w-4" aria-hidden="true" />
-                <input
-                  value={workspaceSearchQuery}
-                  onChange={(event) => setWorkspaceSearchQuery(event.target.value)}
-                  placeholder="Search in this guide..."
-                  aria-label="Search study tools"
-                />
-              </label>
-              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)} className="capture-mobile-filter-button" aria-label="Open filters and navigation">
-                <SlidersHorizontal className="h-5 w-5" aria-hidden="true" />
-              </button>
-            </div>
-            <div className="capture-mobile-tool-row" aria-label="Capture quick actions">
-              <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()}>
-                <Copy className="h-4 w-4" aria-hidden="true" />
-                <span>Files</span>
-              </button>
-              <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()}>
-                <Download className="h-4 w-4" aria-hidden="true" />
-                <span>Notes</span>
-              </button>
-              <button type="button" onClick={() => setStudyGuidePromptDraft((current) => current || "")}>
-                <Pencil className="h-4 w-4" aria-hidden="true" />
-                <span>Prompt</span>
-              </button>
-              <button type="button" onClick={() => generateStudyGuideButtonRef.current?.scrollIntoView({ block: "center", behavior: "smooth" })}>
-                <Highlighter className="h-4 w-4" aria-hidden="true" />
-                <span>Guide</span>
-              </button>
-              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)}>
-                <Ellipsis className="h-4 w-4" aria-hidden="true" />
-                <span>More</span>
-              </button>
-            </div>
-          </div>
           <div className="capture-panel-desktop-header mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
               <button type="button" onClick={() => openStudyChatPage()} className="capture-ai-chat-button">
@@ -26382,7 +26364,7 @@ export default function App() {
                     <div className="force-mobile-stack flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Prompt to Study Workspace</p>
-                        <p className="mt-2 text-xs leading-6 text-slate-300">Write what the guide must cover, add it, then press Generate Study Guide.</p>
+                        <p className="mt-2 text-xs leading-6 text-slate-300">Write what the guide must cover, add it, then press Generate Study Guide. Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p>
                       </div>
                       {studyGuidePromptSource ? (
                         <button type="button" onClick={removeStudyGuidePromptSource} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10">Remove prompt</button>

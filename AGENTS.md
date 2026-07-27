@@ -910,3 +910,29 @@ Never say "fixed" until:
 ✓ Feature fully functional
 
 If any item fails, continue working until the implementation is complete.
+
+------------------------------------------------------------
+
+# AI RESPONSE FORMATTING RULES
+
+Mabaso AI responses must never expose raw Markdown symbols to the user.
+
+The interface must render:
+
+- bold text as actual bold text
+- headings as actual headings
+- bullet points as clean bullets
+- numbered steps as proper numbered lists
+- links as clickable links
+- code as styled code blocks
+- tables as real responsive tables
+- formulas as properly rendered equations
+- paragraphs with correct spacing
+
+Do not render AI answers as plain strings when they may contain Markdown. Use the existing safe Markdown renderer where possible, such as `MobileFirstMarkdown`, `AssistantMarkdown`, `react-markdown`, `remark-gfm`, `remark-math`, and `rehype-katex`.
+
+Never solve raw Markdown by blindly deleting symbols such as `*`, `**`, `##`, or `###`; that can damage formulas, code, multiplication symbols, footnotes, and intended academic content. Render Markdown properly instead.
+
+AI writing should prefer direct answers, short paragraphs, useful headings, clean lists only for real lists, numbered steps for procedures, tables for comparisons, no filler introductions, no excessive bold text, no repeated conclusions, no fake quotations, and no excessive emojis.
+
+On mobile, responses must fit the viewport: `width: 100%`, `max-width: 100%`, `min-width: 0`, wrapped long words and URLs, scrollable tables/code blocks, comfortable line height, and no horizontal clipping.
