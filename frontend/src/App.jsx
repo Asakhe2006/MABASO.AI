@@ -8641,6 +8641,11 @@ export default function App() {
     historyOwnerEmailRef.current = ownerEmail;
     setHistoryItems((current) => mergeHistoryItems([nextItem], current));
     setActiveHistoryId(nextItem.id);
+    if (authToken && ownerEmail) {
+      void saveHistoryItemToServer(nextItem).catch((saveError) => {
+        setAuthMessage((current) => current || getReadableRequestError(saveError) || "Your material is saved on this device and will sync when the connection returns.");
+      });
+    }
     return nextItem;
   };
 
@@ -14874,8 +14879,9 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined" || !authEmail) {
       setStudyChatHistoryIndex([]);
-      return;
+      return undefined;
     }
+    let cancelled = false;
     try {
       const parsed = JSON.parse(window.localStorage.getItem(getStudyChatIndexStorageKey(authEmail)) || "[]");
       setStudyChatHistoryIndex(
@@ -14888,7 +14894,28 @@ export default function App() {
     } catch {
       setStudyChatHistoryIndex([]);
     }
-  }, [authEmail]);
+    if (authToken) {
+      void authJsonWithTransientRetries("/api/assistant/conversations?limit=80&offset=0&archived=false", {}, {
+        timeoutMs: 20000,
+        retries: 1,
+      }).then(({ data }) => {
+        if (cancelled) return;
+        const serverRows = Array.isArray(data?.items) ? data.items : [];
+        setStudyChatHistoryIndex(serverRows.map((item) => ({
+          id: item.id,
+          title: item.title || "Study Chat",
+          updatedAt: item.updatedAt || item.lastMessageAt || "",
+          materialKey: item.contextKey || "general-study-chat",
+          messageCount: Number(item.messageCount || 0),
+        })).filter((item) => item.id));
+      }).catch(() => {
+        // Keep the email-scoped local cache available during a temporary server failure.
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [authEmail, authToken]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !authEmail) return;
@@ -14901,6 +14928,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    let cancelled = false;
     try {
       const parsed = JSON.parse(window.localStorage.getItem(studyChatStorageKey) || "[]");
       if (!Array.isArray(parsed)) {
@@ -14919,7 +14947,28 @@ export default function App() {
     } catch {
       setChatMessages([]);
     }
-  }, [studyChatStorageKey]);
+    if (authToken && activeStudyChatId) {
+      void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
+        timeoutMs: 20000,
+        retries: 1,
+      }).then(({ data }) => {
+        if (cancelled) return;
+        const serverMessages = Array.isArray(data?.conversation?.messages) ? data.conversation.messages : [];
+        if (!serverMessages.length) return;
+        setChatMessages(serverMessages.map((message, index) => ({
+          id: String(message.id || `server-study-chat-${index}`),
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: String(message.content || ""),
+          images: Array.isArray(message.referenceImages) ? message.referenceImages.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS) : [],
+        })));
+      }).catch(() => {
+        // A newly created conversation has no server row until its first completed answer.
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStudyChatId, authToken, studyChatStorageKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -19856,6 +19905,26 @@ export default function App() {
     return undefined;
   }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath]);
 
+  const saveHistoryItemToServer = async (item) => {
+    const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
+    if (!ownerEmail || !item?.id) throw new Error("A signed-in account and material ID are required.");
+    const [ownedItem] = sanitizeHistoryItemsForStorage([
+      {
+        ...item,
+        ownerEmail,
+      },
+    ]);
+    const response = await authFetch(`/history/${encodeURIComponent(item.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item: ownedItem }),
+      timeoutMs: 20000,
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok || !data.item) throw new Error(data.detail || "Could not save this material to your account.");
+    return normalizeHistoryItems([data.item])[0] || item;
+  };
+
   const pushHistoryToServer = async (items) => {
     const ownerEmail = normalizeHistoryOwnerEmail(authEmail);
     const ownedItems = normalizeHistoryItems(items)
@@ -21820,6 +21889,7 @@ export default function App() {
 
   const generateFlashcards = async () => {
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating flashcards.");
     }
@@ -21856,7 +21926,7 @@ export default function App() {
       setFlashcards(nextFlashcards);
       setFlashcardCount(clampFlashcardCountForPlan(data.requested_count || requestedCount));
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(toolContext.summary || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: toolContext.summary,
@@ -21895,6 +21965,7 @@ export default function App() {
 
   const generateQuiz = async () => {
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the test.");
     }
@@ -21928,6 +21999,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "quiz",
+        historyItemId: sourceHistoryId,
         savedAt: new Date().toISOString(),
       });
       const job = await pollJob(data.job_id, "quiz");
@@ -21941,7 +22013,7 @@ export default function App() {
         resetQuizSessionState(nextQuizQuestions);
       });
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(toolContext.summary || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: toolContext.summary,
@@ -21981,6 +22053,7 @@ export default function App() {
 
   const generatePresentation = async ({ summaryOverride = "", transcriptOverride = "", lectureNotesOverride = "" } = {}) => {
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     const resolvedSummary = summaryOverride || toolContext.summary;
     const resolvedTranscript = transcriptOverride || toolContext.transcript;
     const resolvedLectureNotes = lectureNotesOverride || toolContext.lectureNotes;
@@ -22032,6 +22105,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "presentation",
+        historyItemId: sourceHistoryId,
         savedAt: new Date().toISOString(),
       });
       const job = await pollJob(data.job_id, "presentation");
@@ -22053,7 +22127,7 @@ export default function App() {
         presentationViewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(resolvedSummary || nextPresentationData.title || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: resolvedSummary,
@@ -22146,6 +22220,7 @@ export default function App() {
 
   const generatePodcast = async () => {
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     if (!toolContext.hasContent) {
       return setError("Generate a study guide or add lecture material before creating the podcast debate.");
     }
@@ -22189,6 +22264,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "podcast",
+        historyItemId: sourceHistoryId,
         savedAt: new Date().toISOString(),
       });
       const job = await pollJob(data.job_id, "podcast");
@@ -22209,7 +22285,7 @@ export default function App() {
       revealWorkspacePage("podcast");
       setProgress(100);
       const nextHistoryItem = addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(toolContext.summary || nextPodcastData.script || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: toolContext.summary,
@@ -22283,6 +22359,7 @@ export default function App() {
   const generateReport = async ({ closePanel = false, configOverride = null } = {}) => {
     const activeConfig = configOverride ? { ...reportConfig, ...configOverride, features: { ...reportConfig.features, ...(configOverride.features || {}) } } : reportConfig;
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     if (!(activeConfig.reportTitle.trim() || toolContext.hasContent)) {
       return setError("Enter a report topic or add lecture material before creating the academic report.");
     }
@@ -22308,6 +22385,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "report",
+        historyItemId: sourceHistoryId,
         savedAt: new Date().toISOString(),
       });
       const job = await pollJob(data.job_id, "report");
@@ -22326,7 +22404,7 @@ export default function App() {
       setProgress(100);
       setStatus("Academic report ready.");
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(toolContext.summary || nextReportData.title || activeConfig.reportTitle || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: toolContext.summary,
@@ -22415,6 +22493,7 @@ export default function App() {
 
   const generateMindMap = async () => {
     const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     const chatContext = chatToText(lectureAssistantMessages);
     const hasMindMapContext = Boolean(
       toolContext.hasContent
@@ -22461,6 +22540,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "mind_map",
+        historyItemId: sourceHistoryId,
         savedAt: new Date().toISOString(),
       });
       const job = await pollJob(data.job_id, "mind_map");
@@ -22477,7 +22557,7 @@ export default function App() {
       setProgress(100);
       setStatus("Mind map ready.");
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(toolContext.summary || nextMindMapData.title || "", toolContext.sourceLabel),
         fileName: toolContext.sourceLabel,
         summary: toolContext.summary,
@@ -22795,6 +22875,7 @@ export default function App() {
   };
 
   const generateTeacherLesson = async ({ autoplay = true } = {}) => {
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
     if (!(summary.trim() || transcript.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim())) {
       return setError("Generate a study guide or add lecture material before starting study audio.");
     }
@@ -22840,6 +22921,7 @@ export default function App() {
       persistPendingJob({
         jobId: data.job_id,
         jobType: "teacher_lesson",
+        historyItemId: sourceHistoryId,
         autoplay,
         savedAt: new Date().toISOString(),
       });
@@ -22864,7 +22946,7 @@ export default function App() {
         pastQuestionPaperFileNames,
       });
       addHistoryItem({
-        id: activeHistoryId || "",
+        id: sourceHistoryId,
         title: extractHistoryTitle(summary || nextTeacherLessonData.title || "", sourceLabel),
         fileName: sourceLabel,
         summary,
@@ -22976,6 +23058,7 @@ export default function App() {
     const pendingJob = loadPendingJobSnapshot(ownerEmail);
     hasResumedPendingJobRef.current = ownerEmail;
     if (!pendingJob?.jobId) return undefined;
+    const pendingHistoryItemId = String(pendingJob.historyItemId || "").trim();
 
     let cancelled = false;
     const timeoutId = window.setTimeout(async () => {
@@ -23024,7 +23107,7 @@ export default function App() {
           });
           revealWorkspacePage("guide");
           addHistoryItem({
-            id: activeHistoryId || "",
+            id: pendingHistoryItemId || activeHistoryId || "",
             title: extractHistoryTitle(resumedJob.summary || "", sourceLabel),
             fileName: sourceLabel,
             summary: resumedJob.summary || "",
@@ -23066,7 +23149,7 @@ export default function App() {
           });
           revealWorkspacePage("quiz");
           addHistoryItem({
-            id: activeHistoryId || "",
+            id: pendingHistoryItemId || activeHistoryId || "",
             title: extractHistoryTitle(summary || "", sourceLabel),
             fileName: sourceLabel,
             summary,
@@ -23113,7 +23196,7 @@ export default function App() {
           });
           revealWorkspacePage("presentation");
           addHistoryItem({
-            id: activeHistoryId || "",
+            id: pendingHistoryItemId || activeHistoryId || "",
             title: extractHistoryTitle(summary || nextPresentationData.title || "", sourceLabel),
             fileName: sourceLabel,
             summary,
@@ -23157,7 +23240,7 @@ export default function App() {
           await loadPodcastAudioTrack(pendingJob.jobId, resumedJob.podcast_segments || []);
           revealWorkspacePage("podcast");
           addHistoryItem({
-            id: activeHistoryId || "",
+            id: pendingHistoryItemId || activeHistoryId || "",
             title: extractHistoryTitle(summary || nextPodcastData.script || "", sourceLabel),
             fileName: sourceLabel,
             summary,
@@ -23187,6 +23270,93 @@ export default function App() {
           return;
         }
 
+        if (pendingJob.jobType === "report") {
+          const nextReportData = normalizeReportData({
+            jobId: pendingJob.jobId,
+            title: resumedJob.report_title,
+            body: resumedJob.report_body,
+            sections: resumedJob.report_sections,
+            configuration: resumedJob.report_configuration,
+          });
+          setReportData(nextReportData);
+          revealWorkspacePage("report");
+          addHistoryItem({
+            id: pendingHistoryItemId || activeHistoryId || "",
+            title: extractHistoryTitle(summary || nextReportData.title || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            reportData: sanitizeReportForHistory(nextReportData),
+            mindMapData: sanitizeMindMapForHistory(mindMapData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered the academic report after refresh.");
+          return;
+        }
+
+        if (pendingJob.jobType === "mind_map") {
+          const nextMindMapData = normalizeMindMapData({
+            jobId: pendingJob.jobId,
+            title: resumedJob.mind_map_title,
+            root: resumedJob.mind_map_root,
+            depth: resumedJob.mind_map_depth,
+            nodeCount: resumedJob.mind_map_node_count,
+          });
+          setMindMapData(nextMindMapData);
+          setSelectedMindMapNode(nextMindMapData.root);
+          revealWorkspacePage("mindmap");
+          addHistoryItem({
+            id: pendingHistoryItemId || activeHistoryId || "",
+            title: extractHistoryTitle(summary || nextMindMapData.title || "", sourceLabel),
+            fileName: sourceLabel,
+            summary,
+            transcript,
+            formula,
+            example,
+            flashcards,
+            quizQuestions,
+            studyImages,
+            lectureNotes,
+            lectureNotesFileName,
+            lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+            lectureNoteFileNames,
+            lectureSlides,
+            lectureSlideFileNames,
+            lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+            pastQuestionMemo,
+            pastQuestionPapers,
+            pastQuestionPaperFileNames,
+            pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+            presentationData: sanitizePresentationForHistory(presentationData),
+            podcastData: sanitizePodcastForHistory(podcastData),
+            reportData: sanitizeReportForHistory(reportData),
+            mindMapData: sanitizeMindMapForHistory(nextMindMapData),
+            teacherLessonData: sanitizeTeacherLessonForHistory(teacherLessonData),
+          });
+          clearPendingJob();
+          setStatus("Recovered the mind map after refresh.");
+          return;
+        }
+
         if (pendingJob.jobType === "teacher_lesson") {
           const nextTeacherLessonData = normalizeTeacherLessonData({
             jobId: pendingJob.jobId,
@@ -23196,7 +23366,7 @@ export default function App() {
           });
           setTeacherLessonData(nextTeacherLessonData);
           addHistoryItem({
-            id: activeHistoryId || "",
+            id: pendingHistoryItemId || activeHistoryId || "",
             title: extractHistoryTitle(summary || nextTeacherLessonData.title || "", sourceLabel),
             fileName: sourceLabel,
             summary,
@@ -23251,6 +23421,9 @@ export default function App() {
     deliveryMode = "chat",
     currentSection = "",
     responseLength = deliveryMode === "voice" ? "concise" : teacherResponseLength,
+    conversationId = currentPageRef.current === "voice" ? activeStudyChatId : "",
+    userMessageId = "",
+    assistantMessageId = "",
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
@@ -23270,19 +23443,20 @@ export default function App() {
       .filter((document) => document.text)
       .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const shouldUseLectureContext = currentPageRef.current !== "voice";
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       timeoutMs: 90000,
       body: JSON.stringify({
         question,
-        transcript,
-        summary,
-        formulas: formattedFormula || formula,
-        worked_examples: cleanedExampleContent,
-        lecture_notes: lectureNotes,
-        lecture_slides: lectureSlides,
-        past_question_papers: pastQuestionPapers,
+        transcript: shouldUseLectureContext ? transcript : "",
+        summary: shouldUseLectureContext ? summary : "",
+        formulas: shouldUseLectureContext ? (formattedFormula || formula) : "",
+        worked_examples: shouldUseLectureContext ? cleanedExampleContent : "",
+        lecture_notes: shouldUseLectureContext ? lectureNotes : "",
+        lecture_slides: shouldUseLectureContext ? lectureSlides : "",
+        past_question_papers: shouldUseLectureContext ? pastQuestionPapers : "",
         history,
         reference_images: normalizedReferenceImages,
         reference_documents: normalizedReferenceDocuments,
@@ -23296,6 +23470,11 @@ export default function App() {
         auto_simplify: teacherAutoSimplify,
         exam_mode: teacherExamMode,
         interactive_mode: teacherInteractiveMode,
+        conversation_id: conversationId,
+        context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : "general-study-chat",
+        lecture_label: shouldUseLectureContext ? workspaceFileLabel : "",
+        user_message_id: userMessageId,
+        assistant_message_id: assistantMessageId,
       }),
     });
     const data = await parseJsonSafe(response);
@@ -23311,6 +23490,16 @@ export default function App() {
     if (!response.ok) throw new Error(data.detail || "Study chat failed.");
     const answer = String(data.answer || "").trim();
     if (!answer) throw new Error("Mabaso could not generate a clear answer. Please try again.");
+    if (data.conversation?.id) {
+      const savedConversation = data.conversation;
+      setStudyChatHistoryIndex((current) => [{
+        id: savedConversation.id,
+        title: savedConversation.title || "Study Chat",
+        updatedAt: savedConversation.updatedAt || new Date().toISOString(),
+        messageCount: Number(savedConversation.messageCount || 0),
+        materialKey: savedConversation.contextKey || "general-study-chat",
+      }, ...current.filter((item) => item.id !== savedConversation.id)].slice(0, 80));
+    }
     return answer;
   };
 
@@ -23865,6 +24054,9 @@ export default function App() {
         referenceDocuments: referenceDocumentsForQuestion,
         deliveryMode: "chat",
         currentSection: activeTab,
+        conversationId: activeStudyChatId,
+        userMessageId: userMessage.id,
+        assistantMessageId: pendingAssistantMessage.id,
       });
       setChatReferenceImages([]);
       setChatMessages((current) => {
@@ -24010,6 +24202,9 @@ export default function App() {
         deliveryMode: "teacher_interrupt",
         currentSection: activeTab,
         responseLength: "concise",
+        conversationId: activeStudyChatId,
+        userMessageId: userMessage.id,
+        assistantMessageId: pendingAssistantMessage.id,
       });
       if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
       setChatReferenceImages([]);
@@ -24201,9 +24396,9 @@ export default function App() {
             <AssistantMarkdown content={message.content} theme="dark" />
           </div>
         </div>
-      )) : (
-        <div className={fullPage ? "study-chat-page-empty" : "study-chat-empty"}>Ask anything. Mabaso can help with uploaded material or general academic questions.</div>
-      )}
+      )) : (fullPage ? null : (
+        <div className="study-chat-empty">Ask anything. Mabaso can help with uploaded material or general academic questions.</div>
+      ))}
       <div ref={studyChatEndRef} />
     </div>
   );

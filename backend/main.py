@@ -1068,6 +1068,8 @@ WORKED EXAMPLE ENGINE RULES
 - For programming, explain algorithm thinking, execution flow, and why the code or logic works.
 - Always include a clear final answer, a final verification, a key takeaway, and one exam insight or real-world insight.
 - When appropriate, include both a Beginner Solution and an Exam Marker Solution, then add Common Mistakes, Alternative Method, and Calculator Method sections.
+- Always add one more advanced, multi-step example that is directly related to the current lecture topic. It must test application or reasoning rather than repeat the beginner example with different numbers.
+- When a supplied lecture image contains an example question, diagram-based question, handwritten problem, or visible calculation, explain that question carefully and solve it step by step. State any unreadable or uncertain detail instead of inventing it.
 - The output must feel dynamic, human-tutored, visually structured, and significantly better than a generic templated answer.
 """
 
@@ -1294,6 +1296,10 @@ class HistorySyncRequest(BaseModel):
     items: list[dict[str, Any]] = []
 
 
+class HistoryItemUpsertRequest(BaseModel):
+    item: dict[str, Any] = {}
+
+
 class SiteRatingRequest(BaseModel):
     stars: int
     comment: str = ""
@@ -1341,6 +1347,11 @@ class StudyChatRequest(BaseModel):
     auto_simplify: bool = True
     exam_mode: bool = False
     interactive_mode: bool = True
+    conversation_id: str = ""
+    context_key: str = ""
+    lecture_label: str = ""
+    user_message_id: str = ""
+    assistant_message_id: str = ""
 
 
 class LectureAssistantMessage(BaseModel):
@@ -4613,6 +4624,33 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
             )
 
     return normalized_items
+
+
+def upsert_history_item_for_user(email: str, item: dict[str, Any], item_id: str = "") -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    normalized_id = compact_text(item_id)
+    if not normalized_email:
+        raise HTTPException(status_code=401, detail="Authentication is required.")
+    normalized_item = normalize_history_item_payload(item)
+    if normalized_id:
+        normalized_item["id"] = normalized_id
+    normalized_item["ownerEmail"] = normalized_email
+    created_at = compact_text(normalized_item.get("createdAt"), utc_now().isoformat())
+    updated_at = compact_text(normalized_item.get("updatedAt"), created_at)
+    payload_json = json.dumps(normalized_item, ensure_ascii=False)
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM study_history_items WHERE lower(email) = ? AND id = ?",
+            (normalized_email, normalized_item["id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO study_history_items (email, id, payload_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (normalized_email, normalized_item["id"], payload_json, created_at, updated_at),
+        )
+    return normalized_item
 
 
 def clamp_word_limited_comment(value: Any, max_words: int = 50) -> str:
@@ -12880,6 +12918,15 @@ async def sync_study_history(
     return {"items": replace_history_items_for_user(current_user, items)}
 
 
+@app.put("/history/{item_id}")
+async def save_study_history_item(
+    item_id: str,
+    payload: HistoryItemUpsertRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return {"item": upsert_history_item_for_user(current_user, payload.item, item_id)}
+
+
 @app.post("/site-ratings")
 async def submit_site_rating(
     payload: SiteRatingRequest,
@@ -16186,6 +16233,8 @@ def parse_visual_analysis_items(content: str) -> list[dict[str, str]]:
                     item.get("ai_explanation") or item.get("exam_explanation"),
                     compact_text(item.get("key_highlight"), "Notice the labelled parts, sequence, or comparison shown in this visual."),
                 ),
+                "question_text": compact_text(item.get("question_text")),
+                "worked_solution_hint": compact_text(item.get("worked_solution_hint")),
             }
         )
     return normalized
@@ -16218,9 +16267,11 @@ async def analyze_reference_images_for_study_guide(
                 f"Write all labels in {output_language}.\n"
                 "Match each visual to the most relevant study-guide section or concept.\n"
                 "Detect whether the visual is a table, chart, diagram, process flow, equation snapshot, photo, or mixed slide visual.\n"
+                "If a visual contains an example or exam question, transcribe its readable question text and describe the correct solving approach.\n"
+                "Never invent unreadable values, symbols, labels, or question wording.\n"
                 "Give each visual a short clear classroom label and one highlight explaining what a student should notice.\n"
                 "Return strict JSON in this shape only:\n"
-                '{"items":[{"title":"...","visual_type":"...","matched_section":"...","key_highlight":"...","diagram_label":"...","caption":"...","ai_explanation":"..."}]}'
+                '{"items":[{"title":"...","visual_type":"...","matched_section":"...","key_highlight":"...","diagram_label":"...","caption":"...","ai_explanation":"...","question_text":"...","worked_solution_hint":"..."}]}'
             ),
         }
     ]
@@ -20007,6 +20058,7 @@ async def generate_structured_study_assets(
     past_question_papers: str,
     job_id: str,
     output_language: str,
+    visual_analysis: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     fallback_assets = extract_study_assets(
         summary,
@@ -20021,6 +20073,11 @@ async def generate_structured_study_assets(
         trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
         trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block(
+            "QUESTIONS OR EXAMPLES DETECTED IN UPLOADED IMAGES",
+            json.dumps(visual_analysis or [], ensure_ascii=False),
+            MAX_STUDY_GUIDE_INPUT_CHARS // 3,
+        ),
     ]
     combined_source = "\n\n".join(block for block in source_blocks if block)
 
@@ -20041,6 +20098,8 @@ async def generate_structured_study_assets(
                         "- `formula` should be a compact markdown study sheet with readable formulas, important rearrangements, and derived forms when the supplied material shows them.\n"
                         "- `worked_example` should explain every example that appears in the study guide WORKED EXAMPLES section.\n"
                         "- If no explicit worked example appears but the lecture has formulas, derivations, methods, or likely exam-style procedures, create at least one original practice example using only the supplied topic context.\n"
+                        "- Include one advanced multi-step example tied directly to the lecture topic, with reasoning, verification, and an exam-level interpretation.\n"
+                        "- If the extracted source describes a question shown in an image, explain and solve that image-based question while clearly marking any unreadable detail.\n"
                         "- If the supplied material contains a derivation, rearrangement, or formula build-up, include that derivation clearly inside `worked_example`.\n"
                         "- `worked_example` must explain why each step happens, why the formula fits, and how the result is checked.\n"
                         "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"
@@ -20633,6 +20692,7 @@ async def run_summary_job(
         )
         study_image_limit = get_study_image_plan_limit(owner_email)
         uploaded_visuals: list[dict[str, str]] = []
+        visual_analysis: list[dict[str, str]] = []
         if study_image_limit > 0:
             visual_analysis = await analyze_reference_images_for_study_guide(
                 reference_images,
@@ -20650,6 +20710,7 @@ async def run_summary_job(
             past_question_papers,
             job_id,
             output_language,
+            visual_analysis,
         )
         generated_study_images = await generate_ai_study_images(
             summary,
@@ -22902,6 +22963,68 @@ async def mark_quiz_answer(
             await uploaded_image.close()
 
 
+def persist_study_chat_turn(
+    *,
+    current_user: str,
+    payload: StudyChatRequest,
+    answer: str,
+) -> dict[str, Any] | None:
+    conversation_id = compact_text(payload.conversation_id)
+    if not conversation_id:
+        return None
+    try:
+        title = shorten_text(compact_text(payload.question, "Study Chat"), 72)
+        conversation = chat_history_store.ensure_conversation(
+            email=current_user,
+            conversation_id=conversation_id,
+            title=title,
+            lecture_label=compact_text(payload.lecture_label),
+            context_key=compact_text(payload.context_key, "general-study-chat"),
+            metadata={"source": "study_chat"},
+        )
+        timestamp = utc_now().isoformat()
+        attachment_names = [
+            shorten_text((item or {}).get("name", "Attached document"), 120)
+            for item in (payload.reference_documents or [])
+            if isinstance(item, dict)
+        ]
+        chat_history_store.insert_messages(
+            email=current_user,
+            conversation_id=conversation_id,
+            messages=[
+                {
+                    "id": compact_text(payload.user_message_id, f"{conversation_id}-user-{uuid4().hex}"),
+                    "role": "user",
+                    "content": compact_text(payload.question),
+                    "timestamp": timestamp,
+                    "interaction_mode": "voice" if payload.voice_mode else "text",
+                    "metadata_json": {
+                        "source": "study_chat",
+                        "reference_image_count": len(payload.reference_images or []),
+                        "attachment_names": attachment_names,
+                    },
+                },
+                {
+                    "id": compact_text(payload.assistant_message_id, f"{conversation_id}-assistant-{uuid4().hex}"),
+                    "role": "assistant",
+                    "content": compact_text(answer),
+                    "timestamp": utc_now().isoformat(),
+                    "interaction_mode": "voice" if payload.voice_mode else "text",
+                    "metadata_json": {"source": "study_chat"},
+                },
+            ],
+        )
+        return chat_history_store.refresh_conversation_state(
+            email=current_user,
+            conversation_id=conversation_id,
+            title=compact_text(conversation.get("title"), title),
+            lecture_label=compact_text(payload.lecture_label),
+        )
+    except Exception:
+        logger.exception("Failed to persist Study Chat conversation")
+        return None
+
+
 @app.post("/ask-study-assistant/")
 async def ask_study_assistant(
     payload: StudyChatRequest,
@@ -22989,7 +23112,17 @@ async def ask_study_assistant(
             timeout=STUDY_CHAT_FALLBACK_TIMEOUT + 3,
         )
     answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question, payload.delivery_mode)
-    return {"answer": make_formulas_human_readable(answer_with_follow_up)}
+    final_answer = make_formulas_human_readable(answer_with_follow_up)
+    saved_conversation = await asyncio.to_thread(
+        persist_study_chat_turn,
+        current_user=current_user,
+        payload=normalized_payload,
+        answer=final_answer,
+    )
+    return {
+        "answer": final_answer,
+        "conversation": format_chat_history_conversation(saved_conversation) if saved_conversation else None,
+    }
 
 
 def format_chat_history_message(row: dict[str, Any]) -> dict[str, Any]:
@@ -23187,7 +23320,7 @@ class DatabaseChatHistoryStore:
             ).fetchall()
         return {
             "items": [dict(row) for row in rows],
-            "total": int((total_row or {}).get("total") or 0),
+            "total": int(dict(total_row).get("total") or 0) if total_row else 0,
         }
 
     def get_messages(
@@ -23220,13 +23353,13 @@ class DatabaseChatHistoryStore:
                 SELECT id,conversation_id,role,content,timestamp,interaction_mode,provider,model,metadata_json
                 FROM assistant_messages
                 WHERE {where_sql}
-                ORDER BY timestamp DESC, id DESC
+                ORDER BY timestamp DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC, id DESC
                 LIMIT ?
                 """,
                 tuple(parameters + [normalized_limit]),
             ).fetchall()
         descending_items = [dict(row) for row in descending_rows]
-        total = int((total_row or {}).get("total") or 0)
+        total = int(dict(total_row).get("total") or 0) if total_row else 0
         next_before = compact_text(descending_items[-1].get("timestamp")) if descending_items else ""
         return {
             "items": list(reversed(descending_items)),
@@ -23247,7 +23380,7 @@ class DatabaseChatHistoryStore:
                 SELECT id,conversation_id,role,content,timestamp,interaction_mode,provider,model,metadata_json
                 FROM assistant_messages
                 WHERE conversation_id = ? AND user_email = ?
-                ORDER BY timestamp ASC, id ASC
+                ORDER BY timestamp ASC, CASE role WHEN 'user' THEN 0 ELSE 1 END ASC, id ASC
                 LIMIT ?
                 """,
                 (normalized_id, normalized_email, normalized_limit),
@@ -23321,7 +23454,7 @@ class DatabaseChatHistoryStore:
                 """,
                 (normalized_id, normalized_email),
             ).fetchone()
-            message_id = compact_text((row or {}).get("id"))
+            message_id = compact_text(dict(row).get("id")) if row else ""
             if message_id:
                 connection.execute(
                     "DELETE FROM assistant_messages WHERE id = ? AND conversation_id = ? AND user_email = ?",
