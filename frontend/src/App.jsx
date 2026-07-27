@@ -6601,6 +6601,7 @@ export default function App() {
   const studyGuideDocumentDraftRef = useRef({});
   const activeGuideSelectionRef = useRef(null);
   const guideSelectionFrameRef = useRef(0);
+  const lastGuideHighlightPaintAtRef = useRef(0);
   const studyGuideDocumentSaveInProgressRef = useRef(false);
   const lastSummarySignatureRef = useRef("");
   const workspaceMobileSidebarDrawerRef = useRef(null);
@@ -7539,6 +7540,13 @@ export default function App() {
     currentPageRef.current = normalizedPageId;
     setCurrentPage(normalizedPageId);
     if (targetRoute) navigateToPath(targetRoute, { replace });
+  };
+
+  const openStudyChatPage = ({ replace = false, mode = "text" } = {}) => {
+    setActiveTab("chat");
+    setStudyChatResponseMode(mode === "voice" ? "voice" : "text");
+    setIsStudyChatSidebarOpen(false);
+    openProtectedAppPage("voice", { replace });
   };
 
   const openModeSelection = ({ replace = false } = {}) => {
@@ -23077,11 +23085,19 @@ export default function App() {
     return editor;
   };
 
+  const openAllStudyGuideSections = () => {
+    if (typeof document === "undefined") return;
+    document.querySelectorAll("details.study-guide-section-card").forEach((sectionCard) => {
+      sectionCard.open = true;
+    });
+  };
+
   const toggleWorkspaceEditMode = () => {
     setIsWorkspaceEditMode((current) => {
       const next = !current;
       if (next) setIsWorkspaceHighlightMode(false);
       window.requestAnimationFrame(() => {
+        if (next) openAllStudyGuideSections();
         const editor = focusStudyGuideEditor();
         if (!next && editor) saveActiveGuideEditor(editor);
       });
@@ -23097,8 +23113,9 @@ export default function App() {
       if (next) {
         const editor = getActiveGuideEditor() || Object.values(studyGuideEditorRefs.current || {}).find(Boolean);
         if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
+        window.requestAnimationFrame(openAllStudyGuideSections);
       }
-      setStatus(next ? "Highlight mode on. Select text, then choose a colour." : "Highlight mode off.");
+      setStatus(next ? "Highlight mode on. Drag over text to paint it, or select text and choose a colour." : "Highlight mode off.");
       return next;
     });
   };
@@ -23150,6 +23167,15 @@ export default function App() {
     } catch {
       setStatus("That exact selection could not be highlighted. Try selecting a smaller phrase.");
     }
+  };
+
+  const captureGuideSelectionAfterInteraction = (sectionKey, editor, { paint = false } = {}) => {
+    captureGuideEditorSelection(sectionKey, editor);
+    if (!paint || !isWorkspaceHighlightMode) return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (now - lastGuideHighlightPaintAtRef.current < 120) return;
+    lastGuideHighlightPaintAtRef.current = now;
+    window.requestAnimationFrame(() => applyWorkspaceHighlight(activeHighlightColor));
   };
 
   const eraseSelectedWorkspaceHighlight = () => {
@@ -23219,6 +23245,10 @@ export default function App() {
     const question = chatQuestion.trim();
     if (!question) {
       setError("Ask a question first.");
+      return;
+    }
+    if (studyChatResponseMode === "voice") {
+      await submitStudyChatVoiceQuestion(question);
       return;
     }
     const referenceImagesForQuestion = chatReferenceImages.map((image) => ({
@@ -23437,6 +23467,7 @@ export default function App() {
       setStudyChatVoiceStatus(`Voice input is not supported in ${detectSupportBrowser() || "this browser"}. Type the question instead.`);
       return;
     }
+    setStudyChatResponseMode("voice");
     stopStudyChatVoiceCapture();
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
@@ -23603,6 +23634,20 @@ export default function App() {
           className="study-chat-composer-input"
           placeholder="Ask Mabaso"
         />
+        <button
+          type="button"
+          onClick={() => {
+            setStudyChatResponseMode("voice");
+            if (isStudyChatVoiceListening) stopStudyChatVoiceCapture();
+            else startStudyChatVoiceCapture();
+          }}
+          disabled={isAskingChat || isStudyChatVoiceAnswering}
+          className={`study-chat-composer-icon ${isStudyChatVoiceListening ? "is-listening" : ""}`}
+          aria-label={isStudyChatVoiceListening ? "Stop voice question" : "Ask by voice"}
+          aria-pressed={isStudyChatVoiceListening}
+        >
+          <Mic className="h-5 w-5" aria-hidden="true" />
+        </button>
         <button
           type="button"
           onClick={askStudyAssistant}
@@ -24054,7 +24099,7 @@ export default function App() {
       return;
     }
     if (tool.targetPage === "voice") {
-      openProtectedAppPage("voice");
+      openStudyChatPage();
       return;
     }
     if (tool.prompt) {
@@ -26064,7 +26109,7 @@ export default function App() {
         return;
       }
       if (item.id === "ai") {
-        openProtectedAppPage("voice");
+        openStudyChatPage();
         return;
       }
       if (item.id === "collaboration") {
@@ -26269,7 +26314,7 @@ export default function App() {
           </div>
           <div className="capture-panel-desktop-header mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <button type="button" onClick={() => openProtectedAppPage("voice")} className="capture-ai-chat-button">
+              <button type="button" onClick={() => openStudyChatPage()} className="capture-ai-chat-button">
                 <MessageCircle className="h-5 w-5" aria-hidden="true" />
                 <span>AI Chat</span>
               </button>
@@ -26331,7 +26376,7 @@ export default function App() {
                     <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Latest capture update</p>
                     <p className="mt-3 text-sm font-semibold text-white">{captureStatusMessage}</p>
                     {usedFallbackSummary ? <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">MABASO returned a fallback study guide instead of leaving the lecture blank.</div> : null}
-                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{renderCaptureErrorMessage(error)}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openProtectedAppPage("voice")} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
+                    {error ? <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100"><p className="font-semibold">{captureErrorTitle}</p><p className="mt-2">{renderCaptureErrorMessage(error)}</p>{!isCurrentErrorUsageBlocked && errorHint && !(error || "").toLowerCase().includes(errorHint.trim().toLowerCase()) ? <p className="mt-2 text-rose-100/80">{errorHint}</p> : null}<button type="button" onClick={() => openStudyChatPage({ mode: "voice" })} className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-white/15"><svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true"><path d="M7 9v6M12 6v12M17 9v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg><span>Open voice help</span></button></div> : null}
                   </div>
                   <div className="study-guide-prompt-card">
                     <div className="force-mobile-stack flex items-start justify-between gap-3">
@@ -26780,10 +26825,10 @@ export default function App() {
                                     event.currentTarget.dataset.renderedHtml = event.currentTarget.innerHTML;
                                     updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true });
                                   }}
-                                  onSelect={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
-                                  onMouseUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
-                                  onPointerUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
-                                  onTouchEnd={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
+                                  onSelect={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
+                                  onMouseUp={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
+                                  onPointerUp={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
+                                  onTouchEnd={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
                                   onKeyUp={(event) => {
                                     const sectionKey = getGuideSectionEditKey(section);
                                     captureGuideEditorSelection(sectionKey, event.currentTarget);
