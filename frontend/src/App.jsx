@@ -6600,6 +6600,7 @@ export default function App() {
   const studyGuideEditorRefs = useRef({});
   const studyGuideDocumentDraftRef = useRef({});
   const activeGuideSelectionRef = useRef(null);
+  const guideSelectionFrameRef = useRef(0);
   const studyGuideDocumentSaveInProgressRef = useRef(false);
   const lastSummarySignatureRef = useRef("");
   const workspaceMobileSidebarDrawerRef = useRef(null);
@@ -22999,6 +23000,14 @@ export default function App() {
     mark.remove();
   };
 
+  const syncGuideEditorHtml = (editor, html, { force = false } = {}) => {
+    if (!editor || typeof html !== "string") return;
+    if (force || editor.dataset.renderedHtml !== html) {
+      editor.innerHTML = html;
+      editor.dataset.renderedHtml = html;
+    }
+  };
+
   const captureGuideEditorSelection = (sectionKey, editor) => {
     if (typeof window === "undefined" || !sectionKey || !editor) return;
     const selection = window.getSelection?.();
@@ -23008,11 +23017,12 @@ export default function App() {
       ? range.commonAncestorContainer
       : range.commonAncestorContainer?.parentElement;
     if (!container || !editor.contains(container)) return;
+    const previousSectionKey = activeGuideSelectionRef.current?.sectionKey || "";
     activeGuideSelectionRef.current = {
       sectionKey,
       range: range.cloneRange(),
     };
-    setActiveGuideEditorSectionKey(sectionKey);
+    if (previousSectionKey !== sectionKey) setActiveGuideEditorSectionKey(sectionKey);
   };
 
   const restoreGuideEditorSelection = () => {
@@ -23045,6 +23055,7 @@ export default function App() {
   const saveActiveGuideEditor = (editor) => {
     const sectionKey = editor?.dataset?.sectionKey || activeGuideEditorSectionKey;
     if (!sectionKey || !editor) return;
+    editor.dataset.renderedHtml = editor.innerHTML;
     updateStudyGuideSectionHtml(sectionKey, editor.innerHTML, { immediate: true });
   };
 
@@ -23069,6 +23080,7 @@ export default function App() {
   const toggleWorkspaceEditMode = () => {
     setIsWorkspaceEditMode((current) => {
       const next = !current;
+      if (next) setIsWorkspaceHighlightMode(false);
       window.requestAnimationFrame(() => {
         const editor = focusStudyGuideEditor();
         if (!next && editor) saveActiveGuideEditor(editor);
@@ -23081,6 +23093,7 @@ export default function App() {
   const toggleWorkspaceHighlightMode = () => {
     setIsWorkspaceHighlightMode((current) => {
       const next = !current;
+      if (next) setIsWorkspaceEditMode(false);
       if (next) {
         const editor = getActiveGuideEditor() || Object.values(studyGuideEditorRefs.current || {}).find(Boolean);
         if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
@@ -23150,13 +23163,20 @@ export default function App() {
     const rangeContainer = range?.commonAncestorContainer?.nodeType === 1
       ? range.commonAncestorContainer
       : range?.commonAncestorContainer?.parentElement;
-    const selectedMark = node?.closest?.("mark")
-      || rangeContainer?.closest?.("mark")
-      || [...editor.querySelectorAll("mark")].find((mark) => selection.containsNode?.(mark, true));
-    if (selectedMark && editor.contains(selectedMark)) {
-      unwrapMarkElement(selectedMark);
+    const selectedMarks = [...editor.querySelectorAll("mark")]
+      .filter((mark) => {
+        if (!editor.contains(mark)) return false;
+        if (node?.closest?.("mark") === mark || rangeContainer?.closest?.("mark") === mark) return true;
+        try {
+          return range?.intersectsNode?.(mark) || selection.containsNode?.(mark, true);
+        } catch {
+          return false;
+        }
+      });
+    if (selectedMarks.length) {
+      selectedMarks.forEach(unwrapMarkElement);
       saveActiveGuideEditor(editor);
-      setStatus("Highlight removed.");
+      setStatus(selectedMarks.length === 1 ? "Highlight removed." : "Highlights removed.");
       return;
     }
     setStatus("Tap or select highlighted text first.");
@@ -23172,6 +23192,28 @@ export default function App() {
     saveActiveGuideEditor(editor);
     setStatus("Highlights cleared for this section.");
   };
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return undefined;
+    const handleGuideSelectionChange = () => {
+      if (guideSelectionFrameRef.current) window.cancelAnimationFrame(guideSelectionFrameRef.current);
+      guideSelectionFrameRef.current = window.requestAnimationFrame(() => {
+        guideSelectionFrameRef.current = 0;
+        const selection = window.getSelection?.();
+        if (!selection || selection.rangeCount === 0) return;
+        const anchor = selection.anchorNode;
+        const anchorElement = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+        const editor = anchorElement?.closest?.(".study-guide-rich-editor");
+        if (!editor?.dataset?.sectionKey) return;
+        captureGuideEditorSelection(editor.dataset.sectionKey, editor);
+      });
+    };
+    document.addEventListener("selectionchange", handleGuideSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleGuideSelectionChange);
+      if (guideSelectionFrameRef.current) window.cancelAnimationFrame(guideSelectionFrameRef.current);
+    };
+  }, []);
 
   const askStudyAssistant = async () => {
     const question = chatQuestion.trim();
@@ -26551,15 +26593,15 @@ export default function App() {
                     </button>
                     {isDownloadMenuOpen ? renderDownloadMenu() : null}
                   </div>
-                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide">
+                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide" aria-pressed={isWorkspaceEditMode}>
                     <Pencil className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <div className="relative">
-                    <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text">
+                    <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text" aria-pressed={isWorkspaceHighlightMode}>
                       <Highlighter className="h-4 w-4" aria-hidden="true" />
                     </button>
                     {isWorkspaceHighlightMode ? (
-                      <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours">
+                      <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours" onMouseDown={(event) => event.preventDefault()}>
                         {[
                           ["Yellow", "#fef08a"],
                           ["Green", "#bbf7d0"],
@@ -26645,13 +26687,25 @@ export default function App() {
                                 <div
                                   ref={(node) => {
                                     const sectionKey = getGuideSectionEditKey(section);
-                                    if (node) studyGuideEditorRefs.current[sectionKey] = node;
-                                    else delete studyGuideEditorRefs.current[sectionKey];
+                                    if (node) {
+                                      studyGuideEditorRefs.current[sectionKey] = node;
+                                      const nextHtml = getStudyGuideSectionHtml(section);
+                                      const isActiveEditor = typeof document !== "undefined" && document.activeElement === node;
+                                      if (!isActiveEditor || !node.dataset.renderedHtml) {
+                                        syncGuideEditorHtml(node, nextHtml);
+                                      }
+                                    } else {
+                                      delete studyGuideEditorRefs.current[sectionKey];
+                                    }
                                   }}
                                   className={`study-guide-rich-editor ${isWorkspaceEditMode ? "is-editing" : ""} ${isWorkspaceHighlightMode ? "is-highlighting" : ""}`}
-                                  contentEditable={isWorkspaceEditMode}
+                                  contentEditable={isWorkspaceEditMode || isWorkspaceHighlightMode}
                                   suppressContentEditableWarning
                                   data-section-key={getGuideSectionEditKey(section)}
+                                  data-edit-mode={isWorkspaceEditMode ? "true" : "false"}
+                                  data-highlight-mode={isWorkspaceHighlightMode ? "true" : "false"}
+                                  inputMode={isWorkspaceEditMode ? "text" : "none"}
+                                  aria-label="Editable study guide content"
                                   tabIndex={isWorkspaceEditMode || isWorkspaceHighlightMode ? 0 : undefined}
                                   onFocus={(event) => {
                                     const sectionKey = event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section);
@@ -26664,21 +26718,35 @@ export default function App() {
                                   onPaste={(event) => {
                                     if (!isWorkspaceEditMode) event.preventDefault();
                                   }}
-                                  onBlur={(event) => updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true })}
+                                  onKeyDown={(event) => {
+                                    if (!isWorkspaceEditMode && !event.metaKey && !event.ctrlKey && event.key.length === 1) {
+                                      event.preventDefault();
+                                    }
+                                  }}
+                                  onBlur={(event) => {
+                                    event.currentTarget.dataset.renderedHtml = event.currentTarget.innerHTML;
+                                    updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true });
+                                  }}
+                                  onSelect={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                   onMouseUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                   onPointerUp={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                   onTouchEnd={(event) => captureGuideEditorSelection(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                   onKeyUp={(event) => {
                                     const sectionKey = getGuideSectionEditKey(section);
                                     captureGuideEditorSelection(sectionKey, event.currentTarget);
-                                    if (isWorkspaceEditMode) updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    if (isWorkspaceEditMode) {
+                                      event.currentTarget.dataset.renderedHtml = event.currentTarget.innerHTML;
+                                      updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    }
                                   }}
                                   onInput={(event) => {
                                     const sectionKey = getGuideSectionEditKey(section);
                                     captureGuideEditorSelection(sectionKey, event.currentTarget);
-                                    if (isWorkspaceEditMode) updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    if (isWorkspaceEditMode) {
+                                      event.currentTarget.dataset.renderedHtml = event.currentTarget.innerHTML;
+                                      updateStudyGuideSectionHtml(sectionKey, event.currentTarget.innerHTML);
+                                    }
                                   }}
-                                  dangerouslySetInnerHTML={{ __html: getStudyGuideSectionHtml(section) }}
                                 />
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />

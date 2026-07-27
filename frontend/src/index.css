@@ -1825,18 +1825,34 @@ iframe {
   font-size: 15px;
   line-height: 1.75;
   outline: none;
+  -webkit-user-select: text;
   user-select: text;
+  touch-action: auto;
+  word-break: break-word;
 }
 
 .study-guide-rich-editor.is-editing {
   border-color: rgba(16, 185, 129, 0.7);
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.13);
+  caret-color: #059669;
   cursor: text;
 }
 
 .study-guide-rich-editor.is-highlighting {
   border-color: rgba(250, 204, 21, 0.72);
   box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.13);
+  caret-color: transparent;
+  cursor: text;
+}
+
+.study-guide-rich-editor[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.study-guide-rich-editor:focus-visible {
+  outline: 2px solid rgba(16, 185, 129, 0.45);
+  outline-offset: 4px;
 }
 
 .study-guide-rich-editor p,
@@ -3202,6 +3218,261 @@ iframe {
 
   .timetable-loading-cell {
     min-height: 62px;
+  }
+}
+
+@media (max-width: 768px) {
+  .workspace-shell {
+    min-height: 100dvh;
+    padding: calc(6.45rem + env(safe-area-inset-top)) 8px calc(5rem + env(safe-area-inset-bottom)) !important;
+    background: #020807 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow-x: clip !important;
+  }
+
+  .workspace-topbar {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 180 !important;
+    gap: 0.5rem !important;
+    padding: calc(0.48rem + env(safe-area-inset-top)) 10px 0.58rem !important;
+    border-bottom: 1px solid rgba(16, 185, 129, 0.18) !important;
+    background: rgba(2, 8, 7, 0.98) !important;
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34) !important;
+    backdrop-filter: blur(16px);
+  }
+
+  .workspace-topbar > div:first-child {
+    display: grid !important;
+    grid-template-columns: 34px 34px minmax(0, 1fr);
+    align-items: center !important;
+    gap: 0.42rem !important;
+    width: 100%;
+  }
+
+  .workspace-topbar p {
+    color: rgba(110, 231, 183, 0.88) !important;
+    font-size: 0.55rem !important;
+    letter-spacing: 0.22em !important;
+  }
+
+  .workspace-topbar h2 {
+    margin-top: 0.1rem !important;
+    max-width: 100%;
+    overflow: hidden;
+    color: #f8fafc !important;
+    font-size: 1rem !important;
+    line-height: 1.1 !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-top-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    width: 100%;
+    gap: 0.45rem !important;
+  }
+
+  .workspace-search-box {
+    min-height: 34px;
+    border-color: rgba(16, 185, 129, 0.16) !important;
+    border-radius: 10px !important;
+    background: rgba(3, 12, 11, 0.92) !important;
+  }
+
+  .workspace-search-input {
+    min-height: 32px;
+    font-size: 0.78rem !important;
+  }
+
+  .sticky-back-button,
+  .workspace-mobile-sidebar-button {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(16, 185, 129, 0.2) !important;
+    background: rgba(8, 20, 18, 0.92) !important;
+    color: #f8fafc !important;
+    box-shadow: none !important;
+  }
+
+  .workspace-layout {
+    margin-top: 0 !important;
+  }
+
+  .workspace-content-surface {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  .workspace-tool-actions {
+    position: static !important;
+    display: flex !important;
+    align-items: center !important;
+    margin: 0.1rem 0 0.75rem !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .workspace-tool-actions > div:first-child {
+    display: none !important;
+  }
+
+  .workspace-tool-actions > div:last-child {
+    display: flex !important;
+    width: 100%;
+    justify-content: flex-start !important;
+    gap: 0.38rem !important;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .workspace-tool-actions > div:last-child::-webkit-scrollbar {
+    display: none;
+  }
+
+  .workspace-icon-action {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    border-radius: 999px !important;
+    border-color: rgba(16, 185, 129, 0.22) !important;
+    background: rgba(7, 20, 18, 0.94) !important;
+    color: #d1fae5 !important;
+    box-shadow: none !important;
+  }
+
+  .workspace-icon-action.is-active,
+  .workspace-icon-action[aria-pressed="true"] {
+    border-color: rgba(16, 185, 129, 0.78) !important;
+    background: rgba(16, 185, 129, 0.18) !important;
+    color: #f8fafc !important;
+  }
+
+  .workspace-highlight-menu {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    bottom: calc(4.85rem + env(safe-area-inset-bottom)) !important;
+    top: auto !important;
+    z-index: 220 !important;
+    justify-content: flex-start;
+    gap: 0.38rem !important;
+    width: auto !important;
+    border-color: rgba(16, 185, 129, 0.2) !important;
+    border-radius: 12px !important;
+    background: rgba(2, 8, 23, 0.98) !important;
+    padding: 0.42rem !important;
+  }
+
+  .workspace-highlight-menu button {
+    width: 28px !important;
+    min-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    border-radius: 8px !important;
+  }
+
+  .workspace-highlight-menu .workspace-highlight-tool {
+    width: auto !important;
+    min-width: 54px !important;
+    padding: 0 0.55rem !important;
+    font-size: 0.72rem !important;
+  }
+
+  .study-guide-rich-editor {
+    min-height: 110px !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    padding: 0.2rem 0 !important;
+    font-size: 13.5px !important;
+    line-height: 1.55 !important;
+    -webkit-user-select: text !important;
+    user-select: text !important;
+    touch-action: auto !important;
+  }
+
+  .study-guide-rich-editor p,
+  .study-guide-rich-editor li,
+  .study-guide-rich-editor td,
+  .study-guide-rich-editor th {
+    font-size: 13.5px !important;
+    line-height: 1.55 !important;
+  }
+
+  .workspace-mobile-sidebar-layer {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 240 !important;
+    pointer-events: auto;
+  }
+
+  .workspace-mobile-sidebar-scrim {
+    position: fixed !important;
+    inset: 0 !important;
+    background: rgba(0, 0, 0, 0.54) !important;
+    backdrop-filter: blur(2px);
+  }
+
+  .workspace-mobile-sidebar-drawer {
+    position: fixed !important;
+    inset: 0 auto 0 0 !important;
+    width: min(84vw, 340px) !important;
+    max-width: 340px !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    border-radius: 0 22px 22px 0 !important;
+    border-right: 1px solid rgba(16, 185, 129, 0.18) !important;
+    background: #030807 !important;
+    box-shadow: 18px 0 40px rgba(0, 0, 0, 0.45) !important;
+    transform: translate3d(0, 0, 0);
+    animation: workspaceDrawerIn 220ms ease-out;
+  }
+
+  .workspace-mobile-sidebar-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: rgba(3, 8, 7, 0.98);
+    padding-top: calc(0.85rem + env(safe-area-inset-top));
+  }
+
+  .workspace-mobile-sidebar-content {
+    padding-bottom: 5.8rem;
+  }
+
+  .workspace-mobile-sidebar-profile {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: rgba(3, 8, 7, 0.98);
+    padding-bottom: calc(0.85rem + env(safe-area-inset-bottom));
+  }
+}
+
+@keyframes workspaceDrawerIn {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+
+  to {
+    transform: translate3d(0, 0, 0);
   }
 }
 
