@@ -2618,6 +2618,12 @@ export const protectedWorkspaceRoutes = [
     access: "login",
   },
   {
+    route: "/app/chat",
+    title: "Study Chat",
+    description: "Open a private Mabaso AI study conversation with text, voice, images, and saved chat history.",
+    access: "login",
+  },
+  {
     route: "/app/materials",
     title: "Saved Materials",
     description: "Reopen generated study packs, saved tests, and export-ready history tied to the signed-in account.",
@@ -2669,5 +2675,7 @@ export function findProtectedWorkspaceRoute(route = "/") {
   if (normalized === "/study-session" || normalized.startsWith("/study-session/")) {
     return protectedWorkspaceRoutes.find((entry) => entry.route === "/study-session") || null;
   }
-  return protectedWorkspaceRoutes.find((entry) => entry.route === normalized) || null;
+  return protectedWorkspaceRoutes.find((entry) => (
+    entry.route === normalized || normalized.startsWith(`${entry.route}/`)
+  )) || null;
 }

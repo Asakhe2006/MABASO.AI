@@ -13,6 +13,7 @@ import {
   resolveCurrentPageFromRoute,
   resolveEnterpriseRoute,
   resolveMetadataForRoute,
+  resolveProtectedResourceIdFromRoute,
 } from "./siteRouting";
 import { useLectureAssistant } from "./useLectureAssistant";
 import AssistantMarkdown from "./components/AssistantMarkdown";
@@ -108,6 +109,7 @@ const TEACHER_REALTIME_CONNECTION_STATES = {
 const HISTORY_STORAGE_KEY = "mabaso-history-v1";
 const WORKSPACE_DRAFT_STORAGE_KEY = "mabaso-workspace-draft-v1";
 const STUDY_CHAT_STORAGE_KEY = "mabaso-study-chat-v1";
+const STUDY_CHAT_INDEX_STORAGE_KEY = "mabaso-study-chat-index-v1";
 const STUDY_GUIDE_DOCUMENT_STORAGE_KEY = "mabaso-study-guide-document-v1";
 const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
@@ -122,6 +124,9 @@ const AUTH_MODE_KEY = "mabaso-auth-mode";
 const AUTH_AVAILABLE_MODES_KEY = "mabaso-auth-available-modes";
 const AUTH_REDIRECT_PATH_KEY = "mabaso-auth-redirect-path";
 const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
+const WORKSPACE_CONTEXT_ID_STORAGE_KEY = "mabaso-workspace-context-id-v1";
+const STUDY_CHAT_CONTEXT_ID_STORAGE_KEY = "mabaso-study-chat-context-id-v1";
+const AUTH_SYNC_STORAGE_KEY = "mabaso-auth-sync-v1";
 const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
@@ -237,6 +242,14 @@ function loadPersistedAuthStateToken() {
   } catch {
     return "";
   }
+}
+
+function createOpaqueResourceId(prefix = "ctx") {
+  const normalizedPrefix = String(prefix || "ctx").replace(/[^a-z0-9_-]+/gi, "").slice(0, 12) || "ctx";
+  const randomId = typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().replace(/-/g, "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+  return `${normalizedPrefix}_${randomId.slice(0, 24)}`;
 }
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
@@ -686,7 +699,7 @@ const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetabl
 const MOBILE_APP_NAV_ITEMS = [
   { id: "capture", label: "Home", icon: UploadCloud },
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
-  { id: "ai", label: "AI", icon: Bot },
+  { id: "ai", label: "AI Chat", icon: MessageCircle },
   { id: "timetable", label: "Plan", icon: CalendarDays },
   { id: "more", label: "More", icon: Ellipsis },
 ];
@@ -3539,6 +3552,28 @@ function getBillingStatusStorageKey(email = "") {
   return normalizedEmail ? `${BILLING_STATUS_CACHE_KEY}:${normalizedEmail}` : BILLING_STATUS_CACHE_KEY;
 }
 
+function getWorkspaceContextIdStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${WORKSPACE_CONTEXT_ID_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_CONTEXT_ID_STORAGE_KEY;
+}
+
+function getStudyChatContextIdStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email);
+  return normalizedEmail ? `${STUDY_CHAT_CONTEXT_ID_STORAGE_KEY}:${normalizedEmail}` : STUDY_CHAT_CONTEXT_ID_STORAGE_KEY;
+}
+
+function loadOrCreatePrivateContextId(storageKey = "", prefix = "ctx") {
+  try {
+    const storedId = String(window.localStorage.getItem(storageKey) || "").trim();
+    if (/^[a-zA-Z0-9_-]{8,96}$/.test(storedId)) return storedId;
+    const nextId = createOpaqueResourceId(prefix);
+    window.localStorage.setItem(storageKey, nextId);
+    return nextId;
+  } catch {
+    return createOpaqueResourceId(prefix);
+  }
+}
+
 function loadBillingStatusCache(email = "") {
   try {
     const rawValue = window.localStorage.getItem(getBillingStatusStorageKey(email));
@@ -3576,8 +3611,34 @@ function inlineStudyGuideMarkdownToHtml(value = "") {
     .replace(/\*(.*?)\*/g, "<em>$1</em>");
 }
 
+function normalizeStudyGuideContentSpacing(value = "") {
+  let text = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/-{3,}/g, "\n\n")
+    .trim();
+  if (!text) return "";
+
+  const nonEmptyLineCount = text.split("\n").filter((line) => line.trim()).length;
+  const needsStructuralRecovery = text.length >= 180 && nonEmptyLineCount <= Math.max(2, Math.floor(text.length / 700));
+  if (needsStructuralRecovery) {
+    text = text
+      .replace(/([.!?])(?=[A-Z][a-z]{2,})/g, "$1\n\n")
+      .replace(/([:;])(?=(?:Step|Question)\s*\d+\b)/gi, "$1\n\n")
+      .replace(/(?<!^)(?=(?:Step|Question)\s*\d+\s*[:.)])/gim, "\n\n")
+      .replace(/(?<!^)(?=(?:Answer|Definition|Example|Exam Tip|Common Mistake|Remember|Worked Example|Deep Dive|Key Takeaway|Quick Summary|Key Points|Quick Revision Questions)\s*:)/gim, "\n\n");
+  }
+
+  return text
+    .replace(/^\s*Step\s+(\d+)\s*:\s*/gim, "$1. ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function markdownToEditableStudyGuideHtml(markdown = "") {
-  const lines = String(markdown || "").split(/\r?\n/);
+  const lines = normalizeStudyGuideContentSpacing(markdown).split(/\r?\n/);
   const htmlParts = [];
   let listType = "";
   const parseTableRow = (line) => line
@@ -3605,7 +3666,6 @@ function markdownToEditableStudyGuideHtml(markdown = "") {
     const line = rawLine.trim();
     if (!line) {
       closeList();
-      htmlParts.push("<p><br></p>");
       continue;
     }
 
@@ -3705,7 +3765,7 @@ function getWorkspaceDraftStorageKey(email = "") {
   return normalizedEmail ? `${WORKSPACE_DRAFT_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_DRAFT_STORAGE_KEY;
 }
 
-function getStudyChatStorageKey(email = "", materialKey = "") {
+function getStudyChatStorageKey(email = "", materialKey = "", conversationId = "") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email) || "__guest__";
   const normalizedMaterialKey = String(materialKey || "__current__")
     .trim()
@@ -3713,7 +3773,16 @@ function getStudyChatStorageKey(email = "", materialKey = "") {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 90) || "__current__";
-  return `${STUDY_CHAT_STORAGE_KEY}:${normalizedEmail}:${normalizedMaterialKey}`;
+  const normalizedConversationId = String(conversationId || "__current__")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "")
+    .slice(0, 96) || "__current__";
+  return `${STUDY_CHAT_STORAGE_KEY}:${normalizedEmail}:${normalizedMaterialKey}:${normalizedConversationId}`;
+}
+
+function getStudyChatIndexStorageKey(email = "") {
+  const normalizedEmail = normalizeHistoryOwnerEmail(email) || "__guest__";
+  return `${STUDY_CHAT_INDEX_STORAGE_KEY}:${normalizedEmail}`;
 }
 
 function getStudyGuideDocumentStorageKey(email = "", materialKey = "") {
@@ -5764,7 +5833,7 @@ function parseGuideHeadingLine(line, { allowUnknownHeadings = true } = {}) {
 }
 
 function extractGuideSections(markdown) {
-  const text = (markdown || "").replace(/\r\n/g, "\n").trim();
+  const text = normalizeStudyGuideContentSpacing(markdown);
   if (!text) return [];
 
   const lines = text.split("\n");
@@ -6438,7 +6507,7 @@ function getLatestCollaborationRoomMessageRecord(room) {
 export default function App() {
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
-  const [authToken, setAuthToken] = useState(loadPersistedAuthStateToken);
+  const [authToken, setAuthToken] = useState("");
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
   const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
   const [authAvailableModes, setAuthAvailableModes] = useState(() => {
@@ -6468,6 +6537,7 @@ export default function App() {
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [authServerStateReady, setAuthServerStateReady] = useState(false);
+  const [authCheckError, setAuthCheckError] = useState("");
   const isAuthReady = authChecked && authServerStateReady;
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
@@ -6491,6 +6561,8 @@ export default function App() {
   const upgradeModalScrollRef = useRef(null);
   const upgradePaymentOptionsRef = useRef(null);
   const [currentPage, setCurrentPage] = useState("capture");
+  const [workspaceContextId, setWorkspaceContextId] = useState(() => createOpaqueResourceId("ws"));
+  const [activeStudyChatId, setActiveStudyChatId] = useState(() => createOpaqueResourceId("chat"));
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
   const [file, setFile] = useState(null);
@@ -6554,6 +6626,8 @@ export default function App() {
   const [downloadActionState, setDownloadActionState] = useState("");
   const [isWorkspaceEditMode, setIsWorkspaceEditMode] = useState(false);
   const [isWorkspaceHighlightMode, setIsWorkspaceHighlightMode] = useState(false);
+  const [isWorkspaceMobileFilterOpen, setIsWorkspaceMobileFilterOpen] = useState(false);
+  const [isWorkspaceMobileMoreOpen, setIsWorkspaceMobileMoreOpen] = useState(false);
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState("");
   const [autoOpenStudyGuideWhenReady, setAutoOpenStudyGuideWhenReady] = useState(() => {
     try {
@@ -6565,6 +6639,7 @@ export default function App() {
   });
   const [studyGuideDocumentHtml, setStudyGuideDocumentHtml] = useState({});
   const [activeHighlightColor, setActiveHighlightColor] = useState("#fef08a");
+  const [workspaceHighlightTool, setWorkspaceHighlightTool] = useState("paint");
   const [activeGuideEditorSectionKey, setActiveGuideEditorSectionKey] = useState("");
   const [currentJobType, setCurrentJobType] = useState("");
   const [usedFallbackSummary, setUsedFallbackSummary] = useState(false);
@@ -6615,6 +6690,7 @@ export default function App() {
   const [isMarkingRoomQuiz, setIsMarkingRoomQuiz] = useState(false);
   const [roomQuizSubmitted, setRoomQuizSubmitted] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
+  const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isAskingChat, setIsAskingChat] = useState(false);
@@ -6623,6 +6699,7 @@ export default function App() {
   const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
   const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
+  const [inlineVoicePicker, setInlineVoicePicker] = useState("");
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
@@ -6781,7 +6858,11 @@ export default function App() {
   const enterpriseGoogleButtonRef = useRef(null);
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
-  const authTokenRef = useRef(loadPersistedAuthStateToken());
+  const authTokenRef = useRef("");
+  const authBroadcastChannelRef = useRef(null);
+  const authExpiryHandledRef = useRef(false);
+  const sessionValidationRunRef = useRef(0);
+  const lastSessionValidationAtRef = useRef(0);
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
@@ -7567,7 +7648,8 @@ export default function App() {
       setCurrentPage(normalizedPageId);
       return;
     }
-    const targetRoute = resolveAppRouteForPage(normalizedPageId, authSessionMode);
+    const protectedResourceId = normalizedPageId === "voice" ? activeStudyChatId : workspaceContextId;
+    const targetRoute = resolveAppRouteForPage(normalizedPageId, authSessionMode, protectedResourceId);
     if (targetRoute && browserPath === targetRoute && currentPageRef.current === normalizedPageId) return;
     currentPageRef.current = normalizedPageId;
     setCurrentPage(normalizedPageId);
@@ -7773,6 +7855,18 @@ export default function App() {
       setIsWorkspaceMobileSidebarOpen(false);
     }
   }, [currentPage]);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const routedPage = resolveCurrentPageFromRoute(browserPath);
+    const routedResourceId = resolveProtectedResourceIdFromRoute(browserPath);
+    if (!routedResourceId) return;
+    if (routedPage === "voice") {
+      setActiveStudyChatId((current) => (current === routedResourceId ? current : routedResourceId));
+    } else if (routedPage && routedPage !== "admin" && routedPage !== "study-session") {
+      setWorkspaceContextId((current) => (current === routedResourceId ? current : routedResourceId));
+    }
+  }, [authToken, browserPath]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -8003,7 +8097,7 @@ export default function App() {
       pastQuestionPaperFileNames.join("-"),
     ].filter(Boolean).join("|")
     || "current-material";
-  const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey);
+  const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey, activeStudyChatId);
   const studyGuideDocumentStorageKey = getStudyGuideDocumentStorageKey(authEmail, studyChatMaterialKey);
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
   const roomAnswerGroups = groupQuizAnswers(activeRoom?.quiz_answers || []);
@@ -8449,7 +8543,7 @@ export default function App() {
     startTransition(() => {
       setFile(null);
       setTranscript(snapshot.transcript || "");
-      setSummary(snapshot.summary || "");
+      setSummary(normalizeStudyGuideContentSpacing(snapshot.summary || ""));
       setStudyGuideDocumentHtml(snapshot.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object" ? snapshot.studyGuideDocumentHtml : {});
       setFormula(snapshot.formula || "");
       setExample(snapshot.example || "");
@@ -9991,7 +10085,23 @@ export default function App() {
                 <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/70">AI Study Assistant</p>
                 <h2 className="mt-2 text-2xl font-semibold text-cyan-50">Ask a short study question</h2>
               </div>
-              <span className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-slate-200">Uses study chat attempts</span>
+              <div className="inline-chat-actions">
+                <button type="button" onClick={startNewActiveStudySessionChat} className="inline-chat-action">New Chat</button>
+                <div className="inline-voice-anchor">
+                  <button type="button" onClick={() => setInlineVoicePicker((current) => current === "timetable" ? "" : "timetable")} className="inline-chat-action" aria-haspopup="listbox" aria-expanded={inlineVoicePicker === "timetable"}>
+                    <Mic className="h-4 w-4" aria-hidden="true" />
+                    <span>Voice</span>
+                  </button>
+                  {inlineVoicePicker === "timetable" ? (
+                    <div className="inline-voice-picker" role="listbox" aria-label="Choose timetable study voice">
+                      <button type="button" className={!selectedTeacherVoiceName ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(""); setInlineVoicePicker(""); }}>Default voice</button>
+                      {teacherVoiceOptions.map((voice) => (
+                        <button key={voice.name} type="button" className={selectedTeacherVoiceName === voice.name ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(voice.name); setInlineVoicePicker(""); }}>{voice.name}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
             <div className="mt-5 space-y-4">
               {messages.length ? messages.map((message, index) => (
@@ -14476,7 +14586,14 @@ export default function App() {
     );
   };
 
-  const clearSession = (message = "Please sign in again.") => {
+  const clearSession = (message = "Please sign in again.", { broadcast = true } = {}) => {
+    const previousEmail = normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
+    transcriptionAbortControllerRef.current?.abort();
+    transcriptionAbortControllerRef.current = null;
+    stopStudyChatVoiceCapture();
+    stopBrowserVoiceListening();
+    stopBrowserVoicePlayback();
+    cleanupRecordingMonitoring({ stopStream: true });
     stopTeacherPlayback({ resetIndex: true });
     historyOwnerEmailRef.current = "";
     hasLoadedAdminDashboardRef.current = false;
@@ -14485,7 +14602,9 @@ export default function App() {
     setAuthEmail("");
     setAuthSessionMode("user");
     setAuthAvailableModes([]);
+    setAuthChecked(true);
     setAuthServerStateReady(true);
+    setAuthCheckError("");
     setAuthMode("login");
     setRegisterStep("email");
     setPendingRegistrationToken("");
@@ -14501,6 +14620,24 @@ export default function App() {
     setShowLandingAuthOptions(false);
     setHistoryItems([]);
     setActiveHistoryId("");
+    setTranscript("");
+    setSummary("");
+    setStudyGuideDocumentHtml({});
+    studyGuideDocumentDraftRef.current = {};
+    activeGuideSelectionRef.current = null;
+    setFormula("");
+    setExample("");
+    setFlashcards([]);
+    setQuizQuestions([]);
+    setStudyImages([]);
+    setChatMessages([]);
+    setStudyChatHistoryIndex([]);
+    setChatQuestion("");
+    setChatReferenceImages([]);
+    setIsWorkspaceEditMode(false);
+    setIsWorkspaceHighlightMode(false);
+    setWorkspaceContextId(createOpaqueResourceId("ws"));
+    setActiveStudyChatId(createOpaqueResourceId("chat"));
     setBillingUsage(null);
     setBillingSubscription(null);
     setPaymentRequests([]);
@@ -14534,83 +14671,131 @@ export default function App() {
     window.localStorage.removeItem(AUTH_MODE_KEY);
     window.localStorage.removeItem(AUTH_AVAILABLE_MODES_KEY);
     window.localStorage.removeItem(ACTIVE_WORKSPACE_TAB_STORAGE_KEY);
+    if (previousEmail) {
+      const privateStoragePrefixes = [
+        getHistoryStorageKey(previousEmail),
+        getWorkspaceDraftStorageKey(previousEmail),
+        getPendingJobStorageKey(previousEmail),
+        getBillingStatusStorageKey(previousEmail),
+        getStudyChatIndexStorageKey(previousEmail),
+        `${STUDY_CHAT_STORAGE_KEY}:${previousEmail}:`,
+        `${STUDY_GUIDE_DOCUMENT_STORAGE_KEY}:${previousEmail}:`,
+        getWorkspaceContextIdStorageKey(previousEmail),
+        getStudyChatContextIdStorageKey(previousEmail),
+      ];
+      for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+        const key = window.localStorage.key(index) || "";
+        if (privateStoragePrefixes.some((prefix) => key === prefix || key.startsWith(prefix))) {
+          window.localStorage.removeItem(key);
+        }
+      }
+      void clearRecoveredRecordingFromDb(previousEmail);
+    }
+    if (typeof window !== "undefined" && "caches" in window) {
+      window.caches.keys().then((keys) => Promise.all(
+        keys.filter((key) => /mabaso.*(?:private|user|api)/i.test(key)).map((key) => window.caches.delete(key)),
+      )).catch(() => {});
+    }
     authTokenRef.current = "";
     clearAuthCsrfToken();
     currentPageRef.current = "capture";
     navigateToPath("/", { replace: true });
     setAuthMessage(message);
+    if (broadcast) {
+      authBroadcastChannelRef.current?.postMessage?.({ type: "LOGOUT" });
+      try {
+        window.localStorage.setItem(AUTH_SYNC_STORAGE_KEY, JSON.stringify({ type: "LOGOUT", at: Date.now() }));
+      } catch {
+        // Cross-tab logout still works through BroadcastChannel where supported.
+      }
+    }
+  };
+
+  const verifySession = async ({ resumed = false } = {}) => {
+    const runId = sessionValidationRunRef.current + 1;
+    sessionValidationRunRef.current = runId;
+    const hadSessionMarker = window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true";
+    setAuthCheckError("");
+    setAuthChecked(false);
+    setAuthServerStateReady(false);
+    try {
+      const response = await apiFetch(
+        "/auth/me",
+        {
+          headers: withAuthHeaders({ Accept: "application/json", "Cache-Control": "no-cache" }, COOKIE_SESSION_AUTH_STATE),
+          cache: "no-store",
+        },
+        10000,
+      );
+      const data = await parseJsonSafe(response);
+      if (sessionValidationRunRef.current !== runId) return false;
+      if (response.status === 401 || response.status === 403) {
+        authExpiryHandledRef.current = true;
+        clearSession(
+          hadSessionMarker || resumed
+            ? "Your session has expired. Please sign in again."
+            : "Sign in to continue.",
+          { broadcast: hadSessionMarker },
+        );
+        return false;
+      }
+      if (!response.ok || !String(data.email || "").trim()) {
+        throw new Error(data.detail || "We could not verify your session.");
+      }
+
+      const nextEmail = normalizeHistoryOwnerEmail(data.email);
+      const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
+      const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
+      const nextSessionMode = data.session_mode || "user";
+      const routedPage = resolveCurrentPageFromRoute(browserPath);
+      const routedResourceId = resolveProtectedResourceIdFromRoute(browserPath);
+      const nextWorkspaceId = routedPage !== "voice" && routedResourceId
+        ? routedResourceId
+        : loadOrCreatePrivateContextId(getWorkspaceContextIdStorageKey(nextEmail), "ws");
+      const nextConversationId = routedPage === "voice" && routedResourceId
+        ? routedResourceId
+        : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail), "chat");
+
+      authTokenRef.current = nextToken;
+      authExpiryHandledRef.current = false;
+      lastSessionValidationAtRef.current = Date.now();
+      setAuthToken(nextToken);
+      setAuthEmail(nextEmail);
+      setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
+      setAuthSessionMode(nextSessionMode);
+      setAuthAvailableModes(nextAvailableModes);
+      setWorkspaceContextId(nextWorkspaceId);
+      setActiveStudyChatId(nextConversationId);
+      applyServerAccountState(data);
+      setAuthServerStateReady(true);
+      setAuthChecked(true);
+      if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
+        setCurrentPage("admin");
+      } else if (routedPage && routedPage !== "admin") {
+        setCurrentPage(routedPage);
+      } else {
+        setCurrentPage("capture");
+      }
+      return true;
+    } catch (error) {
+      if (sessionValidationRunRef.current !== runId) return false;
+      setAuthToken("");
+      authTokenRef.current = "";
+      setAuthServerStateReady(false);
+      setAuthChecked(false);
+      setAuthCheckError(
+        isAbortError(error)
+          ? "We could not verify your session. Check your connection and try again."
+          : getReadableRequestError(error) || "We could not verify your session. Check your connection and try again.",
+      );
+      return false;
+    }
   };
 
   useEffect(() => {
-    let cancelled = false;
-    const token = loadPersistedAuthStateToken();
-    const storedEmail = window.localStorage.getItem(AUTH_EMAIL_KEY) || "";
-    const storedMode = window.localStorage.getItem(AUTH_MODE_KEY) || "user";
-    let storedAvailableModes = [];
-    try {
-      storedAvailableModes = JSON.parse(window.localStorage.getItem(AUTH_AVAILABLE_MODES_KEY) || "[]");
-    } catch {
-      storedAvailableModes = [];
-    }
-    if (token) {
-      setAuthToken(token);
-      setAuthEmail(storedEmail);
-      setAuthSessionMode(storedMode === "admin" ? "admin" : "user");
-      setAuthAvailableModes(Array.isArray(storedAvailableModes) ? storedAvailableModes : []);
-    }
-    setAuthEmailInput(storedEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-    setAuthChecked(true);
-    setAuthServerStateReady(true);
-    apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 3000).then(async (response) => {
-      const data = await parseJsonSafe(response);
-      if (cancelled) return;
-      if (response.status === 401) {
-        if (token) {
-          clearSession("Sign in to continue.");
-        }
-        return;
-      }
-      if (!response.ok) {
-        if (token) {
-          setAuthMessage(data.detail || "Opening your saved session while the server reconnects.");
-        }
-        return;
-      }
-      const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
-      authTokenRef.current = nextToken;
-      const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
-      const nextSessionMode = data.session_mode || window.localStorage.getItem(AUTH_MODE_KEY) || "user";
-      setAuthToken(nextToken);
-      setAuthEmail(data.email || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
-      setAuthEmailInput(data.email || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-      setAuthSessionMode(nextSessionMode);
-      setAuthAvailableModes(nextAvailableModes);
-      applyServerAccountState(data);
-      if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
-        setCurrentPage("admin");
-      } else {
-        const routedPage = resolveCurrentPageFromRoute(browserPath);
-        if (routedPage && routedPage !== "admin") {
-          setCurrentPage(routedPage);
-        }
-      }
-    }).catch((error) => {
-      if (cancelled) return;
-      if (token) {
-        setAuthMessage(
-          isAbortError(error)
-            ? "Opening your saved session while the server wakes up."
-            : "Using the saved session while the server finishes reconnecting.",
-        );
-      }
-    }).finally(() => {
-      if (!cancelled) {
-        setAuthServerStateReady(true);
-        setAuthChecked(true);
-      }
-    });
+    void verifySession();
     return () => {
-      cancelled = true;
+      sessionValidationRunRef.current += 1;
     };
   }, []);
 
@@ -14636,7 +14821,11 @@ export default function App() {
     window.localStorage.setItem(AUTH_EMAIL_KEY, authEmail);
     window.localStorage.setItem(AUTH_MODE_KEY, authSessionMode || "user");
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
-  }, [authAvailableModes, authEmail, authSessionMode, authToken]);
+    if (authEmail) {
+      window.localStorage.setItem(getWorkspaceContextIdStorageKey(authEmail), workspaceContextId);
+      window.localStorage.setItem(getStudyChatContextIdStorageKey(authEmail), activeStudyChatId);
+    }
+  }, [activeStudyChatId, authAvailableModes, authEmail, authSessionMode, authToken, workspaceContextId]);
 
   useEffect(() => {
     if (authToken) return;
@@ -14646,6 +14835,34 @@ export default function App() {
   useEffect(() => {
     studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [chatMessages.length, isAskingChat]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !authEmail) {
+      setStudyChatHistoryIndex([]);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(getStudyChatIndexStorageKey(authEmail)) || "[]");
+      setStudyChatHistoryIndex(
+        Array.isArray(parsed)
+          ? parsed
+            .filter((item) => item && /^[a-zA-Z0-9_-]{8,96}$/.test(String(item.id || "")))
+            .slice(0, 80)
+          : [],
+      );
+    } catch {
+      setStudyChatHistoryIndex([]);
+    }
+  }, [authEmail]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !authEmail) return;
+    try {
+      window.localStorage.setItem(getStudyChatIndexStorageKey(authEmail), JSON.stringify(studyChatHistoryIndex.slice(0, 80)));
+    } catch {
+      // The current conversation remains usable if history indexing is unavailable.
+    }
+  }, [authEmail, studyChatHistoryIndex]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -14682,10 +14899,24 @@ export default function App() {
           images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_IMAGES) : [],
         }));
       window.localStorage.setItem(studyChatStorageKey, JSON.stringify(persistableMessages));
+      if (persistableMessages.length && authEmail && activeStudyChatId) {
+        const firstQuestion = persistableMessages.find((message) => message.role === "user")?.content || "New Study Chat";
+        const nextRecord = {
+          id: activeStudyChatId,
+          title: String(firstQuestion).replace(/\s+/g, " ").trim().slice(0, 64) || "New Study Chat",
+          updatedAt: new Date().toISOString(),
+          materialKey: studyChatMaterialKey,
+          messageCount: persistableMessages.length,
+        };
+        setStudyChatHistoryIndex((current) => [
+          nextRecord,
+          ...current.filter((item) => item.id !== activeStudyChatId),
+        ].slice(0, 80));
+      }
     } catch {
       // Keep chat persistence best-effort so a full browser storage quota never breaks the app.
     }
-  }, [chatMessages, studyChatStorageKey]);
+  }, [activeStudyChatId, authEmail, chatMessages, studyChatMaterialKey, studyChatStorageKey]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -14733,7 +14964,7 @@ export default function App() {
       if (keepEdited) {
         const editedSummary = rebuildSummaryFromStudyGuideDocument(studyGuideDocumentHtml);
         studyGuideDocumentSaveInProgressRef.current = true;
-        setSummary(editedSummary);
+        setSummary(normalizeStudyGuideContentSpacing(editedSummary));
         window.setTimeout(() => {
           studyGuideDocumentSaveInProgressRef.current = false;
         }, 0);
@@ -14986,8 +15217,16 @@ export default function App() {
     if (!authToken) return undefined;
     const interval = window.setInterval(() => {
       apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
+        if (response.status === 401 || response.status === 403) {
+          if (!authExpiryHandledRef.current) {
+            authExpiryHandledRef.current = true;
+            clearSession("Your session has expired. Please sign in again.");
+          }
+          return;
+        }
         if (!response.ok) return;
         const data = await parseJsonSafe(response);
+        lastSessionValidationAtRef.current = Date.now();
         if (data.csrf_token) rememberAuthCsrfToken(data.csrf_token);
         const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
         authTokenRef.current = nextToken;
@@ -15100,19 +15339,57 @@ export default function App() {
 
   useEffect(() => {
     if (!authToken) return undefined;
-    const handleFocus = () => {
+    const revalidateVisibleSession = (event) => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      refreshSessionIfNeeded().catch(() => {
-        // Leave the current UI state alone until the next authenticated request surfaces the problem.
-      });
+      const restoredFromPageCache = event?.type === "pageshow" && event.persisted === true;
+      const inactiveForMs = Date.now() - Number(lastSessionValidationAtRef.current || 0);
+      if (!restoredFromPageCache && inactiveForMs < 60 * 1000) return;
+      void verifySession({ resumed: true });
     };
-    window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleFocus);
+    window.addEventListener("focus", revalidateVisibleSession);
+    window.addEventListener("pageshow", revalidateVisibleSession);
+    document.addEventListener("visibilitychange", revalidateVisibleSession);
     return () => {
-      window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleFocus);
+      window.removeEventListener("focus", revalidateVisibleSession);
+      window.removeEventListener("pageshow", revalidateVisibleSession);
+      document.removeEventListener("visibilitychange", revalidateVisibleSession);
     };
   }, [authAvailableModes, authEmail, authSessionMode, authToken]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleRemoteLogout = (event) => {
+      const payload = event?.data || {};
+      if (payload.type !== "LOGOUT" || !authTokenRef.current) return;
+      clearSession("Your session has ended in another tab. Please sign in again.", { broadcast: false });
+    };
+    const handleStorageLogout = (event) => {
+      if (event.key !== AUTH_SYNC_STORAGE_KEY || !event.newValue || !authTokenRef.current) return;
+      try {
+        const payload = JSON.parse(event.newValue);
+        if (payload?.type === "LOGOUT") {
+          clearSession("Your session has ended in another tab. Please sign in again.", { broadcast: false });
+        }
+      } catch {
+        // Ignore malformed cross-tab events.
+      }
+    };
+    if ("BroadcastChannel" in window) {
+      const channel = new window.BroadcastChannel("mabaso-auth");
+      authBroadcastChannelRef.current = channel;
+      channel.addEventListener("message", handleRemoteLogout);
+    }
+    window.addEventListener("storage", handleStorageLogout);
+    return () => {
+      window.removeEventListener("storage", handleStorageLogout);
+      const channel = authBroadcastChannelRef.current;
+      if (channel) {
+        channel.removeEventListener("message", handleRemoteLogout);
+        channel.close();
+      }
+      authBroadcastChannelRef.current = null;
+    };
+  }, [authToken]);
 
   useEffect(() => {
     setIsDownloadMenuOpen(false);
@@ -15149,12 +15426,18 @@ export default function App() {
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
     applyServerAccountState(data);
     authTokenRef.current = nextToken;
+    authExpiryHandledRef.current = false;
+    lastSessionValidationAtRef.current = Date.now();
     setAuthToken(nextToken);
     setAuthEmail(nextEmail);
     setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
     setAuthSessionMode(nextMode);
     setAuthAvailableModes(nextAvailableModes);
+    setWorkspaceContextId(loadOrCreatePrivateContextId(getWorkspaceContextIdStorageKey(nextEmail), "ws"));
+    setActiveStudyChatId(loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail), "chat"));
+    setAuthChecked(true);
     setAuthServerStateReady(true);
+    setAuthCheckError("");
     if (nextMode === "admin") {
       setCurrentPage("admin");
       return;
@@ -15747,17 +16030,21 @@ export default function App() {
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (!routedPage || routedPage === "admin" || routedPage === currentPage) return;
     if (currentPage === "timetable" && timetablePlanningStateRef.current.isEditing && routedPage !== "timetable") {
-      const timetableRoute = resolveAppRouteForPage("timetable", authSessionMode);
+      const timetableRoute = resolveAppRouteForPage("timetable", authSessionMode, workspaceContextId);
       if (timetableRoute && browserPath !== timetableRoute) navigateToPath(timetableRoute, { replace: true });
       return;
     }
     setCurrentPage(routedPage);
-  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage]);
+  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage, workspaceContextId]);
 
   useEffect(() => {
     if (!authChecked || !authToken) return;
     if (browserPath === "/admin/dashboard" && !authServerStateReady && authAvailableModes.includes("admin")) return;
-    const targetRoute = resolveAppRouteForPage(currentPage, authSessionMode);
+    const targetRoute = resolveAppRouteForPage(
+      currentPage,
+      authSessionMode,
+      currentPage === "voice" ? activeStudyChatId : workspaceContextId,
+    );
     const routedPage = resolveCurrentPageFromRoute(browserPath);
     if (routedPage && routedPage !== "admin" && routedPage !== currentPage) return;
     if (routedPage === "admin" && authSessionMode === "admin" && currentPage !== "admin") return;
@@ -15766,7 +16053,7 @@ export default function App() {
       || (browserPath === "/admin/dashboard" && currentPage === "admin" && authSessionMode === "admin");
     if (!targetRoute || !routeShouldMirrorApp || browserPath === targetRoute) return;
     navigateToPath(targetRoute, { replace: true });
-  }, [authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage]);
+  }, [activeStudyChatId, authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage, workspaceContextId]);
 
   useEffect(() => {
     if (authToken || !authChecked) return;
@@ -15873,8 +16160,11 @@ export default function App() {
         staleAuthError.staleAuthRequest = true;
         throw staleAuthError;
       }
-      clearSession("Your session expired. Please sign in again.");
-      throw new Error("Your session expired. Please sign in again.");
+      if (!authExpiryHandledRef.current) {
+        authExpiryHandledRef.current = true;
+        clearSession("Your session has expired. Please sign in again.");
+      }
+      throw new Error("Your session has expired. Please sign in again.");
     }
     const shouldRefreshUsage = response.ok
       && requestMethod !== "GET"
@@ -17038,6 +17328,19 @@ export default function App() {
       notesUpdatedAt: new Date().toISOString(),
       focusScore: calculateStudySessionFocusScore({ ...session, studyNotes: notes }, timetableNow),
     }), { save: true, delayMs: 900 });
+  };
+  const startNewActiveStudySessionChat = () => {
+    const session = getActiveStudySession();
+    if (!session) return;
+    updateActiveStudySessionRecord(session.id, (item) => ({
+      ...item,
+      studyMessages: [],
+      focusScore: calculateStudySessionFocusScore({ ...item, studyMessages: [] }, timetableNow),
+    }), { save: true, delayMs: 100 });
+    setActiveStudySessionQuestion("");
+    setActiveStudySessionReferenceImages([]);
+    setActiveStudySessionMessage("New study chat started.");
+    setInlineVoicePicker("");
   };
   const handleActiveStudySessionReferenceFilesChange = async (selectedFiles) => {
     const files = Array.from(selectedFiles?.target?.files || selectedFiles || []);
@@ -18316,6 +18619,7 @@ export default function App() {
   );
 
   const lectureAssistant = useLectureAssistant({
+    enabled: currentPage === "voice",
     requestStream: requestLectureAssistantStream,
     requestTranscription: requestLectureAssistantTranscription,
     requestConversationList: requestLectureAssistantConversationList,
@@ -19479,10 +19783,21 @@ export default function App() {
   };
 
   const loadHistoryFromServer = async () => {
-    const response = await authFetch("/history");
+    const response = await authFetch("/history?compact=true", { timeoutMs: 12000, cache: "no-store" });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || "Could not load history.");
     return normalizeHistoryItems(data.items || []);
+  };
+
+  const resolveFullHistoryItem = async (item) => {
+    if (!item?.isCompactHistoryItem) return item;
+    const response = await authFetch(`/history/${encodeURIComponent(item.id)}`, { timeoutMs: 20000, cache: "no-store" });
+    const data = await parseJsonSafe(response);
+    if (!response.ok || !data.item) throw new Error(data.detail || "Could not open this saved study workspace.");
+    const [fullItem] = normalizeHistoryItems([data.item]);
+    if (!fullItem) throw new Error("This saved study workspace could not be read.");
+    setHistoryItems((current) => current.map((entry) => entry.id === fullItem.id ? fullItem : entry));
+    return fullItem;
   };
 
   const loadAdminDashboard = async (silent = false, tokenOverride = "", rangeOverride = "") => {
@@ -19624,7 +19939,12 @@ export default function App() {
           .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
           .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
         const shouldImportLocalItems = serverItems.length === 0 && localItems.length > 0;
-        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : serverItems;
+        const localItemsById = new Map(localItems.map((item) => [item.id, item]));
+        const hydratedIndexItems = serverItems.map((item) => {
+          const cachedItem = localItemsById.get(item.id);
+          return cachedItem && cachedItem.updatedAt === item.updatedAt ? cachedItem : item;
+        });
+        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : hydratedIndexItems;
         if (cancelled) return;
         historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
         skipNextHistorySyncRef.current = true;
@@ -20048,7 +20368,14 @@ export default function App() {
     return resolved;
   };
 
-  const loadHistoryItem = (item) => {
+  const loadHistoryItem = async (item) => {
+    let resolvedItem;
+    try {
+      resolvedItem = await resolveFullHistoryItem(item);
+    } catch (err) {
+      setError(err.message || "Could not open this saved study workspace.");
+      return;
+    }
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     stopTeacherPlayback({ resetIndex: true });
@@ -20056,43 +20383,43 @@ export default function App() {
     if (presentationTemplateInputRef.current) presentationTemplateInputRef.current.value = "";
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
     startTransition(() => {
-      setTranscript(item.transcript || "");
-      setSummary(item.summary || "");
-      setStudyGuideDocumentHtml(item.studyGuideDocumentHtml && typeof item.studyGuideDocumentHtml === "object" ? item.studyGuideDocumentHtml : {});
-      setFormula(item.formula || "");
-      setExample(item.example || "");
-      setFlashcards(item.flashcards || []);
-      setQuizQuestions(item.quizQuestions || []);
-      setStudyImages(item.studyImages || []);
+      setTranscript(resolvedItem.transcript || "");
+      setSummary(normalizeStudyGuideContentSpacing(resolvedItem.summary || ""));
+      setStudyGuideDocumentHtml(resolvedItem.studyGuideDocumentHtml && typeof resolvedItem.studyGuideDocumentHtml === "object" ? resolvedItem.studyGuideDocumentHtml : {});
+      setFormula(resolvedItem.formula || "");
+      setExample(resolvedItem.example || "");
+      setFlashcards(resolvedItem.flashcards || []);
+      setQuizQuestions(resolvedItem.quizQuestions || []);
+      setStudyImages(resolvedItem.studyImages || []);
       setLectureNoteSources(
         normalizeStudySourceEntries(
-          item.lectureNoteSources,
-          item.lectureNotes,
-          item.lectureNoteFileNames || [item.lectureNotesFileName],
+          resolvedItem.lectureNoteSources,
+          resolvedItem.lectureNotes,
+          resolvedItem.lectureNoteFileNames || [resolvedItem.lectureNotesFileName],
           "LECTURE NOTE",
         ),
       );
-      setPastQuestionMemo(item.pastQuestionMemo || "");
-      setLectureSlideSources(normalizeStudySourceEntries(item.lectureSlideSources, item.lectureSlides, item.lectureSlideFileNames, "SLIDE SOURCE"));
+      setPastQuestionMemo(resolvedItem.pastQuestionMemo || "");
+      setLectureSlideSources(normalizeStudySourceEntries(resolvedItem.lectureSlideSources, resolvedItem.lectureSlides, resolvedItem.lectureSlideFileNames, "SLIDE SOURCE"));
       setPendingLectureSlideFiles([]);
       setPastQuestionPaperSources(
         normalizeStudySourceEntries(
-          item.pastQuestionPaperSources,
-          item.pastQuestionPapers,
-          item.pastQuestionPaperFileNames,
+          resolvedItem.pastQuestionPaperSources,
+          resolvedItem.pastQuestionPapers,
+          resolvedItem.pastQuestionPaperFileNames,
           "PAST QUESTION PAPER",
         ),
       );
-      const nextPresentationData = normalizePresentationData(item.presentationData);
+      const nextPresentationData = normalizePresentationData(resolvedItem.presentationData);
       setPresentationData(nextPresentationData);
       setPresentationView(nextPresentationData.slides.length ? "viewer" : "setup");
       setSelectedPresentationDesign(nextPresentationData.designId || defaultPresentationDesignId);
-      const nextPodcastData = normalizePodcastData(item.podcastData);
+      const nextPodcastData = normalizePodcastData(resolvedItem.podcastData);
       const nextPodcastSpeakerCount = Number(nextPodcastData.speakerCount || 2) >= 3 ? 3 : 2;
       setPodcastData(nextPodcastData);
-      setTeacherLessonData(normalizeTeacherLessonData(item.teacherLessonData));
-      const nextReportData = normalizeReportData(item.reportData);
-      const nextMindMapData = normalizeMindMapData(item.mindMapData);
+      setTeacherLessonData(normalizeTeacherLessonData(resolvedItem.teacherLessonData));
+      const nextReportData = normalizeReportData(resolvedItem.reportData);
+      const nextMindMapData = normalizeMindMapData(resolvedItem.mindMapData);
       setReportData(nextReportData);
       setMindMapData(nextMindMapData);
       setSelectedMindMapNode(nextMindMapData.root || null);
@@ -20100,7 +20427,7 @@ export default function App() {
       setMindMapTopic("");
       setPodcastSpeakerCount(nextPodcastSpeakerCount);
       setPodcastSpeakerProfiles(normalizePodcastSpeakerProfiles(nextPodcastData.speakerProfiles, nextPodcastSpeakerCount));
-      setPodcastTargetMinutes(Number(item.podcastData?.targetMinutes || item.podcastData?.target_minutes || 10) || 10);
+      setPodcastTargetMinutes(Number(resolvedItem.podcastData?.targetMinutes || resolvedItem.podcastData?.target_minutes || 10) || 10);
       setActivePodcastSegmentIndex(0);
       setIsPodcastAutoPlaying(false);
       setActiveTeacherSegmentIndex(-1);
@@ -20110,14 +20437,14 @@ export default function App() {
       setQuizAnswerImages({});
       setQuizResults({});
       setQuizSubmitted(false);
-      resetQuizSessionState(item.quizQuestions || []);
+      resetQuizSessionState(resolvedItem.quizQuestions || []);
       setChatMessages([]);
       setChatReferenceImages([]);
-      setActiveHistoryId(item.id);
+      setActiveHistoryId(resolvedItem.id);
       setActiveTab("guide");
     });
     openProtectedAppPage("workspace");
-    setStatus(`Loaded ${item.title} from history.`);
+    setStatus(`Loaded ${resolvedItem.title} from history.`);
   };
 
   const resetGeneratedOutputs = () => {
@@ -20158,6 +20485,25 @@ export default function App() {
     setChatReferenceImages([]);
     setUsedFallbackSummary(false);
     setActiveHistoryId("");
+  };
+
+  const startNewLectureWorkspace = () => {
+    resetGeneratedOutputs();
+    setFile(null);
+    setVideoUrl("");
+    setLectureNoteSources([]);
+    setLectureSlideSources([]);
+    setPendingLectureSlideFiles([]);
+    setPastQuestionPaperSources([]);
+    setPastQuestionMemo("");
+    setStudyGuidePromptDraft("");
+    setStudyGuidePromptSource(null);
+    setWorkspaceSearchQuery("");
+    setIsWorkspaceMobileFilterOpen(false);
+    setIsWorkspaceMobileMoreOpen(false);
+    closeWorkspaceMobileSidebar();
+    setWorkspaceContextId(createOpaqueResourceId("ws"));
+    openProtectedAppPage("capture");
   };
 
   const isTranscriptionAbortForSignal = (error, signal) => Boolean(
@@ -21288,7 +21634,7 @@ export default function App() {
       replacePodcastAudioUrl("");
       replacePodcastAudioSegments([]);
       startTransition(() => {
-        setSummary(job.summary || "");
+        setSummary(normalizeStudyGuideContentSpacing(job.summary || ""));
         setFormula(job.formula || "");
         setExample(job.worked_example || "");
         setFlashcards(job.flashcards || []);
@@ -22563,7 +22909,7 @@ export default function App() {
 
         if (pendingJob.jobType === "study_guide") {
           startTransition(() => {
-            setSummary(resumedJob.summary || "");
+            setSummary(normalizeStudyGuideContentSpacing(resumedJob.summary || ""));
             setFormula(resumedJob.formula || "");
             setExample(resumedJob.worked_example || "");
             setFlashcards(resumedJob.flashcards || []);
@@ -22813,7 +23159,7 @@ export default function App() {
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeoutMs: 240000,
+      timeoutMs: 90000,
       body: JSON.stringify({
         question,
         transcript,
@@ -22968,7 +23314,7 @@ export default function App() {
     }, baseSummary);
   };
 
-  const queueStudyGuideDocumentSave = (nextDocumentHtml = studyGuideDocumentHtml) => {
+  const queueStudyGuideDocumentSave = (nextDocumentHtml = studyGuideDocumentHtml, delayMs = 750) => {
     setWorkspaceSaveStatus("Saving...");
     if (guideEditSaveTimerRef.current) window.clearTimeout(guideEditSaveTimerRef.current);
     guideEditSaveTimerRef.current = window.setTimeout(() => {
@@ -23012,7 +23358,7 @@ export default function App() {
         studyGuideDocumentSaveInProgressRef.current = false;
       }, 0);
       window.setTimeout(() => setWorkspaceSaveStatus(""), 1800);
-    }, 750);
+    }, Math.max(0, Number(delayMs) || 0));
   };
 
   const updateStudyGuideSectionHtml = (sectionKey, html, { immediate = false } = {}) => {
@@ -23026,12 +23372,10 @@ export default function App() {
       [sectionKey]: cleanedHtml,
     };
     studyGuideDocumentDraftRef.current = next;
-    queueStudyGuideDocumentSave(next);
+    queueStudyGuideDocumentSave(next, immediate ? 0 : 750);
     if (immediate) {
       studyGuideDocumentDraftRef.current = {};
       setStudyGuideDocumentHtml(next);
-      setWorkspaceSaveStatus("Saved ✓");
-      window.setTimeout(() => setWorkspaceSaveStatus(""), 1600);
     }
   };
 
@@ -23059,9 +23403,16 @@ export default function App() {
       : range.commonAncestorContainer?.parentElement;
     if (!container || !editor.contains(container)) return;
     const previousSectionKey = activeGuideSelectionRef.current?.sectionKey || "";
+    const preSelectionRange = range.cloneRange();
+    preSelectionRange.selectNodeContents(editor);
+    preSelectionRange.setEnd(range.startContainer, range.startOffset);
+    const selectedText = range.toString();
     activeGuideSelectionRef.current = {
       sectionKey,
       range: range.cloneRange(),
+      startOffset: preSelectionRange.toString().length,
+      endOffset: preSelectionRange.toString().length + selectedText.length,
+      selectedText,
     };
     if (previousSectionKey !== sectionKey) setActiveGuideEditorSectionKey(sectionKey);
   };
@@ -23069,17 +23420,47 @@ export default function App() {
   const restoreGuideEditorSelection = () => {
     if (typeof window === "undefined") return null;
     const savedSelection = activeGuideSelectionRef.current;
-    if (!savedSelection?.range || !savedSelection.sectionKey) return null;
+    if (!savedSelection?.sectionKey) return null;
     const editor = studyGuideEditorRefs.current[savedSelection.sectionKey];
     if (!editor) return null;
-    const container = savedSelection.range.commonAncestorContainer?.nodeType === 1
-      ? savedSelection.range.commonAncestorContainer
-      : savedSelection.range.commonAncestorContainer?.parentElement;
-    if (!container || !editor.contains(container)) return null;
     const selection = window.getSelection?.();
     if (!selection) return null;
+    let restoredRange = null;
+    if (savedSelection.range) {
+      const container = savedSelection.range.commonAncestorContainer?.nodeType === 1
+        ? savedSelection.range.commonAncestorContainer
+        : savedSelection.range.commonAncestorContainer?.parentElement;
+      if (container && editor.contains(container)) restoredRange = savedSelection.range.cloneRange();
+    }
+    if (!restoredRange && Number.isFinite(savedSelection.startOffset) && Number.isFinite(savedSelection.endOffset)) {
+      const textNodes = [];
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+      let textNode = walker.nextNode();
+      while (textNode) {
+        textNodes.push(textNode);
+        textNode = walker.nextNode();
+      }
+      const locateOffset = (targetOffset) => {
+        let consumed = 0;
+        for (const node of textNodes) {
+          const nextConsumed = consumed + node.nodeValue.length;
+          if (targetOffset <= nextConsumed) return { node, offset: Math.max(0, targetOffset - consumed) };
+          consumed = nextConsumed;
+        }
+        const lastNode = textNodes[textNodes.length - 1];
+        return lastNode ? { node: lastNode, offset: lastNode.nodeValue.length } : null;
+      };
+      const start = locateOffset(savedSelection.startOffset);
+      const end = locateOffset(savedSelection.endOffset);
+      if (start && end) {
+        restoredRange = document.createRange();
+        restoredRange.setStart(start.node, start.offset);
+        restoredRange.setEnd(end.node, end.offset);
+      }
+    }
+    if (!restoredRange) return null;
     selection.removeAllRanges();
-    selection.addRange(savedSelection.range.cloneRange());
+    selection.addRange(restoredRange);
     setActiveGuideEditorSectionKey(savedSelection.sectionKey);
     return editor;
   };
@@ -23192,7 +23573,9 @@ export default function App() {
     mark.style.backgroundColor = color;
     mark.dataset.mabasoHighlight = "true";
     try {
-      mark.appendChild(range.extractContents());
+      const fragment = range.extractContents();
+      [...fragment.querySelectorAll("mark")].forEach(unwrapMarkElement);
+      mark.appendChild(fragment);
       range.insertNode(mark);
       selection.removeAllRanges();
       saveActiveGuideEditor(editor);
@@ -23208,7 +23591,10 @@ export default function App() {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - lastGuideHighlightPaintAtRef.current < 120) return;
     lastGuideHighlightPaintAtRef.current = now;
-    window.requestAnimationFrame(() => applyWorkspaceHighlight(activeHighlightColor));
+    window.requestAnimationFrame(() => {
+      if (workspaceHighlightTool === "erase") eraseSelectedWorkspaceHighlight();
+      else applyWorkspaceHighlight(activeHighlightColor);
+    });
   };
 
   const eraseSelectedWorkspaceHighlight = () => {
@@ -23232,6 +23618,20 @@ export default function App() {
           return false;
         }
       });
+    if (range && !range.collapsed && selectedMarks.length) {
+      try {
+        const fragment = range.extractContents();
+        [...fragment.querySelectorAll("mark")].forEach(unwrapMarkElement);
+        range.insertNode(fragment);
+        selection.removeAllRanges();
+        saveActiveGuideEditor(editor);
+        setStatus("Selected highlight removed.");
+        return;
+      } catch {
+        setStatus("That exact highlight selection could not be erased. Try selecting a smaller phrase.");
+        return;
+      }
+    }
     if (selectedMarks.length) {
       selectedMarks.forEach(unwrapMarkElement);
       saveActiveGuideEditor(editor);
@@ -23717,7 +24117,23 @@ export default function App() {
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Chat</p>
           <h4 className="mt-2 text-2xl font-semibold text-white">Ask Mabaso anything.</h4>
         </div>
-        <button type="button" onClick={startNewStudyChat} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">New Chat</button>
+        <div className="inline-chat-actions">
+          <button type="button" onClick={startNewStudyChat} className="inline-chat-action">New Chat</button>
+          <div className="inline-voice-anchor">
+            <button type="button" onClick={() => setInlineVoicePicker((current) => current === "guide" ? "" : "guide")} className="inline-chat-action" aria-haspopup="listbox" aria-expanded={inlineVoicePicker === "guide"}>
+              <Mic className="h-4 w-4" aria-hidden="true" />
+              <span>Voice</span>
+            </button>
+            {inlineVoicePicker === "guide" ? (
+              <div className="inline-voice-picker" role="listbox" aria-label="Choose Study Chat voice">
+                <button type="button" className={!selectedTeacherVoiceName ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(""); setInlineVoicePicker(""); }}>Default voice</button>
+                {teacherVoiceOptions.map((voice) => (
+                  <button key={voice.name} type="button" className={selectedTeacherVoiceName === voice.name ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(voice.name); setInlineVoicePicker(""); }}>{voice.name}</button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
       {renderStudyChatMessages({ limit: 12 })}
       {renderStudyChatComposer({ compact })}
@@ -23725,18 +24141,21 @@ export default function App() {
   );
 
   const renderStudyChatFullPage = () => {
+    const currentIndexedChat = studyChatHistoryIndex.find((item) => item.id === activeStudyChatId);
     const chatHistoryRows = [
-      { id: "current-study-chat", title: chatMessages.length ? "Current Study Chat" : "New Study Chat", subtitle: chatMessages.length ? `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}` : "Ready when you are" },
-      ...chatMessages
-        .filter((message) => message.role === "user" && String(message.content || "").trim())
-        .slice(-18)
-        .reverse()
-        .map((message, index) => ({
-          id: message.id || `chat-turn-${index}`,
-          title: String(message.content || "Study question").replace(/\s+/g, " ").slice(0, 48),
-          subtitle: "Chat turn",
+      {
+        id: activeStudyChatId,
+        title: currentIndexedChat?.title || (chatMessages.length ? "Current Study Chat" : "New Study Chat"),
+        subtitle: `Conversation ${activeStudyChatId}`,
+      },
+      ...studyChatHistoryIndex
+        .filter((item) => item.id !== activeStudyChatId)
+        .map((item) => ({
+          id: item.id,
+          title: item.title || "Study Chat",
+          subtitle: `Conversation ${item.id}`,
         })),
-    ];
+    ].slice(0, 80);
     return (
       <div className="study-chat-page">
         {isStudyChatSidebarOpen ? <button type="button" className="study-chat-sidebar-scrim" aria-label="Close chat history" onClick={() => setIsStudyChatSidebarOpen(false)} /> : null}
@@ -23746,15 +24165,20 @@ export default function App() {
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(false)} className="study-chat-sidebar-close lg:hidden" aria-label="Close chat history"><X className="h-4 w-4" aria-hidden="true" /></button>
           </div>
           <button type="button" onClick={startNewStudyChat} className="study-chat-new-button"><Pencil className="h-4 w-4" aria-hidden="true" /><span>New chat</span></button>
+          <label className="study-chat-sidebar-voice">
+            <span><Mic className="h-4 w-4" aria-hidden="true" /> Voice</span>
+            <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} aria-label="Choose study chat voice">
+              <option value="">Default voice</option>
+              {teacherVoiceOptions.map((voice) => <option key={voice.name} value={voice.name}>{voice.name}</option>)}
+            </select>
+          </label>
           <div className="study-chat-history-list">
             {chatHistoryRows.map((row) => (
               <button
                 key={row.id}
                 type="button"
-                onClick={() => {
-                  setIsStudyChatSidebarOpen(false);
-                }}
-                className={`study-chat-history-item ${row.id === "current-study-chat" ? "is-active" : ""}`}
+                onClick={() => openSavedStudyChat(row.id)}
+                className={`study-chat-history-item ${row.id === activeStudyChatId ? "is-active" : ""}`}
               >
                 <MessageCircle className="h-4 w-4" aria-hidden="true" />
                 <span className="min-w-0">
@@ -23774,10 +24198,7 @@ export default function App() {
               <button type="button" className={studyChatResponseMode === "text" ? "is-active" : ""} onClick={() => setStudyChatResponseMode("text")}>Chat</button>
               <button type="button" className={studyChatResponseMode === "voice" ? "is-active" : ""} onClick={() => setStudyChatResponseMode("voice")}>Voice</button>
             </div>
-            <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} className="study-chat-voice-select" aria-label="Voice selection">
-              <option value="">Default voice</option>
-              {teacherVoiceOptions.map((voice) => <option key={voice.name} value={voice.name}>{voice.name}</option>)}
-            </select>
+            <span className="protected-context-id">Conversation {activeStudyChatId}</span>
             <button type="button" onClick={isStudyChatVoiceListening ? stopStudyChatVoiceCapture : startStudyChatVoiceCapture} disabled={isAskingChat || isStudyChatVoiceAnswering} className={`study-chat-top-button ${isStudyChatVoiceListening ? "is-listening" : ""}`} aria-label={isStudyChatVoiceListening ? "Stop voice question" : "Start voice question"}><Mic className="h-5 w-5" aria-hidden="true" /></button>
             <div className="study-chat-page-profile">{renderCompactProfileMenu()}</div>
           </header>
@@ -24868,13 +25289,28 @@ export default function App() {
   };
 
   const startNewStudyChat = () => {
+    const nextConversationId = createOpaqueResourceId("chat");
     stopStudyChatVoiceCapture();
+    setActiveStudyChatId(nextConversationId);
     setChatMessages([]);
     setChatQuestion("");
     setChatReferenceImages([]);
     setStudyChatVoiceStatus("");
     setIsStudyChatSidebarOpen(false);
+    if (currentPageRef.current === "voice") {
+      navigateToPath(resolveAppRouteForPage("voice", authSessionMode, nextConversationId));
+    }
     setStatus("New Study Chat started.");
+  };
+
+  const openSavedStudyChat = (conversationId = "") => {
+    const normalizedConversationId = String(conversationId || "").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 96);
+    if (!normalizedConversationId) return;
+    setActiveStudyChatId(normalizedConversationId);
+    setIsStudyChatSidebarOpen(false);
+    currentPageRef.current = "voice";
+    setCurrentPage("voice");
+    navigateToPath(resolveAppRouteForPage("voice", authSessionMode, normalizedConversationId));
   };
 
   const handleRoomChatKeyDown = (event) => {
@@ -25101,34 +25537,36 @@ export default function App() {
 
   const downloadHistoryItemPdf = async (item) => {
     try {
-      await exportPdf(item.title || item.fileName || "Saved lecture", [
-        { title: "Study Guide", content: item.summary || "", images: sanitizeStudyImagesForStorage(getVisibleStudyImages(item.studyImages || [])) },
-        { title: "Transcript", content: item.transcript || "" },
-        { title: "Past Question Paper References", content: item.pastQuestionPapers || "" },
-        { title: "Formulas", content: item.formula || "" },
-        { title: "Worked Examples", content: item.example || "" },
-        { title: "Flashcards", content: flashcardsToText(item.flashcards || []) },
-        { title: "Test", content: quizToText(item.quizQuestions || []) },
-        { title: "PowerPoint Presentation", content: presentationToText(item.presentationData) },
-        { title: "Podcast Debate Script", content: item.podcastData?.script || "" },
-        { title: "Study Audio Session", content: teacherLessonToText(item.teacherLessonData) },
+      const resolvedItem = await resolveFullHistoryItem(item);
+      await exportPdf(resolvedItem.title || resolvedItem.fileName || "Saved lecture", [
+        { title: "Study Guide", content: resolvedItem.summary || "", images: sanitizeStudyImagesForStorage(getVisibleStudyImages(resolvedItem.studyImages || [])) },
+        { title: "Transcript", content: resolvedItem.transcript || "" },
+        { title: "Past Question Paper References", content: resolvedItem.pastQuestionPapers || "" },
+        { title: "Formulas", content: resolvedItem.formula || "" },
+        { title: "Worked Examples", content: resolvedItem.example || "" },
+        { title: "Flashcards", content: flashcardsToText(resolvedItem.flashcards || []) },
+        { title: "Test", content: quizToText(resolvedItem.quizQuestions || []) },
+        { title: "PowerPoint Presentation", content: presentationToText(resolvedItem.presentationData) },
+        { title: "Podcast Debate Script", content: resolvedItem.podcastData?.script || "" },
+        { title: "Study Audio Session", content: teacherLessonToText(resolvedItem.teacherLessonData) },
       ]);
-      setStatus(`${item.title} PDF downloaded.`);
+      setStatus(`${resolvedItem.title} PDF downloaded.`);
     } catch (err) {
       setError(err.message || "Could not create the history PDF.");
     }
   };
 
   const downloadHistoryQuizPdf = async (item) => {
-    if (!(item.quizQuestions || []).length) {
-      setError("This saved workspace does not have a generated test yet.");
-      return;
-    }
     try {
-      await exportPdf(`${item.title || item.fileName || "Saved lecture"} test`, [
-        { title: "Test", content: buildQuizExportText(item.quizQuestions || []) },
+      const resolvedItem = await resolveFullHistoryItem(item);
+      if (!(resolvedItem.quizQuestions || []).length) {
+        setError("This saved workspace does not have a generated test yet.");
+        return;
+      }
+      await exportPdf(`${resolvedItem.title || resolvedItem.fileName || "Saved lecture"} test`, [
+        { title: "Test", content: buildQuizExportText(resolvedItem.quizQuestions || []) },
       ]);
-      setStatus(`${item.title} test PDF downloaded.`);
+      setStatus(`${resolvedItem.title} test PDF downloaded.`);
     } catch (err) {
       setError(err.message || "Could not create the test PDF.");
     }
@@ -25789,13 +26227,19 @@ export default function App() {
     return logoutConfirmModal;
   }
 
-  if (!authChecked) {
+  if (!isAuthReady) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
-          <div className="rounded-[28px] border border-white/10 bg-slate-950/70 px-8 py-10 text-center">
+          <div className="px-8 py-10 text-center">
             <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
-            <p className="mt-4 text-sm text-slate-300">Checking your session...</p>
+            <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
+            <p className="mt-4 text-sm text-slate-300">{authCheckError || "Checking your session..."}</p>
+            {authCheckError ? (
+              <button type="button" onClick={() => void verifySession({ resumed: true })} className="mt-5 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white">
+                Retry
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -26261,6 +26705,10 @@ export default function App() {
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
       <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
+        <div className="protected-context-strip" aria-label="Current private workspace identifier">
+          <span>Workspace ID</span>
+          <code>{workspaceContextId}</code>
+        </div>
         {currentPage !== "capture" && currentPage !== "workspace" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
@@ -26481,7 +26929,7 @@ export default function App() {
               <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(true)} className="workspace-mobile-sidebar-button lg:hidden" aria-label="Open Study Workspace sidebar">
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </button>
-              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2></div>
+              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2><code className="workspace-context-id">Workspace {workspaceContextId}</code></div>
             </div>
             <div className="workspace-top-actions">
               <div className="workspace-search-box">
@@ -26490,7 +26938,7 @@ export default function App() {
                   value={workspaceSearchQuery}
                   onChange={(event) => setWorkspaceSearchQuery(event.target.value)}
                   className="workspace-search-input"
-                  placeholder="Search tools"
+                  placeholder="Search this workspace"
                   aria-label="Search study tools"
                 />
                 {workspaceSearchResults.length ? (
@@ -26516,6 +26964,9 @@ export default function App() {
                   </div>
                 ) : null}
               </div>
+              <button type="button" onClick={() => setIsWorkspaceMobileFilterOpen(true)} className="workspace-mobile-filter-button lg:hidden" aria-label="Filter workspace search">
+                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+              </button>
               {renderCompactProfileMenu()}
             </div>
           </div>
@@ -26547,31 +26998,57 @@ export default function App() {
                   </button>
                 </div>
                 <div className="workspace-mobile-sidebar-content">
-                  <button type="button" onClick={() => { openProtectedAppPage("capture"); closeWorkspaceMobileSidebar(); }} className="workspace-mobile-primary-action">
-                    <ChevronDown className="h-4 w-4 rotate-90" aria-hidden="true" />
-                    <span>Back to Capture</span>
+                  <button type="button" onClick={startNewLectureWorkspace} className="workspace-mobile-primary-action">
+                    <span className="text-lg leading-none" aria-hidden="true">+</span>
+                    <span>New Lecture</span>
                   </button>
-                  {WORKSPACE_TOOL_GROUPS.map((group) => {
-                    const isOpenGroup = workspaceToolGroup === group.id;
-                    return (
-                      <div key={`mobile-drawer-${group.id}`} className="workspace-sidebar-folder workspace-mobile-sidebar-group">
-                        <button type="button" onClick={() => setWorkspaceToolGroup(group.id)} className={`workspace-sidebar-folder-button ${isOpenGroup ? "is-open" : ""}`}>
-                          <span>{group.eyebrow}</span>
-                          <span aria-hidden="true">{isOpenGroup ? "\u25BE" : "\u25B8"}</span>
+                  <nav className="workspace-mobile-global-nav" aria-label="Mabaso AI navigation">
+                    {[
+                      { id: "capture", label: "Home", icon: GraduationCap, action: () => openProtectedAppPage("capture") },
+                      { id: "workspace", label: "Study Workspace", icon: FolderOpen, action: () => {} },
+                      { id: "materials", label: "My Materials", icon: FileText, action: () => openProtectedAppPage("materials") },
+                      { id: "collaboration", label: "Collaboration", icon: UsersRound, action: () => openCollaborationPage() },
+                      { id: "timetable", label: "Timetable", icon: CalendarDays, action: () => openProtectedAppPage("timetable") },
+                      { id: "voice", label: "AI Chat", icon: MessageCircle, action: () => openStudyChatPage() },
+                      { id: "about", label: "Help & About", icon: Info, action: () => navigateToPath("/company/about") },
+                      { id: "support", label: "Support & Contact", icon: Headphones, action: () => navigateToPath("/support/contact-support") },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          key={`workspace-mobile-nav-${item.id}`}
+                          type="button"
+                          onClick={() => {
+                            item.action();
+                            closeWorkspaceMobileSidebar();
+                          }}
+                          className={`workspace-mobile-global-nav-item ${item.id === "workspace" ? "is-active" : ""}`}
+                        >
+                          <Icon className="h-5 w-5" aria-hidden="true" />
+                          <span>{item.label}</span>
                         </button>
-                        {isOpenGroup ? (
-                          <div className="mt-2 space-y-1">
-                            {group.tools.map((tool) => (
-                              <button key={`mobile-drawer-${tool.id}`} type="button" onClick={() => { openWorkspaceToolCard(tool); closeWorkspaceMobileSidebar(); }} className={`workspace-sidebar-tool ${activeTab === tool.targetTab ? "is-active" : ""}`}>
-                                <span className="workspace-sidebar-tool-icon">{tool.diagram}</span>
-                                <span>{tool.label}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </nav>
+                  <div className="workspace-mobile-recents">
+                    <div className="workspace-mobile-recents-heading">
+                      <span>Recent Study Guides</span>
+                      <button type="button" onClick={() => { openProtectedAppPage("materials"); closeWorkspaceMobileSidebar(); }}>View all</button>
+                    </div>
+                    {historyItems.slice(0, 4).map((item) => (
+                      <button key={`workspace-recent-${item.id}`} type="button" onClick={() => { loadHistoryItem(item); closeWorkspaceMobileSidebar(); }} className="workspace-mobile-recent-item">
+                        <span className="workspace-mobile-recent-icon"><FileText className="h-4 w-4" aria-hidden="true" /></span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold text-white">{item.title || "Study Guide"}</span>
+                          <span className="mt-1 block truncate text-[11px] text-slate-400">{new Date(item.updatedAt || item.createdAt || Date.now()).toLocaleDateString()}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <button type="button" onClick={() => { openProtectedAppPage("materials"); closeWorkspaceMobileSidebar(); }} className="workspace-mobile-storage">
+                    <span className="flex items-center justify-between gap-3"><span>Storage</span><span>Account files</span></span>
+                    <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-white/10"><span className="block h-full w-1/4 rounded-full bg-emerald-400" /></span>
+                  </button>
                 </div>
                 <div className="workspace-mobile-sidebar-profile">
                   <div className="profile-menu-avatar">{profileDisplayName.slice(0, 2).toUpperCase()}</div>
@@ -26585,6 +27062,37 @@ export default function App() {
                   </button>
                 </div>
               </aside>
+            </div>
+          ) : null}
+          {isWorkspaceMobileFilterOpen ? (
+            <div className="workspace-mobile-sheet-layer lg:hidden">
+              <button type="button" className="workspace-mobile-sheet-scrim" aria-label="Close workspace filters" onClick={() => setIsWorkspaceMobileFilterOpen(false)} />
+              <section className="workspace-mobile-sheet" aria-label="Search workspace tools">
+                <div className="workspace-mobile-sheet-head"><div><p>Search in</p><h3>Workspace tools</h3></div><button type="button" onClick={() => setIsWorkspaceMobileFilterOpen(false)} aria-label="Close filters"><X className="h-5 w-5" aria-hidden="true" /></button></div>
+                <div className="workspace-mobile-sheet-list">
+                  {WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools).slice(0, 8).map((tool) => (
+                    <button key={`workspace-filter-${tool.id}`} type="button" onClick={() => { openWorkspaceToolCard(tool); setIsWorkspaceMobileFilterOpen(false); }} className={activeTab === tool.targetTab ? "is-active" : ""}>
+                      <span>{tool.label}</span>
+                      {activeTab === tool.targetTab ? <Check className="h-4 w-4" aria-hidden="true" /> : null}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          ) : null}
+          {isWorkspaceMobileMoreOpen ? (
+            <div className="workspace-mobile-sheet-layer lg:hidden">
+              <button type="button" className="workspace-mobile-sheet-scrim" aria-label="Close more actions" onClick={() => setIsWorkspaceMobileMoreOpen(false)} />
+              <section className="workspace-mobile-sheet" aria-label="More Study Workspace actions">
+                <div className="workspace-mobile-sheet-head"><div><p>Study Workspace</p><h3>More actions</h3></div><button type="button" onClick={() => setIsWorkspaceMobileMoreOpen(false)} aria-label="Close more actions"><X className="h-5 w-5" aria-hidden="true" /></button></div>
+                <div className="workspace-mobile-sheet-list">
+                  <button type="button" onClick={() => { setActiveTab("chat"); setIsWorkspaceMobileMoreOpen(false); }}>Explain Simply</button>
+                  <button type="button" onClick={() => { if (teacherLessonData.segments.length) playTeacherLesson(); else generateTeacherLesson({ autoplay: true }); setIsWorkspaceMobileMoreOpen(false); }}>Teacher Mode</button>
+                  <button type="button" onClick={() => { syncCurrentTabToRoom(); setIsWorkspaceMobileMoreOpen(false); }} disabled={!canShareCurrentTool}>Share</button>
+                  <button type="button" onClick={() => { window.print(); setIsWorkspaceMobileMoreOpen(false); }}>Print</button>
+                  <button type="button" onClick={() => { openProtectedAppPage("materials"); setIsWorkspaceMobileMoreOpen(false); }}>History</button>
+                </div>
+              </section>
             </div>
           ) : null}
 
@@ -26664,20 +27172,20 @@ export default function App() {
                 <div className="workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy current section">
+                  <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy current section" data-mobile-label="Copy">
                     {copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
                   </button>
                   <div className="relative">
-                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download">
+                    <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download" data-mobile-label="PDF">
                       {downloadActionState.endsWith(":done") ? <Check className="h-4 w-4" aria-hidden="true" /> : downloadActionState ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
                     </button>
                     {isDownloadMenuOpen ? renderDownloadMenu() : null}
                   </div>
-                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide" aria-pressed={isWorkspaceEditMode}>
+                  <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide" aria-pressed={isWorkspaceEditMode} data-mobile-label="Edit">
                     <Pencil className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <div className="relative">
-                    <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text" aria-pressed={isWorkspaceHighlightMode}>
+                    <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text" aria-pressed={isWorkspaceHighlightMode} data-mobile-label="Highlight">
                       <Highlighter className="h-4 w-4" aria-hidden="true" />
                     </button>
                     {isWorkspaceHighlightMode ? (
@@ -26689,16 +27197,19 @@ export default function App() {
                           ["Pink", "#fbcfe8"],
                           ["Orange", "#fed7aa"],
                         ].map(([label, color]) => (
-                          <button key={label} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
+                          <button key={label} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("paint"); setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={workspaceHighlightTool === "paint" && activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
                         ))}
-                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={eraseSelectedWorkspaceHighlight} className="workspace-highlight-tool" title="Erase selected highlight" aria-label="Erase selected highlight">Erase</button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("erase"); eraseSelectedWorkspaceHighlight(); }} className={`workspace-highlight-tool ${workspaceHighlightTool === "erase" ? "is-selected" : ""}`} title="Erase selected highlight or drag across highlights to remove them" aria-label="Activate highlight eraser">Erase</button>
                         <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
                       </div>
                     ) : null}
                   </div>
-                  {workspaceSaveStatus ? <span className="workspace-save-status">{workspaceSaveStatus}</span> : null}
-                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
-                  <button type="button" onClick={() => openCollaborationPage()} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
+                  <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen(true)} className="workspace-icon-action workspace-mobile-more-button lg:hidden" title="More" aria-label="More Study Workspace actions" data-mobile-label="More">
+                    <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  {workspaceSaveStatus ? <span className="workspace-save-status workspace-secondary-action">{workspaceSaveStatus}</span> : null}
+                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="workspace-secondary-action rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
+                  <button type="button" onClick={() => openCollaborationPage()} className="workspace-secondary-action rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
                   </div>
                 </div>
               </>
@@ -26771,21 +27282,23 @@ export default function App() {
                                       studyGuideEditorRefs.current[sectionKey] = node;
                                       const nextHtml = getStudyGuideSectionHtml(section);
                                       const isActiveEditor = typeof document !== "undefined" && document.activeElement === node;
-                                      if (!isActiveEditor || !node.dataset.renderedHtml) {
+                                      const shouldInitializeEditor = !node.dataset.renderedHtml;
+                                      const canSyncInactiveEditor = !isWorkspaceEditMode && !isWorkspaceHighlightMode && !isActiveEditor;
+                                      if (shouldInitializeEditor || canSyncInactiveEditor) {
                                         syncGuideEditorHtml(node, nextHtml);
                                       }
                                     } else {
                                       delete studyGuideEditorRefs.current[sectionKey];
                                     }
                                   }}
-                                  className={`study-guide-rich-editor ${isWorkspaceEditMode ? "is-editing" : ""} ${isWorkspaceHighlightMode ? "is-highlighting" : ""}`}
-                                  contentEditable={isWorkspaceEditMode || isWorkspaceHighlightMode}
+                                  className={`study-guide-rich-editor ${isWorkspaceEditMode ? "is-editing" : ""} ${isWorkspaceHighlightMode ? "is-highlighting" : ""} ${isWorkspaceHighlightMode && workspaceHighlightTool === "erase" ? "is-erasing" : ""}`}
+                                  contentEditable={isWorkspaceEditMode}
                                   suppressContentEditableWarning
                                   data-section-key={getGuideSectionEditKey(section)}
                                   data-edit-mode={isWorkspaceEditMode ? "true" : "false"}
                                   data-highlight-mode={isWorkspaceHighlightMode ? "true" : "false"}
                                   inputMode={isWorkspaceEditMode ? "text" : "none"}
-                                  aria-label="Editable study guide content"
+                                  aria-label={isWorkspaceEditMode ? "Editable study guide content" : isWorkspaceHighlightMode ? "Selectable study guide content for highlighting" : "Study guide content"}
                                   tabIndex={isWorkspaceEditMode || isWorkspaceHighlightMode ? 0 : undefined}
                                   onFocus={(event) => {
                                     const sectionKey = event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section);
@@ -26808,9 +27321,7 @@ export default function App() {
                                     updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true });
                                   }}
                                   onSelect={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
-                                  onMouseUp={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
                                   onPointerUp={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
-                                  onTouchEnd={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
                                   onKeyUp={(event) => {
                                     const sectionKey = getGuideSectionEditKey(section);
                                     captureGuideEditorSelection(sectionKey, event.currentTarget);

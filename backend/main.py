@@ -145,6 +145,8 @@ FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whispe
 STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
 STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
+STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
+STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
 GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
 GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
@@ -1536,8 +1538,25 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(), payment=()")
     if request.url.scheme == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    if request.url.path.startswith("/auth/"):
-        response.headers.setdefault("Cache-Control", "no-store")
+    is_private_request = bool(
+        request.headers.get("Authorization")
+        or request.cookies.get(SESSION_COOKIE_NAME)
+        or request.url.path.startswith((
+            "/auth/",
+            "/history",
+            "/admin",
+            "/api/account",
+            "/api/assistant",
+            "/api/chat",
+            "/collaboration",
+            "/timetable",
+            "/billing",
+            "/ask-study-assistant",
+        ))
+    )
+    if is_private_request:
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
     if duration_ms >= SLOW_REQUEST_LOG_MS and request.url.path != "/health":
         logger.warning(
             "Slow request method=%s path=%s status=%s duration_ms=%s",
@@ -4497,11 +4516,80 @@ def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
     return sort_history_items(items)[:MAX_HISTORY_ITEMS]
 
 
+def get_history_item_for_user(email: str, item_id: str) -> dict[str, Any] | None:
+    normalized_email = normalize_email(email)
+    normalized_id = compact_text(item_id)
+    if not normalized_email or not normalized_id:
+        return None
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT payload_json
+            FROM study_history_items
+            WHERE lower(email) = ? AND id = ?
+            LIMIT 1
+            """,
+            (normalized_email, normalized_id),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        item = normalize_history_item_payload(json.loads(row["payload_json"]))
+    except (json.JSONDecodeError, HTTPException):
+        return None
+    item["ownerEmail"] = normalized_email
+    return item
+
+
+def compact_history_item(item: dict[str, Any]) -> dict[str, Any]:
+    quiz_questions = item.get("quizQuestions") if isinstance(item.get("quizQuestions"), list) else []
+    slide_files = item.get("lectureSlideFileNames") if isinstance(item.get("lectureSlideFileNames"), list) else []
+    paper_files = item.get("pastQuestionPaperFileNames") if isinstance(item.get("pastQuestionPaperFileNames"), list) else []
+    summary = compact_text(item.get("summary"))
+    return {
+        "id": compact_text(item.get("id")),
+        "title": compact_text(item.get("title"), "Saved study guide"),
+        "fileName": compact_text(item.get("fileName"), "Saved lecture"),
+        "createdAt": compact_text(item.get("createdAt")),
+        "updatedAt": compact_text(item.get("updatedAt")),
+        "ownerEmail": normalize_email(item.get("ownerEmail")),
+        "summary": shorten_text(summary, 420),
+        "quizQuestions": [{} for _ in quiz_questions],
+        "lectureNotes": "Available" if compact_text(item.get("lectureNotes")) else "",
+        "lectureSlideFileNames": ["Slide source"] * len(slide_files),
+        "pastQuestionPaperFileNames": ["Past paper"] * len(paper_files),
+        "quizQuestionCount": len(quiz_questions),
+        "hasLectureNotes": bool(compact_text(item.get("lectureNotes"))),
+        "lectureSlideFileCount": len(slide_files),
+        "pastQuestionPaperFileCount": len(paper_files),
+        "isCompactHistoryItem": True,
+    }
+
+
 def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized_email = normalize_email(email)
     if not normalized_email:
         return []
-    normalized_items = sort_history_items([normalize_history_item_payload(item) for item in items])[:MAX_HISTORY_ITEMS]
+    with get_db_connection() as connection:
+        existing_rows = connection.execute(
+            "SELECT id, payload_json FROM study_history_items WHERE lower(email) = ?",
+            (normalized_email,),
+        ).fetchall()
+    existing_payloads: dict[str, dict[str, Any]] = {}
+    for row in existing_rows:
+        try:
+            existing_payloads[compact_text(row["id"])] = json.loads(row["payload_json"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    resolved_items = []
+    for item in items:
+        item_id = compact_text(item.get("id")) if isinstance(item, dict) else ""
+        if isinstance(item, dict) and item.get("isCompactHistoryItem") and item_id in existing_payloads:
+            resolved_items.append(existing_payloads[item_id])
+        else:
+            resolved_items.append(item)
+    normalized_items = sort_history_items([normalize_history_item_payload(item) for item in resolved_items])[:MAX_HISTORY_ITEMS]
     for item in normalized_items:
         item["ownerEmail"] = normalized_email
 
@@ -6695,7 +6783,8 @@ VOICE_BEHAVIOUR = {
 
 
 def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
-    section_limit = max(2000, MAX_CHAT_CONTEXT_CHARS // 4)
+    chat_context_limit = min(MAX_CHAT_CONTEXT_CHARS, 18000)
+    section_limit = max(1800, chat_context_limit // 5)
     output_language = normalize_output_language(payload.language)
     delivery_mode = compact_text(getattr(payload, "delivery_mode", ""), "chat").lower()
     current_section = compact_text(getattr(payload, "current_section", ""))
@@ -6738,8 +6827,8 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(4000, MAX_CHAT_CONTEXT_CHARS // 2)),
     ]
     context_text = "\n\n".join(part for part in context_parts if part).strip()
-    if len(context_text) > MAX_CHAT_CONTEXT_CHARS:
-        context_text = context_text[:MAX_CHAT_CONTEXT_CHARS].rsplit(" ", 1)[0].strip()
+    if len(context_text) > chat_context_limit:
+        context_text = context_text[:chat_context_limit].rsplit(" ", 1)[0].strip()
 
     if delivery_mode == "teacher_interrupt":
         system_prompt = "\n\n".join(
@@ -12688,8 +12777,23 @@ async def submit_public_support_request(
 
 
 @app.get("/history")
-async def get_study_history(current_user: str = Depends(require_authenticated_user)):
-    return {"items": get_history_items_for_user(current_user)}
+async def get_study_history(
+    compact: bool = Query(False),
+    current_user: str = Depends(require_authenticated_user),
+):
+    items = get_history_items_for_user(current_user)
+    return {"items": [compact_history_item(item) for item in items] if compact else items}
+
+
+@app.get("/history/{item_id}")
+async def get_study_history_item(
+    item_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    item = get_history_item_for_user(current_user, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Saved study workspace not found.")
+    return {"item": item}
 
 
 @app.put("/history")
@@ -22735,16 +22839,70 @@ async def ask_study_assistant(
     ensure_openai_key()
     reference_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
 
-    def _ask() -> str:
-        use_vision = bool(reference_images)
-        response = client.with_options(timeout=VISION_REQUEST_TIMEOUT if use_vision else 45).chat.completions.create(
+    normalized_payload = payload.model_copy(update={"reference_images": reference_images})
+    primary_messages = build_chat_messages(normalized_payload)
+
+    def _ask(messages: list[dict[str, object]], *, timeout_seconds: float, max_tokens: int = 1200) -> str:
+        use_vision = any(
+            isinstance(message.get("content"), list)
+            for message in messages
+            if isinstance(message, dict)
+        )
+        response = client.with_options(timeout=timeout_seconds, max_retries=0).chat.completions.create(
             model=VISION_MODEL if use_vision else STUDY_CHAT_MODEL,
-            max_completion_tokens=1200,
-            messages=build_chat_messages(payload.model_copy(update={"reference_images": reference_images})),
+            max_completion_tokens=max_tokens,
+            messages=messages,
         )
         return (response.choices[0].message.content or "").strip()
 
-    answer = await asyncio.to_thread(_ask)
+    try:
+        answer = await asyncio.wait_for(
+            asyncio.to_thread(
+                _ask,
+                primary_messages,
+                timeout_seconds=VISION_REQUEST_TIMEOUT if reference_images else STUDY_CHAT_PRIMARY_TIMEOUT,
+            ),
+            timeout=(VISION_REQUEST_TIMEOUT if reference_images else STUDY_CHAT_PRIMARY_TIMEOUT) + 3,
+        )
+    except Exception as primary_error:
+        error_name = primary_error.__class__.__name__.lower()
+        status_code = int(getattr(primary_error, "status_code", 0) or 0)
+        can_retry = (
+            isinstance(primary_error, (TimeoutError, InternalServerError))
+            or "timeout" in error_name
+            or "connection" in error_name
+            or status_code in {408, 429, 500, 502, 503, 504}
+        )
+        if not can_retry:
+            raise
+        logger.warning(
+            "Study Chat primary request failed; retrying with reduced context user=%s error=%s",
+            current_user,
+            primary_error.__class__.__name__,
+        )
+        fallback_payload = normalized_payload.model_copy(
+            update={
+                "transcript": "",
+                "summary": compact_text(normalized_payload.summary)[:2500],
+                "formulas": compact_text(normalized_payload.formulas)[:1200],
+                "worked_examples": compact_text(normalized_payload.worked_examples)[:1600],
+                "lecture_notes": compact_text(normalized_payload.lecture_notes)[:1800],
+                "lecture_slides": compact_text(normalized_payload.lecture_slides)[:1800],
+                "past_question_papers": "",
+                "history": normalized_payload.history[-4:],
+                "reference_images": [],
+            }
+        )
+        fallback_messages = build_chat_messages(fallback_payload)
+        answer = await asyncio.wait_for(
+            asyncio.to_thread(
+                _ask,
+                fallback_messages,
+                timeout_seconds=STUDY_CHAT_FALLBACK_TIMEOUT,
+                max_tokens=900,
+            ),
+            timeout=STUDY_CHAT_FALLBACK_TIMEOUT + 3,
+        )
     answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question, payload.delivery_mode)
     return {"answer": make_formulas_human_readable(answer_with_follow_up)}
 

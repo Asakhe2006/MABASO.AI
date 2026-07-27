@@ -11,10 +11,27 @@ export const APP_ROUTE_BY_PAGE = {
   payments: "/app/payments",
   timetable: "/app/timetable",
   collaboration: "/app/collaboration",
-  voice: "/app/workspace",
+  voice: "/app/chat",
   "study-session": "/study-session",
   admin: "/admin/dashboard",
 };
+
+const IDENTIFIED_APP_PAGES = new Set([
+  "capture",
+  "workspace",
+  "materials",
+  "payments",
+  "timetable",
+  "collaboration",
+  "voice",
+]);
+
+export function normalizeProtectedResourceId(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "")
+    .slice(0, 96);
+}
 
 const APP_ROUTE_METADATA = protectedWorkspaceRoutes.reduce((accumulator, route) => {
   accumulator[route.route] = {
@@ -43,19 +60,33 @@ export function resolveBrowserPath() {
   return normalizeRoutePath(window.location.pathname || "/");
 }
 
-export function resolveAppRouteForPage(currentPage = "", authSessionMode = "user") {
+export function resolveAppRouteForPage(currentPage = "", authSessionMode = "user", resourceId = "") {
   if (currentPage === "admin") {
     return authSessionMode === "admin" ? APP_ROUTE_BY_PAGE.admin : "";
   }
-  return APP_ROUTE_BY_PAGE[currentPage] || "";
+  const baseRoute = APP_ROUTE_BY_PAGE[currentPage] || "";
+  const normalizedResourceId = normalizeProtectedResourceId(resourceId);
+  if (!baseRoute || !normalizedResourceId || !IDENTIFIED_APP_PAGES.has(currentPage)) return baseRoute;
+  return `${baseRoute}/${normalizedResourceId}`;
 }
 
 export function resolveCurrentPageFromRoute(route = "/") {
   const normalized = normalizeRoutePath(route);
   if (normalized === "/study-session" || normalized.startsWith("/study-session/")) return "study-session";
   if (normalized === "/app/voice-study") return "workspace";
-  const match = Object.entries(APP_ROUTE_BY_PAGE).find(([, value]) => value === normalized);
+  const match = Object.entries(APP_ROUTE_BY_PAGE).find(([, value]) => (
+    value === normalized || normalized.startsWith(`${value}/`)
+  ));
   return match?.[0] || "";
+}
+
+export function resolveProtectedResourceIdFromRoute(route = "/") {
+  const normalized = normalizeRoutePath(route);
+  const match = Object.entries(APP_ROUTE_BY_PAGE).find(([pageId, value]) => (
+    IDENTIFIED_APP_PAGES.has(pageId) && normalized.startsWith(`${value}/`)
+  ));
+  if (!match) return "";
+  return normalizeProtectedResourceId(normalized.slice(match[1].length + 1).split("/")[0]);
 }
 
 export function resolveEnterpriseRoute(path = "/") {

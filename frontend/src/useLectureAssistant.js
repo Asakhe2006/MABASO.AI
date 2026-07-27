@@ -1039,6 +1039,7 @@ export function useLectureAssistant({
   draft = "",
   setDraft,
   onLegacyMessagesChange,
+  enabled = true,
 }) {
   const storageKey = useMemo(() => buildConversationStorageKey(authEmail), [authEmail]);
   const legacyStorageKey = useMemo(
@@ -1101,6 +1102,8 @@ export function useLectureAssistant({
   const [attachedImages, setAttachedImages] = useState([]);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const remoteSyncAvailable = Boolean(
+    enabled
+    &&
     compactText(authEmail)
     && typeof requestConversationList === "function"
     && typeof requestConversation === "function",
@@ -4113,10 +4116,11 @@ export function useLectureAssistant({
   }, [remoteSyncAvailable]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (!hasLoadedStorageRef.current || !remoteSyncAvailable || remoteHydratedRef.current) return;
     remoteHydratedRef.current = true;
     void hydrateConversationList({ search: "", offset: 0, append: false });
-  }, [remoteSyncAvailable, storageKey]);
+  }, [enabled, remoteSyncAvailable, storageKey]);
 
   useEffect(() => {
     if (!hasLoadedStorageRef.current || !remoteSyncAvailable || typeof window === "undefined") return undefined;
