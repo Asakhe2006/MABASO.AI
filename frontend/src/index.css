@@ -610,19 +610,11 @@ iframe {
   display: grid;
   min-width: 0;
   min-height: 100dvh;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .study-chat-page-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  min-height: 58px;
-  justify-content: center;
-  border-bottom: 0;
-  background: rgba(0, 0, 0, 0.96);
-  padding: 0.55rem 1rem;
-  backdrop-filter: blur(14px);
+  display: none;
 }
 
 .study-chat-mode-tabs {
@@ -669,14 +661,22 @@ iframe {
 .study-chat-page-scroll {
   min-height: 0;
   overflow-y: auto;
-  padding: 12vh min(9vw, 7rem) 1.5rem;
+  padding: 7vh min(9vw, 7rem) 1.5rem;
+  scrollbar-color: rgba(34, 197, 94, 0.42) transparent;
+}
+
+.study-chat-page-scroll.is-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .study-chat-page-scroll h1 {
-  margin: 0 0 2rem;
+  margin: 0 0 1rem;
   text-align: center;
   font-size: clamp(1.45rem, 3vw, 2rem);
   font-weight: 650;
+  color: #f8fafc;
 }
 
 .study-chat-page-messages {
@@ -690,9 +690,47 @@ iframe {
 .study-chat-page-empty {
   margin: 0 auto;
   max-width: 620px;
-  color: #9ca3af;
+  color: #a7f3d0;
   text-align: center;
   font-size: 0.95rem;
+}
+
+.study-chat-page-messages .study-chat-message {
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.55rem 0;
+  box-shadow: none;
+}
+
+.study-chat-page-messages .study-chat-message.is-assistant,
+.study-chat-page-messages .study-chat-message.is-user {
+  align-self: stretch;
+  border: 0;
+  background: transparent;
+}
+
+.study-chat-page-messages .study-chat-message.is-user {
+  width: min(100%, 680px);
+  margin-left: auto;
+  text-align: right;
+}
+
+.study-chat-page-messages .study-chat-message > p:first-child {
+  color: #4ade80;
+}
+
+.study-chat-page-messages .study-chat-message .mabaso-ai-response {
+  color: #f8fafc;
+}
+
+.study-chat-page-messages .study-chat-message.is-user .mabaso-ai-response {
+  display: inline-block;
+  width: auto;
+  max-width: 100%;
+  text-align: left;
 }
 
 .study-chat-page-composer {
@@ -703,10 +741,21 @@ iframe {
   width: min(820px, calc(100% - 2rem));
   border: 0;
   border-radius: 28px;
-  background: #262626;
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  background: #151b18;
   padding: 0.45rem 0.55rem;
-  box-shadow: none;
+  box-shadow: 0 14px 45px rgba(0, 0, 0, 0.3);
   transform: translateY(-1rem);
+}
+
+.study-chat-page-composer:focus-within {
+  border-color: rgba(74, 222, 128, 0.52);
+}
+
+.study-chat-mobile-title {
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 700;
 }
 
 .study-guide-prompt-card {
@@ -2562,6 +2611,13 @@ iframe {
   box-shadow: none;
 }
 
+.study-guide-figure-explainer {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding-inline: 0 !important;
+}
+
 .study-guide-figure-caption {
   margin-top: 0.7rem;
   display: grid;
@@ -2619,13 +2675,21 @@ iframe {
 
   .study-chat-main {
     min-height: 100dvh;
+    grid-template-rows: auto minmax(0, 1fr) auto;
   }
 
   .study-chat-page-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
     justify-content: flex-start;
     min-height: 54px;
     gap: 0.45rem;
+    border-bottom: 1px solid rgba(34, 197, 94, 0.12);
+    background: rgba(0, 8, 5, 0.96);
     padding: 0.45rem 0.65rem;
+    backdrop-filter: blur(14px);
   }
 
   .study-chat-mode-tabs {
@@ -2652,7 +2716,12 @@ iframe {
   }
 
   .study-chat-page-scroll {
-    padding: 15vh 0.85rem 1rem;
+    padding: 1rem 0.9rem;
+  }
+
+  .study-chat-page-scroll.is-empty {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
   }
 
   .study-chat-page-scroll h1 {
@@ -2661,15 +2730,13 @@ iframe {
   }
 
   .study-chat-message {
-    max-width: 92%;
-    border-radius: 18px;
-    padding: 0.75rem 0.85rem;
+    max-width: 100%;
   }
 
   .study-chat-page-composer {
     width: calc(100% - 1rem);
-    border-radius: 24px;
-    transform: translateY(-0.7rem);
+    border-radius: 22px;
+    transform: translateY(calc(-0.55rem - env(safe-area-inset-bottom)));
   }
 
   .study-guide-prompt-row {
@@ -4193,6 +4260,109 @@ iframe {
 
   to {
     transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Capture is one continuous workspace; only the source actions stay individually framed. */
+.page-capture .capture-app-header,
+.page-capture .capture-panel,
+.page-capture .capture-panel > aside,
+.page-capture .capture-panel > aside > div {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+.page-capture .capture-panel {
+  padding-inline: 0 !important;
+}
+
+.page-capture .capture-panel > aside {
+  padding-inline: 0 !important;
+}
+
+.page-capture .capture-panel > aside > div {
+  padding-inline: 0 !important;
+}
+
+.page-capture .capture-panel aside > div > .space-y-5 > .rounded-2xl,
+.page-capture .study-guide-prompt-card {
+  border: 0 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 1rem 0 !important;
+}
+
+.study-guide-rich-editor {
+  line-height: 1.6;
+}
+
+.study-guide-rich-editor p,
+.study-guide-rich-editor li,
+.study-guide-rich-editor td,
+.study-guide-rich-editor th {
+  line-height: 1.58;
+}
+
+.study-guide-rich-editor p,
+.study-guide-rich-editor ul,
+.study-guide-rich-editor ol,
+.study-guide-rich-editor blockquote,
+.study-guide-rich-editor table {
+  margin-bottom: 0.68rem;
+}
+
+.study-guide-figure-image {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+  object-position: center;
+}
+
+@media (max-width: 640px) {
+  .page-capture .capture-app-header {
+    padding-inline: 0.25rem !important;
+  }
+
+  .page-capture .capture-panel {
+    padding-top: 0 !important;
+  }
+
+  .page-capture .capture-source-button {
+    min-height: 76px;
+    border-radius: 12px;
+    padding: 0.75rem;
+  }
+
+  .page-capture .capture-source-button .text-sm {
+    font-size: 0.78rem !important;
+    line-height: 1.25rem !important;
+  }
+
+  .study-guide-rich-editor {
+    min-height: 56px !important;
+    border-radius: 0 !important;
+    padding: 0.25rem 0 !important;
+    font-size: 13.5px !important;
+    line-height: 1.5 !important;
+  }
+
+  .study-guide-rich-editor p,
+  .study-guide-rich-editor ul,
+  .study-guide-rich-editor ol,
+  .study-guide-rich-editor blockquote,
+  .study-guide-rich-editor table {
+    margin-bottom: 0.58rem !important;
+  }
+
+  .study-guide-figure-image {
+    max-height: none !important;
+    border-radius: 8px;
   }
 }
 

@@ -465,6 +465,7 @@ BILLING_FEATURE_LABELS = {
     "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
     "source_upload": "Audio/source processing",
+    "study_chat_upload": "Study chat attachments",
 }
 
 
@@ -499,6 +500,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
         "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 3),
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
+        "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 3),
     },
     "pro_student": {
         "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
@@ -516,6 +518,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
         "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
+        "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 15),
     },
     "premium_student": {
         "ai_chat": -1,
@@ -533,6 +536,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": -1,
         "voice_transcription": -1,
         "source_upload": -1,
+        "study_chat_upload": get_int_env("PREMIUM_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 15),
     },
 }
 AI_FEATURE_COST_ESTIMATE_ZAR = {
@@ -1326,6 +1330,7 @@ class StudyChatRequest(BaseModel):
     past_question_papers: str = ""
     history: list[ChatTurn] = []
     reference_images: list[str] = []
+    reference_documents: list[dict[str, Any]] = []
     language: str = "English"
     delivery_mode: str = "chat"
     voice_mode: bool = False
@@ -1429,6 +1434,7 @@ class SessionModeRequest(BaseModel):
 
 class BillingCheckoutRequest(BaseModel):
     plan_id: str
+    trial: bool = False
 
 
 class PaymentCreateRequest(BaseModel):
@@ -6826,6 +6832,16 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         trimmed_block("PAST QUESTION PAPERS", payload.past_question_papers, section_limit),
         trimmed_block("LECTURE TRANSCRIPT", payload.transcript, max(4000, MAX_CHAT_CONTEXT_CHARS // 2)),
     ]
+    uploaded_document_parts: list[str] = []
+    for item in payload.reference_documents[:15]:
+        if not isinstance(item, dict):
+            continue
+        name = compact_text(item.get("name"), "Attached document")[:160]
+        text = compact_text(item.get("text"))
+        if text:
+            uploaded_document_parts.append(trimmed_block(f"QUESTION ATTACHMENT: {name}", text, section_limit))
+    if uploaded_document_parts:
+        context_parts.append("\n\n".join(uploaded_document_parts))
     context_text = "\n\n".join(part for part in context_parts if part).strip()
     if len(context_text) > chat_context_limit:
         context_text = context_text[:chat_context_limit].rsplit(" ", 1)[0].strip()
@@ -7670,11 +7686,13 @@ def upsert_billing_subscription(
     amount_zar: str,
     raw_event_json: str = "{}",
     now_iso: str = "",
+    duration_days: int | None = None,
 ) -> tuple[str, str]:
     normalized_email = validate_email_address(email)
     normalized_plan_id = normalize_billing_plan_id(plan_id)
     current_time = compact_text(now_iso, utc_now().isoformat())
-    period_end = (parse_billing_datetime(current_time) or utc_now()) + timedelta(days=get_billing_plan_duration_days(normalized_plan_id))
+    resolved_duration_days = max(1, int(duration_days or get_billing_plan_duration_days(normalized_plan_id)))
+    period_end = (parse_billing_datetime(current_time) or utc_now()) + timedelta(days=resolved_duration_days)
     period_end_iso = period_end.isoformat()
     connection.execute(
         """
@@ -7760,6 +7778,7 @@ def build_payfast_checkout_fields(
     email: str,
     checkout_id: str,
     plan: dict[str, str],
+    trial: bool = False,
 ) -> dict[str, str]:
     app_base_url = APP_PUBLIC_URL or str(request.base_url).rstrip("/")
     api_base_url = get_request_public_base_url(request)
@@ -7772,12 +7791,17 @@ def build_payfast_checkout_fields(
         "name_first": email.split("@", 1)[0][:100],
         "email_address": email[:100],
         "m_payment_id": checkout_id,
-        "amount": plan["amount_zar"],
-        "item_name": f"MABASO.AI {plan['name']}"[:100],
-        "item_description": plan["description"][:255],
+        "amount": "0.00" if trial else plan["amount_zar"],
+        "item_name": (f"MABASO.AI 7-day free trial - {plan['name']}" if trial else f"MABASO.AI {plan['name']}")[:100],
+        "item_description": (
+            f"Seven-day free trial. Automatically bills {plan['amount_zar']} monthly after the trial unless cancelled."
+            if trial
+            else plan["description"]
+        )[:255],
         "custom_str1": email[:255],
         "custom_str2": plan["id"][:255],
         "custom_str3": checkout_id[:255],
+        "custom_str4": "trial" if trial else "standard",
     }
     if PAYFAST_SUBSCRIPTION_ENABLED:
         fields.update(
@@ -7791,6 +7815,10 @@ def build_payfast_checkout_fields(
                 "subscription_notify_buyer": "true",
             }
         )
+        if trial:
+            johannesburg_tz = timezone(timedelta(hours=2))
+            first_billing_date = datetime.now(johannesburg_tz) + timedelta(days=7)
+            fields["billing_date"] = first_billing_date.strftime("%Y-%m-%d")
     fields["signature"] = get_payfast_signature(fields)
     return fields
 
@@ -7834,6 +7862,36 @@ def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
             """,
             (normalized_id,),
         ).fetchone()
+
+
+def ensure_payfast_trial_eligible(email: str, plan_id: str) -> None:
+    normalized_email = validate_email_address(email)
+    if normalize_billing_plan_id(plan_id) != "pro_student":
+        raise HTTPException(status_code=400, detail="The seven-day free trial is available only on the monthly Pro Student plan.")
+    if not PAYFAST_SUBSCRIPTION_ENABLED:
+        raise HTTPException(status_code=503, detail="The free trial requires PayFast recurring subscriptions to be enabled.")
+    subscription = get_user_subscription(normalized_email)
+    if subscription.get("active"):
+        raise HTTPException(status_code=409, detail="The free trial is available only before a paid subscription has been activated.")
+    with get_db_connection() as connection:
+        prior_trial = connection.execute(
+            """
+            SELECT id, status, created_at
+            FROM billing_checkout_sessions
+            WHERE lower(email) = lower(?)
+              AND checkout_fields_json LIKE '%"custom_str4": "trial"%'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (normalized_email,),
+        ).fetchone()
+    if not prior_trial:
+        return
+    prior_status = compact_text(prior_trial["status"]).lower()
+    created_at = parse_billing_datetime(prior_trial["created_at"])
+    pending_is_stale = prior_status == "pending" and created_at and (utc_now() - created_at) > timedelta(hours=1)
+    if not pending_is_stale:
+        raise HTTPException(status_code=409, detail="This account has already started or used its seven-day Pro trial.")
 
 
 def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
@@ -8696,9 +8754,18 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     checkout_id = session["id"]
     email = normalize_email(compact_text(payload.get("custom_str1"), session["email"]))
     plan_id = normalize_billing_plan_id(compact_text(payload.get("custom_str2"), session["plan_id"]))
+    try:
+        checkout_fields = json.loads(compact_text(session["checkout_fields_json"], "{}"))
+    except json.JSONDecodeError:
+        checkout_fields = {}
+    is_trial_checkout = compact_text(checkout_fields.get("custom_str4")).lower() == "trial"
+    plan = get_billing_plan(plan_id)
     amount_gross = format_zar_amount(compact_text(payload.get("amount_gross"), session["amount_zar"]))
     expected_amount = format_zar_amount(session["amount_zar"])
-    if amount_gross != expected_amount:
+    allowed_amounts = {expected_amount}
+    if is_trial_checkout:
+        allowed_amounts.add(format_zar_amount(plan["amount_zar"]))
+    if amount_gross not in allowed_amounts:
         raise HTTPException(status_code=400, detail="PayFast amount does not match the checkout session.")
     if plan_id != session["plan_id"]:
         raise HTTPException(status_code=400, detail="PayFast plan does not match the checkout session.")
@@ -8707,7 +8774,7 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     provider_payment_id = compact_text(payload.get("pf_payment_id"))
     provider_token = compact_text(payload.get("token"))
     now_iso = utc_now().isoformat()
-    period_end = (utc_now() + timedelta(days=get_billing_plan_duration_days(plan_id))).isoformat()
+    is_initial_trial_activation = is_trial_checkout and amount_gross == "0.00"
     next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
     payment_id = provider_payment_id or checkout_id
 
@@ -8781,7 +8848,7 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 plan_id,
                 "payfast",
                 provider_payment_id,
-                expected_amount,
+                amount_gross,
                 next_status,
                 raw_event_json,
                 now_iso,
@@ -8805,9 +8872,10 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 provider="payfast",
                 provider_token=provider_token,
                 provider_payment_id=provider_payment_id,
-                amount_zar=expected_amount,
+                amount_zar=format_zar_amount(plan["amount_zar"]),
                 raw_event_json=raw_event_json,
                 now_iso=now_iso,
+                duration_days=7 if is_initial_trial_activation else None,
             )
     sync_user_account_snapshot(email)
     return next_status
@@ -12434,12 +12502,16 @@ async def create_billing_checkout(
     require_payfast_configured()
     email = normalize_email(current_user)
     plan = get_billing_plan(payload.plan_id)
+    is_trial = bool(payload.trial)
+    if is_trial:
+        ensure_payfast_trial_eligible(email, plan["id"])
     checkout_id = f"mabaso-{uuid4().hex[:24]}"
     fields = build_payfast_checkout_fields(
         request=request,
         email=email,
         checkout_id=checkout_id,
         plan=plan,
+        trial=is_trial,
     )
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
@@ -12455,7 +12527,7 @@ async def create_billing_checkout(
                 checkout_id,
                 email,
                 plan["id"],
-                plan["amount_zar"],
+                "0.00" if is_trial else plan["amount_zar"],
                 "payfast",
                 "pending",
                 json.dumps(fields, ensure_ascii=False),
@@ -12475,12 +12547,15 @@ async def create_billing_checkout(
             "checkout_id": checkout_id,
             "amount_zar": plan["amount_zar"],
             "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+            "trial": is_trial,
         },
     )
     return {
         "provider": "payfast",
         "sandbox": PAYFAST_SANDBOX,
         "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+        "trial": is_trial,
+        "trial_days": 7 if is_trial else 0,
         "checkout_id": checkout_id,
         "checkout_url": PAYFAST_PROCESS_URL,
         "fields": fields,
@@ -15873,9 +15948,10 @@ def normalize_ai_study_image_specs(value: Any, limit: int) -> list[dict[str, str
             continue
         if not prompt:
             prompt = (
-                f"Educational textbook illustration for the subtopic '{subtopic}'. "
+                f"Contemporary high-resolution educational textbook illustration for the subtopic '{subtopic}'. "
                 f"Show the exact idea: {explanation}. Clear classroom context, accurate subject details, "
-                "realistic where appropriate, age appropriate, no branding, no decorative fantasy style."
+                "modern visual design, crisp labels, realistic where appropriate, age appropriate, no branding, "
+                "no vintage scan, faded paper texture, decorative fantasy style, or cropped labels."
             )
         normalized.append(
             {
@@ -15915,10 +15991,10 @@ def build_fallback_ai_study_image_specs(summary: str, limit: int) -> list[dict[s
                 "caption": f"This visual summarizes the key idea in {heading}.",
                 "ai_explanation": f"Students should connect the labels, stages, or compared parts in this visual to the exam explanation for {heading}.",
                 "prompt": (
-                    f"Premium educational textbook illustration for '{heading}'. "
+                    f"Premium contemporary high-resolution educational textbook illustration for '{heading}'. "
                     f"Visualize this explanation accurately: {explanation}. "
                     "Make it curriculum-aligned, clear, age appropriate, realistic or diagrammatic as the subject requires, "
-                    "with a clean classroom textbook style and no unrelated stock-photo elements."
+                    "with crisp modern graphics, complete uncropped labels, and no vintage scan or unrelated stock-photo elements."
                 ),
                 "purpose": "Make the explanation easier to visualize and remember.",
                 "visual_type": "educational diagram",
@@ -15967,8 +16043,10 @@ async def build_ai_study_image_specs(
                         f"- Return {limit} image specs or fewer.\n"
                         "- Choose only major subtopics where a visual will directly improve understanding.\n"
                         "- The prompt must match the exact subtopic and explanation, never a random stock image.\n"
+                        "- Require crisp contemporary high-resolution graphics with complete uncropped content and readable labels.\n"
                         "- Prefer diagrams, flowcharts, timelines, labelled illustrations, architecture diagrams, process graphics, worked-example infographics, and concept visualizations.\n"
                         "- Avoid generic photos and decorative stock-style scenes unless the topic requires recognising a real physical object.\n"
+                        "- Avoid vintage textbook scans, faded paper textures, dated clip art, low-resolution graphics, and old-looking photography.\n"
                         "- Include the subject-specific details that must appear in the image.\n"
                         "- Caption must be short and specific. AI explanation must say what the figure shows, why it matters, and what students should notice for exams.\n"
                         "- Keep prompts classroom appropriate, accurate, and curriculum-aligned.\n"
@@ -21759,19 +21837,21 @@ async def extract_slide_text(
     ensure_openai_key()
     content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or ""
     reference_images: list[str] = []
+    is_study_chat_attachment = compact_text(request.headers.get("x-mabaso-upload-purpose")).lower() == "study-chat"
+    quota_feature = "study_chat_upload" if is_study_chat_attachment else "source_upload"
     ensure_plan_quota_available(
         email=current_user,
-        feature="source_upload",
+        feature=quota_feature,
         request=request,
-        metadata={"route": "extract_slide_text", "stage": "precheck"},
+        metadata={"route": "extract_slide_text", "stage": "precheck", "purpose": "study_chat" if is_study_chat_attachment else "source"},
     )
 
     def finish_extracted_source(text: str, image_urls: list[str], *, source_kind: str) -> dict[str, Any]:
         consume_plan_quota(
             email=current_user,
-            feature="source_upload",
+            feature=quota_feature,
             request=request,
-            metadata={"route": "extract_slide_text", "source_kind": source_kind},
+            metadata={"route": "extract_slide_text", "source_kind": source_kind, "purpose": "study_chat" if is_study_chat_attachment else "source"},
         )
         record_audit_log(
             action="study_source.extract",
@@ -21855,8 +21935,13 @@ async def extract_slide_text(
 
         ensure_allowed_image_upload(file.filename, content_type)
         image_data_url = build_data_url(file_bytes, content_type, file.filename)
-        text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
-        if not text:
+        try:
+            text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
+        except Exception:
+            if not is_study_chat_attachment:
+                raise
+            text = ""
+        if not text and not is_study_chat_attachment:
             raise HTTPException(status_code=422, detail="MABASO could not read text from that slide image.")
         return finish_extracted_source(text, [image_data_url], source_kind="image")
     except HTTPException as exc:

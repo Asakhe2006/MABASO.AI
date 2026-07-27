@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, RefreshCw, Search, SlidersHorizontal, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -141,6 +141,7 @@ const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const PUBLIC_TERMS_PATH = "/terms-and-conditions";
 const MAX_HISTORY_ITEMS = 24;
+const MAX_CHAT_REFERENCE_ATTACHMENTS = 15;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const MAX_QUIZ_ANSWER_IMAGES = 6;
 const MAX_STORAGE_TRANSCRIPT_CHARS = 120000;
@@ -795,6 +796,7 @@ const fairSubscriptionPlans = [
       "1 mind map/day",
       "1 audio/source processing job/day",
       "3 voice messages/day",
+      "3 photo or document uploads/day",
     ],
     safeguards: ["No card required", "Standard accuracy", "Clear usage meter"],
   },
@@ -823,6 +825,7 @@ const fairSubscriptionPlans = [
       "6 mind maps/day",
       "3 audio/source processing jobs/day",
       "9 voice messages/day",
+      "15 photo or document uploads/day",
     ],
     safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
   },
@@ -850,6 +853,7 @@ const fairSubscriptionPlans = [
       "Unlimited podcasts",
       "Unlimited mind maps",
       "Unlimited slide and document analysis",
+      "15 photo or document uploads/day",
     ],
     safeguards: ["Best quality tier", "Highest priority", "Premium features included"],
   },
@@ -6811,6 +6815,7 @@ export default function App() {
   const [activeStudySessionNotesDraft, setActiveStudySessionNotesDraft] = useState("");
   const [activeStudySessionReferenceImages, setActiveStudySessionReferenceImages] = useState([]);
   const [isAskingActiveStudySession, setIsAskingActiveStudySession] = useState(false);
+  const [isActiveStudySessionVoiceListening, setIsActiveStudySessionVoiceListening] = useState(false);
   const [activeStudySessionMessage, setActiveStudySessionMessage] = useState("");
   const [activeStudyMotivationPopup, setActiveStudyMotivationPopup] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
@@ -6823,6 +6828,7 @@ export default function App() {
   const generateStudyGuideButtonRef = useRef(null);
   const chatImageInputRef = useRef(null);
   const activeStudySessionImageInputRef = useRef(null);
+  const activeStudySessionVoiceRecognitionRef = useRef(null);
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
   const studyChatEndRef = useRef(null);
@@ -7419,6 +7425,19 @@ export default function App() {
                   {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
                 </div>
               </details>
+              {plan.id === "pro_student" ? (
+                <div className="mt-5">
+                  <button
+                    type="button"
+                    onClick={() => startBillingCheckout(plan, "payfast", { trial: true })}
+                    disabled={Boolean(billingCheckoutPlanId)}
+                    className="w-full rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-emerald-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-70"
+                  >
+                    {billingCheckoutPlanId === "payfast:trial:pro_student" ? "Opening PayFast..." : "Start 7-day free trial"}
+                  </button>
+                  <p className="mt-2 text-xs leading-5 text-slate-300">Card required. R0 today, then R50 monthly after seven days unless cancelled. One trial per account.</p>
+                </div>
+              ) : null}
               {plan.billingOptions?.length ? (
                 <div className="mt-5 grid gap-2 sm:grid-cols-3">
                   {plan.billingOptions.map((option) => (
@@ -10111,7 +10130,9 @@ export default function App() {
                   {Array.isArray(message.referenceImages) && message.referenceImages.length ? (
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                       {message.referenceImages.map((image, imageIndex) => (
-                        <img key={image.id || `${message.id || index}-image-${imageIndex}`} src={image.dataUrl || image.url || image.previewUrl} alt={image.name || "Uploaded study reference"} className="h-24 w-full rounded-xl border border-white/10 object-cover" />
+                        (image.dataUrl || image.url || image.previewUrl)
+                          ? <img key={image.id || `${message.id || index}-image-${imageIndex}`} src={image.dataUrl || image.url || image.previewUrl} alt={image.name || "Uploaded study reference"} className="h-24 w-full rounded-xl border border-white/10 object-cover" />
+                          : <span key={image.id || `${message.id || index}-document-${imageIndex}`} className="inline-flex min-h-12 items-center gap-2 text-xs text-slate-300"><FileText className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="truncate">{image.name || "Document"}</span></span>
                       ))}
                     </div>
                   ) : null}
@@ -10121,24 +10142,29 @@ export default function App() {
               )}
             </div>
             <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/80 p-3">
-              <input ref={activeStudySessionImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleActiveStudySessionReferenceFilesChange} />
+              <input ref={activeStudySessionImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={handleActiveStudySessionReferenceFilesChange} />
               {activeStudySessionReferenceImages.length ? (
                 <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {activeStudySessionReferenceImages.map((image) => (
                     <div key={image.id} className="relative overflow-hidden rounded-2xl border border-cyan-300/20 bg-white/[0.04]">
-                      <img src={image.dataUrl} alt={image.name || "Study reference"} className="h-24 w-full object-cover" />
+                      {image.dataUrl
+                        ? <img src={image.dataUrl} alt={image.name || "Study reference"} className="h-24 w-full object-cover" />
+                        : <div className="flex h-24 items-center justify-center gap-2 px-3 text-center text-xs text-slate-200"><FileText className="h-5 w-5 shrink-0" aria-hidden="true" /><span className="truncate">{image.name || "Document"}</span></div>}
                       <button type="button" onClick={() => removeActiveStudySessionReferenceImage(image.id)} className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/75 text-sm font-black text-white" aria-label="Remove study reference image">x</button>
                     </div>
                   ))}
                 </div>
               ) : null}
               <div className="flex items-end gap-3">
-                <button type="button" onClick={() => activeStudySessionImageInputRef.current?.click()} disabled={isAskingActiveStudySession || activeStudySessionReferenceImages.length >= MAX_AI_REFERENCE_IMAGES} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-cyan-300/25 bg-cyan-300/10 text-cyan-50 disabled:opacity-50" aria-label="Add study reference photo">
+                <button type="button" onClick={() => activeStudySessionImageInputRef.current?.click()} disabled={isAskingActiveStudySession || activeStudySessionReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-cyan-300/25 bg-cyan-300/10 text-cyan-50 disabled:opacity-50" aria-label="Add study reference photo or document">
                   <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
                   </svg>
                 </button>
                 <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Ask anything..." />
+                <button type="button" onClick={toggleActiveStudySessionVoiceCapture} disabled={isAskingActiveStudySession} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white disabled:opacity-50 ${isActiveStudySessionVoiceListening ? "ring-2 ring-emerald-300" : ""}`} aria-label={isActiveStudySessionVoiceListening ? "Stop voice question" : "Ask by voice"} aria-pressed={isActiveStudySessionVoiceListening}>
+                  <Mic className="h-5 w-5" aria-hidden="true" />
+                </button>
                 <button type="button" onClick={askActiveStudySessionAssistant} disabled={isAskingActiveStudySession} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#06b6d4,#22c55e)] text-white disabled:opacity-50" aria-label="Send study session question">
                   <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                     <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
@@ -10347,8 +10373,8 @@ export default function App() {
                 <p className="mt-2 text-sm leading-7 text-slate-300">Add each class manually. Press Save Lecture Timetable when you are done.</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={loadLectureTimetable} disabled={isLoadingLectureTimetable} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isLoadingLectureTimetable ? "Loading..." : "Load"}</button>
-                <button type="button" onClick={addLectureTimetableEntry} className="rounded-full border border-sky-300/25 bg-sky-300/10 px-4 py-2 text-sm font-semibold text-sky-50">Add Lecture</button>
+                <button type="button" onClick={loadLectureTimetable} disabled={isLoadingLectureTimetable} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"><RefreshCw className="h-4 w-4" aria-hidden="true" />{isLoadingLectureTimetable ? "Loading..." : "Load saved"}</button>
+                <button type="button" onClick={addLectureTimetableEntry} className="inline-flex items-center gap-2 rounded-full border border-sky-300/25 bg-sky-300/10 px-4 py-2 text-sm font-semibold text-sky-50"><Plus className="h-4 w-4" aria-hidden="true" />Add Lecture</button>
                 <button type="button" onClick={saveLectureTimetable} disabled={isSavingLectureTimetable} className="rounded-full bg-[linear-gradient(135deg,#0284c7,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isSavingLectureTimetable ? "Saving..." : "Save Lecture Timetable"}</button>
               </div>
             </div>
@@ -14715,9 +14741,12 @@ export default function App() {
     const runId = sessionValidationRunRef.current + 1;
     sessionValidationRunRef.current = runId;
     const hadSessionMarker = window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true";
-    setAuthCheckError("");
-    setAuthChecked(false);
-    setAuthServerStateReady(false);
+    const isBackgroundCheck = resumed && Boolean(authTokenRef.current);
+    if (!isBackgroundCheck) {
+      setAuthCheckError("");
+      setAuthChecked(false);
+      setAuthServerStateReady(false);
+    }
     try {
       const response = await apiFetch(
         "/auth/me",
@@ -14779,6 +14808,12 @@ export default function App() {
       return true;
     } catch (error) {
       if (sessionValidationRunRef.current !== runId) return false;
+      if (isBackgroundCheck) {
+        console.warn("[MABASO session] Background session verification failed.", {
+          errorName: error?.name || "",
+        });
+        return false;
+      }
       setAuthToken("");
       authTokenRef.current = "";
       setAuthServerStateReady(false);
@@ -14879,7 +14914,7 @@ export default function App() {
           id: String(message.id || `stored-study-chat-${index}`),
           role: message.role,
           content: String(message.content || ""),
-          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_IMAGES) : [],
+          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS) : [],
         })));
     } catch {
       setChatMessages([]);
@@ -14896,7 +14931,7 @@ export default function App() {
           id: message.id,
           role: message.role,
           content: String(message.content || "").slice(0, 12000),
-          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_IMAGES) : [],
+          images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS) : [],
         }));
       window.localStorage.setItem(studyChatStorageKey, JSON.stringify(persistableMessages));
       if (persistableMessages.length && authEmail && activeStudyChatId) {
@@ -15343,7 +15378,7 @@ export default function App() {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       const restoredFromPageCache = event?.type === "pageshow" && event.persisted === true;
       const inactiveForMs = Date.now() - Number(lastSessionValidationAtRef.current || 0);
-      if (!restoredFromPageCache && inactiveForMs < 60 * 1000) return;
+      if (!restoredFromPageCache && inactiveForMs < 5 * 60 * 1000) return;
       void verifySession({ resumed: true });
     };
     window.addEventListener("focus", revalidateVisibleSession);
@@ -16658,15 +16693,17 @@ export default function App() {
   };
   const loadLectureTimetable = async () => {
     if (!authToken) return;
-    hasLoadedLectureTimetableRef.current = true;
     setIsLoadingLectureTimetable(true);
     try {
       const response = await authFetch("/lecture-timetable", { timeoutMs: 60000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your lecture timetable.");
-      setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []));
-      setLectureTimetableMessage("");
+      const loadedEntries = normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []);
+      setLectureTimetableEntries(loadedEntries);
+      hasLoadedLectureTimetableRef.current = true;
+      setLectureTimetableMessage(loadedEntries.length ? `${loadedEntries.length} saved lecture${loadedEntries.length === 1 ? "" : "s"} loaded.` : "No saved lectures yet. Use + Add Lecture to create one.");
     } catch (err) {
+      hasLoadedLectureTimetableRef.current = false;
       setLectureTimetableMessage(getReadableRequestError(err) || "Could not load your lecture timetable.");
     } finally {
       setIsLoadingLectureTimetable(false);
@@ -16688,9 +16725,13 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your lecture timetable.");
-      setLectureTimetableEntries(normalizeLectureTimetableEntries(data.lecture_timetable?.entries || entries));
+      const savedEntries = normalizeLectureTimetableEntries(data.lecture_timetable?.entries || []);
+      if (savedEntries.length !== entries.length) {
+        throw new Error("The server did not confirm every lecture. Please load the timetable and try saving again.");
+      }
+      setLectureTimetableEntries(savedEntries);
       hasLoadedLectureTimetableRef.current = true;
-      setLectureTimetableMessage("Lecture timetable saved.");
+      setLectureTimetableMessage(`${savedEntries.length} lecture${savedEntries.length === 1 ? "" : "s"} saved successfully.`);
     } catch (err) {
       setLectureTimetableMessage(getReadableRequestError(err) || "Could not save your lecture timetable.");
     } finally {
@@ -17346,39 +17387,82 @@ export default function App() {
     const files = Array.from(selectedFiles?.target?.files || selectedFiles || []);
     if (activeStudySessionImageInputRef.current) activeStudySessionImageInputRef.current.value = "";
     if (!files.length) return;
-    const remainingSlots = Math.max(0, MAX_AI_REFERENCE_IMAGES - activeStudySessionReferenceImages.length);
+    const remainingSlots = Math.max(0, MAX_CHAT_REFERENCE_ATTACHMENTS - activeStudySessionReferenceImages.length);
     if (!remainingSlots) {
-      setActiveStudySessionMessage(`You can attach up to ${MAX_AI_REFERENCE_IMAGES} study photos in one question.`);
+      setActiveStudySessionMessage(`You can attach up to ${MAX_CHAT_REFERENCE_ATTACHMENTS} photos or documents in one question.`);
       return;
     }
-    try {
-      const nextImages = [];
-      for (const selectedFile of files.slice(0, remainingSlots)) {
-        if (!selectedFile.type.startsWith("image/")) {
-          throw new Error("Please upload image files for study references.");
-        }
-        if (selectedFile.size > 5 * 1024 * 1024) {
-          throw new Error("Each study reference photo must be smaller than 5 MB.");
-        }
-        const dataUrl = await readFileAsDataUrl(selectedFile);
-        nextImages.push({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: selectedFile.name,
-          dataUrl,
-        });
+    setActiveStudySessionMessage("Reading study attachments...");
+    const nextAttachments = [];
+    let uploadError = null;
+    for (const selectedFile of files.slice(0, remainingSlots)) {
+      try {
+        nextAttachments.push(await uploadStudyChatReferenceFile(selectedFile));
+      } catch (err) {
+        uploadError = err;
+        break;
       }
-      setActiveStudySessionReferenceImages((current) => [...current, ...nextImages].slice(0, MAX_AI_REFERENCE_IMAGES));
-      setActiveStudySessionMessage(`${nextImages.length} study photo${nextImages.length === 1 ? "" : "s"} added.`);
-    } catch (err) {
-      setActiveStudySessionMessage(sanitizePublicRequestErrorMessage(err.message || "Could not read the study photo.", "study photo"));
     }
+    if (nextAttachments.length) {
+      setActiveStudySessionReferenceImages((current) => [...current, ...nextAttachments].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
+      setActiveStudySessionMessage(`${nextAttachments.length} study attachment${nextAttachments.length === 1 ? "" : "s"} added.`);
+    }
+    if (uploadError) setActiveStudySessionMessage(sanitizePublicRequestErrorMessage(uploadError.message || "Could not read the study attachment.", "study attachment"));
   };
   const removeActiveStudySessionReferenceImage = (imageId) => {
     setActiveStudySessionReferenceImages((current) => current.filter((item) => item.id !== imageId));
   };
-  const askActiveStudySessionAssistant = async () => {
+  const toggleActiveStudySessionVoiceCapture = () => {
+    if (isActiveStudySessionVoiceListening) {
+      try {
+        activeStudySessionVoiceRecognitionRef.current?.stop();
+      } catch {
+        // Recognition may already be stopping.
+      }
+      return;
+    }
+    const Recognition = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!Recognition) {
+      setActiveStudySessionMessage("Voice input is not available in this browser.");
+      return;
+    }
+    const recognition = new Recognition();
+    let capturedQuestion = "";
+    recognition.lang = resolveSpeechLocale(outputLanguage);
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.onresult = (event) => {
+      capturedQuestion = Array.from(event.results || [])
+        .map((result) => result?.[0]?.transcript || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (capturedQuestion) setActiveStudySessionQuestion(capturedQuestion);
+    };
+    recognition.onerror = () => {
+      setIsActiveStudySessionVoiceListening(false);
+      activeStudySessionVoiceRecognitionRef.current = null;
+      setActiveStudySessionMessage("Voice capture stopped. Allow microphone access or type the question.");
+    };
+    recognition.onend = () => {
+      setIsActiveStudySessionVoiceListening(false);
+      activeStudySessionVoiceRecognitionRef.current = null;
+      if (capturedQuestion) askActiveStudySessionAssistant(capturedQuestion, { speakAnswer: true });
+    };
+    activeStudySessionVoiceRecognitionRef.current = recognition;
+    setIsActiveStudySessionVoiceListening(true);
+    setActiveStudySessionMessage("Listening...");
+    try {
+      recognition.start();
+    } catch {
+      setIsActiveStudySessionVoiceListening(false);
+      activeStudySessionVoiceRecognitionRef.current = null;
+      setActiveStudySessionMessage("Voice input could not start.");
+    }
+  };
+  const askActiveStudySessionAssistant = async (questionOverride = "", { speakAnswer = false } = {}) => {
     const session = getActiveStudySession();
-    const question = activeStudySessionQuestion.trim();
+    const question = String(questionOverride || activeStudySessionQuestion).trim();
     if (!session) {
       setActiveStudySessionMessage("Open an active study session first.");
       return;
@@ -17388,7 +17472,7 @@ export default function App() {
       return;
     }
     const existingMessages = Array.isArray(session.studyMessages) ? session.studyMessages : [];
-    const selectedReferenceImages = activeStudySessionReferenceImages.slice(0, MAX_AI_REFERENCE_IMAGES);
+    const selectedReferenceImages = activeStudySessionReferenceImages.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const turnId = `active-study-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${turnId}-user`, role: "user", content: question, referenceImages: selectedReferenceImages };
     const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "Thinking..." };
@@ -17410,6 +17494,7 @@ export default function App() {
         currentSection: `Active study session: ${normalizeTimetableSubjectName(session.title, "Subject")}`,
         responseLength: "concise",
         referenceImages: selectedReferenceImages.map((image) => image.dataUrl).filter(Boolean),
+        referenceDocuments: selectedReferenceImages.filter((item) => item.text).map((item) => ({ name: item.name, text: item.text })),
       });
       const completedMessages = pendingMessages.map((message) => (
         message.id === pendingAssistantMessage.id ? { ...message, content: answer } : message
@@ -17420,6 +17505,7 @@ export default function App() {
         focusScore: calculateStudySessionFocusScore({ ...item, studyMessages: completedMessages }, timetableNow),
       }), { save: true, delayMs: 150 });
       setActiveStudySessionMessage("Answer ready.");
+      if (speakAnswer) speakStudyChatVoiceAnswer(answer);
     } catch (err) {
       const safeMessage = sanitizePublicRequestErrorMessage(err.message || "Study assistant could not answer right now.", "study assistant");
       const failedMessages = pendingMessages.map((message) => (
@@ -18379,7 +18465,7 @@ export default function App() {
     scrollUpgradePaymentOptionsIntoView();
   };
 
-  const startBillingCheckout = async (plan, paymentProvider = "payshap") => {
+  const startBillingCheckout = async (plan, paymentProvider = "payshap", { trial = false } = {}) => {
     if (!plan) return;
     if (plan.paymentType === "free") {
       setIsUpgradeModalOpen(false);
@@ -18392,8 +18478,9 @@ export default function App() {
       return;
     }
     const provider = String(paymentProvider || "").trim().toLowerCase() === "payfast" ? "payfast" : "payshap";
-    setBillingCheckoutMessage(provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
-    setBillingCheckoutPlanId(`${provider}:${plan.id}`);
+    setBillingCheckoutMessage(trial ? "Opening the secure PayFast trial setup..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
+    const checkoutKey = `${provider}:${trial ? "trial:" : ""}${plan.id}`;
+    setBillingCheckoutPlanId(checkoutKey);
     try {
       if (provider === "payfast") {
         const { data } = await authJsonWithTransientRetries(
@@ -18401,11 +18488,13 @@ export default function App() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ plan_id: plan.id }),
+            body: JSON.stringify({ plan_id: plan.id, trial }),
           },
           { timeoutMs: 30000, retries: 1 },
         );
-        setBillingCheckoutMessage("PayFast page is opening. Your plan will activate automatically after payment is confirmed.");
+        setBillingCheckoutMessage(trial
+          ? "PayFast is opening. Your card is required, nothing is charged today, and Pro bills R50 monthly after seven days unless cancelled."
+          : "PayFast page is opening. Your plan will activate automatically after payment is confirmed.");
         submitExternalCheckoutForm(data);
         return;
       }
@@ -21255,36 +21344,53 @@ export default function App() {
     setStatus("Past question paper removed.");
   };
 
+  const uploadStudyChatReferenceFile = async (selectedFile) => {
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    const response = await authFetch("/extract-slide-text/", {
+      method: "POST",
+      headers: { "X-Mabaso-Upload-Purpose": "study-chat" },
+      body: formData,
+      timeoutMs: 90000,
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
+    const imageUrl = Array.isArray(data.image_urls) ? data.image_urls.find(Boolean) : "";
+    return {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: selectedFile.name,
+      type: selectedFile.type || "",
+      kind: imageUrl ? "image" : "document",
+      dataUrl: imageUrl || "",
+      text: String(data.text || "").trim(),
+    };
+  };
+
   const handleChatReferenceFilesChange = async (selectedFiles) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return;
     setError("");
-    const remainingSlots = Math.max(0, MAX_CHAT_REFERENCE_IMAGES - chatReferenceImages.length);
+    const remainingSlots = Math.max(0, MAX_CHAT_REFERENCE_ATTACHMENTS - chatReferenceImages.length);
     if (!remainingSlots) {
-      setError(`You can attach up to ${MAX_CHAT_REFERENCE_IMAGES} reference images in one question.`);
+      setError(`You can attach up to ${MAX_CHAT_REFERENCE_ATTACHMENTS} photos or documents in one question.`);
       return;
     }
-    try {
-      const nextImages = [];
-      for (const selectedFile of files.slice(0, remainingSlots)) {
-        if (!selectedFile.type.startsWith("image/")) {
-          throw new Error("Please upload image files for chat references.");
-        }
-        if (selectedFile.size > 5 * 1024 * 1024) {
-          throw new Error("Each chat reference image must be smaller than 5 MB.");
-        }
-        const dataUrl = await readFileAsDataUrl(selectedFile);
-        nextImages.push({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: selectedFile.name,
-          dataUrl,
-        });
+    setStatus("Reading chat attachments...");
+    const nextAttachments = [];
+    let uploadError = null;
+    for (const selectedFile of files.slice(0, remainingSlots)) {
+      try {
+        nextAttachments.push(await uploadStudyChatReferenceFile(selectedFile));
+      } catch (err) {
+        uploadError = err;
+        break;
       }
-      setChatReferenceImages((current) => [...current, ...nextImages].slice(0, MAX_CHAT_REFERENCE_IMAGES));
-      setStatus(`${nextImages.length} chat reference image${nextImages.length === 1 ? "" : "s"} added.`);
-    } catch (err) {
-      setError(err.message || "Could not read the reference image.");
     }
+    if (nextAttachments.length) {
+      setChatReferenceImages((current) => [...current, ...nextAttachments].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
+      setStatus(`${nextAttachments.length} chat attachment${nextAttachments.length === 1 ? "" : "s"} added.`);
+    }
+    if (uploadError) setError(uploadError.message || "Could not read the chat attachment.");
   };
 
   const removeChatReferenceImage = (imageId) => {
@@ -23141,6 +23247,7 @@ export default function App() {
     question,
     history = chatMessages.slice(-6),
     referenceImages = [],
+    referenceDocuments = [],
     deliveryMode = "chat",
     currentSection = "",
     responseLength = deliveryMode === "voice" ? "concise" : teacherResponseLength,
@@ -23155,6 +23262,13 @@ export default function App() {
       })
       .filter(Boolean)
       .slice(0, MAX_CHAT_REFERENCE_IMAGES);
+    const normalizedReferenceDocuments = (Array.isArray(referenceDocuments) ? referenceDocuments : [])
+      .map((document) => ({
+        name: String(document?.name || "Attached document").slice(0, 160),
+        text: String(document?.text || "").trim().slice(0, 12000),
+      }))
+      .filter((document) => document.text)
+      .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const response = await authFetch("/ask-study-assistant/", {
       method: "POST",
@@ -23171,6 +23285,7 @@ export default function App() {
         past_question_papers: pastQuestionPapers,
         history,
         reference_images: normalizedReferenceImages,
+        reference_documents: normalizedReferenceDocuments,
         language: outputLanguage,
         delivery_mode: deliveryMode,
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
@@ -23321,6 +23436,7 @@ export default function App() {
       const syncedDocumentHtml = collectCurrentStudyGuideDocumentHtml(nextDocumentHtml);
       const nextSummary = rebuildSummaryFromStudyGuideDocument(syncedDocumentHtml);
       studyGuideDocumentSaveInProgressRef.current = true;
+      lastSummarySignatureRef.current = String(nextSummary || "").slice(0, 4000);
       studyGuideDocumentDraftRef.current = {};
       setStudyGuideDocumentHtml(syncedDocumentHtml);
       setSummary(nextSummary);
@@ -23356,7 +23472,7 @@ export default function App() {
       setWorkspaceSaveStatus("Saved ✓");
       window.setTimeout(() => {
         studyGuideDocumentSaveInProgressRef.current = false;
-      }, 0);
+      }, 120);
       window.setTimeout(() => setWorkspaceSaveStatus(""), 1800);
     }, Math.max(0, Number(delayMs) || 0));
   };
@@ -23507,32 +23623,58 @@ export default function App() {
   };
 
   const toggleWorkspaceEditMode = () => {
-    setIsWorkspaceEditMode((current) => {
-      const next = !current;
-      if (next) setIsWorkspaceHighlightMode(false);
-      window.requestAnimationFrame(() => {
-        if (next) openAllStudyGuideSections();
-        const editor = focusStudyGuideEditor();
-        if (!next && editor) saveActiveGuideEditor(editor);
-      });
-      setStatus(next ? "Edit mode on. Tap inside the study guide and type." : "Edit mode off.");
-      return next;
-    });
+    const next = !isWorkspaceEditMode;
+    if (next) setIsWorkspaceHighlightMode(false);
+    setIsWorkspaceEditMode(next);
+    setStatus(next ? "Edit mode on. Tap inside the study guide and type." : "Edit mode off.");
   };
 
   const toggleWorkspaceHighlightMode = () => {
-    setIsWorkspaceHighlightMode((current) => {
-      const next = !current;
-      if (next) setIsWorkspaceEditMode(false);
-      if (next) {
-        const editor = getActiveGuideEditor() || Object.values(studyGuideEditorRefs.current || {}).find(Boolean);
-        if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
-        window.requestAnimationFrame(openAllStudyGuideSections);
-      }
-      setStatus(next ? "Highlight mode on. Drag over text to paint it, or select text and choose a colour." : "Highlight mode off.");
-      return next;
-    });
+    const next = !isWorkspaceHighlightMode;
+    if (next) {
+      setIsWorkspaceEditMode(false);
+      const editor = getActiveGuideEditor() || Object.values(studyGuideEditorRefs.current || {}).find(Boolean);
+      if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
+    }
+    setIsWorkspaceHighlightMode(next);
+    setStatus(next ? "Highlight mode on. Drag over text to paint it, or select text and choose a colour." : "Highlight mode off.");
   };
+
+  useEffect(() => {
+    if (!isWorkspaceEditMode && !isWorkspaceHighlightMode) return undefined;
+    openAllStudyGuideSections();
+    if (!isWorkspaceEditMode) return undefined;
+    const firstFrame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const editor = focusStudyGuideEditor();
+        if (editor && editor.getAttribute("contenteditable") !== "true") {
+          editor.setAttribute("contenteditable", "true");
+        }
+      });
+    });
+    return () => window.cancelAnimationFrame(firstFrame);
+  }, [isWorkspaceEditMode, isWorkspaceHighlightMode]);
+
+  useEffect(() => {
+    if (!isWorkspaceHighlightMode || typeof document === "undefined") return undefined;
+    let captureTimer = 0;
+    const captureCurrentSelection = () => {
+      window.clearTimeout(captureTimer);
+      captureTimer = window.setTimeout(() => {
+        const selection = window.getSelection?.();
+        const anchorNode = selection?.anchorNode;
+        const anchorElement = anchorNode?.nodeType === 1 ? anchorNode : anchorNode?.parentElement;
+        const editor = anchorElement?.closest?.(".study-guide-rich-editor");
+        if (!editor || !selection?.rangeCount || selection.getRangeAt(0).collapsed) return;
+        captureGuideEditorSelection(editor.dataset.sectionKey || "", editor);
+      }, 30);
+    };
+    document.addEventListener("selectionchange", captureCurrentSelection);
+    return () => {
+      document.removeEventListener("selectionchange", captureCurrentSelection);
+      window.clearTimeout(captureTimer);
+    };
+  }, [isWorkspaceHighlightMode]);
 
   const closeWorkspaceMobileSidebar = () => {
     setIsWorkspaceMobileSidebarOpen(false);
@@ -23597,6 +23739,18 @@ export default function App() {
     });
   };
 
+  const captureGuideTouchSelectionAfterInteraction = (sectionKey, editor) => {
+    [80, 220, 420].forEach((delayMs, index) => {
+      window.setTimeout(() => {
+        captureGuideEditorSelection(sectionKey, editor);
+        if (index === 2 && isWorkspaceHighlightMode) {
+          if (workspaceHighlightTool === "erase") eraseSelectedWorkspaceHighlight();
+          else applyWorkspaceHighlight(activeHighlightColor);
+        }
+      }, delayMs);
+    });
+  };
+
   const eraseSelectedWorkspaceHighlight = () => {
     if (typeof window === "undefined") return;
     const restoredEditor = restoreGuideEditorSelection();
@@ -23618,22 +23772,9 @@ export default function App() {
           return false;
         }
       });
-    if (range && !range.collapsed && selectedMarks.length) {
-      try {
-        const fragment = range.extractContents();
-        [...fragment.querySelectorAll("mark")].forEach(unwrapMarkElement);
-        range.insertNode(fragment);
-        selection.removeAllRanges();
-        saveActiveGuideEditor(editor);
-        setStatus("Selected highlight removed.");
-        return;
-      } catch {
-        setStatus("That exact highlight selection could not be erased. Try selecting a smaller phrase.");
-        return;
-      }
-    }
     if (selectedMarks.length) {
       selectedMarks.forEach(unwrapMarkElement);
+      selection.removeAllRanges();
       saveActiveGuideEditor(editor);
       setStatus(selectedMarks.length === 1 ? "Highlight removed." : "Highlights removed.");
       return;
@@ -23688,7 +23829,10 @@ export default function App() {
       id: image.id,
       name: image.name,
       dataUrl: image.dataUrl,
+      text: image.text,
+      kind: image.kind,
     }));
+    const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     const hasStudyChatContext = Boolean(
       String(transcript || "").trim()
       || String(summary || "").trim()
@@ -23718,6 +23862,7 @@ export default function App() {
         question,
         history: updatedHistory.slice(-4),
         referenceImages: referenceImagesForQuestion,
+        referenceDocuments: referenceDocumentsForQuestion,
         deliveryMode: "chat",
         currentSection: activeTab,
       });
@@ -23840,7 +23985,10 @@ export default function App() {
       id: image.id,
       name: image.name,
       dataUrl: image.dataUrl,
+      text: image.text,
+      kind: image.kind,
     }));
+    const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     setError("");
     setStatus("MABASO is answering your voice question...");
     setStudyChatVoiceStatus("Thinking through your question...");
@@ -23858,6 +24006,7 @@ export default function App() {
         question,
         history: updatedHistory.slice(-4),
         referenceImages: referenceImagesForQuestion,
+        referenceDocuments: referenceDocumentsForQuestion,
         deliveryMode: "teacher_interrupt",
         currentSection: activeTab,
         responseLength: "concise",
@@ -24043,7 +24192,9 @@ export default function App() {
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
           {Array.isArray(message.images) && message.images.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              {message.images.map((image) => <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />)}
+              {message.images.map((image) => image.dataUrl
+                ? <img key={image.id || image.name} src={image.dataUrl} alt={image.name || "Question reference"} className="h-16 w-16 rounded-xl border border-white/10 object-cover" />
+                : <span key={image.id || image.name} className="inline-flex max-w-[220px] items-center gap-2 text-xs text-slate-300"><FileText className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="truncate">{image.name || "Document"}</span></span>)}
             </div>
           ) : null}
           <div className="mabaso-ai-response mt-2">
@@ -24060,7 +24211,7 @@ export default function App() {
   const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "rounded-[24px] border border-white/10 bg-slate-950/85 p-4"}`}>
       <div className="study-chat-composer-row">
-        <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_IMAGES} className="study-chat-composer-icon" aria-label="Add question photo">+</button>
+        <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
         <textarea
           value={chatQuestion}
           onChange={(event) => setChatQuestion(event.target.value)}
@@ -24095,7 +24246,7 @@ export default function App() {
           </svg>
         </button>
       </div>
-      <input ref={chatImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
+      <input ref={chatImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
       {chatReferenceImages.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {chatReferenceImages.map((image) => (
@@ -24146,14 +24297,14 @@ export default function App() {
       {
         id: activeStudyChatId,
         title: currentIndexedChat?.title || (chatMessages.length ? "Current Study Chat" : "New Study Chat"),
-        subtitle: `Conversation ${activeStudyChatId}`,
+        subtitle: `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}`,
       },
       ...studyChatHistoryIndex
         .filter((item) => item.id !== activeStudyChatId)
         .map((item) => ({
           id: item.id,
           title: item.title || "Study Chat",
-          subtitle: `Conversation ${item.id}`,
+          subtitle: `${Number(item.messageCount || 0)} message${Number(item.messageCount || 0) === 1 ? "" : "s"}`,
         })),
     ].slice(0, 80);
     return (
@@ -24193,16 +24344,9 @@ export default function App() {
         <section className="study-chat-main">
           <header className="study-chat-page-topbar">
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className="study-chat-top-button lg:hidden" aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
-            <button type="button" onClick={() => openProtectedAppPage("capture")} className="study-chat-top-button" aria-label="Back to capture"><span aria-hidden="true">&lt;</span></button>
-            <div className="study-chat-mode-tabs" aria-label="Study chat mode">
-              <button type="button" className={studyChatResponseMode === "text" ? "is-active" : ""} onClick={() => setStudyChatResponseMode("text")}>Chat</button>
-              <button type="button" className={studyChatResponseMode === "voice" ? "is-active" : ""} onClick={() => setStudyChatResponseMode("voice")}>Voice</button>
-            </div>
-            <span className="protected-context-id">Conversation {activeStudyChatId}</span>
-            <button type="button" onClick={isStudyChatVoiceListening ? stopStudyChatVoiceCapture : startStudyChatVoiceCapture} disabled={isAskingChat || isStudyChatVoiceAnswering} className={`study-chat-top-button ${isStudyChatVoiceListening ? "is-listening" : ""}`} aria-label={isStudyChatVoiceListening ? "Stop voice question" : "Start voice question"}><Mic className="h-5 w-5" aria-hidden="true" /></button>
-            <div className="study-chat-page-profile">{renderCompactProfileMenu()}</div>
+            <span className="study-chat-mobile-title lg:hidden">Study Chat</span>
           </header>
-          <main className="study-chat-page-scroll">
+          <main className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
             {chatMessages.length ? null : <h1>Ready when you are.</h1>}
             {renderStudyChatMessages({ limit: 80, fullPage: true })}
           </main>
@@ -26705,10 +26849,6 @@ export default function App() {
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
       <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
-        <div className="protected-context-strip" aria-label="Current private workspace identifier">
-          <span>Workspace ID</span>
-          <code>{workspaceContextId}</code>
-        </div>
         {currentPage !== "capture" && currentPage !== "workspace" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
@@ -26929,7 +27069,7 @@ export default function App() {
               <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(true)} className="workspace-mobile-sidebar-button lg:hidden" aria-label="Open Study Workspace sidebar">
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </button>
-              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2><code className="workspace-context-id">Workspace {workspaceContextId}</code></div>
+              <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2></div>
             </div>
             <div className="workspace-top-actions">
               <div className="workspace-search-box">
@@ -27189,7 +27329,7 @@ export default function App() {
                       <Highlighter className="h-4 w-4" aria-hidden="true" />
                     </button>
                     {isWorkspaceHighlightMode ? (
-                      <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours" onMouseDown={(event) => event.preventDefault()}>
+                      <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours" onPointerDown={(event) => event.preventDefault()}>
                         {[
                           ["Yellow", "#fef08a"],
                           ["Green", "#bbf7d0"],
@@ -27197,10 +27337,10 @@ export default function App() {
                           ["Pink", "#fbcfe8"],
                           ["Orange", "#fed7aa"],
                         ].map(([label, color]) => (
-                          <button key={label} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("paint"); setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={workspaceHighlightTool === "paint" && activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
+                          <button key={label} type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("paint"); setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={workspaceHighlightTool === "paint" && activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
                         ))}
-                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("erase"); eraseSelectedWorkspaceHighlight(); }} className={`workspace-highlight-tool ${workspaceHighlightTool === "erase" ? "is-selected" : ""}`} title="Erase selected highlight or drag across highlights to remove them" aria-label="Activate highlight eraser">Erase</button>
-                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
+                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("erase"); eraseSelectedWorkspaceHighlight(); }} className={`workspace-highlight-tool ${workspaceHighlightTool === "erase" ? "is-selected" : ""}`} title="Erase selected highlight or drag across highlights to remove them" aria-label="Activate highlight eraser">Erase</button>
+                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
                       </div>
                     ) : null}
                   </div>
@@ -27321,7 +27461,11 @@ export default function App() {
                                     updateStudyGuideSectionHtml(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget.innerHTML, { immediate: true });
                                   }}
                                   onSelect={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
-                                  onPointerUp={(event) => captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true })}
+                                  onPointerUp={(event) => {
+                                    if (event.pointerType === "touch") return;
+                                    captureGuideSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget, { paint: true });
+                                  }}
+                                  onTouchEnd={(event) => captureGuideTouchSelectionAfterInteraction(event.currentTarget.dataset.sectionKey || getGuideSectionEditKey(section), event.currentTarget)}
                                   onKeyUp={(event) => {
                                     const sectionKey = getGuideSectionEditKey(section);
                                     captureGuideEditorSelection(sectionKey, event.currentTarget);
