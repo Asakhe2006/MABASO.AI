@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, RefreshCw, Search, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, RefreshCw, Search, SlidersHorizontal, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -26180,7 +26180,7 @@ export default function App() {
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
       {siteRatingModal}
-      <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
+      <main className={`mobile-app-main relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"} ${currentPage === "capture" ? "mobile-capture-page" : ""}`}>
         {currentPage !== "capture" && currentPage !== "workspace" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
@@ -26214,7 +26214,60 @@ export default function App() {
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
-          <div className="mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
+          <div className="capture-mobile-workspace-shell sm:hidden">
+            <div className="capture-mobile-workspace-top">
+              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)} className="capture-mobile-icon-button" aria-label="Open Mabaso sidebar">
+                <Menu className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <div className="capture-mobile-title">
+                <span className="capture-mobile-logo" aria-hidden="true">
+                  <img src="/favicon.svg" alt="" />
+                </span>
+                <span>
+                  <strong>Study Workspace</strong>
+                  <small>Study Guide Generator</small>
+                </span>
+              </div>
+              <div className="capture-mobile-profile">{renderCompactProfileMenu()}</div>
+            </div>
+            <div className="capture-mobile-search-row">
+              <label className="capture-mobile-search">
+                <Search className="h-4 w-4" aria-hidden="true" />
+                <input
+                  value={workspaceSearchQuery}
+                  onChange={(event) => setWorkspaceSearchQuery(event.target.value)}
+                  placeholder="Search in this guide..."
+                  aria-label="Search study tools"
+                />
+              </label>
+              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)} className="capture-mobile-filter-button" aria-label="Open filters and navigation">
+                <SlidersHorizontal className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="capture-mobile-tool-row" aria-label="Capture quick actions">
+              <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()}>
+                <Copy className="h-4 w-4" aria-hidden="true" />
+                <span>Files</span>
+              </button>
+              <button type="button" onClick={() => lectureNotesFileInputRef.current?.click()}>
+                <Download className="h-4 w-4" aria-hidden="true" />
+                <span>Notes</span>
+              </button>
+              <button type="button" onClick={() => setStudyGuidePromptDraft((current) => current || "")}>
+                <Pencil className="h-4 w-4" aria-hidden="true" />
+                <span>Prompt</span>
+              </button>
+              <button type="button" onClick={() => generateStudyGuideButtonRef.current?.scrollIntoView({ block: "center", behavior: "smooth" })}>
+                <Highlighter className="h-4 w-4" aria-hidden="true" />
+                <span>Guide</span>
+              </button>
+              <button type="button" onClick={() => setIsMobileMoreMenuOpen(true)}>
+                <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                <span>More</span>
+              </button>
+            </div>
+          </div>
+          <div className="capture-panel-desktop-header mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
             <div className="flex min-w-0 flex-wrap items-center gap-3">
               <button type="button" onClick={() => openProtectedAppPage("voice")} className="capture-ai-chat-button">
                 <MessageCircle className="h-5 w-5" aria-hidden="true" />
