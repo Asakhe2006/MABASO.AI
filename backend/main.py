@@ -6582,6 +6582,8 @@ ANSWER LENGTH
 - Do not generate long walls of text.
 - Use short paragraphs.
 - Use headings, bullet points, numbered steps, tables or examples only when they improve understanding.
+- Choose length automatically: simple factual questions get a short direct answer; definitions get definition, explanation and example; learning questions get a structured explanation; assignments and tutorials get step-by-step help with enough working.
+- Always obey the student's requested length when they ask for a short, detailed, simple, exam-style or step-by-step answer.
 
 TEACHING METHOD
 When explaining a difficult concept, normally use this order:
@@ -6601,6 +6603,8 @@ STUDY MATERIAL
 - When the material does not contain the answer, say so briefly and then answer from general knowledge when appropriate.
 - Do not refuse general academic questions merely because the answer is not inside the uploaded material.
 - Never invent citations, page numbers, marks, formulas, sources or quotations.
+- Use labels only when they add clarity: "From your uploaded material" for supported lecture content, and "General knowledge" for outside academic explanation.
+- If the answer depends on current facts, prices, leaders, news or changing data, say current verification is needed unless a live source was actually used.
 
 CONVERSATION CONTEXT
 - Remember the current topic and previous messages.
@@ -6633,6 +6637,13 @@ FORMATTING
 - For simple questions, answer in a normal paragraph instead of forcing headings or bullet lists.
 - When several items each need explanation, prefer a heading or bold title followed by a short description instead of a long wall of "- **Title:** ..." bullets.
 - Keep mobile readability in mind: short paragraphs, wrapped links, concise table cells, and no overly wide text blocks.
+
+RESPONSE VALIDATION
+- Before finalising, check that you answered the user's exact question.
+- Remove repeated paragraphs, repeated conclusions and filler transitions.
+- Do not include unsupported citations or made-up source labels.
+- If evidence is weak, say what is uncertain and give the safest explanation.
+- Never claim that uploads, tools, searches, payments, saves, downloads or background actions succeeded unless the system explicitly provided that result.
 
 Your goal is to make every response feel clear, intelligent, natural and useful, like a patient lecturer or tutor speaking directly to the student.
 """
@@ -6847,10 +6858,10 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         "conversational": "Sound warm, natural, and human while staying precise.",
     }.get(teaching_style, "Adapt the explanation to the student's likely level and confusion.")
     response_length_instruction = {
-        "concise": "Keep the spoken answer compact and high-signal.",
-        "balanced": "Keep the spoken answer concise but informative.",
-        "detailed": "Give a fuller explanation with a little more teaching depth.",
-    }.get(response_length, "Keep the spoken answer concise but informative.")
+        "concise": "Keep the answer compact and high-signal.",
+        "balanced": "Keep the answer concise but informative.",
+        "detailed": "Give a fuller explanation with more teaching depth.",
+    }.get(response_length, "Keep the answer concise but informative.")
 
     def trimmed_block(label: str, value: str, limit: int = section_limit) -> str:
         cleaned = (value or "").strip()
@@ -7329,26 +7340,26 @@ def ensure_study_chat_follow_up(answer: str, question: str, delivery_mode: str =
     if compact_text(delivery_mode, "chat").lower() in {"teacher_interrupt", "study_session"}:
         return cleaned or "That exact point was not clearly covered in the lecture material."
     if not cleaned:
-        return "I could not form a clear answer from the lecture context.\n\nWould you like me to narrow it down and walk through that exact part step by step?"
+        return "I could not form a clear answer from the available context."
 
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n", cleaned) if part.strip()]
-    if paragraphs:
-        last_paragraph = paragraphs[-1]
-        if last_paragraph.endswith("?") or "?" in last_paragraph:
-            return cleaned
-
-    focus = compact_text(question).replace('"', "'")
-    if len(focus) > 140:
-        focus = (focus[:137].rsplit(" ", 1)[0].strip() or focus[:137].strip()) + "..."
-
-    if focus:
-        follow_up = (
-            f'Would you like me to unpack "{focus}" step by step and show how each part connects to the lecture method?'
-        )
-    else:
-        follow_up = "Would you like me to unpack that step by step and show how each part connects to the lecture method?"
-
-    return f"{cleaned}\n\n{follow_up}"
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for paragraph in paragraphs:
+        fingerprint = re.sub(r"\W+", "", paragraph).lower()
+        if fingerprint and fingerprint in seen:
+            continue
+        if fingerprint:
+            seen.add(fingerprint)
+        deduped.append(paragraph)
+    cleaned = "\n\n".join(deduped) or cleaned
+    cleaned = re.sub(
+        r"\n{0,2}(Would you like me to|Do you want me to|Can I help you).{0,220}\?\s*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
+    return cleaned or "I could not form a clear answer from the available context."
 
 
 def sanitize_download_filename(value: str) -> str:

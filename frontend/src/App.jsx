@@ -14877,6 +14877,14 @@ export default function App() {
   }, [chatMessages.length, isAskingChat]);
 
   useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    document.body.classList.toggle("study-chat-sidebar-open", Boolean(isStudyChatSidebarOpen));
+    return () => {
+      document.body.classList.remove("study-chat-sidebar-open");
+    };
+  }, [isStudyChatSidebarOpen]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !authEmail) {
       setStudyChatHistoryIndex([]);
       return undefined;
@@ -24381,10 +24389,30 @@ export default function App() {
   );
 
   const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => (
-    <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages"}>
+    <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
       {chatMessages.length ? chatMessages.slice(-limit).map((message, index) => (
         <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}>
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+          <div className="study-chat-message-meta">
+            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
+            {message.role === "assistant" && message.content !== "Thinking..." ? (
+              <button
+                type="button"
+                className="study-chat-message-action"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(String(message.content || ""));
+                    setStatus("Answer copied.");
+                  } catch {
+                    setError("Copy failed. Your browser may be blocking clipboard access.");
+                  }
+                }}
+                aria-label="Copy answer"
+              >
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Copy</span>
+              </button>
+            ) : null}
+          </div>
           {Array.isArray(message.images) && message.images.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {message.images.map((image) => image.dataUrl
@@ -24404,7 +24432,7 @@ export default function App() {
   );
 
   const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
-    <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "rounded-[24px] border border-white/10 bg-slate-950/85 p-4"}`}>
+    <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
       <div className="study-chat-composer-row">
         <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
         <textarea
@@ -24457,12 +24485,9 @@ export default function App() {
   );
 
   const renderStudyChatPanel = ({ compact = false } = {}) => (
-    <div className={`study-chat-panel ${compact ? "rounded-[24px] border border-emerald-300/15 bg-slate-950/85 p-4" : ""}`}>
-      <div className="force-mobile-stack flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Chat</p>
-          <h4 className="mt-2 text-2xl font-semibold text-white">Ask Mabaso anything.</h4>
-        </div>
+    <div className={`study-chat-panel study-chat-embedded-panel ${compact ? "is-compact" : ""}`}>
+      <div className="study-chat-embedded-head">
+        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Study Chat</p>
         <div className="inline-chat-actions">
           <button type="button" onClick={startNewStudyChat} className="inline-chat-action">New Chat</button>
           <div className="inline-voice-anchor">
