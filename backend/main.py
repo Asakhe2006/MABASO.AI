@@ -320,6 +320,7 @@ STUDY_IMAGE_MODEL = (os.getenv("STUDY_IMAGE_MODEL", "gpt-image-1") or "gpt-image
 STUDY_IMAGE_SIZE = (os.getenv("STUDY_IMAGE_SIZE", "1024x1024") or "1024x1024").strip()
 STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "high") or "high").strip()
 STUDY_IMAGE_GENERATION_TIMEOUT = float(os.getenv("STUDY_IMAGE_GENERATION_TIMEOUT", "120"))
+MAX_STUDY_IMAGE_INLINE_BYTES = int(os.getenv("MAX_STUDY_IMAGE_INLINE_BYTES", "3500000"))
 FREE_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("FREE_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
@@ -6557,6 +6558,65 @@ def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+MABASO_PRODUCT_KNOWLEDGE_FILE = Path(__file__).with_name("mabaso_product_knowledge.json")
+
+
+def load_mabaso_product_knowledge_context() -> str:
+    try:
+        payload = json.loads(MABASO_PRODUCT_KNOWLEDGE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Could not load Mabaso product knowledge: %s", exc)
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    lines: list[str] = []
+    for key, value in payload.items():
+        if isinstance(value, (str, int, float, bool)):
+            lines.append(f"{str(key).replace('_', ' ').title()}: {value}")
+    return "\n".join(lines).strip()
+
+
+MABASO_PRODUCT_KNOWLEDGE_CONTEXT = load_mabaso_product_knowledge_context()
+
+
+def is_mabaso_product_question(question: str) -> bool:
+    normalized = compact_text(question).lower()
+    if not normalized:
+        return False
+    if "mabaso" not in normalized and "this app" not in normalized and "the app" not in normalized and "your platform" not in normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in (
+            "what is",
+            "how does",
+            "how do",
+            "how can",
+            "new chat",
+            "history",
+            "study guide",
+            "upload",
+            "record",
+            "voice",
+            "oral exam",
+            "timetable",
+            "plan",
+            "attempt",
+            "limit",
+            "paid",
+            "free",
+            "pro",
+            "premium",
+            "download",
+            "collaboration",
+            "room",
+            "account",
+            "sign in",
+            "login",
+        )
+    )
+
+
 STUDY_CHAT_SYSTEM_PROMPT = """
 You are Mabaso AI, a professional, natural and supportive AI study assistant.
 
@@ -6894,6 +6954,7 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
     context_text = "\n\n".join(part for part in context_parts if part).strip()
     if len(context_text) > chat_context_limit:
         context_text = context_text[:chat_context_limit].rsplit(" ", 1)[0].strip()
+    question_text = payload.question.strip()
 
     if delivery_mode == "teacher_interrupt":
         system_prompt = "\n\n".join(
@@ -6937,6 +6998,18 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
 
     messages: list[dict[str, object]] = [{"role": "system", "content": system_prompt}]
 
+    if MABASO_PRODUCT_KNOWLEDGE_CONTEXT and is_mabaso_product_question(question_text):
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Verified Mabaso AI product knowledge for product-specific questions. "
+                    "Use only these facts for Mabaso AI platform, plan, feature, owner, limit or policy answers. "
+                    "If the requested product detail is missing here, say it is not available in verified Mabaso AI configuration.\n\n"
+                    f"{MABASO_PRODUCT_KNOWLEDGE_CONTEXT}"
+                ),
+            }
+        )
     if context_text:
         messages.append({"role": "system", "content": f"Optional workspace background for internal use only:\n\n{context_text}"})
     if current_section:
@@ -6948,7 +7021,6 @@ def build_chat_messages(payload: StudyChatRequest) -> list[dict[str, object]]:
         if content:
             messages.append({"role": role, "content": content[:1200]})
 
-    question_text = payload.question.strip()
     reference_images = [image for image in payload.reference_images[:4] if (image or "").strip()]
     if reference_images:
         user_content: list[dict[str, object]] = [
@@ -7360,6 +7432,23 @@ def ensure_study_chat_follow_up(answer: str, question: str, delivery_mode: str =
         flags=re.IGNORECASE | re.DOTALL,
     ).strip()
     return cleaned or "I could not form a clear answer from the available context."
+
+
+def build_study_chat_unavailable_answer(question: str, delivery_mode: str = "chat") -> str:
+    if compact_text(delivery_mode, "chat").lower() in {"teacher_interrupt", "voice"}:
+        return (
+            "I could not reach the answer service clearly right now. "
+            "Please ask again in a moment, or type the question so I can retry it as text."
+        )
+    if is_mabaso_product_question(question):
+        return (
+            "I could not reach the answer service clearly right now, so I should not guess Mabaso AI product details. "
+            "Please press retry or ask again in a moment."
+        )
+    return (
+        "I could not reach the answer service clearly right now. "
+        "Please press retry or send the question again, and I will answer from your material or general academic knowledge when the service responds."
+    )
 
 
 def sanitize_download_filename(value: str) -> str:
@@ -16133,6 +16222,42 @@ async def build_ai_study_image_specs(
     return specs or build_fallback_ai_study_image_specs(summary, limit)
 
 
+def download_remote_study_image_as_data_url(image_url: str) -> str:
+    cleaned_url = compact_text(image_url)
+    if not cleaned_url or cleaned_url.startswith("data:"):
+        return cleaned_url
+    parsed_url = urlparse(cleaned_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return ""
+    try:
+        response = requests.get(
+            cleaned_url,
+            timeout=min(35.0, max(10.0, STUDY_IMAGE_GENERATION_TIMEOUT / 3)),
+            headers={"User-Agent": YOUTUBE_USER_AGENT, "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"},
+            stream=True,
+        )
+        response.raise_for_status()
+        content_type = compact_text(response.headers.get("content-type")).split(";", 1)[0].lower()
+        if content_type not in {"image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}:
+            return ""
+        chunks: list[bytes] = []
+        total_bytes = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            total_bytes += len(chunk)
+            if total_bytes > MAX_STUDY_IMAGE_INLINE_BYTES:
+                logger.info("Study image URL too large to inline: %s bytes from %s", total_bytes, parsed_url.netloc)
+                return ""
+            chunks.append(chunk)
+        if not chunks:
+            return ""
+        return build_data_url(b"".join(chunks), "image/jpeg" if content_type == "image/jpg" else content_type, "study-visual")
+    except Exception as exc:
+        logger.warning("Could not make study image URL durable: %s", exc)
+        return ""
+
+
 def generate_openai_study_image_url(prompt: str) -> str:
     safe_prompt = compact_text(prompt)
     if not safe_prompt:
@@ -16165,7 +16290,8 @@ def generate_openai_study_image_url(prompt: str) -> str:
     b64_json = getattr(image, "b64_json", "") or (image.get("b64_json", "") if isinstance(image, dict) else "")
     if b64_json:
         return f"data:image/png;base64,{b64_json}"
-    return getattr(image, "url", "") or (image.get("url", "") if isinstance(image, dict) else "")
+    remote_url = getattr(image, "url", "") or (image.get("url", "") if isinstance(image, dict) else "")
+    return download_remote_study_image_as_data_url(remote_url) or remote_url
 
 
 async def generate_ai_study_images(
@@ -23113,15 +23239,24 @@ async def ask_study_assistant(
             }
         )
         fallback_messages = build_chat_messages(fallback_payload)
-        answer = await asyncio.wait_for(
-            asyncio.to_thread(
-                _ask,
-                fallback_messages,
-                timeout_seconds=STUDY_CHAT_FALLBACK_TIMEOUT,
-                max_tokens=900,
-            ),
-            timeout=STUDY_CHAT_FALLBACK_TIMEOUT + 3,
-        )
+        try:
+            answer = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _ask,
+                    fallback_messages,
+                    timeout_seconds=STUDY_CHAT_FALLBACK_TIMEOUT,
+                    max_tokens=900,
+                ),
+                timeout=STUDY_CHAT_FALLBACK_TIMEOUT + 3,
+            )
+        except Exception as fallback_error:
+            logger.exception(
+                "Study Chat fallback request failed user=%s primary=%s fallback=%s",
+                current_user,
+                primary_error.__class__.__name__,
+                fallback_error.__class__.__name__,
+            )
+            answer = build_study_chat_unavailable_answer(payload.question, payload.delivery_mode)
     answer_with_follow_up = ensure_study_chat_follow_up(answer, payload.question, payload.delivery_mode)
     final_answer = make_formulas_human_readable(answer_with_follow_up)
     saved_conversation = await asyncio.to_thread(

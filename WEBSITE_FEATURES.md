@@ -275,3 +275,808 @@ The main code is concentrated in a few places:
 ## Short summary
 
 Mabaso AI is a full lecture-to-study platform. Its biggest strength is that one lecture can become many tools at the same time: transcript, study guide, formulas, examples, flashcards, test, podcast, presentation, chat help, saved history, and collaboration rooms.
+
+
+I have expanded your description into a more advanced **ChatGPT-style platform specification** that includes the features you previously requested: Copilot-style AI, realtime voice, mobile-first workspace, Word-like editing/highlighting, AI memory, subscriptions, security, analytics, South African language support, future AI training capabilities, and a larger platform vision.
+
+You can use this as a master document for your Codex `AGENTS.md`, project documentation, or development roadmap.
+
+---
+
+# Mabaso AI — Advanced AI Study Platform Specification
+
+## Platform Vision
+
+Mabaso AI is an advanced AI-powered education platform that transforms lectures, learning materials, and academic content into a complete intelligent study environment.
+
+Instead of only summarising information, Mabaso AI works like a combination of:
+
+* ChatGPT for academic conversations
+* Microsoft Copilot for teaching assistance
+* Notion for organised study notes
+* Quizlet for revision
+* PowerPoint AI for presentations
+* Podcast AI for audio learning
+* Google Drive-style storage for student materials
+
+The goal is to create a complete AI study companion that follows the student throughout their academic journey.
+
+---
+
+# Core Platform Capabilities
+
+Mabaso AI can:
+
+* upload lecture audio and video files
+* record live classroom lectures
+* capture microphone input
+* capture browser tab audio when supported
+* capture system audio when supported
+* process YouTube/public lecture links
+* process lecture notes
+* process PowerPoint slides
+* process PDF textbooks
+* process DOCX documents
+* process images of handwritten notes
+* process past exam papers
+* process marking guides/memos
+
+The AI combines all sources into one intelligent study knowledge base.
+
+The student does not study isolated files.
+
+The AI understands the complete lecture context.
+
+---
+
+# AI Knowledge Processing System
+
+Behind the platform:
+
+The AI pipeline should:
+
+1. Receive uploaded material.
+
+2. Extract information from:
+
+* audio transcription
+* PDF text
+* PowerPoint slides
+* Word documents
+* images
+* handwritten notes
+* previous exam papers
+
+3. Combine information into one academic knowledge base.
+
+4. Identify:
+
+* important concepts
+* definitions
+* formulas
+* examples
+* repeated exam topics
+* lecturer emphasis
+* missing explanations
+* difficult concepts
+
+5. Generate personalised study resources.
+
+---
+
+# User Authentication System
+
+## Sign-In Options
+
+Users can access Mabaso AI using:
+
+* email and password
+* Google login
+* Apple login
+
+The platform must support:
+
+* secure sessions
+* persistent login
+* logout
+* account recovery
+* profile management
+
+---
+
+# Language Intelligence System
+
+Mabaso AI should support multiple output languages.
+
+Initial languages:
+
+* English
+* isiZulu
+* isiXhosa
+* Sesotho
+* Setswana
+* Afrikaans
+
+Future expansion:
+
+* all South African languages
+* international languages
+
+The AI should maintain:
+
+* academic accuracy
+* correct technical terminology
+* natural explanations
+
+Example:
+
+A student can upload an engineering lecture in English and request:
+
+"Explain this in isiZulu but keep formulas and technical terms unchanged."
+
+---
+
+# Main User Journey
+
+## Step 1 — Account Creation
+
+Student:
+
+* creates account
+* selects preferred language
+* chooses academic level
+* chooses institution/course information
+
+The system personalises future responses.
+
+---
+
+# Step 2 — Capture Lecture Workspace
+
+This is the entry point for learning.
+
+Students can:
+
+## Upload
+
+* audio
+* video
+* PDF
+* DOCX
+* PPTX
+* TXT
+* Markdown
+* images
+
+## Record
+
+Browser recording:
+
+* microphone
+* classroom lecture
+* online lecture
+* browser audio
+
+## Import
+
+* YouTube lecture
+* public educational videos
+
+---
+
+# Processing Experience
+
+The platform should show:
+
+* upload progress
+* transcription progress
+* AI processing stages
+* estimated completion time
+
+Example:
+
+```
+Uploading lecture...
+✓ Audio extracted
+
+Transcribing...
+✓ 45 minutes processed
+
+Understanding concepts...
+✓ 120 concepts identified
+
+Creating study workspace...
+✓ Complete
+```
+
+---
+
+# Study Workspace
+
+The Study Workspace is the main learning environment.
+
+It should feel similar to ChatGPT:
+
+* clean interface
+* large reading area
+* minimal distractions
+* smooth animations
+* conversation-style interactions
+
+---
+
+# Study Guide System
+
+The AI creates a structured study guide.
+
+It should include:
+
+## Automatic Structure
+
+* topic overview
+* learning objectives
+* definitions
+* explanations
+* examples
+* common mistakes
+* exam tips
+* summary points
+
+---
+
+# Advanced Study Guide Editor
+
+The study guide should behave like Microsoft Word.
+
+Features:
+
+## Edit Mode
+
+Users can:
+
+* edit generated text
+* rewrite sections
+* add personal notes
+* correct information
+
+## Highlight Mode
+
+The highlighter should work like Word:
+
+Features:
+
+* highlight text
+* select colours
+* permanent saving
+* autosave
+* refresh persistence
+* erase highlights
+
+Highlight data must be stored with the study guide.
+
+Example:
+
+```
+Student highlights:
+"Newton's Second Law"
+
+Colour:
+Yellow
+
+Saved:
+Database
+```
+
+---
+
+# Study Guide Actions
+
+Each section should have:
+
+* copy icon
+* download icon
+* regenerate icon
+* edit icon
+* highlight icon
+
+Icons should match ChatGPT style.
+
+---
+
+# Mobile Study Experience
+
+Mobile should behave like ChatGPT mobile.
+
+Requirements:
+
+## Fixed Header
+
+Always visible:
+
+* sidebar button
+* search button
+* profile button
+* back button when needed
+
+Scrolling should only move content.
+
+---
+
+## Mobile Sidebar
+
+Should:
+
+* slide from side
+* occupy around quarter/half screen
+* not cover everything
+* behave like ChatGPT sidebar
+
+---
+
+## Mobile Workspace
+
+Requirements:
+
+* no unnecessary borders
+* no squeezed content
+* ChatGPT-like font size
+* proper spacing
+* readable paragraphs
+* images placed naturally
+
+---
+
+# AI Teacher Mode
+
+A major Mabaso AI feature.
+
+Teacher Mode converts the study guide into a personal AI teacher.
+
+Capabilities:
+
+## Voice Teaching
+
+The AI can:
+
+* explain lessons aloud
+* pause
+* continue
+* repeat explanations
+* simplify concepts
+
+---
+
+## Voice Conversation
+
+Similar to ChatGPT Voice.
+
+Student:
+
+"Explain this formula."
+
+AI:
+
+"Let me explain step by step..."
+
+Features:
+
+* microphone button
+* speech recognition
+* voice streaming
+* interruption handling
+* natural conversation
+
+---
+
+# AI Study Chat
+
+ChatGPT-style academic assistant.
+
+Capabilities:
+
+* answer questions
+* explain difficult concepts
+* use uploaded lecture context
+* analyse images
+* solve questions
+* explain mistakes
+
+Supports:
+
+* text input
+* voice input
+* image upload
+
+---
+
+# Transcript Workspace
+
+Provides:
+
+* complete lecture transcript
+* timestamps
+* search
+* copy sections
+* highlight important parts
+
+---
+
+# Formula Generator
+
+Extracts:
+
+* equations
+* symbols
+* definitions
+* variable meanings
+* examples
+
+---
+
+# Worked Examples
+
+Creates:
+
+* step-by-step solutions
+* explanations
+* common mistakes
+* alternative methods
+
+---
+
+# Flashcards
+
+AI creates:
+
+* question cards
+* answer cards
+* difficulty levels
+* spaced repetition
+
+Future:
+
+AI automatically schedules revision.
+
+---
+
+# AI Testing System
+
+The testing engine supports:
+
+## Question Types
+
+* multiple choice
+* written answers
+* calculations
+* diagrams
+* image answers
+
+## Features
+
+* timed exams
+* automatic marking
+* explanations
+* performance analytics
+
+Uses:
+
+* lecture content
+* past papers
+* marking guides
+
+---
+
+# AI PowerPoint Generator
+
+Creates professional presentations.
+
+Features:
+
+* multiple themes
+* custom templates
+* university style
+* business style
+* lecturer style
+
+Supports:
+
+* uploaded PowerPoint templates
+* slide preview
+* editing
+* downloading
+
+---
+
+# AI Podcast Generator
+
+Transforms lectures into audio discussions.
+
+Options:
+
+* two speakers
+* three speakers
+* interview style
+* debate style
+* teaching style
+
+Controls:
+
+* duration
+* difficulty level
+* language
+
+Output:
+
+* script
+* audio file
+
+---
+
+# My Materials Library
+
+Student cloud storage.
+
+Contains:
+
+* previous lectures
+* study guides
+* tests
+* presentations
+* podcasts
+
+Functions:
+
+* reopen
+* download
+* delete
+* search
+
+---
+
+# Collaboration Rooms
+
+Students can study together.
+
+Features:
+
+## Rooms
+
+* private rooms
+* public rooms
+* university groups
+
+## Collaboration
+
+* shared notes
+* shared chat
+* shared tests
+* answer comparison
+* shared study guide
+
+---
+
+# Smart Study Planner
+
+Future advanced feature.
+
+AI creates study plans using:
+
+* exams
+* deadlines
+* available time
+* difficulty
+
+Features:
+
+* automatic rescheduling
+* missed-work recovery
+* progress tracking
+* motivation messages
+
+---
+
+# AI Memory System
+
+Future ChatGPT-style memory.
+
+The AI remembers:
+
+* preferred language
+* learning style
+* previous mistakes
+* weak topics
+* favourite explanations
+
+Example:
+
+"Explain physics like you explained circuits last week."
+
+---
+
+# Subscription Platform
+
+Plans:
+
+## Free
+
+Includes:
+
+* limited generations
+* basic chat
+* limited storage
+
+## Premium
+
+Includes:
+
+* unlimited study tools
+* voice teacher
+* more storage
+* advanced AI models
+
+## Institution
+
+Includes:
+
+* universities
+* lecturers
+* departments
+
+---
+
+# Payment System
+
+Supports:
+
+* PayFast
+* PayShap
+* subscription verification
+
+Security:
+
+* prevent subscription abuse
+* monitor suspicious accounts
+* track usage
+
+---
+
+# Admin Dashboard
+
+Admin controls:
+
+## User Management
+
+* view users
+* suspend users
+* reactivate users
+* force logout
+
+## Analytics
+
+Track:
+
+* active users
+* generated study guides
+* tests created
+* storage usage
+* AI usage
+
+## Security
+
+Monitor:
+
+* suspicious activity
+* duplicate accounts
+* subscription abuse
+* failed payments
+
+---
+
+# System Architecture
+
+## Frontend
+
+Main files:
+
+```
+frontend/src/App.jsx
+frontend/src/App.css
+frontend/src/index.css
+```
+
+Responsibilities:
+
+* interface
+* routing
+* workspace
+* UI states
+* downloads
+* collaboration
+* admin screens
+
+---
+
+## Backend
+
+Main file:
+
+```
+backend/main.py
+```
+
+Responsibilities:
+
+* authentication
+* AI generation
+* transcription
+* file processing
+* database operations
+* collaboration APIs
+* subscriptions
+* admin APIs
+
+---
+
+# Future AI Expansion
+
+Mabaso AI can become a complete education ecosystem.
+
+Future features:
+
+## AI Tutor Avatar
+
+A visual AI teacher.
+
+## Student Result Prediction
+
+AI analyses:
+
+* tests
+* assignments
+* study behaviour
+
+Predicts:
+
+* academic performance
+* improvement areas
+
+## University Assistant
+
+Helps students:
+
+* apply to universities
+* understand requirements
+* choose courses
+* compare programs
+
+## Lecturer Platform
+
+Teachers can:
+
+* upload courses
+* generate materials
+* create exams
+* analyse class performance
+
+---
+
+# Final Product Vision
+
+Mabaso AI is not only a study summariser.
+
+It is an AI education platform where:
+
+One lecture becomes:
+
+* transcript
+* study guide
+* formulas
+* examples
+* flashcards
+* tests
+* presentations
+* podcasts
+* AI conversations
+* personalised teaching
+
+The platform should continuously evolve toward becoming a complete AI learning companion for students worldwide.

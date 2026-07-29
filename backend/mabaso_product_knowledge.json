@@ -1,0 +1,19 @@
+{
+  "version": "2026-07-29",
+  "product": "Mabaso AI",
+  "purpose": "Mabaso AI helps students turn lecture recordings, notes, slides, PDFs, past papers, images and public lecture links into study workspaces with guides, transcripts, formulas, worked examples, flashcards, quizzes, presentations, podcasts, timetable tools, voice help and collaboration rooms.",
+  "audience": "Students who want lecture capture, revision help, study planning and AI tutoring in one account-based workspace.",
+  "sign_in": "Students sign in with the supported authentication methods shown in the app. Saved history is linked to the authenticated account email, not only the current browser device.",
+  "new_chat": "New Chat starts a fresh Study Chat conversation. Existing conversations should remain available in history for the signed-in account.",
+  "history": "Important generated materials and conversations should be saved to the user's account history so they can be reopened, continued, renamed or removed where the interface supports it.",
+  "uploaded_materials": "Uploaded material is used as primary context when relevant. If the uploaded source does not contain the answer, Mabaso AI should say that clearly and then provide a labelled general academic explanation when appropriate.",
+  "supported_sources": "The app supports lecture media, notes, slides, past papers, images, PDFs, DOCX, PPTX, TXT, Markdown and supported public video links where backend extraction succeeds.",
+  "study_guides": "Study Guides are generated from the selected lecture sources and should organise concepts into clear explanations, examples, visuals, exam tips, common mistakes, summaries and revision questions.",
+  "voice": "Voice mode lets a student ask by microphone and receive a spoken answer when browser voice features are available. Text answers remain available when voice playback is not supported.",
+  "timetable": "The timetable tools help students plan study sessions and lecture schedules. My Timetable focuses on study planning. Lecture Timetable focuses on class schedule entries such as modules, lecturers, days, times and venues.",
+  "collaboration": "Collaboration rooms let invited students work with shared materials, room notes, room chat and group revision tools.",
+  "downloads": "PDF, DOCX and presentation downloads should preserve the same content order and educational meaning shown in the web workspace.",
+  "plans": "The Free plan and paid plans have account-based usage limits shown in the billing and upgrade interface. Exact limits, prices and remaining attempts must come from backend billing configuration or the live account state, not from model guesses.",
+  "limits": "Attempts and upload limits are enforced by the authenticated account. Clearing browser storage or logging out should not reset account usage.",
+  "unknowns": "If a feature, owner detail, price or policy is not present in this knowledge file or live configuration, Mabaso AI must not invent it."
+}

@@ -152,7 +152,7 @@ const MAX_STORAGE_SOURCE_TEXT_CHARS = 18000;
 const MAX_STORAGE_IMAGE_URL_LENGTH = 2400;
 const MAX_AI_REFERENCE_IMAGES = 4;
 const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
-const MAX_INLINE_STUDY_IMAGE_CHARS = 1800000;
+const MAX_INLINE_STUDY_IMAGE_CHARS = 4500000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
 const RECORDING_SILENCE_MONITOR_INTERVAL_MS = 1250;
@@ -3539,6 +3539,22 @@ function sanitizeStoredImageUrlList(values = [], options = {}) {
     .slice(0, 6);
 }
 
+function getStudyChatClipboardText(content = "") {
+  const text = String(content || "").trim();
+  if (!text) return "";
+  return text
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/^```[a-z0-9_-]*\s*/i, "").replace(/```\s*$/i, "").trim())
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function getSafeAiReferenceImageUrls(references = [], { allowInlineDataUrl = false, maxItems = MAX_AI_REFERENCE_IMAGES } = {}) {
   return (references || [])
     .map((item) => sanitizeStoredImageUrl(item?.image_url || item?.source_url || "", { allowInlineDataUrl }))
@@ -4470,40 +4486,48 @@ function sanitizeStudySourceEntriesForHistory(entries) {
 
 function sanitizeStudyImagesForStorage(images) {
   return (images || [])
-    .map((image) => ({
-      title: image?.title || "",
-      query: image?.query || "",
-      image_url: sanitizeStoredImageUrl(image?.image_url || "", { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
-      source_url: sanitizeStoredImageUrl(image?.source_url || "", { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
-      source_type: image?.source_type || "",
-      visual_type: image?.visual_type || "",
-      matched_section: image?.matched_section || "",
-      key_highlight: truncateStoredText(image?.key_highlight || "", 260),
-      diagram_label: image?.diagram_label || "",
-      caption: truncateStoredText(image?.caption || "", 360),
-      ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
-      figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
-    }))
+    .map((image) => {
+      const primaryUrl = image?.image_url || image?.data_url || image?.dataUrl || image?.url || image?.src || "";
+      const sourceUrl = image?.source_url || image?.original_url || image?.display_url || image?.thumbnail_url || "";
+      return {
+        title: image?.title || "",
+        query: image?.query || "",
+        image_url: sanitizeStoredImageUrl(primaryUrl, { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
+        source_url: sanitizeStoredImageUrl(sourceUrl, { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
+        source_type: image?.source_type || "",
+        visual_type: image?.visual_type || "",
+        matched_section: image?.matched_section || "",
+        key_highlight: truncateStoredText(image?.key_highlight || "", 260),
+        diagram_label: image?.diagram_label || "",
+        caption: truncateStoredText(image?.caption || "", 360),
+        ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
+        figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
+      };
+    })
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
     .slice(0, 6);
 }
 
 function sanitizeStudyImagesForCollaboration(images) {
   return (images || [])
-    .map((image) => ({
-      title: image?.title || "",
-      query: image?.query || "",
-      image_url: sanitizeStoredImageUrl(image?.image_url || "", { allowInlineDataUrl: true }),
-      source_url: sanitizeStoredImageUrl(image?.source_url || "", { allowInlineDataUrl: true }),
-      source_type: image?.source_type || "",
-      visual_type: image?.visual_type || "",
-      matched_section: image?.matched_section || "",
-      key_highlight: truncateStoredText(image?.key_highlight || "", 260),
-      diagram_label: image?.diagram_label || "",
-      caption: truncateStoredText(image?.caption || "", 360),
-      ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
-      figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
-    }))
+    .map((image) => {
+      const primaryUrl = image?.image_url || image?.data_url || image?.dataUrl || image?.url || image?.src || "";
+      const sourceUrl = image?.source_url || image?.original_url || image?.display_url || image?.thumbnail_url || "";
+      return {
+        title: image?.title || "",
+        query: image?.query || "",
+        image_url: sanitizeStoredImageUrl(primaryUrl, { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
+        source_url: sanitizeStoredImageUrl(sourceUrl, { allowInlineDataUrl: true, maxInlineChars: MAX_INLINE_STUDY_IMAGE_CHARS }),
+        source_type: image?.source_type || "",
+        visual_type: image?.visual_type || "",
+        matched_section: image?.matched_section || "",
+        key_highlight: truncateStoredText(image?.key_highlight || "", 260),
+        diagram_label: image?.diagram_label || "",
+        caption: truncateStoredText(image?.caption || "", 360),
+        ai_explanation: truncateStoredText(image?.ai_explanation || image?.explanation || "", 620),
+        figure_number: Number(image?.figure_number || image?.figureNumber || 0) || 0,
+      };
+    })
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
     .slice(0, 6);
 }
@@ -6329,6 +6353,35 @@ function getStudyImagesForSection(images = [], section = {}, sectionIndex = 0, s
   }).slice(0, 3);
 }
 
+function escapeStudyFigureSvgText(value = "") {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildStudyFigureFallbackDataUrl(title = "Study visual") {
+  const safeTitle = escapeStudyFigureSvgText(String(title || "Study visual").slice(0, 58));
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-label="${safeTitle}">
+      <defs>
+        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#052e1d"/>
+          <stop offset="1" stop-color="#020617"/>
+        </linearGradient>
+      </defs>
+      <rect width="1200" height="720" rx="44" fill="url(#bg)"/>
+      <circle cx="210" cy="176" r="86" fill="#22c55e" opacity=".18"/>
+      <path d="M278 355h644M278 425h450M278 495h560" stroke="#86efac" stroke-width="24" stroke-linecap="round" opacity=".72"/>
+      <rect x="778" y="150" width="224" height="154" rx="28" fill="#10b981" opacity=".18" stroke="#34d399" stroke-width="6"/>
+      <path d="M822 224h136M890 178v94" stroke="#d1fae5" stroke-width="16" stroke-linecap="round"/>
+      <text x="278" y="270" fill="#f8fafc" font-family="Arial, sans-serif" font-size="42" font-weight="700">${safeTitle}</text>
+      <text x="278" y="570" fill="#bbf7d0" font-family="Arial, sans-serif" font-size="28">Visual preview unavailable. Regenerate the guide to refresh this figure.</text>
+    </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 function StudyGuideImageCards({ images = [] }) {
   if (!images.length) return null;
   const resolveStudyImageUrls = (image = {}) => (
@@ -6377,8 +6430,9 @@ function StudyGuideImageCards({ images = [] }) {
                     event.currentTarget.src = nextUrl;
                     return;
                   }
-                  event.currentTarget.hidden = true;
-                  event.currentTarget.closest("figure")?.classList.add("study-guide-figure-image-missing");
+                  if (event.currentTarget.dataset.fallbackApplied === "true") return;
+                  event.currentTarget.dataset.fallbackApplied = "true";
+                  event.currentTarget.src = buildStudyFigureFallbackDataUrl(title);
                 }}
               />
             ) : (
@@ -6704,6 +6758,8 @@ export default function App() {
   const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
+  const [copiedStudyChatMessageId, setCopiedStudyChatMessageId] = useState("");
+  const [authSessionRetryCount, setAuthSessionRetryCount] = useState(0);
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
