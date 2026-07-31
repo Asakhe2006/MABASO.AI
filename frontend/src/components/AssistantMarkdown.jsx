@@ -1,11 +1,41 @@
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { Check, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
 
 function themed(theme, darkValue, lightValue) {
   return theme === "light" ? lightValue : darkValue;
+}
+
+function CopyableCodeBlock({ children, className = "", theme = "dark", ...props }) {
+  const [copied, setCopied] = useState(false);
+  const codeText = String(children || "").replace(/\n$/, "");
+
+  const copyCode = async () => {
+    if (!codeText) return;
+    try {
+      await navigator.clipboard.writeText(codeText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="assistant-code-block">
+      <button type="button" className="assistant-code-copy" onClick={copyCode} aria-label={copied ? "Code copied" : "Copy code"}>
+        {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+        <span>{copied ? "Copied" : "Copy"}</span>
+      </button>
+      <code className={`block overflow-x-auto rounded-[22px] p-4 pr-24 font-mono text-[13px] ${themed(theme, "bg-[#0b1120] text-slate-100", "bg-slate-950 text-slate-100")} ${className || ""}`} {...props}>
+        {children}
+      </code>
+    </div>
+  );
 }
 
 export default function AssistantMarkdown({ content = "", theme = "dark" }) {
@@ -47,11 +77,7 @@ export default function AssistantMarkdown({ content = "", theme = "dark" }) {
                 </code>
               );
             }
-            return (
-              <code className={`block overflow-x-auto rounded-[22px] p-4 font-mono text-[13px] ${themed(theme, "bg-[#0b1120] text-slate-100", "bg-slate-950 text-slate-100")} ${className || ""}`} {...props}>
-                {children}
-              </code>
-            );
+            return <CopyableCodeBlock className={className} theme={theme} {...props}>{children}</CopyableCodeBlock>;
           },
           pre: ({ node, ...props }) => <pre className="mb-3 last:mb-0" {...props} />,
           table: ({ node, ...props }) => (

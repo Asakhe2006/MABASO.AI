@@ -6790,7 +6790,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return undefined;
-    const copyAllowedSelector = ".workspace-content-surface, .study-guide-shell, .study-guide-rich-editor, .content-panel";
+    const copyAllowedSelector = ".workspace-content-surface, .study-guide-shell, .study-guide-rich-editor, .content-panel, .study-chat-page, .study-chat-panel, .study-chat-message, .mabaso-ai-response";
     document.body.classList.add("mabaso-copy-guard");
 
     const isCopyAllowed = (event) => {
@@ -6891,6 +6891,8 @@ export default function App() {
   const browserVoiceEndRef = useRef(null);
   const studyChatVoiceRecognitionRef = useRef(null);
   const studyChatVoiceAnswerRunRef = useRef(0);
+  const studyChatRequestRunRef = useRef(0);
+  const studyChatCopyTimerRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
   const activeStudyMotivationTimerRef = useRef(null);
@@ -7485,7 +7487,10 @@ export default function App() {
                 <div className="mt-5">
                   <button
                     type="button"
-                    onClick={() => startBillingCheckout(plan, "payfast", { trial: true })}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void startBillingCheckout(plan, "payfast", { trial: true });
+                    }}
                     disabled={Boolean(billingCheckoutPlanId)}
                     className="w-full rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-emerald-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-70"
                   >
@@ -7963,6 +7968,10 @@ export default function App() {
     if (siteRatingPromptTimerRef.current) {
       window.clearTimeout(siteRatingPromptTimerRef.current);
       siteRatingPromptTimerRef.current = null;
+    }
+    if (studyChatCopyTimerRef.current) {
+      window.clearTimeout(studyChatCopyTimerRef.current);
+      studyChatCopyTimerRef.current = null;
     }
   }, []);
 
@@ -14859,6 +14868,7 @@ export default function App() {
       applyServerAccountState(data);
       setAuthServerStateReady(true);
       setAuthChecked(true);
+      setAuthSessionRetryCount(0);
       if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
         setCurrentPage("admin");
       } else if (routedPage && routedPage !== "admin") {
@@ -14894,6 +14904,16 @@ export default function App() {
       sessionValidationRunRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    if (!authCheckError || authToken || isAuthReady) return undefined;
+    const retryDelayMs = Math.min(6500, 1200 + (authSessionRetryCount * 900));
+    const retryTimer = window.setTimeout(() => {
+      setAuthSessionRetryCount((current) => current + 1);
+      void verifySession({ resumed: true });
+    }, retryDelayMs);
+    return () => window.clearTimeout(retryTimer);
+  }, [authCheckError, authSessionRetryCount, authToken, isAuthReady]);
 
   useEffect(() => {
     try {
@@ -15013,8 +15033,8 @@ export default function App() {
     }
     if (authToken && activeStudyChatId) {
       void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
-        timeoutMs: 20000,
-        retries: 1,
+        timeoutMs: 6500,
+        retries: 0,
       }).then(({ data }) => {
         if (cancelled) return;
         const serverMessages = Array.isArray(data?.conversation?.messages) ? data.conversation.messages : [];
@@ -16381,7 +16401,7 @@ export default function App() {
       form.appendChild(input);
     });
     document.body.appendChild(form);
-    form.submit();
+    window.HTMLFormElement.prototype.submit.call(form);
   };
 
   const refreshBillingStatus = async () => {
@@ -18591,6 +18611,10 @@ export default function App() {
       return;
     }
     const provider = String(paymentProvider || "").trim().toLowerCase() === "payfast" ? "payfast" : "payshap";
+    if (trial) {
+      setSelectedBillingPlan(null);
+      setManualPaymentRequest(null);
+    }
     setBillingCheckoutMessage(trial ? "Opening the secure PayFast trial setup..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
     const checkoutKey = `${provider}:${trial ? "trial:" : ""}${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
@@ -24074,10 +24098,13 @@ export default function App() {
       setError("Ask a question first.");
       return;
     }
+    if (isAskingChat) return;
     if (studyChatResponseMode === "voice") {
       await submitStudyChatVoiceQuestion(question);
       return;
     }
+    const requestRunId = studyChatRequestRunRef.current + 1;
+    studyChatRequestRunRef.current = requestRunId;
     const referenceImagesForQuestion = chatReferenceImages.map((image) => ({
       id: image.id,
       name: image.name,
@@ -24122,6 +24149,7 @@ export default function App() {
         userMessageId: userMessage.id,
         assistantMessageId: pendingAssistantMessage.id,
       });
+      if (studyChatRequestRunRef.current !== requestRunId) return;
       setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
@@ -24140,6 +24168,7 @@ export default function App() {
         images: referenceImagesForQuestion.length,
       });
     } catch (err) {
+      if (studyChatRequestRunRef.current !== requestRunId) return;
       const chatFailedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
       console.warn("[MABASO timing] study chat failed", {
         totalMs: Math.round(chatFailedAt - chatStartedAt),
@@ -24157,7 +24186,9 @@ export default function App() {
       });
       setError(readableError || "Study chat failed.");
     } finally {
-      setIsAskingChat(false);
+      if (studyChatRequestRunRef.current === requestRunId) {
+        setIsAskingChat(false);
+      }
     }
   };
 
@@ -24172,6 +24203,19 @@ export default function App() {
       }
     }
     setIsStudyChatVoiceListening(false);
+  };
+
+  const stopStudyChatAnswer = () => {
+    studyChatRequestRunRef.current += 1;
+    studyChatVoiceAnswerRunRef.current += 1;
+    stopStudyChatVoiceCapture();
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsAskingChat(false);
+    setIsStudyChatVoiceAnswering(false);
+    setStudyChatVoiceStatus("Response stopped.");
+    setChatMessages((current) => current.filter((message) => !(message.role === "assistant" && message.content === "Thinking...")));
   };
 
   const speakStudyChatVoiceAnswer = (answerText = "", { onComplete } = {}) => {
@@ -24444,31 +24488,34 @@ export default function App() {
     </div>
   );
 
+  const copyStudyChatAssistantMessage = async (message) => {
+    const textToCopy = getStudyChatClipboardText(message?.content || "");
+    if (!textToCopy) return;
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopiedStudyChatMessageId(message.id || "");
+      setStatus("Answer copied.");
+      if (studyChatCopyTimerRef.current) window.clearTimeout(studyChatCopyTimerRef.current);
+      studyChatCopyTimerRef.current = window.setTimeout(() => {
+        setCopiedStudyChatMessageId("");
+        studyChatCopyTimerRef.current = null;
+      }, 1800);
+    } catch {
+      setError("Copy failed. Your browser may be blocking clipboard access.");
+    }
+  };
+
+  const handleStudyChatQuestionChange = (event) => {
+    const nextValue = event.target.value;
+    setChatQuestion(nextValue);
+    event.target.style.height = "auto";
+    event.target.style.height = `${Math.min(event.target.scrollHeight, 132)}px`;
+  };
+
   const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => (
     <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
       {chatMessages.length ? chatMessages.slice(-limit).map((message, index) => (
-        <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}>
-          <div className="study-chat-message-meta">
-            <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
-            {message.role === "assistant" && message.content !== "Thinking..." ? (
-              <button
-                type="button"
-                className="study-chat-message-action"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(String(message.content || ""));
-                    setStatus("Answer copied.");
-                  } catch {
-                    setError("Copy failed. Your browser may be blocking clipboard access.");
-                  }
-                }}
-                aria-label="Copy answer"
-              >
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Copy</span>
-              </button>
-            ) : null}
-          </div>
+        <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`} aria-label={message.role === "assistant" ? "Mabaso AI answer" : "Your question"}>
           {Array.isArray(message.images) && message.images.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {message.images.map((image) => image.dataUrl
@@ -24479,9 +24526,22 @@ export default function App() {
           <div className="mabaso-ai-response mt-2">
             <AssistantMarkdown content={message.content} theme="dark" />
           </div>
+          {message.role === "assistant" && message.content !== "Thinking..." ? (
+            <div className="study-chat-message-actions">
+              <button
+                type="button"
+                className={`study-chat-message-action ${copiedStudyChatMessageId === message.id ? "is-copied" : ""}`}
+                onClick={() => copyStudyChatAssistantMessage(message)}
+                aria-label={copiedStudyChatMessageId === message.id ? "Answer copied" : "Copy answer"}
+              >
+                {copiedStudyChatMessageId === message.id ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                <span>{copiedStudyChatMessageId === message.id ? "Copied" : "Copy"}</span>
+              </button>
+            </div>
+          ) : null}
         </div>
       )) : (fullPage ? null : (
-        <div className="study-chat-empty">Ask anything. Mabaso can help with uploaded material or general academic questions.</div>
+        <div className="study-chat-empty">Start a study question when you are ready.</div>
       ))}
       <div ref={studyChatEndRef} />
     </div>
@@ -24493,9 +24553,9 @@ export default function App() {
         <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
         <textarea
           value={chatQuestion}
-          onChange={(event) => setChatQuestion(event.target.value)}
+          onChange={handleStudyChatQuestionChange}
           onKeyDown={handleStudyChatKeyDown}
-          rows={compact ? 2 : 3}
+          rows={1}
           className="study-chat-composer-input"
           placeholder="Ask Mabaso"
         />
@@ -24513,17 +24573,23 @@ export default function App() {
         >
           <Mic className="h-5 w-5" aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          onClick={askStudyAssistant}
-          disabled={isAskingChat || isStudyChatVoiceListening}
-          className="study-chat-send-button"
-          aria-label="Send study chat question"
-        >
-          <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-            <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-          </svg>
-        </button>
+        {isAskingChat ? (
+          <button type="button" onClick={stopStudyChatAnswer} className="study-chat-send-button is-stop" aria-label="Stop study chat response">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={askStudyAssistant}
+            disabled={isStudyChatVoiceListening || !chatQuestion.trim()}
+            className="study-chat-send-button"
+            aria-label="Send study chat question"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
+              <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+            </svg>
+          </button>
+        )}
       </div>
       <input ref={chatImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
       {chatReferenceImages.length ? (
@@ -24620,7 +24686,10 @@ export default function App() {
         <section className="study-chat-main">
           <header className="study-chat-page-topbar">
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className="study-chat-top-button lg:hidden" aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
-            <span className="study-chat-mobile-title lg:hidden">Study Chat</span>
+            <span className="study-chat-mobile-title">Study Chat</span>
+            <button type="button" onClick={() => openProtectedAppPage("workspace", { replace: true })} className="study-chat-exit-button" aria-label="Close Study Chat">
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
           </header>
           <main className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
             {chatMessages.length ? null : <h1>Ready when you are.</h1>}
@@ -26654,10 +26723,10 @@ export default function App() {
           <div className="px-8 py-10 text-center">
             <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
             <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
-            <p className="mt-4 text-sm text-slate-300">{authCheckError || "Checking your session..."}</p>
+            <p className="mt-4 text-sm text-slate-300">{authCheckError ? "Reconnecting securely..." : "Checking your session..."}</p>
             {authCheckError ? (
               <button type="button" onClick={() => void verifySession({ resumed: true })} className="mt-5 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white">
-                Retry
+                Try now
               </button>
             ) : null}
           </div>
