@@ -93,7 +93,7 @@ export default function PublicLandingPage({
             </details>
           ))}
           <button type="button" onClick={() => navigate("/pricing")}>Pricing</button>
-          <button type="button" onClick={() => navigate("/company/about")}>For Institutions</button>
+          <button type="button" onClick={() => navigate("/for-institutions")}>For Institutions</button>
         </nav>
         <div className="public-landing-auth-actions">
           <button type="button" className="public-sign-in" onClick={startGoogle}>Sign in</button>
@@ -157,6 +157,11 @@ export default function PublicLandingPage({
             <button type="button" onClick={() => navigate("/developers/api-documentation")}><FileText aria-hidden="true" /><strong>API Documentation</strong><span>Integration information for approved developers and institutions.</span></button>
           </div>
         </section>
+        <footer className="public-provider-footer">
+          <span>AI generation powered by</span>
+          <strong className="provider-mark provider-openai"><span aria-hidden="true">◎</span> OpenAI</strong>
+          <strong className="provider-mark provider-gemini"><Sparkles aria-hidden="true" /> Google Gemini</strong>
+        </footer>
       </main>
     </div>
   );

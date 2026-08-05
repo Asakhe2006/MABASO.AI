@@ -6621,6 +6621,7 @@ export default function App() {
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
@@ -16115,6 +16116,18 @@ export default function App() {
       setAuthMessage("Google sign-in is still loading. Try again in a moment.");
       return;
     }
+    const renderedGoogleButton = [
+      landingPrimaryGoogleButtonRef.current,
+      googleButtonRef.current,
+      enterpriseGoogleButtonRef.current,
+    ]
+      .filter(Boolean)
+      .map((container) => container.querySelector('[role="button"]'))
+      .find(Boolean);
+    if (renderedGoogleButton) {
+      renderedGoogleButton.click();
+      return;
+    }
     window.google.accounts.id.prompt();
   };
 
@@ -20847,15 +20860,18 @@ export default function App() {
   };
 
   const confirmLogout = async () => {
-    setIsLogoutConfirmOpen(false);
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
     try {
-      if (authToken) await authFetch("/auth/logout", { method: "POST" });
+      if (authToken) await authFetch("/auth/logout", { method: "POST", timeoutMs: 3500 });
     } catch {
       // Ignore logout API errors.
     } finally {
       clearSession("You have signed out.");
       setStatus("");
       setError("");
+      setIsLoggingOut(false);
+      setIsLogoutConfirmOpen(false);
     }
   };
 
@@ -26923,11 +26939,12 @@ export default function App() {
   const logoutConfirmModal = isLogoutConfirmOpen ? (
     <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
       <div className="w-full max-w-sm rounded-[22px] border border-white/10 bg-slate-950 p-5 text-white shadow-[0_24px_70px_rgba(2,8,23,0.5)]">
-        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Confirm logout</p>
-        <h3 className="mt-2 text-xl font-semibold">Sign out of Mabaso AI?</h3>
+        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{isLoggingOut ? "Secure logout" : "Confirm logout"}</p>
+        <h3 className="mt-2 text-xl font-semibold">{isLoggingOut ? "Logging out..." : "Sign out of Mabaso AI?"}</h3>
+        {isLoggingOut ? <div className="mt-5 flex items-center gap-3 text-sm text-slate-300"><LoaderCircle className="h-5 w-5 animate-spin text-emerald-300" aria-hidden="true" /><span>Closing this session securely.</span></div> : null}
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={() => setIsLogoutConfirmOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Cancel</button>
-          <button type="button" onClick={confirmLogout} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white">Log out</button>
+          <button type="button" onClick={() => setIsLogoutConfirmOpen(false)} disabled={isLoggingOut} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Cancel</button>
+          <button type="button" onClick={confirmLogout} disabled={isLoggingOut} className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isLoggingOut ? "Logging out..." : "Log out"}</button>
         </div>
       </div>
     </div>

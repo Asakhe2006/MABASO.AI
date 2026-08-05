@@ -2,7 +2,6 @@ import termsAndConditionsMarkdown from "./content/terms-and-conditions.md?raw";
 
 const primaryCta = (label, action, target = "") => ({ label, action, target, variant: "primary" });
 const secondaryCta = (label, action, target = "") => ({ label, action, target, variant: "secondary" });
-const tertiaryCta = (label, action, target = "") => ({ label, action, target, variant: "ghost" });
 
 const page = ({
   route,
@@ -27,6 +26,7 @@ const page = ({
   footerCrossLinks = [],
   lockedPreview = null,
   adminGuard = null,
+  pricingPlans = [],
 }) => ({
   route,
   aliases,
@@ -50,6 +50,7 @@ const page = ({
   footerCrossLinks,
   lockedPreview,
   adminGuard,
+  pricingPlans,
 });
 
 export const footerLinkGroups = [
@@ -102,6 +103,7 @@ export const footerLinkGroups = [
     title: "Company",
     links: [
       { label: "About Mabaso AI", route: "/company/about" },
+      { label: "For Institutions", route: "/for-institutions" },
       { label: "Security", route: "/company/security" },
       { label: "Privacy Policy", route: "/company/privacy" },
       { label: "Terms & Conditions", route: "/company/terms" },
@@ -117,6 +119,44 @@ export const footerLinkGroups = [
 ];
 
 export const sitePages = [
+  page({
+    route: "/for-institutions",
+    aliases: ["/institutions", "/education/institutions"],
+    title: "For Institutions",
+    category: "Education",
+    access: "public",
+    metadata: {
+      title: "For Institutions | Mabaso AI",
+      description: "Mabaso AI information for schools, colleges, universities, lecturers, and approved student support programmes.",
+    },
+    hero: {
+      eyebrow: "Institutions / Education",
+      headline: "Structured AI study support for teaching and learning programmes.",
+      description: "Institutions can use Mabaso AI to support lecture capture, structured revision, study resources, collaboration, and guided academic practice while keeping account access and private workspaces protected.",
+      ctas: [
+        primaryCta("Contact Mabaso AI", "navigate", "/support/contact-support"),
+        secondaryCta("Review Security", "navigate", "/company/security"),
+      ],
+    },
+    modules: [
+      { icon: "school", title: "Student study workflows", description: "Students can turn approved lecture material into guides, practice questions, flashcards, presentations, and revision sessions." },
+      { icon: "users", title: "Collaboration", description: "Shared study rooms support invited learners without making private workspaces public." },
+      { icon: "shield-check", title: "Protected access", description: "Private workspaces remain account-scoped and require authenticated access." },
+      { icon: "life-buoy", title: "Programme support", description: "Institutions can contact Mabaso AI to discuss learner numbers, rollout requirements, and support expectations." },
+    ],
+    workflow: [
+      "Describe the institution, learner group, and intended academic workflow",
+      "Review privacy, access, file handling, and support requirements",
+      "Agree on an appropriate subscription and rollout approach",
+      "Introduce learners and staff to the approved study workflow",
+    ],
+    faq: [
+      { question: "Does an institutional account make student work public?", answer: "No. Normal student workspaces remain private. Collaboration access is separately controlled through room membership and permissions." },
+      { question: "Can an institution request a tailored rollout?", answer: "Yes. Contact support with the learner count, academic level, expected tools, and rollout dates so the requirements can be reviewed." },
+      { question: "Does Mabaso AI replace lecturers or official course material?", answer: "No. It supports teaching and revision. Institution-provided material and lecturer guidance remain the primary academic reference." },
+    ],
+    relatedPages: ["/company/security", "/collaboration/group-study-features", "/support/contact-support"],
+  }),
   page({
     route: "/pricing",
     aliases: ["/subscriptions", "/billing/plans"],
@@ -142,10 +182,34 @@ export const sitePages = [
       },
     },
     modules: [
-      { icon: "shield-check", title: "Free Study", description: "No card required, small monthly credits, and enough access to test study guides, chat, and basic exports." },
-      { icon: "graduation-cap", title: "Student Plus", description: "R49/month with higher AI credits, reports, quizzes, mind maps, and PDF/DOCX exports." },
-      { icon: "brain", title: "Pro Research", description: "R149/month with higher document limits, advanced academic reports, presentations, priority queue access, and strict spend caps." },
-      { icon: "building-2", title: "Team / Institution", description: "Shared seats, pooled credits, restricted controls, invoices, audit logs, and approval before extra billing." },
+      { icon: "shield-check", title: "Free", description: "No card required. Daily starter limits cover Study Chat, one Study Guide, one presentation, one test, and core study tools." },
+      { icon: "graduation-cap", title: "Pro Student", description: "R50 monthly, R270 per semester, or R480 annually with higher daily attempts, exports, and a faster generation queue." },
+      { icon: "brain", title: "Premium Student", description: "R150 monthly, R765 per semester, or R1350 annually with unlimited core generations and the highest available priority." },
+    ],
+    pricingPlans: [
+      {
+        name: "Free",
+        price: "R0",
+        description: "For light studying and trying Mabaso AI without a card.",
+        features: ["10 Study Chat questions per day", "1 Study Guide, test, presentation, podcast, and mind map per day", "3 photo or document uploads per day"],
+        action: "Start free",
+      },
+      {
+        name: "Pro Student",
+        price: "R50 monthly",
+        alternatives: "R270 per semester or R480 annually",
+        description: "For active students creating regular study packs.",
+        features: ["20 Study Chat questions per day", "3 Study Guides and presentations per day", "15 photo or document uploads per day", "7-day trial, then R50 monthly unless cancelled"],
+        action: "Start 7-day trial",
+      },
+      {
+        name: "Premium Student",
+        price: "R150 monthly",
+        alternatives: "R765 per semester or R1350 annually",
+        description: "For heavy academic and research use.",
+        features: ["Unlimited core study generations", "Highest available quality and priority", "Large-file and advanced academic workflows", "15 photo or document uploads per day"],
+        action: "Choose Premium",
+      },
     ],
     workflow: [
       "Show exact monthly prices before checkout",

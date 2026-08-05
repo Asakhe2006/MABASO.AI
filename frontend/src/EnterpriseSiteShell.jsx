@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { createElement, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { motion } from "framer-motion";
+import { motion as Motion } from "framer-motion";
 import * as LucideIcons from "lucide-react";
 
 import { findFooterLinksByRoutes, footerLinkGroups } from "./sitePageConfig";
@@ -24,8 +24,7 @@ function resolveIcon(name = "") {
 }
 
 function SiteIcon({ name, className = "h-5 w-5" }) {
-  const Icon = resolveIcon(name);
-  return <Icon className={className} aria-hidden="true" />;
+  return createElement(resolveIcon(name), { className, "aria-hidden": "true" });
 }
 
 function pageActionLabel(access = "public") {
@@ -82,7 +81,7 @@ function WorkspacePreview({ page }) {
         <div className="rounded-[26px] border border-white/10 bg-white/[0.04] p-4">
           <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Live product surface</p>
           <div className="mt-4 grid gap-3">
-            {previewHighlights.map((item, index) => (
+            {previewHighlights.map((item) => (
               <div
                 key={`${page.route}-preview-highlight-${item.title}`}
                 className="rounded-[22px] border border-white/8 bg-slate-950/50 p-4"
@@ -131,7 +130,6 @@ function CtaButton({ cta, onAction }) {
 }
 
 function AuthOverlayButtons({
-  onSignIn,
   onPrepareSignIn,
   googleButtonRef,
   isGoogleSigningIn,
@@ -317,6 +315,11 @@ export function EnterpriseFooter({ currentRoute = "/", onNavigate }) {
           </div>
         ))}
       </div>
+      <div className="enterprise-provider-footer">
+        <span>AI generation powered by</span>
+        <strong className="provider-mark provider-openai"><span aria-hidden="true">◎</span> OpenAI</strong>
+        <strong className="provider-mark provider-gemini"><LucideIcons.Sparkles aria-hidden="true" /> Google Gemini</strong>
+      </div>
     </footer>
   );
 }
@@ -335,7 +338,7 @@ function RelatedPageRail({ routes = [], title = "Related pages", onNavigate }) {
       </div>
       <div className="mt-6 grid gap-4 xl:grid-cols-3">
         {pages.map((page) => (
-          <motion.button
+          <Motion.button
             key={page.route}
             type="button"
             onClick={() => onNavigate(page.route)}
@@ -356,7 +359,7 @@ function RelatedPageRail({ routes = [], title = "Related pages", onNavigate }) {
               Open page
               <LucideIcons.ArrowUpRight className="h-4 w-4" aria-hidden="true" />
             </div>
-          </motion.button>
+          </Motion.button>
         ))}
       </div>
     </section>
@@ -430,6 +433,57 @@ function ProtectedAdminState({ page, onNavigate, onOpenApp }) {
   );
 }
 
+function EnterpriseNavigation({ currentRoute, isAuthenticated, onNavigate, onOpenApp, onOpenSignIn, onPrepareSignIn }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const groups = [
+    { label: "Platform", links: footerLinkGroups.find((group) => group.title === "Product")?.links.slice(0, 5) || [] },
+    { label: "Features", links: [
+      ...(footerLinkGroups.find((group) => group.title === "AI Tools")?.links || []),
+      { label: "Flashcards", route: "/product/flashcards" },
+      { label: "Test Generator", route: "/product/ai-test-generator" },
+    ] },
+    { label: "Resources", links: footerLinkGroups.find((group) => group.title === "Resources")?.links || [] },
+  ];
+  const navigate = (route) => {
+    setIsOpen(false);
+    onNavigate(route);
+  };
+  const signIn = () => {
+    onPrepareSignIn?.(currentRoute);
+    onOpenSignIn?.();
+  };
+  return (
+    <header className="enterprise-public-nav">
+      <button type="button" onClick={() => navigate("/")} className="enterprise-public-brand">Mabaso AI</button>
+      <button type="button" onClick={() => setIsOpen((open) => !open)} className="enterprise-public-menu" aria-label={isOpen ? "Close navigation" : "Open navigation"} aria-expanded={isOpen}>
+        {isOpen ? <LucideIcons.X aria-hidden="true" /> : <LucideIcons.Menu aria-hidden="true" />}
+      </button>
+      <nav className={`enterprise-public-links ${isOpen ? "is-open" : ""}`} aria-label="Mabaso AI pages">
+        {groups.map((group) => (
+          <details key={group.label}>
+            <summary>{group.label}<LucideIcons.ChevronDown aria-hidden="true" /></summary>
+            <div>
+              {group.links.map((link) => <button key={link.route} type="button" className={currentRoute === link.route ? "is-active" : ""} onClick={() => navigate(link.route)}>{link.label}</button>)}
+            </div>
+          </details>
+        ))}
+        <button type="button" className={currentRoute === "/pricing" ? "is-active" : ""} onClick={() => navigate("/pricing")}>Pricing</button>
+        <button type="button" onClick={() => navigate("/for-institutions")}>For Institutions</button>
+      </nav>
+      <div className="enterprise-public-actions">
+        {isAuthenticated ? (
+          <button type="button" className="enterprise-public-primary" onClick={() => onOpenApp("capture")}>Open app</button>
+        ) : (
+          <>
+            <button type="button" className="enterprise-public-signin" onClick={signIn}>Sign in</button>
+            <button type="button" className="enterprise-public-primary" onClick={signIn}>Get started</button>
+          </>
+        )}
+      </div>
+    </header>
+  );
+}
+
 export function EnterpriseSiteShell({
   page,
   currentRoute,
@@ -439,11 +493,8 @@ export function EnterpriseSiteShell({
   onOpenApp,
   onOpenSignIn,
   onPrepareSignIn,
-  onOpenCreateAccount,
-  onStartApple,
   googleButtonRef,
   isGoogleSigningIn = false,
-  isAppleSigningIn = false,
   supportForm,
   onSupportFieldChange,
   onSupportSubmit,
@@ -464,42 +515,18 @@ export function EnterpriseSiteShell({
   }
 
   return (
-    <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
+    <div className="enterprise-site-shell min-h-screen bg-[var(--page-bg)] text-slate-100">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="hero-glow hero-glow-left" />
         <div className="hero-glow hero-glow-right" />
         <div className="hero-grid" />
       </div>
       <main className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <header className="mb-8 rounded-[30px] border border-white/10 bg-slate-950/70 px-5 py-4 shadow-[0_24px_80px_rgba(2,8,23,0.4)] backdrop-blur xl:px-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-col gap-3">
-              <button type="button" onClick={() => onNavigate("/")} className="brand-mark text-left text-2xl font-black">
-                Mabaso AI
-              </button>
-              <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-                <span>{page.category}</span>
-                <span className="text-slate-600">/</span>
-                <span>{page.title}</span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-cyan-100">
-                  {pageActionLabel(page.access)}
-                </span>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <button type="button" onClick={() => onNavigate("/product/study-workspace")} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]">
-                Explore Product
-              </button>
-              <button type="button" onClick={() => onOpenApp("capture")} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-4 py-2 text-sm font-semibold text-white">
-                {isAuthenticated ? "Open App" : "Start with Capture"}
-              </button>
-            </div>
-          </div>
-        </header>
+        <EnterpriseNavigation currentRoute={currentRoute} isAuthenticated={isAuthenticated} onNavigate={onNavigate} onOpenApp={onOpenApp} onOpenSignIn={onOpenSignIn} onPrepareSignIn={onPrepareSignIn} />
 
-        <section className="rounded-[34px] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.9),rgba(15,23,42,0.82))] p-6 shadow-[0_32px_100px_rgba(2,8,23,0.42)] backdrop-blur xl:p-8">
+        <section className="enterprise-page-hero rounded-[34px] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.9),rgba(15,23,42,0.82))] p-6 shadow-[0_32px_100px_rgba(2,8,23,0.42)] backdrop-blur xl:p-8">
           <div className="grid gap-8 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <motion.div {...cardMotion}>
+            <Motion.div className="enterprise-page-copy" {...cardMotion}>
               <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/70">{page.hero?.eyebrow || `${page.category} / ${page.title}`}</p>
               <h1 className="mt-5 text-4xl font-semibold tracking-[-0.05em] text-white sm:text-5xl xl:text-6xl">{page.hero?.headline || page.title}</h1>
               <p className="mt-5 max-w-3xl text-sm leading-8 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
@@ -531,19 +558,42 @@ export function EnterpriseSiteShell({
                   </div>
                 ))}
               </div>
-            </motion.div>
-            <motion.div {...cardMotion}>
+            </Motion.div>
+            <Motion.div className="enterprise-page-preview" {...cardMotion}>
               <WorkspacePreview page={page} />
-            </motion.div>
+            </Motion.div>
           </div>
         </section>
+
+        {page.pricingPlans?.length ? (
+          <section className="enterprise-pricing-section" aria-labelledby="pricing-plan-heading">
+            <p className="enterprise-document-label">Current plans</p>
+            <h2 id="pricing-plan-heading">Choose the level that matches your study load.</h2>
+            <div className="enterprise-pricing-grid">
+              {page.pricingPlans.map((plan) => (
+                <article key={plan.name}>
+                  <p>{plan.name}</p>
+                  <h3>{plan.price}</h3>
+                  {plan.alternatives ? <small>{plan.alternatives}</small> : null}
+                  <p>{plan.description}</p>
+                  <details>
+                    <summary>Plan limits and access<LucideIcons.ChevronDown aria-hidden="true" /></summary>
+                    <ul>{plan.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>
+                  </details>
+                  <button type="button" onClick={() => onOpenApp(plan.name === "Free" ? "capture" : "payments")}>{plan.action}</button>
+                </article>
+              ))}
+            </div>
+            <p className="enterprise-pricing-note">The seven-day trial requires a payment method. Nothing is charged on the first day; Pro Student renews at R50 monthly after seven days unless cancelled before renewal.</p>
+          </section>
+        ) : null}
 
         <div className="relative mt-8">
           <div className={`${isLocked ? "pointer-events-none select-none blur-[12px] saturate-[0.65] opacity-45" : ""}`}>
             {page.contains?.length ? (
               <section className="grid gap-4 xl:grid-cols-3">
                 {page.contains.map((item) => (
-                  <motion.div
+                  <Motion.div
                     key={`${page.route}-contains-${item.title}`}
                     {...cardMotion}
                     className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5 shadow-[0_18px_60px_rgba(2,8,23,0.25)]"
@@ -553,13 +603,13 @@ export function EnterpriseSiteShell({
                     </div>
                     <h2 className="mt-5 text-xl font-semibold text-white">{item.title}</h2>
                     <p className="mt-3 text-sm leading-7 text-slate-300">{item.description}</p>
-                  </motion.div>
+                  </Motion.div>
                 ))}
               </section>
             ) : null}
 
             <section className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+              <Motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Layout architecture</p>
                 <div className="mt-5 grid gap-4">
                   {page.layout?.map((item) => (
@@ -569,8 +619,8 @@ export function EnterpriseSiteShell({
                     </div>
                   ))}
                 </div>
-              </motion.div>
-              <motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+              </Motion.div>
+              <Motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Modules and page contents</p>
                 <div className="mt-5 grid gap-4">
                   {page.modules?.map((module) => (
@@ -594,7 +644,7 @@ export function EnterpriseSiteShell({
                     </div>
                   ))}
                 </div>
-              </motion.div>
+              </Motion.div>
             </section>
 
             {page.workflow?.length ? (
@@ -603,12 +653,12 @@ export function EnterpriseSiteShell({
                 <h2 className="mt-3 text-2xl font-semibold text-white">Step-by-step platform flow</h2>
                 <div className="mt-6 grid gap-4 xl:grid-cols-3">
                   {page.workflow.map((item, index) => (
-                    <motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                    <Motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
                       <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-400/12 text-sm font-semibold text-cyan-100">{index + 1}</div>
                         <p className="text-sm leading-7 text-slate-100">{item}</p>
                       </div>
-                    </motion.div>
+                    </Motion.div>
                   ))}
                 </div>
               </section>
@@ -617,7 +667,7 @@ export function EnterpriseSiteShell({
             {page.fileGroups?.length ? (
               <section className="mt-8 grid gap-4 xl:grid-cols-3">
                 {page.fileGroups.map((group) => (
-                  <motion.div key={`${page.route}-files-${group.label}`} {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+                  <Motion.div key={`${page.route}-files-${group.label}`} {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
                     <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{group.label}</p>
                     <div className="mt-4 grid gap-2">
                       {group.items?.map((item) => (
@@ -626,7 +676,7 @@ export function EnterpriseSiteShell({
                         </div>
                       ))}
                     </div>
-                  </motion.div>
+                  </Motion.div>
                 ))}
               </section>
             ) : null}
@@ -702,7 +752,7 @@ export function EnterpriseSiteShell({
             ) : null}
 
             <section className="mt-8 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)]">
-              <motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
                 <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Suggested visuals</p>
                 <div className="mt-4 grid gap-2">
                   {(page.visuals || []).map((item) => (
@@ -712,13 +762,13 @@ export function EnterpriseSiteShell({
                     </div>
                   ))}
                 </div>
-              </motion.div>
-              <motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+              </Motion.div>
+              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
                 <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Empty state</p>
                 <h3 className="mt-4 text-xl font-semibold text-white">{page.emptyState?.title || "Ready for content"}</h3>
                 <p className="mt-3 text-sm leading-7 text-slate-300">{page.emptyState?.description}</p>
-              </motion.div>
-              <motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+              </Motion.div>
+              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
                 <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Enterprise design notes</p>
                 <div className="mt-4 grid gap-2">
                   {(page.designNotes || []).map((item) => (
@@ -727,7 +777,7 @@ export function EnterpriseSiteShell({
                     </div>
                   ))}
                 </div>
-              </motion.div>
+              </Motion.div>
             </section>
           </div>
 
