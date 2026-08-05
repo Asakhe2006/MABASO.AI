@@ -153,7 +153,9 @@ const MAX_STORAGE_SOURCE_TEXT_CHARS = 18000;
 const MAX_STORAGE_IMAGE_URL_LENGTH = 2400;
 const MAX_AI_REFERENCE_IMAGES = 4;
 const MAX_INLINE_REFERENCE_IMAGE_CHARS = 220000;
-const MAX_INLINE_STUDY_IMAGE_CHARS = 4500000;
+// Backend study images may contain up to 3.5 MB of binary data. Base64 expands
+// that by roughly one third, so keep the complete durable data URL on save.
+const MAX_INLINE_STUDY_IMAGE_CHARS = 5000000;
 const MIN_PASSWORD_LENGTH = 8;
 const RECORDING_SILENCE_AUTO_STOP_MS = 10 * 60 * 1000;
 const RECORDING_SILENCE_MONITOR_INTERVAL_MS = 1250;
@@ -8124,10 +8126,33 @@ export default function App() {
   const activeRoomFormulaRows = parseFormulaRows(activeRoomFormattedFormula);
   const currentTabLabel = tabs.find((tab) => tab.id === activeTab)?.label || "Study Guide";
   const activeWorkspaceToolGroup = WORKSPACE_TOOL_GROUPS.find((group) => group.id === workspaceToolGroup) || WORKSPACE_TOOL_GROUPS[0];
-  const workspaceSearchResults = workspaceSearchQuery.trim()
-    ? WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => ({ ...tool, groupLabel: group.label, groupId: group.id })))
-      .filter((tool) => `${tool.label} ${tool.description} ${tool.groupLabel}`.toLowerCase().includes(workspaceSearchQuery.trim().toLowerCase()))
-      .slice(0, 8)
+  const workspaceSearchTerm = workspaceSearchQuery.trim().toLowerCase();
+  const workspaceSearchResults = workspaceSearchTerm
+    ? [
+      ...WORKSPACE_TOOL_GROUPS.flatMap((group) => group.tools.map((tool) => ({ ...tool, kind: "tool", groupLabel: group.label, groupId: group.id }))),
+      ...[
+        ["capture", "Capture Lecture", "Upload, record, link, or prompt a lecture"],
+        ["materials", "My Materials", "Saved lectures, files, recordings, and study packs"],
+        ["timetable", "Study Timetable", "Lecture timetable and generated study plan"],
+        ["collaboration", "Collaboration", "Shared rooms, notes, and group study"],
+        ["voice", "AI Chat", "General Study Chat and voice questions"],
+        ["payments", "Plans and Billing", "Free, Pro, and Premium plans"],
+      ].map(([page, label, description]) => ({ id: `page-${page}`, kind: "page", page, label, description, groupLabel: "Mabaso AI", diagram: "•" })),
+      ...historyItems.map((item) => ({
+        id: `material-${item.id}`,
+        itemId: item.id,
+        kind: "material",
+        label: item.title || item.fileName || "Saved material",
+        description: `${item.fileName || ""} ${item.summary || ""}`,
+        groupLabel: "My Materials",
+        diagram: "•",
+      })),
+      ...(formattedGuide.toLowerCase().includes(workspaceSearchTerm)
+        ? [{ id: "guide-content", kind: "guide", label: "Study Guide content", description: formattedGuide, groupLabel: "Current Study Guide", diagram: "•" }]
+        : []),
+    ]
+      .filter((result) => `${result.label} ${result.description} ${result.groupLabel}`.toLowerCase().includes(workspaceSearchTerm))
+      .slice(0, 12)
     : [];
   const getGuideSectionSourceLabel = () => {
     if (lectureNoteSources.length) return "Source: lecture notes";
@@ -8229,7 +8254,6 @@ export default function App() {
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
     : hasResults || ["chat"].includes(activeTab);
-  const canShareCurrentTool = Boolean(activeRoom && !["podcast", "presentation"].includes(activeTab));
   const hasCollaborationSeedContent = Boolean(
     summary
     || transcript
@@ -18868,7 +18892,7 @@ export default function App() {
     return data;
   };
 
-  const requestLectureAssistantConversation = async (conversationId, { messageLimit = 80 } = {}) => {
+  const requestLectureAssistantConversation = async (conversationId, { messageLimit = 32 } = {}) => {
     const query = new URLSearchParams({ message_limit: String(messageLimit) });
     const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}?${query.toString()}`, {}, {
       timeoutMs: 20000,
@@ -18877,7 +18901,7 @@ export default function App() {
     return data;
   };
 
-  const requestLectureAssistantConversationMessages = async (conversationId, { before = "", limit = 80 } = {}) => {
+  const requestLectureAssistantConversationMessages = async (conversationId, { before = "", limit = 32 } = {}) => {
     const query = new URLSearchParams({ limit: String(limit) });
     if (before) query.set("before", before);
     const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/messages?${query.toString()}`, {}, {
@@ -25311,6 +25335,23 @@ export default function App() {
     openTutorWorkspaceTool(tool.targetTab || "guide");
   };
 
+  const shareCurrentWorkspaceLink = async () => {
+    const route = resolveAppRouteForPage("workspace", authSessionMode, workspaceContextId);
+    const url = new URL(route, window.location.origin).toString();
+    const title = activeHistoryItem?.title || file?.name || "Mabaso AI Study Workspace";
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ title, url });
+        setStatus("Workspace link shared. The recipient must sign in and have access.");
+      } else {
+        await navigator.clipboard.writeText(url);
+        setStatus("Private workspace link copied. The recipient must sign in and have access.");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError") setError("The workspace link could not be shared.");
+    }
+  };
+
   const copyTeacherTranscript = async () => {
     const transcriptText = teacherTranscriptText.trim();
     if (!transcriptText) {
@@ -27714,8 +27755,21 @@ export default function App() {
                         key={`workspace-search-${tool.id}`}
                         type="button"
                         onClick={() => {
-                          setWorkspaceToolGroup(tool.groupId);
                           setWorkspaceSearchQuery("");
+                          if (tool.kind === "material") {
+                            const material = historyItems.find((item) => item.id === tool.itemId);
+                            if (material) void loadHistoryItem(material);
+                            return;
+                          }
+                          if (tool.kind === "page") {
+                            openProtectedAppPage(tool.page);
+                            return;
+                          }
+                          if (tool.kind === "guide") {
+                            setActiveTab("guide");
+                            return;
+                          }
+                          setWorkspaceToolGroup(tool.groupId);
                           openWorkspaceToolCard(tool);
                         }}
                         className="workspace-search-result"
@@ -27852,9 +27906,7 @@ export default function App() {
               <section className="workspace-mobile-sheet" aria-label="More Study Workspace actions">
                 <div className="workspace-mobile-sheet-head"><div><p>Study Workspace</p><h3>More actions</h3></div><button type="button" onClick={() => setIsWorkspaceMobileMoreOpen(false)} aria-label="Close more actions"><X className="h-5 w-5" aria-hidden="true" /></button></div>
                 <div className="workspace-mobile-sheet-list">
-                  <button type="button" onClick={() => { setActiveTab("chat"); setIsWorkspaceMobileMoreOpen(false); }}>Explain Simply</button>
-                  <button type="button" onClick={() => { if (teacherLessonData.segments.length) playTeacherLesson(); else generateTeacherLesson({ autoplay: true }); setIsWorkspaceMobileMoreOpen(false); }}>Teacher Mode</button>
-                  <button type="button" onClick={() => { syncCurrentTabToRoom(); setIsWorkspaceMobileMoreOpen(false); }} disabled={!canShareCurrentTool}>Share</button>
+                  <button type="button" onClick={() => { void shareCurrentWorkspaceLink(); setIsWorkspaceMobileMoreOpen(false); }}>Share private link</button>
                   <button type="button" onClick={() => { window.print(); setIsWorkspaceMobileMoreOpen(false); }}>Print</button>
                   <button type="button" onClick={() => { openProtectedAppPage("materials"); setIsWorkspaceMobileMoreOpen(false); }}>History</button>
                 </div>
@@ -27974,7 +28026,7 @@ export default function App() {
                     <Ellipsis className="h-4 w-4" aria-hidden="true" />
                   </button>
                   {workspaceSaveStatus ? <span className="workspace-save-status workspace-secondary-action">{workspaceSaveStatus}</span> : null}
-                  {canShareCurrentTool ? <button type="button" onClick={syncCurrentTabToRoom} className="workspace-secondary-action rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share</button> : null}
+                  <button type="button" onClick={() => void shareCurrentWorkspaceLink()} className="workspace-secondary-action rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share link</button>
                   <button type="button" onClick={() => openCollaborationPage()} className="workspace-secondary-action rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
                   </div>
                 </div>

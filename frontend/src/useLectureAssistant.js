@@ -14,7 +14,7 @@ const ASSISTANT_VOICE_PROFILE_STORAGE_KEY = "mabaso-lecture-assistant-voice-prof
 const ASSISTANT_VOICE_PREVIEW_DRAFT_STORAGE_KEY = "mabaso-lecture-assistant-voice-preview-draft";
 const MAX_SAVED_CONVERSATIONS = 120;
 const CONVERSATION_LIST_PAGE_SIZE = 30;
-const CONVERSATION_MESSAGE_PAGE_SIZE = 80;
+const CONVERSATION_MESSAGE_PAGE_SIZE = 32;
 const CONVERSATION_SEARCH_DEBOUNCE_MS = 260;
 const LECTURE_ASSISTANT_VOICE_OUTPUT_LANGUAGE = "English";
 const LECTURE_ASSISTANT_VOICE_TRANSCRIPTION_LANGUAGE = "en";
@@ -1121,6 +1121,7 @@ export function useLectureAssistant({
   const composerRef = useRef(null);
   const attachedImageInputRef = useRef(null);
   const copyResetTimerRef = useRef(0);
+  const conversationLoadPromisesRef = useRef(new Map());
   const speechRestartTimerRef = useRef(0);
   const voiceListeningTimerRef = useRef(0);
   const speechRecognitionErrorRef = useRef("");
@@ -2492,9 +2493,12 @@ export function useLectureAssistant({
   const loadConversation = async (conversationId, { silent = false } = {}) => {
     const normalizedConversationId = compactText(conversationId);
     if (!normalizedConversationId || !remoteSyncAvailable || typeof requestConversation !== "function") return null;
+    const pendingLoad = conversationLoadPromisesRef.current.get(normalizedConversationId);
+    if (pendingLoad) return pendingLoad;
     if (!silent) setIsLoadingConversationMessages(true);
 
-    try {
+    const loadPromise = (async () => {
+      try {
       const data = await requestConversation(normalizedConversationId, {
         messageLimit: CONVERSATION_MESSAGE_PAGE_SIZE,
       });
@@ -2514,14 +2518,18 @@ export function useLectureAssistant({
         ))));
       });
       return mergedConversation;
-    } catch (error) {
-      if (!silent) {
-        setStatusText(compactText(error?.message, "That conversation could not be loaded right now."));
+      } catch (error) {
+        if (!silent) {
+          setStatusText(compactText(error?.message, "That conversation could not be loaded right now."));
+        }
+        return null;
+      } finally {
+        conversationLoadPromisesRef.current.delete(normalizedConversationId);
+        if (!silent) setIsLoadingConversationMessages(false);
       }
-      return null;
-    } finally {
-      if (!silent) setIsLoadingConversationMessages(false);
-    }
+    })();
+    conversationLoadPromisesRef.current.set(normalizedConversationId, loadPromise);
+    return loadPromise;
   };
 
   const loadOlderMessages = async (conversationId = activeConversation?.id) => {
@@ -2576,8 +2584,8 @@ export function useLectureAssistant({
     openPanel({ focusComposer });
 
     const selectedConversation = conversations.find((conversation) => conversation.id === normalizedConversationId);
-    if (remoteSyncAvailable && selectedConversation && !selectedConversation.isDraft) {
-      void loadConversation(normalizedConversationId, { silent: Boolean(selectedConversation.messages.length) });
+    if (remoteSyncAvailable && selectedConversation && !selectedConversation.isDraft && !selectedConversation.messages.length) {
+      void loadConversation(normalizedConversationId);
     }
   };
 

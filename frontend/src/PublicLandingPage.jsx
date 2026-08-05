@@ -1,17 +1,14 @@
-import { useState } from "react";
 import {
   BookOpen,
   ChevronDown,
   FileText,
   GraduationCap,
-  Menu,
   MessageCircle,
   Mic,
   Presentation,
   ShieldCheck,
   Sparkles,
   Users,
-  X,
 } from "lucide-react";
 
 const NAV_GROUPS = [
@@ -73,9 +70,7 @@ export default function PublicLandingPage({
   authMessageIsError = false,
   isGoogleSigningIn = false,
 }) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const navigate = (route) => {
-    setIsMenuOpen(false);
     onNavigate(route);
   };
   const startGoogle = () => {
@@ -87,10 +82,7 @@ export default function PublicLandingPage({
     <div className="public-landing">
       <header className="public-landing-nav">
         <button type="button" className="public-landing-brand" onClick={() => navigate("/")}>Mabaso AI</button>
-        <button type="button" className="public-landing-menu-button" onClick={() => setIsMenuOpen((open) => !open)} aria-label={isMenuOpen ? "Close navigation" : "Open navigation"} aria-expanded={isMenuOpen}>
-          {isMenuOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
-        </button>
-        <nav className={`public-landing-links ${isMenuOpen ? "is-open" : ""}`} aria-label="Public navigation">
+        <nav className="public-landing-links" aria-label="Public navigation">
           {NAV_GROUPS.map((group) => (
             <details key={group.label} className="public-nav-dropdown">
               <summary>{group.label}<ChevronDown aria-hidden="true" /></summary>
@@ -111,7 +103,6 @@ export default function PublicLandingPage({
       <main>
         <section className="public-landing-hero">
           <div className="public-hero-copy">
-            <p className="public-eyebrow"><Sparkles aria-hidden="true" /> AI-powered study workspace</p>
             <h1>Turn lectures into your complete <span>study workspace.</span></h1>
             <p>Upload, record, or prompt a lecture workspace, then create structured guides, worked examples, formulas, flashcards, tests, mind maps, presentations, podcasts, timetables, and persistent Study Chat support.</p>
             <div className="public-hero-actions">
@@ -170,6 +161,12 @@ export default function PublicLandingPage({
           <strong className="provider-mark provider-gemini"><Sparkles aria-hidden="true" /> Google Gemini</strong>
         </footer>
       </main>
+      <nav className="public-mobile-bottom-nav" aria-label="Mobile public navigation">
+        <button type="button" onClick={() => navigate("/product/study-workspace")}>Platform</button>
+        <button type="button" onClick={() => navigate("/product/ai-study-guide")}>Features</button>
+        <button type="button" onClick={() => navigate("/resources/study-workflow")}>Resources</button>
+        <button type="button" onClick={() => navigate("/pricing")}>Pricing</button>
+      </nav>
     </div>
   );
 }

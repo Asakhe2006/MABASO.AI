@@ -46,7 +46,7 @@ function actionButtonClass(variant = "secondary") {
 function WorkspacePreview({ page }) {
   const previewTabs = page.hero?.preview?.tabs || [];
   const previewRows = page.hero?.preview?.rows || [];
-  const previewHighlights = (page.contains || page.layout || [])
+  const previewHighlights = (page.contains || [])
     .slice(0, 3)
     .map((item, index) => ({
       title: item.title || `Core surface ${index + 1}`,
@@ -509,6 +509,7 @@ export function EnterpriseSiteShell({
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
+  const visibleModules = (page.modules || []).filter((module) => !/^(enterprise notes|design notes|what it should feel like|visual direction|layout architecture)$/i.test(module.title || ""));
 
   if (adminBlocked) {
     return <ProtectedAdminState page={page} onNavigate={onNavigate} onOpenApp={onOpenApp} />;
@@ -528,8 +529,8 @@ export function EnterpriseSiteShell({
           <div className="grid gap-8 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <Motion.div className="enterprise-page-copy" {...cardMotion}>
               <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/70">{page.hero?.eyebrow || `${page.category} / ${page.title}`}</p>
-              <h1 className="mt-5 text-4xl font-semibold tracking-[-0.05em] text-white sm:text-5xl xl:text-6xl">{page.hero?.headline || page.title}</h1>
-              <p className="mt-5 max-w-3xl text-sm leading-8 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
+              <h1 className="mt-4 text-3xl font-semibold text-white sm:text-4xl xl:text-5xl">{page.hero?.headline || page.title}</h1>
+              <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
               <div className="mt-7 flex flex-wrap gap-3">
                 {(page.hero?.ctas || []).map((cta) => (
                   <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
@@ -608,34 +609,24 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
-            <section className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-              <Motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Layout architecture</p>
-                <div className="mt-5 grid gap-4">
-                  {page.layout?.map((item) => (
-                    <div key={`${page.route}-layout-${item.title}`} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-                      <p className="text-sm font-semibold text-white">{item.title}</p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">{item.description}</p>
-                    </div>
-                  ))}
-                </div>
-              </Motion.div>
-              <Motion.div {...cardMotion} className="rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Modules and page contents</p>
-                <div className="mt-5 grid gap-4">
-                  {page.modules?.map((module) => (
-                    <div key={`${page.route}-module-${module.title}`} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+            {visibleModules.length ? (
+              <section className="enterprise-capability-list mt-8" aria-labelledby="enterprise-capabilities-heading">
+                <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Capabilities</p>
+                <h2 id="enterprise-capabilities-heading" className="mt-2 text-2xl font-semibold text-white">What you can do</h2>
+                <div className="mt-5 grid gap-x-8 gap-y-3 lg:grid-cols-2">
+                  {visibleModules.map((module) => (
+                    <div key={`${page.route}-module-${module.title}`} className="border-b border-emerald-100/10 py-4">
                       <div className="flex items-start gap-3">
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/[0.06] text-cyan-100">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center text-emerald-300">
                           <SiteIcon name={module.icon} />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="text-lg font-semibold text-white">{module.title}</h3>
-                          <div className="mt-3 grid gap-2">
+                          <h3 className="text-base font-semibold text-white">{module.title}</h3>
+                          <div className="mt-2 grid gap-1.5">
                             {module.items?.map((item) => (
-                              <div key={item} className="flex items-start gap-3 rounded-2xl border border-white/8 bg-slate-950/50 px-4 py-3">
-                                <LucideIcons.Check className="mt-1 h-4 w-4 text-cyan-100" aria-hidden="true" />
-                                <p className="text-sm leading-7 text-slate-200">{item}</p>
+                              <div key={item} className="flex items-start gap-2.5 py-1">
+                                <LucideIcons.Check className="mt-1 h-4 w-4 text-emerald-300" aria-hidden="true" />
+                                <p className="text-sm leading-6 text-slate-200">{item}</p>
                               </div>
                             ))}
                           </div>
@@ -644,8 +635,8 @@ export function EnterpriseSiteShell({
                     </div>
                   ))}
                 </div>
-              </Motion.div>
-            </section>
+              </section>
+            ) : null}
 
             {page.workflow?.length ? (
               <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
@@ -751,34 +742,6 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
-            <section className="mt-8 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)]">
-              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Suggested visuals</p>
-                <div className="mt-4 grid gap-2">
-                  {(page.visuals || []).map((item) => (
-                    <div key={item} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-950/65 px-4 py-3">
-                      <LucideIcons.Sparkles className="mt-1 h-4 w-4 text-cyan-100" aria-hidden="true" />
-                      <p className="text-sm leading-7 text-slate-100">{item}</p>
-                    </div>
-                  ))}
-                </div>
-              </Motion.div>
-              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Empty state</p>
-                <h3 className="mt-4 text-xl font-semibold text-white">{page.emptyState?.title || "Ready for content"}</h3>
-                <p className="mt-3 text-sm leading-7 text-slate-300">{page.emptyState?.description}</p>
-              </Motion.div>
-              <Motion.div {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
-                <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Enterprise design notes</p>
-                <div className="mt-4 grid gap-2">
-                  {(page.designNotes || []).map((item) => (
-                    <div key={item} className="rounded-2xl border border-white/10 bg-slate-950/65 px-4 py-3 text-sm leading-7 text-slate-200">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </Motion.div>
-            </section>
           </div>
 
           {isLocked ? (
