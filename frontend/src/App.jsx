@@ -17,6 +17,7 @@ import {
 } from "./siteRouting";
 import { consumeAssistantStream, useLectureAssistant } from "./useLectureAssistant";
 import AssistantMarkdown from "./components/AssistantMarkdown";
+import PublicLandingPage from "./PublicLandingPage";
 
 const ReactMarkdown = lazy(() => import("react-markdown"));
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
@@ -3555,6 +3556,23 @@ function getStudyChatClipboardText(content = "") {
     .trim();
 }
 
+function deriveStudyChatTopicTitle(question = "") {
+  const cleaned = String(question || "")
+    .replace(/[^a-zA-Z0-9'/-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "New Study Chat";
+  const stopWords = new Set([
+    "a", "an", "and", "are", "can", "could", "do", "does", "explain", "for", "give", "help", "how", "i", "in", "is", "it", "me", "of", "on", "please", "tell", "the", "to", "what", "when", "where", "which", "who", "why", "with", "you",
+  ]);
+  const topicWords = cleaned.split(" ").filter((word) => !stopWords.has(word.toLowerCase())).slice(0, 7);
+  const selected = topicWords.length ? topicWords : cleaned.split(" ").slice(0, 7);
+  return selected
+    .map((word) => (/^[A-Z0-9]{2,}$/.test(word) ? word : `${word.charAt(0).toUpperCase()}${word.slice(1)}`))
+    .join(" ")
+    .slice(0, 64) || "New Study Chat";
+}
+
 function getSafeAiReferenceImageUrls(references = [], { allowInlineDataUrl = false, maxItems = MAX_AI_REFERENCE_IMAGES } = {}) {
   return (references || [])
     .map((item) => sanitizeStoredImageUrl(item?.image_url || item?.source_url || "", { allowInlineDataUrl }))
@@ -6757,6 +6775,7 @@ export default function App() {
   const [isStudyChatVoiceListening, setIsStudyChatVoiceListening] = useState(false);
   const [isStudyChatVoicePaused, setIsStudyChatVoicePaused] = useState(false);
   const [isStudyChatVoiceAnswering, setIsStudyChatVoiceAnswering] = useState(false);
+  const [isStudyChatVoiceSessionOpen, setIsStudyChatVoiceSessionOpen] = useState(false);
   const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
   const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
@@ -6939,6 +6958,7 @@ export default function App() {
   const markQuizRef = useRef(null);
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
+  const historyItemLoadPromisesRef = useRef(new Map());
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const hasLoadedAdminDashboardRef = useRef(false);
@@ -15018,6 +15038,7 @@ export default function App() {
           updatedAt: item.updatedAt || item.lastMessageAt || "",
           materialKey: item.contextKey || "general-study-chat",
           messageCount: Number(item.messageCount || 0),
+          serverTitle: true,
         })).filter((item) => item.id));
       }).catch(() => {
         // Keep the email-scoped local cache available during a temporary server failure.
@@ -15101,15 +15122,18 @@ export default function App() {
         const firstQuestion = persistableMessages.find((message) => message.role === "user")?.content || "New Study Chat";
         const nextRecord = {
           id: activeStudyChatId,
-          title: String(firstQuestion).replace(/\s+/g, " ").trim().slice(0, 64) || "New Study Chat",
+          title: deriveStudyChatTopicTitle(firstQuestion),
           updatedAt: new Date().toISOString(),
           materialKey: studyChatMaterialKey,
           messageCount: persistableMessages.length,
         };
-        setStudyChatHistoryIndex((current) => [
-          nextRecord,
-          ...current.filter((item) => item.id !== activeStudyChatId),
-        ].slice(0, 80));
+        setStudyChatHistoryIndex((current) => {
+          const existing = current.find((item) => item.id === activeStudyChatId);
+          const mergedRecord = existing?.serverTitle
+            ? { ...nextRecord, title: existing.title, serverTitle: true }
+            : nextRecord;
+          return [mergedRecord, ...current.filter((item) => item.id !== activeStudyChatId)].slice(0, 80);
+        });
       }
     } catch {
       // Keep chat persistence best-effort so a full browser storage quota never breaks the app.
@@ -16089,7 +16113,9 @@ export default function App() {
     }
     if (!window.google?.accounts?.id) {
       setAuthMessage("Google sign-in is still loading. Try again in a moment.");
+      return;
     }
+    window.google.accounts.id.prompt();
   };
 
   const openProtectedAppRoute = (target = "capture") => {
@@ -20067,13 +20093,24 @@ export default function App() {
 
   const resolveFullHistoryItem = async (item) => {
     if (!item?.isCompactHistoryItem) return item;
-    const response = await authFetch(`/history/${encodeURIComponent(item.id)}`, { timeoutMs: 20000, cache: "no-store" });
-    const data = await parseJsonSafe(response);
-    if (!response.ok || !data.item) throw new Error(data.detail || "Could not open this saved study workspace.");
-    const [fullItem] = normalizeHistoryItems([data.item]);
-    if (!fullItem) throw new Error("This saved study workspace could not be read.");
-    setHistoryItems((current) => current.map((entry) => entry.id === fullItem.id ? fullItem : entry));
-    return fullItem;
+    const itemId = String(item.id || "");
+    const pendingRequest = historyItemLoadPromisesRef.current.get(itemId);
+    if (pendingRequest) return pendingRequest;
+    const request = (async () => {
+      const response = await authFetch(`/history/${encodeURIComponent(itemId)}`, { timeoutMs: 9000, cache: "no-store" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok || !data.item) throw new Error(data.detail || "Could not open this saved study workspace.");
+      const [fullItem] = normalizeHistoryItems([data.item]);
+      if (!fullItem) throw new Error("This saved study workspace could not be read.");
+      setHistoryItems((current) => current.map((entry) => entry.id === fullItem.id ? fullItem : entry));
+      return fullItem;
+    })();
+    historyItemLoadPromisesRef.current.set(itemId, request);
+    try {
+      return await request;
+    } finally {
+      historyItemLoadPromisesRef.current.delete(itemId);
+    }
   };
 
   const loadAdminDashboard = async (silent = false, tokenOverride = "", rangeOverride = "") => {
@@ -23637,6 +23674,7 @@ export default function App() {
         updatedAt: savedConversation.updatedAt || new Date().toISOString(),
         messageCount: Number(savedConversation.messageCount || 0),
         materialKey: savedConversation.contextKey || studyChatMaterialKey,
+        serverTitle: true,
       }, ...current.filter((item) => item.id !== savedConversation.id)].slice(0, 80));
     }
     return answer;
@@ -24314,6 +24352,7 @@ export default function App() {
     }
     setIsAskingChat(false);
     setIsStudyChatVoiceAnswering(false);
+    setIsStudyChatVoiceSessionOpen(false);
     setStudyChatVoiceStatus("Response stopped.");
     setChatMessages((current) => current.filter((message) => !(message.role === "assistant" && message.content === "Thinking...")));
   };
@@ -24461,6 +24500,7 @@ export default function App() {
       setStudyChatVoiceStatus(`Voice input is not supported in ${detectSupportBrowser() || "this browser"}. Type the question instead.`);
       return;
     }
+    setIsStudyChatVoiceSessionOpen(true);
     setStudyChatResponseMode("voice");
     stopStudyChatVoiceCapture({ preserveTranscript });
     if (!preserveTranscript) studyChatVoiceTranscriptRef.current = "";
@@ -24541,25 +24581,46 @@ export default function App() {
     }
   };
 
+  const closeStudyChatVoiceSession = () => {
+    studyChatVoiceAnswerRunRef.current += 1;
+    stopStudyChatVoiceCapture();
+    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+    setIsStudyChatVoiceAnswering(false);
+    setIsStudyChatVoiceSessionOpen(false);
+    setStudyChatVoiceStatus("");
+  };
+
   const renderStudyChatVoiceCaptureOverlay = () => (
-    isStudyChatVoiceListening || isStudyChatVoicePaused ? (
+    isStudyChatVoiceSessionOpen ? (
       <div className="study-chat-voice-capture" role="dialog" aria-modal="true" aria-label="Voice question capture">
+        <button type="button" className="study-chat-voice-close" onClick={closeStudyChatVoiceSession} aria-label="Close voice conversation">
+          <X className="h-5 w-5" aria-hidden="true" />
+        </button>
         <button
           type="button"
-          className={`study-chat-voice-orb ${isStudyChatVoicePaused ? "is-paused" : "is-listening"}`}
+          className={`study-chat-voice-orb ${isStudyChatVoiceListening ? "is-listening" : isStudyChatVoicePaused ? "is-paused" : isAskingChat || isStudyChatVoiceAnswering ? "is-answering" : "is-ready"}`}
           onClick={() => {
-            if (isStudyChatVoicePaused) startStudyChatVoiceCapture({ preserveTranscript: true });
-            else pauseStudyChatVoiceCapture();
+            if (isAskingChat || isStudyChatVoiceAnswering) return;
+            if (isStudyChatVoiceListening) pauseStudyChatVoiceCapture();
+            else startStudyChatVoiceCapture({ preserveTranscript: isStudyChatVoicePaused });
           }}
-          aria-label={isStudyChatVoicePaused ? "Continue speaking" : "Pause voice capture"}
+          aria-label={isStudyChatVoiceListening ? "Pause voice capture" : isStudyChatVoicePaused ? "Continue speaking" : "Ask another voice question"}
         >
-          {isStudyChatVoicePaused ? <Play className="h-7 w-7" aria-hidden="true" /> : <Pause className="h-7 w-7" aria-hidden="true" />}
+          {isAskingChat || isStudyChatVoiceAnswering
+            ? <span className="study-chat-voice-spinner" aria-hidden="true" />
+            : isStudyChatVoiceListening
+              ? <Pause className="h-9 w-9" aria-hidden="true" />
+              : isStudyChatVoicePaused
+                ? <Play className="h-9 w-9" aria-hidden="true" />
+                : <Mic className="h-9 w-9" aria-hidden="true" />}
         </button>
-        <p>{isStudyChatVoicePaused ? "Paused" : "Listening"}</p>
-        <button type="button" className="study-chat-voice-finish" onClick={finishStudyChatVoiceCapture}>
-          <Square className="h-4 w-4" aria-hidden="true" />
-          <span>Stop and send</span>
-        </button>
+        <p>{isStudyChatVoiceListening ? "Listening" : isStudyChatVoicePaused ? "Paused" : isAskingChat ? "Preparing your answer" : isStudyChatVoiceAnswering ? "Speaking" : "Tap to speak again"}</p>
+        {isStudyChatVoiceListening || isStudyChatVoicePaused ? (
+          <button type="button" className="study-chat-voice-finish" onClick={finishStudyChatVoiceCapture}>
+            <Square className="h-4 w-4" aria-hidden="true" />
+            <span>Stop and send</span>
+          </button>
+        ) : null}
       </div>
     ) : null
   );
@@ -24748,7 +24809,6 @@ export default function App() {
         </div>
       ) : null}
       <p className="mt-2 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : studyChatVoiceStatus || lectureAssistant.statusText}</p>
-      {renderStudyChatVoiceCaptureOverlay()}
     </div>
   );
 
@@ -24846,6 +24906,7 @@ export default function App() {
           </main>
           {renderStudyChatComposer({ fullPage: true })}
         </section>
+        {renderStudyChatVoiceCaptureOverlay()}
       </div>
     );
   };
@@ -26959,6 +27020,25 @@ export default function App() {
       );
     }
 
+    if (["/", "/signin", "/register"].includes(browserPath)) {
+      return (
+        <PublicLandingPage
+          brandArtUrl={BRAND_ART_URL}
+          googleButtonRef={landingPrimaryGoogleButtonRef}
+          outputLanguage={outputLanguage}
+          outputLanguageOptions={outputLanguageOptions}
+          onLanguageChange={setOutputLanguage}
+          onNavigate={navigateToPath}
+          onStartGoogle={startDirectGoogleSignIn}
+          onPrepareGoogle={prepareGoogleRedirect}
+          rememberedEmail={authEmailInput}
+          authMessage={showAuthMessageBanner ? authMessage : ""}
+          authMessageIsError={authMessageIsError}
+          isGoogleSigningIn={isGoogleSigningIn}
+        />
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -27036,16 +27116,6 @@ export default function App() {
                     <div className="mt-4 flex justify-center">
                       <div ref={googleButtonRef} className="min-h-[44px] w-full max-w-[320px]" />
                     </div>
-                    {appleSignInAvailable ? (
-                      <button
-                        type="button"
-                        onClick={startAppleLogin}
-                        disabled={isAppleSigningIn}
-                        className="mt-3 w-full rounded-full border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-60"
-                      >
-                        {isAppleSigningIn ? "Opening Apple sign-in..." : "Continue with Apple"}
-                      </button>
-                    ) : null}
                     {showAuthMessageBanner ? <div className={`mt-3 rounded-2xl border px-4 py-3 text-sm ${authMessageIsError ? "border-rose-300/25 bg-rose-500/10 text-rose-100" : authMessageIsPositive ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>{authMessage}</div> : null}
                   </div>
                 ) : null}
@@ -27243,6 +27313,9 @@ export default function App() {
       if (item.id === "collaboration") {
         openCollaborationPage();
         return;
+      }
+      if (item.id === "workspace") {
+        setActiveTab("guide");
       }
       openProtectedAppPage(item.id);
     };
@@ -27915,7 +27988,7 @@ export default function App() {
                                   </div>
                                   <div className="flex shrink-0 items-center gap-2">
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
-                                    {canUseSubtopicExplainMore ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); regenerateGuideSection(section); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title="Regenerate" aria-label="Regenerate this subtopic">{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button> : null}
+                                    <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (canUseSubtopicExplainMore) regenerateGuideSection(section); else openUpgradeModal(); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title={canUseSubtopicExplainMore ? "Regenerate" : "Upgrade to regenerate this subtopic"} aria-label={canUseSubtopicExplainMore ? "Regenerate this subtopic" : "Upgrade to regenerate this subtopic"}>{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button>
                                   </div>
                                 </div>
                               </summary>
@@ -28001,7 +28074,6 @@ export default function App() {
                       </div>
                     )}
 
-                    {renderStudyChatPanel({ compact: true })}
                   </div>
                 ) : null}
                 {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
@@ -28152,6 +28224,7 @@ export default function App() {
 
         {historyPanel}
         {quizFeedbackModal}
+        {renderStudyChatVoiceCaptureOverlay()}
       </main>
       {renderMobileAppNavigation()}
     </div>
