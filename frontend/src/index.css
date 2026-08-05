@@ -1556,6 +1556,178 @@ iframe {
   }
 }
 
+/* Final Study Chat and timetable layout: only the message surface scrolls. */
+.study-chat-page {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: #00170e !important;
+}
+
+.study-chat-main {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: #00170e !important;
+}
+
+.study-chat-page-scroll,
+.study-chat-embedded-messages {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(34, 197, 94, 0.55) #00170e;
+  background: #00170e !important;
+}
+
+.study-chat-page-composer,
+.study-chat-embedded-composer {
+  position: relative !important;
+  inset: auto !important;
+  z-index: 12 !important;
+  flex: none;
+  border-color: rgba(34, 197, 94, 0.28) !important;
+  background: #05261a !important;
+}
+
+.study-chat-page-composer {
+  width: min(820px, calc(100% - 1.5rem)) !important;
+  margin: 0 auto max(0.65rem, env(safe-area-inset-bottom)) !important;
+}
+
+.study-chat-panel,
+.study-chat-embedded-panel,
+.study-chat-embedded-head,
+.study-chat-empty {
+  border-color: rgba(34, 197, 94, 0.18) !important;
+  background: #00170e !important;
+  box-shadow: none !important;
+}
+
+.study-chat-embedded-panel:not(.is-compact) {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  height: clamp(430px, calc(100dvh - 15rem), 720px) !important;
+  min-height: 430px !important;
+  overflow: hidden !important;
+}
+
+.study-chat-upload-status {
+  margin: 0.2rem 0.55rem 0;
+  color: #86efac;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+@media (max-width: 768px) {
+  .capture-bundle-explainer {
+    display: none !important;
+  }
+
+  .study-chat-page-composer {
+    width: calc(100% - 0.85rem) !important;
+    margin: 0 auto max(0.4rem, env(safe-area-inset-bottom)) !important;
+    padding: 0.24rem 0.3rem !important;
+    border-radius: 18px !important;
+  }
+
+  .study-chat-page-scroll {
+    padding: 0.55rem 0.52rem 0.65rem !important;
+  }
+
+  .study-chat-page-messages,
+  .study-chat-embedded-messages {
+    gap: 0.5rem !important;
+  }
+
+  .study-chat-embedded-panel:not(.is-compact),
+  .study-chat-embedded-panel.is-compact {
+    height: min(620px, calc(100dvh - 10.5rem)) !important;
+    min-height: 390px !important;
+    border-width: 1px !important;
+    border-radius: 16px !important;
+  }
+
+  .study-chat-embedded-head {
+    padding: 0.5rem 0.55rem !important;
+  }
+
+  .inline-chat-action,
+  .study-chat-new-button {
+    min-height: 34px !important;
+    padding: 0.35rem 0.58rem !important;
+    font-size: 0.72rem !important;
+  }
+
+  .study-chat-message-action {
+    min-height: 24px !important;
+    padding: 0.18rem 0.42rem !important;
+    font-size: 0.65rem !important;
+  }
+
+  .study-chat-message-action svg {
+    width: 12px !important;
+    height: 12px !important;
+  }
+
+  .study-chat-embedded-messages .study-chat-message,
+  .study-chat-page-messages .study-chat-message {
+    font-size: 0.78rem !important;
+    line-height: 1.48 !important;
+  }
+
+  .study-chat-composer-input {
+    min-height: 34px !important;
+    max-height: 96px !important;
+    font-size: 0.8rem !important;
+    line-height: 1.4 !important;
+  }
+
+  .study-chat-composer-icon,
+  .study-chat-send-button {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+  }
+
+  .study-timetable-grid {
+    min-width: 620px !important;
+  }
+
+  .lecture-timetable-table {
+    min-width: 660px !important;
+    font-size: 0.66rem !important;
+  }
+
+  .timetable-compact-surface h2 {
+    font-size: 1.18rem !important;
+  }
+
+  .timetable-compact-surface h3 {
+    font-size: 0.88rem !important;
+  }
+
+  .timetable-compact-surface p,
+  .timetable-compact-surface button,
+  .timetable-compact-surface input,
+  .timetable-compact-surface select {
+    font-size: 0.72rem !important;
+  }
+
+  .timetable-compact-surface table th {
+    padding: 0.35rem !important;
+    font-size: 0.62rem !important;
+  }
+
+  .timetable-compact-surface table td {
+    padding: 0.32rem !important;
+    font-size: 0.66rem !important;
+  }
+}
+
 @media (max-width: 768px) {
   .page-workspace .workspace-shell {
     padding: calc(7.45rem + env(safe-area-inset-top)) 12px calc(5.4rem + env(safe-area-inset-bottom)) !important;
@@ -6048,4 +6220,108 @@ iframe {
     width: min(44vw, 164px);
     height: min(44vw, 164px);
   }
+}
+
+/* Keep these final so legacy workspace rules cannot reintroduce fixed composers or blue surfaces. */
+.study-chat-page,
+.study-chat-main,
+.study-chat-page-scroll,
+.study-chat-page-messages,
+.study-chat-panel,
+.study-chat-embedded-panel,
+.study-chat-embedded-head,
+.study-chat-embedded-messages,
+.study-chat-empty {
+  border-color: rgba(34, 197, 94, 0.18) !important;
+  background-color: #00170e !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.study-chat-page,
+.study-chat-main {
+  height: 100dvh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.study-chat-main,
+.study-chat-embedded-panel:not(.is-compact) {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+}
+
+.study-chat-page-scroll,
+.study-chat-page-messages,
+.study-chat-embedded-messages {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-color: rgba(34, 197, 94, 0.55) #00170e;
+}
+
+.study-chat-page-messages {
+  min-height: min-content !important;
+  overflow: visible !important;
+}
+
+.study-chat-page-composer,
+.study-chat-embedded-composer {
+  position: relative !important;
+  inset: auto !important;
+  border-color: rgba(34, 197, 94, 0.28) !important;
+  background: #05261a !important;
+  transform: none !important;
+}
+
+.study-chat-page-composer {
+  width: min(820px, calc(100% - 1.5rem)) !important;
+  margin: 0 auto max(0.65rem, env(safe-area-inset-bottom)) !important;
+}
+
+.study-chat-embedded-panel:not(.is-compact) {
+  height: clamp(430px, calc(100dvh - 15rem), 720px) !important;
+  min-height: 430px !important;
+  overflow: hidden !important;
+}
+
+@media (max-width: 768px) {
+  .capture-bundle-explainer {
+    display: none !important;
+  }
+
+  .study-chat-page-composer {
+    width: calc(100% - 0.85rem) !important;
+    margin: 0 auto max(0.4rem, env(safe-area-inset-bottom)) !important;
+    padding: 0.24rem 0.3rem !important;
+  }
+
+  .study-chat-page-scroll {
+    padding: 0.55rem 0.52rem 0.65rem !important;
+  }
+
+  .study-chat-embedded-panel:not(.is-compact),
+  .study-chat-embedded-panel.is-compact {
+    height: min(620px, calc(100dvh - 10.5rem)) !important;
+    min-height: 390px !important;
+  }
+
+  .study-timetable-grid {
+    min-width: 620px !important;
+  }
+
+  .lecture-timetable-table {
+    min-width: 660px !important;
+    font-size: 0.66rem !important;
+  }
+
+  .timetable-compact-surface h2 { font-size: 1.18rem !important; }
+  .timetable-compact-surface h3 { font-size: 0.88rem !important; }
+  .timetable-compact-surface p,
+  .timetable-compact-surface button,
+  .timetable-compact-surface input,
+  .timetable-compact-surface select { font-size: 0.72rem !important; }
+  .timetable-compact-surface table th { padding: 0.35rem !important; font-size: 0.62rem !important; }
+  .timetable-compact-surface table td { padding: 0.32rem !important; font-size: 0.66rem !important; }
 }

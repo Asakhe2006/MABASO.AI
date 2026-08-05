@@ -65,6 +65,8 @@ export const footerLinkGroups = [
       { label: "Worked Examples", route: "/product/worked-examples" },
       { label: "Flashcards", route: "/product/flashcards" },
       { label: "AI Test Generator", route: "/product/ai-test-generator" },
+      { label: "Saved Materials", route: "/app/materials" },
+      { label: "Study Timetable", route: "/app/timetable" },
       { label: "Pricing", route: "/pricing" },
     ],
   },
@@ -74,6 +76,8 @@ export const footerLinkGroups = [
       { label: "Podcast Generator", route: "/ai-tools/podcast-generator" },
       { label: "PowerPoint Generator", route: "/ai-tools/powerpoint-generator" },
       { label: "Study Chat", route: "/ai-tools/study-chat" },
+      { label: "Saved Materials", route: "/app/materials" },
+      { label: "Study Timetable", route: "/app/timetable" },
     ],
   },
   {

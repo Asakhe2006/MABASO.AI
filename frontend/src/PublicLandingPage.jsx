@@ -20,6 +20,9 @@ const NAV_GROUPS = [
     items: [
       ["Study Workspace", "/product/study-workspace"],
       ["Lecture Capture", "/product/lecture-capture"],
+      ["Saved Materials", "/app/materials"],
+      ["Study Timetable", "/app/timetable"],
+      ["Collaboration", "/collaboration/shared-study-rooms"],
       ["AI Study Chat", "/ai-tools/study-chat"],
     ],
   },
@@ -27,7 +30,10 @@ const NAV_GROUPS = [
     label: "Features",
     items: [
       ["Study Guides", "/product/ai-study-guide"],
+      ["Worked Examples", "/product/worked-examples"],
+      ["Formula Extraction", "/product/formula-extraction"],
       ["Presentations", "/ai-tools/powerpoint-generator"],
+      ["Podcasts", "/ai-tools/podcast-generator"],
       ["Tests and Flashcards", "/product/ai-test-generator"],
     ],
   },
@@ -42,14 +48,15 @@ const NAV_GROUPS = [
 ];
 
 const STUDY_TOOLS = [
-  [<BookOpen aria-hidden="true" />, "Study Guides"],
-  [<GraduationCap aria-hidden="true" />, "Flashcards"],
-  [<FileText aria-hidden="true" />, "Tests"],
-  [<Presentation aria-hidden="true" />, "Presentations"],
-  [<Mic aria-hidden="true" />, "Podcasts"],
-  [<MessageCircle aria-hidden="true" />, "AI Chat"],
-  [<FileText aria-hidden="true" />, "Past Papers"],
-  [<Users aria-hidden="true" />, "Collaboration"],
+  [<BookOpen aria-hidden="true" />, "Study Guides", "/product/ai-study-guide"],
+  [<GraduationCap aria-hidden="true" />, "Flashcards", "/product/flashcards"],
+  [<FileText aria-hidden="true" />, "Tests", "/product/ai-test-generator"],
+  [<FileText aria-hidden="true" />, "Worked Examples", "/product/worked-examples"],
+  [<Presentation aria-hidden="true" />, "Presentations", "/ai-tools/powerpoint-generator"],
+  [<Mic aria-hidden="true" />, "Podcasts", "/ai-tools/podcast-generator"],
+  [<MessageCircle aria-hidden="true" />, "Study Chat", "/ai-tools/study-chat"],
+  [<FileText aria-hidden="true" />, "Materials", "/app/materials"],
+  [<Users aria-hidden="true" />, "Collaboration", "/collaboration/shared-study-rooms"],
 ];
 
 export default function PublicLandingPage({
@@ -106,7 +113,7 @@ export default function PublicLandingPage({
           <div className="public-hero-copy">
             <p className="public-eyebrow"><Sparkles aria-hidden="true" /> AI-powered study workspace</p>
             <h1>Turn lectures into your complete <span>study workspace.</span></h1>
-            <p>Upload or record lectures and let Mabaso AI create structured study guides, flashcards, tests, presentations, podcasts, and focused academic support in one workspace.</p>
+            <p>Upload, record, or prompt a lecture workspace, then create structured guides, worked examples, formulas, flashcards, tests, mind maps, presentations, podcasts, timetables, and persistent Study Chat support.</p>
             <div className="public-hero-actions">
               <button type="button" className="public-get-started" onClick={startGoogle}>Get started for free</button>
               <button type="button" className="public-secondary-action" onClick={() => navigate("/resources/study-workflow")}>See how it works</button>
@@ -144,7 +151,7 @@ export default function PublicLandingPage({
 
         <section className="public-tool-strip" aria-label="Mabaso AI study tools">
           <div><p>AI tools for</p><strong>smarter studying</strong></div>
-          {STUDY_TOOLS.map(([icon, label]) => <button key={label} type="button" onClick={startGoogle}>{icon}<span>{label}</span></button>)}
+          {STUDY_TOOLS.map(([icon, label, route]) => <button key={label} type="button" onClick={() => navigate(route)}>{icon}<span>{label}</span></button>)}
         </section>
 
         <section className="public-platform-section">

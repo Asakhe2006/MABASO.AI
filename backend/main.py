@@ -1273,7 +1273,8 @@ class EmailPasswordRegistrationCompleteRequest(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    credential: str
+    credential: str = ""
+    access_token: str = ""
 
 
 class AppleAuthRequest(BaseModel):
@@ -5534,6 +5535,34 @@ def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     if not token_info.get("email_verified"):
         raise HTTPException(status_code=401, detail="Google account email is not verified.")
 
+    ensure_user_account_is_active(email)
+    mark_user_verified(email)
+    return create_session(email), email
+
+
+def create_session_from_google_access_token(access_token: str) -> tuple[str, str]:
+    verify_google_auth_is_configured()
+    normalized_token = compact_text(access_token)
+    if not normalized_token:
+        raise HTTPException(status_code=400, detail="Google access token is required.")
+
+    try:
+        response = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"access_token": normalized_token},
+            timeout=GOOGLE_AUTH_VERIFY_TIMEOUT,
+        )
+        token_info = response.json() if response.ok else {}
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.") from exc
+
+    if not response.ok or compact_text(token_info.get("aud")) != compact_text(GOOGLE_CLIENT_ID):
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.")
+    email_verified = compact_text(token_info.get("email_verified")).lower()
+    if email_verified not in {"true", "1", "yes"}:
+        raise HTTPException(status_code=401, detail="Google account email is not verified.")
+
+    email = validate_email_address(token_info.get("email", ""))
     ensure_user_account_is_active(email)
     mark_user_verified(email)
     return create_session(email), email
@@ -15893,10 +15922,14 @@ async def google_login(payload: GoogleAuthRequest, request: Request, response: R
     started_at = utc_now()
     enforce_rate_limit(scope="auth_google_login", request=request, limit=10, window_seconds=15 * 60)
     credential = payload.credential.strip()
-    if not credential:
+    access_token = payload.access_token.strip()
+    if not credential and not access_token:
         raise HTTPException(status_code=400, detail="Google credential is required.")
     logger.info("Google auth request started.")
-    session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    if access_token:
+        session_token, email = await asyncio.to_thread(create_session_from_google_access_token, access_token)
+    else:
+        session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
     logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
     threading.Thread(
         target=run_post_auth_background_sync,
@@ -26822,6 +26855,8 @@ async def extract_slide_text(
 
         ensure_allowed_image_upload(file.filename, content_type)
         image_data_url = build_data_url(file_bytes, content_type, file.filename)
+        if is_study_chat_attachment:
+            return finish_extracted_source("", [image_data_url], source_kind="image")
         try:
             text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, file.filename)
         except Exception:
@@ -28473,6 +28508,68 @@ def load_persisted_lecture_assistant_context(current_user: str, payload: Lecture
     return conversation, recent_messages, memory_summary
 
 
+def load_relevant_account_conversation_memory(
+    current_user: str,
+    payload: LectureAssistantRequest,
+    *,
+    limit: int = 3,
+    max_chars: int = 2400,
+) -> str:
+    if not chat_history_store.available:
+        return ""
+    question = compact_text(payload.question).lower()
+    if not question:
+        return ""
+    stop_words = {
+        "about", "after", "again", "also", "because", "before", "could", "does", "from", "have",
+        "into", "just", "more", "other", "please", "should", "some", "that", "their", "there",
+        "these", "they", "this", "those", "what", "when", "where", "which", "with", "would", "your",
+    }
+    question_terms = {
+        token for token in re.findall(r"[a-z0-9][a-z0-9_-]{2,}", question)
+        if token not in stop_words
+    }
+    if not question_terms:
+        return ""
+    try:
+        result = chat_history_store.list_conversations(
+            email=current_user,
+            include_archived=False,
+            limit=60,
+            offset=0,
+        )
+    except Exception:
+        logger.exception("Failed to load account-scoped conversation memory")
+        return ""
+
+    current_conversation_id = compact_text(payload.conversation_id)
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for item in result.get("items") or []:
+        if compact_text(item.get("id")) == current_conversation_id:
+            continue
+        memory = compact_text(item.get("memory_summary"))
+        preview = compact_text(item.get("last_message_preview"), compact_text(item.get("preview_text")))
+        searchable = " ".join((compact_text(item.get("title")), compact_text(item.get("lecture_label")), memory, preview)).lower()
+        searchable_terms = set(re.findall(r"[a-z0-9][a-z0-9_-]{2,}", searchable))
+        score = len(question_terms.intersection(searchable_terms))
+        if score and (memory or preview):
+            ranked.append((score, item))
+    ranked.sort(key=lambda entry: entry[0], reverse=True)
+
+    sections: list[str] = []
+    for _, item in ranked[: max(1, limit)]:
+        title = compact_text(item.get("title"), "Earlier study conversation")
+        memory = compact_text(item.get("memory_summary"), compact_text(item.get("last_message_preview"), compact_text(item.get("preview_text"))))
+        if memory:
+            sections.append(f"{title}: {memory}")
+    if not sections:
+        return ""
+    return compact_text(
+        "Relevant account memory from earlier conversations. Use it only when it directly helps answer the current question; do not invent missing details.\n"
+        + "\n".join(sections)
+    )[:max_chars]
+
+
 def persist_lecture_assistant_turn(
     *,
     current_user: str,
@@ -28660,6 +28757,11 @@ def create_lecture_assistant_stream(
         current_user,
         payload,
     )
+    relevant_account_memory = load_relevant_account_conversation_memory(current_user, payload)
+    if relevant_account_memory:
+        persisted_memory_summary = "\n\n".join(
+            part for part in (persisted_memory_summary, relevant_account_memory) if compact_text(part)
+        )
     if bool(payload.regenerate_last_assistant) and persisted_recent_messages:
         trimmed_recent_messages = list(persisted_recent_messages)
         if compact_text(trimmed_recent_messages[-1].get("role")).lower() == "assistant":

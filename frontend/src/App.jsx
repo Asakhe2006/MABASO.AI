@@ -6772,6 +6772,7 @@ export default function App() {
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
+  const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
   const [isAskingChat, setIsAskingChat] = useState(false);
   const [isStudyChatVoiceListening, setIsStudyChatVoiceListening] = useState(false);
   const [isStudyChatVoicePaused, setIsStudyChatVoicePaused] = useState(false);
@@ -6918,6 +6919,7 @@ export default function App() {
   const studyChatVoiceStopModeRef = useRef("");
   const studyChatVoiceAnswerRunRef = useRef(0);
   const studyChatRequestRunRef = useRef(0);
+  const studyChatAttachmentRunRef = useRef(0);
   const studyChatCopyTimerRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
@@ -6946,6 +6948,7 @@ export default function App() {
   const googleButtonRef = useRef(null);
   const landingPrimaryGoogleButtonRef = useRef(null);
   const enterpriseGoogleButtonRef = useRef(null);
+  const googleTokenClientRef = useRef(null);
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const authTokenRef = useRef("");
@@ -10266,7 +10269,7 @@ export default function App() {
                     <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
                   </svg>
                 </button>
-                <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Ask anything..." />
+                <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="" />
                 <button type="button" onClick={toggleActiveStudySessionVoiceCapture} disabled={isAskingActiveStudySession} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white disabled:opacity-50 ${isActiveStudySessionVoiceListening ? "ring-2 ring-emerald-300" : ""}`} aria-label={isActiveStudySessionVoiceListening ? "Stop voice question" : "Ask by voice"} aria-pressed={isActiveStudySessionVoiceListening}>
                   <Mic className="h-5 w-5" aria-hidden="true" />
                 </button>
@@ -15687,9 +15690,8 @@ export default function App() {
     return COOKIE_SESSION_AUTH_STATE;
   };
 
-  const finishGoogleLogin = async (credential) => {
+  const finishGoogleLoginRequest = async (requestBody, previewEmail = "") => {
     setAuthMessage("Signing in with Google...");
-    const previewEmail = extractEmailFromJwt(credential);
     if (previewEmail) setAuthEmailInput(previewEmail);
     setIsGoogleSigningIn(true);
     setStatus("Finishing Google sign-in...");
@@ -15698,7 +15700,7 @@ export default function App() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential }),
+        body: JSON.stringify(requestBody),
       }, 25000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
@@ -15710,6 +15712,14 @@ export default function App() {
     } finally {
       setIsGoogleSigningIn(false);
     }
+  };
+
+  const finishGoogleLogin = async (credential) => {
+    await finishGoogleLoginRequest({ credential }, extractEmailFromJwt(credential));
+  };
+
+  const finishGoogleAccessTokenLogin = async (accessToken) => {
+    await finishGoogleLoginRequest({ access_token: accessToken });
   };
 
   const finishAppleLogin = async ({ authorizationCode = "", idToken = "", nonce = "", state = "", user = null, redirectUri = "" }) => {
@@ -16112,23 +16122,25 @@ export default function App() {
       setAuthMessage("Google sign-in is not available on this website yet.");
       return;
     }
-    if (!window.google?.accounts?.id) {
+    if (!window.google?.accounts?.oauth2) {
       setAuthMessage("Google sign-in is still loading. Try again in a moment.");
       return;
     }
-    const renderedGoogleButton = [
-      landingPrimaryGoogleButtonRef.current,
-      googleButtonRef.current,
-      enterpriseGoogleButtonRef.current,
-    ]
-      .filter(Boolean)
-      .map((container) => container.querySelector('[role="button"]'))
-      .find(Boolean);
-    if (renderedGoogleButton) {
-      renderedGoogleButton.click();
-      return;
+    if (!googleTokenClientRef.current) {
+      googleTokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "openid email profile",
+        callback: (tokenResponse) => {
+          if (tokenResponse?.access_token) {
+            void finishGoogleAccessTokenLogin(tokenResponse.access_token);
+            return;
+          }
+          setAuthMessage("Google sign-in was cancelled or could not be completed.");
+        },
+        error_callback: () => setAuthMessage("Google sign-in was cancelled or could not be completed."),
+      });
     }
-    window.google.accounts.id.prompt();
+    googleTokenClientRef.current.requestAccessToken({ prompt: "select_account" });
   };
 
   const openProtectedAppRoute = (target = "capture") => {
@@ -16452,7 +16464,7 @@ export default function App() {
     }
   };
 
-  const submitExternalCheckoutForm = (checkoutData) => {
+  const submitExternalCheckoutForm = (checkoutData, targetWindowName = "") => {
     const checkoutUrl = checkoutData?.checkout_url || "";
     const fields = checkoutData?.fields || {};
     if (!checkoutUrl || !fields || typeof fields !== "object") {
@@ -16461,6 +16473,7 @@ export default function App() {
     const form = document.createElement("form");
     form.method = "POST";
     form.action = checkoutUrl;
+    if (targetWindowName) form.target = targetWindowName;
     form.style.display = "none";
     Object.entries(fields).forEach(([name, value]) => {
       const input = document.createElement("input");
@@ -16471,6 +16484,7 @@ export default function App() {
     });
     document.body.appendChild(form);
     window.HTMLFormElement.prototype.submit.call(form);
+    window.setTimeout(() => form.remove(), 1000);
   };
 
   const refreshBillingStatus = async () => {
@@ -18687,21 +18701,30 @@ export default function App() {
     setBillingCheckoutMessage(trial ? "Opening the secure PayFast trial setup..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
     const checkoutKey = `${provider}:${trial ? "trial:" : ""}${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
+    const checkoutWindowName = `mabaso-payfast-${Date.now()}`;
+    let checkoutWindow = null;
+    if (provider === "payfast" && typeof window !== "undefined") {
+      checkoutWindow = window.open("about:blank", checkoutWindowName);
+      if (checkoutWindow) {
+        checkoutWindow.opener = null;
+        checkoutWindow.document.title = "Opening PayFast";
+        checkoutWindow.document.body.textContent = "Opening secure PayFast checkout...";
+      }
+    }
     try {
       if (provider === "payfast") {
-        const { data } = await authJsonWithTransientRetries(
-          "/api/billing/checkout",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ plan_id: plan.id, trial }),
-          },
-          { timeoutMs: 30000, retries: 1 },
-        );
+        const response = await authFetch("/api/billing/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan_id: plan.id, trial }),
+          timeoutMs: 30000,
+        });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not open PayFast checkout.");
         setBillingCheckoutMessage(trial
           ? "PayFast is opening. Your card is required, nothing is charged today, and Pro bills R50 monthly after seven days unless cancelled."
           : "PayFast page is opening. Your plan will activate automatically after payment is confirmed.");
-        submitExternalCheckoutForm(data);
+        submitExternalCheckoutForm(data, checkoutWindow ? checkoutWindowName : "");
         return;
       }
       const { data } = await authJsonWithTransientRetries(
@@ -18724,6 +18747,7 @@ export default function App() {
         ? `PayShap reference ${paymentRequest.payment_reference} created. Pay with the exact reference, then click I Have Paid.`
         : "PayShap payment request created. Pay with the displayed reference, then click I Have Paid.");
     } catch (err) {
+      if (checkoutWindow && !checkoutWindow.closed) checkoutWindow.close();
       setBillingCheckoutMessage(getReadableRequestError(err));
     } finally {
       setBillingCheckoutPlanId("");
@@ -21615,22 +21639,22 @@ export default function App() {
       setError(`You can attach up to ${MAX_CHAT_REFERENCE_ATTACHMENTS} photos or documents in one question.`);
       return;
     }
+    const attachmentRunId = studyChatAttachmentRunRef.current + 1;
+    studyChatAttachmentRunRef.current = attachmentRunId;
+    setIsUploadingChatReferences(true);
     setStatus("Reading chat attachments...");
-    const nextAttachments = [];
-    let uploadError = null;
-    for (const selectedFile of files.slice(0, remainingSlots)) {
-      try {
-        nextAttachments.push(await uploadStudyChatReferenceFile(selectedFile));
-      } catch (err) {
-        uploadError = err;
-        break;
-      }
-    }
+    const results = await Promise.allSettled(
+      files.slice(0, remainingSlots).map((selectedFile) => uploadStudyChatReferenceFile(selectedFile)),
+    );
+    if (studyChatAttachmentRunRef.current !== attachmentRunId) return;
+    const nextAttachments = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
+    const uploadError = results.find((result) => result.status === "rejected")?.reason || null;
     if (nextAttachments.length) {
       setChatReferenceImages((current) => [...current, ...nextAttachments].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
       setStatus(`${nextAttachments.length} chat attachment${nextAttachments.length === 1 ? "" : "s"} added.`);
     }
     if (uploadError) setError(uploadError.message || "Could not read the chat attachment.");
+    setIsUploadingChatReferences(false);
   };
 
   const removeChatReferenceImage = (imageId) => {
@@ -24198,6 +24222,10 @@ export default function App() {
   }, []);
 
   const askStudyAssistant = async () => {
+    if (isUploadingChatReferences) {
+      setError("Wait for the selected attachments to finish loading before sending.");
+      return;
+    }
     const question = chatQuestion.trim();
     if (!question) {
       setError("Ask a question first.");
@@ -24217,6 +24245,8 @@ export default function App() {
       text: image.text,
       kind: image.kind,
     }));
+    studyChatAttachmentRunRef.current += 1;
+    setIsUploadingChatReferences(false);
     const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     const hasStudyChatContext = Boolean(
       String(transcript || "").trim()
@@ -24772,7 +24802,7 @@ export default function App() {
   const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
       <div className="study-chat-composer-row">
-        <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
+        <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
         <textarea
           ref={studyChatComposerInputRef}
           value={chatQuestion}
@@ -24780,7 +24810,7 @@ export default function App() {
           onKeyDown={handleStudyChatKeyDown}
           rows={1}
           className="study-chat-composer-input"
-          placeholder="Ask Mabaso"
+          placeholder=""
         />
         <button
           type="button"
@@ -24788,7 +24818,7 @@ export default function App() {
             setStudyChatResponseMode("voice");
             startStudyChatVoiceCapture();
           }}
-          disabled={isAskingChat || isStudyChatVoiceAnswering}
+          disabled={isAskingChat || isUploadingChatReferences || isStudyChatVoiceAnswering}
           className={`study-chat-composer-icon ${isStudyChatVoiceListening ? "is-listening" : ""}`}
           aria-label={isStudyChatVoiceListening ? "Stop voice question" : "Ask by voice"}
           aria-pressed={isStudyChatVoiceListening}
@@ -24803,7 +24833,7 @@ export default function App() {
           <button
             type="button"
             onClick={askStudyAssistant}
-            disabled={isStudyChatVoiceListening || !chatQuestion.trim()}
+            disabled={isStudyChatVoiceListening || isUploadingChatReferences || !chatQuestion.trim()}
             className="study-chat-send-button"
             aria-label="Send study chat question"
           >
@@ -24813,6 +24843,7 @@ export default function App() {
           </button>
         )}
       </div>
+      {isUploadingChatReferences ? <p className="study-chat-upload-status">Reading attachments...</p> : null}
       <input ref={chatImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
       {chatReferenceImages.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
@@ -25999,7 +26030,7 @@ export default function App() {
   const handleStudyChatKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      if (!isAskingChat) askStudyAssistant();
+      if (!isAskingChat && !isUploadingChatReferences) askStudyAssistant();
     }
   };
 
@@ -26011,6 +26042,8 @@ export default function App() {
     setChatQuestion("");
     if (studyChatComposerInputRef.current) studyChatComposerInputRef.current.style.height = "auto";
     setChatReferenceImages([]);
+    studyChatAttachmentRunRef.current += 1;
+    setIsUploadingChatReferences(false);
     setStudyChatVoiceStatus("");
     setIsStudyChatSidebarOpen(false);
     if (currentPageRef.current === "voice") {
@@ -26046,6 +26079,18 @@ export default function App() {
     }
   };
 
+  const triggerBlobDownload = (blob, fileName) => {
+    if (!(blob instanceof Blob) || !blob.size) throw new Error("The downloaded file was empty.");
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+  };
+
   const exportPdf = async (title, sections) => {
     const response = await authFetch("/export-study-pack-pdf/", {
       method: "POST",
@@ -26058,14 +26103,7 @@ export default function App() {
       throw new Error(data.detail || "PDF export failed.");
     }
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${sanitizeFileName(title)}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, `${sanitizeFileName(title)}.pdf`);
   };
 
   const exportStudyPackDocx = async (title, sections) => {
@@ -26080,14 +26118,7 @@ export default function App() {
       throw new Error(data.detail || "DOCX export failed.");
     }
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${sanitizeFileName(title)}.docx`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, `${sanitizeFileName(title)}.docx`);
   };
 
   const copyActiveContent = async () => {
@@ -27495,7 +27526,7 @@ export default function App() {
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleLectureBundleFilesChange(event.dataTransfer.files); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
                 <div className="space-y-5">
                   <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
-                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
+                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="capture-bundle-explainer mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="capture-source-button border-white/10 bg-white/5 text-white disabled:opacity-50"><span className="capture-source-icon"><Video className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></span></button>
                     <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-emerald-300/10 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><FileText className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></span></button>

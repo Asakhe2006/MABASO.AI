@@ -1105,7 +1105,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
               rows={isExpanded ? 2 : 1}
-              placeholder={hasLectureContext ? "Ask anything from this lecture..." : "Ask a question, or load a lecture for grounded answers..."}
+              placeholder=""
               className={`min-h-[56px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 outline-none ${themed(theme, "placeholder:text-slate-500 text-slate-100", "placeholder:text-slate-400 text-slate-900")}`}
             />
             <div className="flex shrink-0 items-center gap-2">
