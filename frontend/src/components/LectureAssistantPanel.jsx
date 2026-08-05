@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion, useDragControls } from "framer-motion";
+import { useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion as Motion, useDragControls } from "framer-motion";
 import {
   Archive,
   AudioLines,
@@ -246,7 +246,7 @@ function VoiceProfileCard({
   onSelect,
 }) {
   return (
-    <motion.button
+    <Motion.button
       type="button"
       layout
       onClick={onSelect}
@@ -313,7 +313,7 @@ function VoiceProfileCard({
           </div>
         </div>
       </div>
-    </motion.button>
+    </Motion.button>
   );
 }
 
@@ -327,7 +327,7 @@ function VoiceListRow({
   onPreview,
 }) {
   return (
-    <motion.div
+    <Motion.div
       layout
       className={`rounded-[24px] border px-4 py-3 transition ${selected
         ? themed(theme, "border-emerald-300/24 bg-emerald-300/10", "border-emerald-200 bg-emerald-50/70")
@@ -366,13 +366,17 @@ function VoiceListRow({
           </button>
         </div>
       </div>
-    </motion.div>
+    </Motion.div>
   );
 }
 
 export default function LectureAssistantPanel({ assistant, visible = true }) {
   if (!visible || !assistant) return null;
 
+  return <LectureAssistantPanelContent assistant={assistant} />;
+}
+
+function LectureAssistantPanelContent({ assistant }) {
   const {
     activeConversation,
     attachedImageInputRef,
@@ -451,9 +455,10 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   } = assistant;
 
   const [actionMenuId, setActionMenuId] = useState("");
-  const [voiceSelectorOpen, setVoiceSelectorOpen] = useState(false);
-  const [voiceOnboardingReady, setVoiceOnboardingReady] = useState(false);
-  const [voiceOnboardingComplete, setVoiceOnboardingComplete] = useState(true);
+  const [voiceOnboardingComplete, setVoiceOnboardingComplete] = useState(
+    () => typeof window !== "undefined" && window.localStorage.getItem(ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY) === "true",
+  );
+  const [voiceSelectorOpen, setVoiceSelectorOpen] = useState(() => !voiceOnboardingComplete);
   const voiceDockViewportRef = useRef(null);
   const voiceDockDragControls = useDragControls();
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id || "";
@@ -466,7 +471,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const transcriptSourceLabel = formatTranscriptSource(voiceTranscriptSource);
   const transcriptConfidenceLabel = formatTranscriptConfidence(voiceTranscriptConfidence);
   const compactVoiceLabel = selectedVoiceProfile?.name || "Wave";
-  const showVoiceOnboarding = voiceOnboardingReady && !voiceOnboardingComplete;
+  const showVoiceOnboarding = !voiceOnboardingComplete;
 
   const voiceStateMode = isVoiceReconnecting ? "reconnecting" : assistantAudioState;
   const latestPerformanceMetric = Array.isArray(performanceMetrics) ? performanceMetrics[0] : null;
@@ -506,16 +511,6 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
   const handleComposerFocus = () => {
     if (!isOpen) openPanel({ focusComposer: false });
   };
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const isOnboarded = window.localStorage.getItem(ASSISTANT_VOICE_ONBOARDING_STORAGE_KEY) === "true";
-    setVoiceOnboardingComplete(isOnboarded);
-    setVoiceOnboardingReady(true);
-    if (!isOnboarded) {
-      setVoiceSelectorOpen(true);
-    }
-  }, []);
 
   const markVoiceOnboardingComplete = () => {
     setVoiceOnboardingComplete(true);
@@ -807,7 +802,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
 
         <div className="pointer-events-none absolute right-3 top-[84px] z-20 sm:right-4">
           <div className="pointer-events-auto relative">
-            <motion.button
+            <Motion.button
               type="button"
               onClick={() => setVoiceSelectorOpen((current) => !current)}
               whileHover={{ y: -2, scale: 1.01 }}
@@ -834,7 +829,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                 </span>
                 <ChevronDown className={`h-4 w-4 transition ${voiceSelectorOpen ? "rotate-180" : ""}`} />
               </div>
-            </motion.button>
+            </Motion.button>
           </div>
         </div>
 
@@ -1190,7 +1185,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
       <AnimatePresence>
         {voiceSelectorOpen && showVoiceOnboarding ? (
           <div className="fixed inset-0 z-40">
-            <motion.button
+            <Motion.button
               type="button"
               aria-label="Close voice setup"
               initial={{ opacity: 0 }}
@@ -1200,7 +1195,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               className="absolute inset-0 h-full w-full bg-slate-950/55 backdrop-blur-md"
             />
             <div className="absolute inset-0 flex items-end justify-center p-0 sm:items-center sm:p-6">
-              <motion.div
+              <Motion.div
                 initial={{ opacity: 0, y: 28, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.98 }}
@@ -1328,14 +1323,14 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                     </div>
                   </div>
                 </div>
-              </motion.div>
+              </Motion.div>
             </div>
           </div>
         ) : null}
 
         {voiceSelectorOpen && !showVoiceOnboarding ? (
           <>
-            <motion.button
+            <Motion.button
               type="button"
               aria-label="Close voice dock"
               initial={{ opacity: 0 }}
@@ -1345,7 +1340,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
               className="fixed inset-0 z-30 bg-transparent"
             />
             <div ref={voiceDockViewportRef} className="fixed inset-0 z-40 pointer-events-none">
-              <motion.div
+              <Motion.div
                 drag
                 dragListener={false}
                 dragControls={voiceDockDragControls}
@@ -1437,7 +1432,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
                     </div>
                   </div>
                 </div>
-              </motion.div>
+              </Motion.div>
             </div>
           </>
         ) : null}
