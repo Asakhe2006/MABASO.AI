@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pencil, Plus, RefreshCw, Search, SlidersHorizontal, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pause, Pencil, Play, Plus, RefreshCw, Search, SlidersHorizontal, Square, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -15,7 +15,7 @@ import {
   resolveMetadataForRoute,
   resolveProtectedResourceIdFromRoute,
 } from "./siteRouting";
-import { useLectureAssistant } from "./useLectureAssistant";
+import { consumeAssistantStream, useLectureAssistant } from "./useLectureAssistant";
 import AssistantMarkdown from "./components/AssistantMarkdown";
 
 const ReactMarkdown = lazy(() => import("react-markdown"));
@@ -3577,9 +3577,11 @@ function getWorkspaceContextIdStorageKey(email = "") {
   return normalizedEmail ? `${WORKSPACE_CONTEXT_ID_STORAGE_KEY}:${normalizedEmail}` : WORKSPACE_CONTEXT_ID_STORAGE_KEY;
 }
 
-function getStudyChatContextIdStorageKey(email = "") {
+function getStudyChatContextIdStorageKey(email = "", scope = "workspace") {
   const normalizedEmail = normalizeHistoryOwnerEmail(email);
-  return normalizedEmail ? `${STUDY_CHAT_CONTEXT_ID_STORAGE_KEY}:${normalizedEmail}` : STUDY_CHAT_CONTEXT_ID_STORAGE_KEY;
+  const normalizedScope = scope === "global" ? "global" : "workspace";
+  const ownerKey = normalizedEmail ? `${STUDY_CHAT_CONTEXT_ID_STORAGE_KEY}:${normalizedEmail}` : STUDY_CHAT_CONTEXT_ID_STORAGE_KEY;
+  return `${ownerKey}:${normalizedScope}`;
 }
 
 function loadOrCreatePrivateContextId(storageKey = "", prefix = "ctx") {
@@ -6753,6 +6755,7 @@ export default function App() {
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isAskingChat, setIsAskingChat] = useState(false);
   const [isStudyChatVoiceListening, setIsStudyChatVoiceListening] = useState(false);
+  const [isStudyChatVoicePaused, setIsStudyChatVoicePaused] = useState(false);
   const [isStudyChatVoiceAnswering, setIsStudyChatVoiceAnswering] = useState(false);
   const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
   const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
@@ -6888,8 +6891,11 @@ export default function App() {
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
   const studyChatEndRef = useRef(null);
+  const studyChatComposerInputRef = useRef(null);
   const browserVoiceEndRef = useRef(null);
   const studyChatVoiceRecognitionRef = useRef(null);
+  const studyChatVoiceTranscriptRef = useRef("");
+  const studyChatVoiceStopModeRef = useRef("");
   const studyChatVoiceAnswerRunRef = useRef(0);
   const studyChatRequestRunRef = useRef(0);
   const studyChatCopyTimerRef = useRef(null);
@@ -7733,14 +7739,20 @@ export default function App() {
     if (targetRoute && browserPath === targetRoute && currentPageRef.current === normalizedPageId) return;
     currentPageRef.current = normalizedPageId;
     setCurrentPage(normalizedPageId);
+    if (normalizedPageId !== "voice" && authEmail) {
+      setActiveStudyChatId(loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(authEmail, "workspace"), "chat"));
+    }
     if (targetRoute) navigateToPath(targetRoute, { replace });
   };
 
   const openStudyChatPage = ({ replace = false, mode = "text" } = {}) => {
-    setActiveTab("chat");
+    const globalConversationId = loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(authEmail, "global"), "chat");
+    setActiveStudyChatId(globalConversationId);
     setStudyChatResponseMode(mode === "voice" ? "voice" : "text");
     setIsStudyChatSidebarOpen(false);
-    openProtectedAppPage("voice", { replace });
+    currentPageRef.current = "voice";
+    setCurrentPage("voice");
+    navigateToPath(resolveAppRouteForPage("voice", authSessionMode, globalConversationId), { replace });
   };
 
   const openModeSelection = ({ replace = false } = {}) => {
@@ -8172,15 +8184,17 @@ export default function App() {
     lectureSlideFileNames,
     pastQuestionPaperFileNames,
   });
-  const studyChatMaterialKey = activeHistoryId
-    || [
-      workspaceFileLabel,
-      videoUrl,
-      lectureNoteFileNames.join("-"),
-      lectureSlideFileNames.join("-"),
-      pastQuestionPaperFileNames.join("-"),
-    ].filter(Boolean).join("|")
-    || "current-material";
+  const studyChatMaterialKey = currentPage === "voice"
+    ? "general-ai-chat"
+    : activeHistoryId
+      || [
+        workspaceFileLabel,
+        videoUrl,
+        lectureNoteFileNames.join("-"),
+        lectureSlideFileNames.join("-"),
+        pastQuestionPaperFileNames.join("-"),
+      ].filter(Boolean).join("|")
+      || "current-material";
   const studyChatStorageKey = getStudyChatStorageKey(authEmail, studyChatMaterialKey, activeStudyChatId);
   const studyGuideDocumentStorageKey = getStudyGuideDocumentStorageKey(authEmail, studyChatMaterialKey);
   const activeRoomQuizQuestions = activeRoom?.quiz_questions || [];
@@ -14777,7 +14791,9 @@ export default function App() {
         `${STUDY_CHAT_STORAGE_KEY}:${previousEmail}:`,
         `${STUDY_GUIDE_DOCUMENT_STORAGE_KEY}:${previousEmail}:`,
         getWorkspaceContextIdStorageKey(previousEmail),
-        getStudyChatContextIdStorageKey(previousEmail),
+        `${STUDY_CHAT_CONTEXT_ID_STORAGE_KEY}:${previousEmail}`,
+        getStudyChatContextIdStorageKey(previousEmail, "workspace"),
+        getStudyChatContextIdStorageKey(previousEmail, "global"),
       ];
       for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
         const key = window.localStorage.key(index) || "";
@@ -14824,7 +14840,7 @@ export default function App() {
           headers: withAuthHeaders({ Accept: "application/json", "Cache-Control": "no-cache" }, COOKIE_SESSION_AUTH_STATE),
           cache: "no-store",
         },
-        10000,
+        7000,
       );
       const data = await parseJsonSafe(response);
       if (sessionValidationRunRef.current !== runId) return false;
@@ -14853,7 +14869,7 @@ export default function App() {
         : loadOrCreatePrivateContextId(getWorkspaceContextIdStorageKey(nextEmail), "ws");
       const nextConversationId = routedPage === "voice" && routedResourceId
         ? routedResourceId
-        : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail), "chat");
+        : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail, routedPage === "voice" ? "global" : "workspace"), "chat");
 
       authTokenRef.current = nextToken;
       authExpiryHandledRef.current = false;
@@ -14939,9 +14955,12 @@ export default function App() {
     window.localStorage.setItem(AUTH_AVAILABLE_MODES_KEY, JSON.stringify(authAvailableModes));
     if (authEmail) {
       window.localStorage.setItem(getWorkspaceContextIdStorageKey(authEmail), workspaceContextId);
-      window.localStorage.setItem(getStudyChatContextIdStorageKey(authEmail), activeStudyChatId);
+      window.localStorage.setItem(
+        getStudyChatContextIdStorageKey(authEmail, currentPage === "voice" ? "global" : "workspace"),
+        activeStudyChatId,
+      );
     }
-  }, [activeStudyChatId, authAvailableModes, authEmail, authSessionMode, authToken, workspaceContextId]);
+  }, [activeStudyChatId, authAvailableModes, authEmail, authSessionMode, authToken, currentPage, workspaceContextId]);
 
   useEffect(() => {
     if (authToken) return;
@@ -14951,6 +14970,14 @@ export default function App() {
   useEffect(() => {
     studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [chatMessages.length, isAskingChat]);
+
+  useEffect(() => {
+    if (!isAskingChat || typeof window === "undefined") return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isAskingChat, chatMessages[chatMessages.length - 1]?.content]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -15013,13 +15040,14 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     let cancelled = false;
+    let hasLocalMessages = false;
     try {
       const parsed = JSON.parse(window.localStorage.getItem(studyChatStorageKey) || "[]");
       if (!Array.isArray(parsed)) {
         setChatMessages([]);
         return;
       }
-      setChatMessages(parsed
+      const localMessages = parsed
         .filter((message) => message && ["user", "assistant"].includes(message.role))
         .slice(-60)
         .map((message, index) => ({
@@ -15027,13 +15055,15 @@ export default function App() {
           role: message.role,
           content: String(message.content || ""),
           images: Array.isArray(message.images) ? message.images.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS) : [],
-        })));
+        }));
+      hasLocalMessages = localMessages.length > 0;
+      setChatMessages(localMessages);
     } catch {
       setChatMessages([]);
     }
     if (authToken && activeStudyChatId) {
       void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
-        timeoutMs: 6500,
+        timeoutMs: hasLocalMessages ? 2800 : 6500,
         retries: 0,
       }).then(({ data }) => {
         if (cancelled) return;
@@ -23512,6 +23542,7 @@ export default function App() {
     conversationId = currentPageRef.current === "voice" ? activeStudyChatId : "",
     userMessageId = "",
     assistantMessageId = "",
+    onDelta = null,
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
@@ -23532,60 +23563,80 @@ export default function App() {
       .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const shouldUseLectureContext = currentPageRef.current !== "voice";
-    const response = await authFetch("/ask-study-assistant/", {
+    const response = await authFetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeoutMs: 90000,
+      timeoutMs: 95000,
       body: JSON.stringify({
         question,
         transcript: shouldUseLectureContext ? transcript : "",
         summary: shouldUseLectureContext ? summary : "",
         formulas: shouldUseLectureContext ? (formattedFormula || formula) : "",
         worked_examples: shouldUseLectureContext ? cleanedExampleContent : "",
-        lecture_notes: shouldUseLectureContext ? lectureNotes : "",
         lecture_slides: shouldUseLectureContext ? lectureSlides : "",
         past_question_papers: shouldUseLectureContext ? pastQuestionPapers : "",
-        history,
+        messages: (Array.isArray(history) ? history : []).map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: String(message.content || ""),
+        })),
         reference_images: normalizedReferenceImages,
-        reference_documents: normalizedReferenceDocuments,
         language: outputLanguage,
-        delivery_mode: deliveryMode,
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
-        current_section: currentSection,
-        teaching_style: teacherTeachingStyle,
-        response_length: responseLength,
-        voice_emotion: teacherVoiceEmotion,
-        auto_simplify: teacherAutoSimplify,
-        exam_mode: teacherExamMode,
-        interactive_mode: teacherInteractiveMode,
+        interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
+        preferred_provider: "openai",
         conversation_id: conversationId,
-        context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : "general-study-chat",
+        session_id: conversationId,
+        context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
         lecture_label: shouldUseLectureContext ? workspaceFileLabel : "",
+        client_request_id: assistantMessageId || userMessageId,
         user_message_id: userMessageId,
         assistant_message_id: assistantMessageId,
+        lecture_notes: [
+          shouldUseLectureContext ? lectureNotes : "",
+          ...normalizedReferenceDocuments.map((document) => `${document.name}:\n${document.text}`),
+        ].filter(Boolean).join("\n\n"),
       }),
     });
-    const data = await parseJsonSafe(response);
+    if (!response.ok) {
+      const data = await parseJsonSafe(response);
+      throw new Error(data.detail || "Study chat failed.");
+    }
+    let answer = "";
+    let savedConversation = null;
+    await consumeAssistantStream(response, ({ event, data }) => {
+      if (event === "delta") {
+        const delta = String(data?.text || "");
+        if (!delta) return;
+        answer += delta;
+        onDelta?.(answer, delta);
+        return;
+      }
+      if (event === "conversation_saved" && data?.conversation) {
+        savedConversation = data.conversation;
+        return;
+      }
+      if (event === "error") {
+        throw new Error(String(data?.message || "Study chat could not finish the answer."));
+      }
+    });
     const requestEndedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     console.info("[MABASO timing] study assistant request", {
       deliveryMode,
       responseLength,
-      status: response.status,
+      status: 200,
       durationMs: Math.round(requestEndedAt - requestStartedAt),
       historyMessages: Array.isArray(history) ? history.length : 0,
       referenceImages: normalizedReferenceImages.length,
     });
-    if (!response.ok) throw new Error(data.detail || "Study chat failed.");
-    const answer = String(data.answer || "").trim();
+    answer = String(answer || "").trim();
     if (!answer) throw new Error("Mabaso could not generate a clear answer. Please try again.");
-    if (data.conversation?.id) {
-      const savedConversation = data.conversation;
+    if (savedConversation?.id) {
       setStudyChatHistoryIndex((current) => [{
         id: savedConversation.id,
         title: savedConversation.title || "Study Chat",
         updatedAt: savedConversation.updatedAt || new Date().toISOString(),
         messageCount: Number(savedConversation.messageCount || 0),
-        materialKey: savedConversation.contextKey || "general-study-chat",
+        materialKey: savedConversation.contextKey || studyChatMaterialKey,
       }, ...current.filter((item) => item.id !== savedConversation.id)].slice(0, 80));
     }
     return answer;
@@ -24136,6 +24187,7 @@ export default function App() {
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
+    if (studyChatComposerInputRef.current) studyChatComposerInputRef.current.style.height = "auto";
     const chatStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     try {
       const answer = await requestStudyAssistantAnswer({
@@ -24148,13 +24200,21 @@ export default function App() {
         conversationId: activeStudyChatId,
         userMessageId: userMessage.id,
         assistantMessageId: pendingAssistantMessage.id,
+        onDelta: (streamedAnswer) => {
+          if (studyChatRequestRunRef.current !== requestRunId) return;
+          setChatMessages((current) => current.map((message) => (
+            message.id === pendingAssistantMessage.id
+              ? { ...message, content: streamedAnswer || "Thinking..." }
+              : message
+          )));
+        },
       });
       if (studyChatRequestRunRef.current !== requestRunId) return;
       setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
-        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+        if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
           next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
           return next;
         }
@@ -24178,7 +24238,7 @@ export default function App() {
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
-        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+        if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
           next[lastIndex] = { ...next[lastIndex], role: "assistant", content: readableError || "Study chat could not answer right now." };
           return next;
         }
@@ -24192,17 +24252,57 @@ export default function App() {
     }
   };
 
-  const stopStudyChatVoiceCapture = () => {
+  const stopStudyChatVoiceCapture = ({ preserveTranscript = false } = {}) => {
     const recognition = studyChatVoiceRecognitionRef.current;
     studyChatVoiceRecognitionRef.current = null;
+    studyChatVoiceStopModeRef.current = "cancel";
     if (recognition) {
       try {
-        recognition.stop();
+        recognition.abort();
       } catch {
         // Browser speech recognition can throw when it has already stopped.
       }
     }
     setIsStudyChatVoiceListening(false);
+    setIsStudyChatVoicePaused(false);
+    if (!preserveTranscript) studyChatVoiceTranscriptRef.current = "";
+  };
+
+  const pauseStudyChatVoiceCapture = () => {
+    const recognition = studyChatVoiceRecognitionRef.current;
+    if (!recognition) return;
+    studyChatVoiceStopModeRef.current = "pause";
+    studyChatVoiceRecognitionRef.current = null;
+    try {
+      recognition.stop();
+    } catch {
+      // Recognition may already be ending after a quiet period.
+    }
+    setIsStudyChatVoiceListening(false);
+    setIsStudyChatVoicePaused(true);
+    setStudyChatVoiceStatus("Voice capture paused.");
+  };
+
+  const finishStudyChatVoiceCapture = () => {
+    const capturedQuestion = String(studyChatVoiceTranscriptRef.current || "").trim();
+    const recognition = studyChatVoiceRecognitionRef.current;
+    studyChatVoiceStopModeRef.current = "submit";
+    studyChatVoiceRecognitionRef.current = null;
+    if (recognition) {
+      try {
+        recognition.stop();
+      } catch {
+        // Recognition may already be stopped.
+      }
+    }
+    setIsStudyChatVoiceListening(false);
+    setIsStudyChatVoicePaused(false);
+    studyChatVoiceTranscriptRef.current = "";
+    if (capturedQuestion) {
+      void submitStudyChatVoiceQuestion(capturedQuestion);
+    } else {
+      setStudyChatVoiceStatus("No clear speech was captured. Tap the mic and try again.");
+    }
   };
 
   const stopStudyChatAnswer = () => {
@@ -24299,6 +24399,7 @@ export default function App() {
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
+    if (studyChatComposerInputRef.current) studyChatComposerInputRef.current.style.height = "auto";
     const requestRunId = studyChatVoiceAnswerRunRef.current + 1;
     studyChatVoiceAnswerRunRef.current = requestRunId;
     try {
@@ -24313,13 +24414,21 @@ export default function App() {
         conversationId: activeStudyChatId,
         userMessageId: userMessage.id,
         assistantMessageId: pendingAssistantMessage.id,
+        onDelta: (streamedAnswer) => {
+          if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
+          setChatMessages((current) => current.map((message) => (
+            message.id === pendingAssistantMessage.id
+              ? { ...message, content: streamedAnswer || "Thinking..." }
+              : message
+          )));
+        },
       });
       if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
       setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
-        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+        if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
           next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
           return next;
         }
@@ -24334,7 +24443,7 @@ export default function App() {
       setChatMessages((current) => {
         const next = [...current];
         const lastIndex = next.length - 1;
-        if (lastIndex >= 0 && next[lastIndex]?.role === "assistant" && next[lastIndex]?.content === "Thinking...") {
+        if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
           next[lastIndex] = { ...next[lastIndex], role: "assistant", content: readableError || "Study chat could not answer right now." };
         }
         return next;
@@ -24346,28 +24455,31 @@ export default function App() {
     }
   };
 
-  const startStudyChatVoiceCapture = () => {
+  const startStudyChatVoiceCapture = ({ preserveTranscript = false } = {}) => {
     const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
     if (!SpeechRecognitionCtor) {
       setStudyChatVoiceStatus(`Voice input is not supported in ${detectSupportBrowser() || "this browser"}. Type the question instead.`);
       return;
     }
     setStudyChatResponseMode("voice");
-    stopStudyChatVoiceCapture();
+    stopStudyChatVoiceCapture({ preserveTranscript });
+    if (!preserveTranscript) studyChatVoiceTranscriptRef.current = "";
+    studyChatVoiceStopModeRef.current = "";
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     const recognition = new SpeechRecognitionCtor();
     studyChatVoiceRecognitionRef.current = recognition;
     recognition.lang = resolveSpeechLocale(outputLanguage);
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    let finalTranscript = "";
-    let latestTranscript = "";
+    const baseTranscript = String(studyChatVoiceTranscriptRef.current || "").trim();
+    let latestSessionTranscript = "";
     recognition.onstart = () => {
       setIsStudyChatVoiceListening(true);
-      setStudyChatVoiceStatus("Listening. Ask your question now.");
+      setIsStudyChatVoicePaused(false);
+      setStudyChatVoiceStatus("Listening...");
     };
     recognition.onresult = (event) => {
       const transcriptText = Array.from(event.results || [])
@@ -24376,8 +24488,8 @@ export default function App() {
         .replace(/\s+/g, " ")
         .trim();
       if (transcriptText) {
-        latestTranscript = transcriptText;
-        setChatQuestion(transcriptText);
+        latestSessionTranscript = transcriptText;
+        studyChatVoiceTranscriptRef.current = [baseTranscript, transcriptText].filter(Boolean).join(" ").trim();
       }
       const completedText = Array.from(event.results || [])
         .filter((result) => result.isFinal)
@@ -24385,7 +24497,9 @@ export default function App() {
         .join(" ")
         .replace(/\s+/g, " ")
         .trim();
-      if (completedText) finalTranscript = completedText;
+      if (completedText) {
+        studyChatVoiceTranscriptRef.current = [baseTranscript, completedText].filter(Boolean).join(" ").trim();
+      }
     };
     recognition.onerror = (event) => {
       const errorCode = String(event?.error || "").trim().toLowerCase();
@@ -24404,12 +24518,19 @@ export default function App() {
     recognition.onend = () => {
       setIsStudyChatVoiceListening(false);
       studyChatVoiceRecognitionRef.current = null;
-      const capturedQuestion = (finalTranscript || latestTranscript).trim();
-      if (capturedQuestion) {
-        submitStudyChatVoiceQuestion(capturedQuestion);
+      const stopMode = studyChatVoiceStopModeRef.current;
+      studyChatVoiceStopModeRef.current = "";
+      if (stopMode === "cancel" || stopMode === "submit") return;
+      if (stopMode === "pause") {
+        setIsStudyChatVoicePaused(true);
         return;
       }
-      setStudyChatVoiceStatus("Listening stopped before a clear question was captured.");
+      if (latestSessionTranscript || studyChatVoiceTranscriptRef.current) {
+        setIsStudyChatVoicePaused(true);
+        setStudyChatVoiceStatus("Voice capture paused. Tap the circle to continue or Stop to send.");
+        return;
+      }
+      setStudyChatVoiceStatus("Listening stopped before clear speech was captured.");
     };
     try {
       recognition.start();
@@ -24419,6 +24540,29 @@ export default function App() {
       setStudyChatVoiceStatus("The browser could not start voice input. Type the question or try again.");
     }
   };
+
+  const renderStudyChatVoiceCaptureOverlay = () => (
+    isStudyChatVoiceListening || isStudyChatVoicePaused ? (
+      <div className="study-chat-voice-capture" role="dialog" aria-modal="true" aria-label="Voice question capture">
+        <button
+          type="button"
+          className={`study-chat-voice-orb ${isStudyChatVoicePaused ? "is-paused" : "is-listening"}`}
+          onClick={() => {
+            if (isStudyChatVoicePaused) startStudyChatVoiceCapture({ preserveTranscript: true });
+            else pauseStudyChatVoiceCapture();
+          }}
+          aria-label={isStudyChatVoicePaused ? "Continue speaking" : "Pause voice capture"}
+        >
+          {isStudyChatVoicePaused ? <Play className="h-7 w-7" aria-hidden="true" /> : <Pause className="h-7 w-7" aria-hidden="true" />}
+        </button>
+        <p>{isStudyChatVoicePaused ? "Paused" : "Listening"}</p>
+        <button type="button" className="study-chat-voice-finish" onClick={finishStudyChatVoiceCapture}>
+          <Square className="h-4 w-4" aria-hidden="true" />
+          <span>Stop and send</span>
+        </button>
+      </div>
+    ) : null
+  );
 
   const rateNoteQuality = async () => {
     const learnerSummary = noteQualityDraft.trim();
@@ -24509,7 +24653,8 @@ export default function App() {
     const nextValue = event.target.value;
     setChatQuestion(nextValue);
     event.target.style.height = "auto";
-    event.target.style.height = `${Math.min(event.target.scrollHeight, 132)}px`;
+    const maxComposerHeight = typeof window !== "undefined" && window.innerWidth <= 768 ? 104 : 132;
+    event.target.style.height = `${Math.min(event.target.scrollHeight, maxComposerHeight)}px`;
   };
 
   const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => (
@@ -24552,6 +24697,7 @@ export default function App() {
       <div className="study-chat-composer-row">
         <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
         <textarea
+          ref={studyChatComposerInputRef}
           value={chatQuestion}
           onChange={handleStudyChatQuestionChange}
           onKeyDown={handleStudyChatKeyDown}
@@ -24563,8 +24709,7 @@ export default function App() {
           type="button"
           onClick={() => {
             setStudyChatResponseMode("voice");
-            if (isStudyChatVoiceListening) stopStudyChatVoiceCapture();
-            else startStudyChatVoiceCapture();
+            startStudyChatVoiceCapture();
           }}
           disabled={isAskingChat || isStudyChatVoiceAnswering}
           className={`study-chat-composer-icon ${isStudyChatVoiceListening ? "is-listening" : ""}`}
@@ -24603,6 +24748,7 @@ export default function App() {
         </div>
       ) : null}
       <p className="mt-2 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : studyChatVoiceStatus || lectureAssistant.statusText}</p>
+      {renderStudyChatVoiceCaptureOverlay()}
     </div>
   );
 
@@ -24634,14 +24780,17 @@ export default function App() {
   );
 
   const renderStudyChatFullPage = () => {
-    const currentIndexedChat = studyChatHistoryIndex.find((item) => item.id === activeStudyChatId);
+    const visibleChatHistory = studyChatHistoryIndex.filter(
+      (item) => String(item.materialKey || "") === studyChatMaterialKey,
+    );
+    const currentIndexedChat = visibleChatHistory.find((item) => item.id === activeStudyChatId);
     const chatHistoryRows = [
       {
         id: activeStudyChatId,
         title: currentIndexedChat?.title || (chatMessages.length ? "Current Study Chat" : "New Study Chat"),
         subtitle: `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}`,
       },
-      ...studyChatHistoryIndex
+      ...visibleChatHistory
         .filter((item) => item.id !== activeStudyChatId)
         .map((item) => ({
           id: item.id,
@@ -24687,7 +24836,7 @@ export default function App() {
           <header className="study-chat-page-topbar">
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className="study-chat-top-button lg:hidden" aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
             <span className="study-chat-mobile-title">Study Chat</span>
-            <button type="button" onClick={() => openProtectedAppPage("workspace", { replace: true })} className="study-chat-exit-button" aria-label="Close Study Chat">
+            <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="study-chat-exit-button" aria-label="Close AI Chat">
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
           </header>
@@ -25783,6 +25932,7 @@ export default function App() {
     setActiveStudyChatId(nextConversationId);
     setChatMessages([]);
     setChatQuestion("");
+    if (studyChatComposerInputRef.current) studyChatComposerInputRef.current.style.height = "auto";
     setChatReferenceImages([]);
     setStudyChatVoiceStatus("");
     setIsStudyChatSidebarOpen(false);
@@ -25795,6 +25945,16 @@ export default function App() {
   const openSavedStudyChat = (conversationId = "") => {
     const normalizedConversationId = String(conversationId || "").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 96);
     if (!normalizedConversationId) return;
+    try {
+      const cachedMessages = JSON.parse(window.localStorage.getItem(
+        getStudyChatStorageKey(authEmail, studyChatMaterialKey, normalizedConversationId),
+      ) || "[]");
+      if (Array.isArray(cachedMessages) && cachedMessages.length) {
+        setChatMessages(cachedMessages.slice(-60));
+      }
+    } catch {
+      // The server refresh below remains the source of truth when local cache parsing fails.
+    }
     setActiveStudyChatId(normalizedConversationId);
     setIsStudyChatSidebarOpen(false);
     currentPageRef.current = "voice";

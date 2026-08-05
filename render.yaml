@@ -11,6 +11,24 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: BASE_TEXT_MODEL
+        value: "gpt-4.1"
+      - key: ADVANCED_ACADEMIC_MODEL
+        value: "gpt-terra-5.6"
+      - key: OPENAI_CHAT_MODEL
+        value: "gpt-terra-5.6"
+      - key: STUDY_CHAT_MODEL
+        value: "gpt-terra-5.6"
+      - key: STUDY_GUIDE_MODEL
+        value: "gpt-terra-5.6"
+      - key: VISION_MODEL
+        value: "gpt-terra-5.6"
+      - key: TEACHER_SCRIPT_MODEL
+        value: "gpt-terra-5.6"
+      - key: PRESENTATION_MODEL
+        value: "gpt-terra-5.6"
+      - key: REPORT_MODEL
+        value: "gpt-terra-5.6"
       - key: GEMINI_API_KEY
         sync: false
       - key: GROQ_API_KEY

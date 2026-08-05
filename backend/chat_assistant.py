@@ -66,7 +66,10 @@ def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = F
 def resolve_provider_model(provider: str, *, voice_mode: bool = False) -> str:
     normalized = compact_text(provider).lower()
     if normalized == "openai":
-        return compact_text(os.getenv("OPENAI_CHAT_MODEL"), "gpt-4.1-mini")
+        return compact_text(
+            os.getenv("OPENAI_CHAT_MODEL"),
+            compact_text(os.getenv("STUDY_CHAT_MODEL"), "gpt-terra-5.6"),
+        )
     if normalized == "gemini":
         if voice_mode:
             return compact_text(os.getenv("GEMINI_VOICE_CHAT_MODEL"), "gemini-2.5-flash")

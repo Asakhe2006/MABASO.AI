@@ -142,8 +142,10 @@ def get_early_int_env(name: str, default: int) -> int:
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
-STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", "gpt-4.1-mini")
-VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4.1-mini")
+BASE_TEXT_MODEL = os.getenv("BASE_TEXT_MODEL", "gpt-4.1")
+ADVANCED_ACADEMIC_MODEL = os.getenv("ADVANCED_ACADEMIC_MODEL", "gpt-terra-5.6")
+STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", ADVANCED_ACADEMIC_MODEL)
+VISION_MODEL = os.getenv("VISION_MODEL", ADVANCED_ACADEMIC_MODEL)
 STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
@@ -151,13 +153,13 @@ GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
 GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
 MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES = int(os.getenv("MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES", str(12 * 1024 * 1024)))
-ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", STUDY_GUIDE_MODEL)
-PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
+ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", BASE_TEXT_MODEL)
+PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", BASE_TEXT_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
-TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", STUDY_GUIDE_MODEL)
-PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", STUDY_GUIDE_MODEL)
-REPORT_MODEL = os.getenv("REPORT_MODEL", STUDY_GUIDE_MODEL)
-MIND_MAP_MODEL = os.getenv("MIND_MAP_MODEL", STUDY_GUIDE_MODEL)
+TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", ADVANCED_ACADEMIC_MODEL)
+PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", ADVANCED_ACADEMIC_MODEL)
+REPORT_MODEL = os.getenv("REPORT_MODEL", ADVANCED_ACADEMIC_MODEL)
+MIND_MAP_MODEL = os.getenv("MIND_MAP_MODEL", BASE_TEXT_MODEL)
 REALTIME_TUTOR_DEFAULT_MODEL = (
     os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
     or "gpt-realtime-mini"
@@ -241,7 +243,7 @@ LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPU
 LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS = int(
     os.getenv("LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS", str(LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS))
 )
-LECTURE_ASSISTANT_TITLE_MODEL = (os.getenv("LECTURE_ASSISTANT_TITLE_MODEL", "gpt-4.1-mini") or "gpt-4.1-mini").strip()
+LECTURE_ASSISTANT_TITLE_MODEL = (os.getenv("LECTURE_ASSISTANT_TITLE_MODEL", BASE_TEXT_MODEL) or BASE_TEXT_MODEL).strip()
 LECTURE_ASSISTANT_TITLE_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_TITLE_TIMEOUT", "20"))
 LECTURE_ASSISTANT_TITLE_MAX_WORDS = max(3, int(os.getenv("LECTURE_ASSISTANT_TITLE_MAX_WORDS", "6")))
 LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "220"))
@@ -10652,7 +10654,7 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
     reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     if reference_images and not bool(payload.voice_mode):
         attempts = resolve_provider_attempts("openai", voice_mode=False)
-        return [
+        vision_attempts = [
             {
                 **attempt,
                 "model": VISION_MODEL,
@@ -10661,14 +10663,34 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
             for attempt in attempts
             if attempt.get("provider") == "openai"
         ]
+        if vision_attempts and compact_text(VISION_MODEL) != compact_text(BASE_TEXT_MODEL):
+            vision_attempts.append({
+                **vision_attempts[0],
+                "model": BASE_TEXT_MODEL,
+                "label": "OpenAI fallback",
+            })
+        return vision_attempts
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
     if not bool(payload.voice_mode):
+        if attempts and attempts[0].get("provider") == "openai" and compact_text(attempts[0].get("model")) != compact_text(BASE_TEXT_MODEL):
+            attempts.append({
+                **attempts[0],
+                "model": BASE_TEXT_MODEL,
+                "label": "OpenAI fallback",
+            })
         return attempts
     if not attempts:
         return []
     locked_attempt = attempts[0]
-    return [dict(locked_attempt) for _ in range(LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES + 1)]
+    voice_attempts = [dict(locked_attempt) for _ in range(LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES + 1)]
+    if locked_attempt.get("provider") == "openai" and compact_text(locked_attempt.get("model")) != compact_text(BASE_TEXT_MODEL):
+        voice_attempts.append({
+            **locked_attempt,
+            "model": BASE_TEXT_MODEL,
+            "label": "OpenAI fallback",
+        })
+    return voice_attempts
 
 
 def build_sse_event(event: str, data: dict[str, Any]) -> str:
@@ -15945,7 +15967,9 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
     )
     active_token = refreshed_token or token
     csrf_token = set_auth_cookies(response, active_token)
-    payload = build_auth_response(context["email"], active_token)
+    # Session bootstrap must stay small: account, billing, and history hydrate after
+    # the protected shell is unlocked instead of blocking every login or refresh.
+    payload = build_auth_response(context["email"], active_token, include_account_snapshot=False)
     payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
     payload["auth_transport"] = "cookie" if cookie_token else ("bearer" if bearer_token else "none")
     payload["cookie_session_active"] = bool(cookie_token)

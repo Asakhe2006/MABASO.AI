@@ -988,7 +988,7 @@ async function readErrorResponse(response) {
   }
 }
 
-async function consumeAssistantStream(response, onEvent) {
+export async function consumeAssistantStream(response, onEvent) {
   if (!response.body) throw new Error("The assistant stream did not return any data.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
