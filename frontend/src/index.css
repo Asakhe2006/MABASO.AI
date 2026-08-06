@@ -7351,3 +7351,293 @@ iframe {
   .study-guide-markdown p { margin: 0 0 10px !important; }
   .study-timetable-grid button,.study-timetable-grid select { font-size: 10.5px !important; line-height: 1.25 !important; }
 }
+
+/* Canonical subject-aware Study Guide publication system. Keep after legacy workspace rules. */
+.study-guide-shell.study-guide-themed {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  color: var(--sg-text) !important;
+  background:
+    linear-gradient(90deg, transparent 0 31px, color-mix(in srgb, var(--sg-accent) 12%, transparent) 31px 32px, transparent 32px),
+    linear-gradient(180deg, color-mix(in srgb, var(--sg-page) 94%, white), var(--sg-page)) !important;
+  padding: 18px !important;
+  border-radius: 10px !important;
+}
+
+.study-guide-shell.study-guide-themed::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(135deg, transparent 0 44px, color-mix(in srgb, var(--sg-accent) 5%, transparent) 44px 45px),
+    linear-gradient(135deg, color-mix(in srgb, var(--sg-accent) 5%, transparent), transparent 38%);
+}
+
+.page-workspace .content-panel:has(.study-guide-themed) {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-title-card,
+.study-guide-shell.study-guide-themed .study-guide-section-card,
+.study-guide-shell.study-guide-themed .study-guide-fallback {
+  color: var(--sg-text) !important;
+  border: 1px solid color-mix(in srgb, var(--sg-border) 78%, transparent) !important;
+  border-radius: 8px !important;
+  background: linear-gradient(145deg, var(--sg-surface), var(--sg-surface-alt)) !important;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--sg-heading) 8%, transparent) !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-title-card {
+  position: relative;
+  overflow: hidden;
+  padding: 24px !important;
+  border-top: 5px solid var(--sg-accent) !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-title-card::after {
+  content: "";
+  position: absolute;
+  right: -28px;
+  bottom: 18px;
+  width: 142px;
+  height: 54px;
+  opacity: 0.3;
+  pointer-events: none;
+  border-top: 1px solid var(--sg-accent);
+  border-bottom: 1px solid var(--sg-accent);
+  transform: rotate(-12deg);
+}
+
+.study-guide-topic-header {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.study-guide-topic-icon {
+  display: inline-grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--sg-accent);
+  color: #fff !important;
+}
+
+.study-guide-topic-icon svg { width: 23px; height: 23px; }
+
+.study-guide-topic-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.study-guide-topic-meta span {
+  border: 1px solid color-mix(in srgb, var(--sg-accent) 23%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sg-accent) 8%, white);
+  padding: 4px 9px;
+  color: var(--sg-heading) !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-card {
+  position: relative;
+  overflow: hidden;
+  margin: 0 0 14px !important;
+  padding: 16px !important;
+  border-left: 4px solid var(--sg-section-accent, var(--sg-accent)) !important;
+  background:
+    linear-gradient(110deg, color-mix(in srgb, var(--sg-section-accent, var(--sg-accent)) 8%, var(--sg-surface)) 0%, var(--sg-surface) 42%, var(--sg-surface-alt) 100%) !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-card > summary {
+  min-height: 44px !important;
+  padding: 0 !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-card[open] > summary {
+  margin-bottom: 8px;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--sg-section-accent, var(--sg-accent)) 18%, transparent);
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-number {
+  background: var(--sg-section-accent, var(--sg-accent)) !important;
+  color: #fff !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-kicker {
+  color: var(--sg-accent) !important;
+  font-weight: 800;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-topic {
+  margin-top: 6px !important;
+  color: var(--sg-heading) !important;
+  font-size: clamp(30px, 4vw, 36px) !important;
+  line-height: 1.16 !important;
+  letter-spacing: 0 !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-heading,
+.study-guide-shell.study-guide-themed .study-guide-markdown h1,
+.study-guide-shell.study-guide-themed .study-guide-markdown h2,
+.study-guide-shell.study-guide-themed .study-guide-markdown h3,
+.study-guide-shell.study-guide-themed .study-guide-markdown h4,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor h1,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor h2,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor h3,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor h4 {
+  color: var(--sg-heading) !important;
+  letter-spacing: 0 !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-section-heading {
+  font-size: 20px !important;
+  line-height: 1.3 !important;
+  font-weight: 800 !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-markdown,
+.study-guide-shell.study-guide-themed .notes-markdown,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor,
+.study-guide-shell.study-guide-themed .study-guide-markdown p,
+.study-guide-shell.study-guide-themed .study-guide-markdown li,
+.study-guide-shell.study-guide-themed .notes-markdown p,
+.study-guide-shell.study-guide-themed .notes-markdown li,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor p,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor li,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor td,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor th,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor strong,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor span,
+.study-guide-shell.study-guide-themed .katex {
+  color: var(--sg-text) !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-markdown,
+.study-guide-shell.study-guide-themed .notes-markdown,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor {
+  font-size: 16px !important;
+  line-height: 1.65 !important;
+  letter-spacing: 0 !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-markdown p,
+.study-guide-shell.study-guide-themed .notes-markdown p,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor p {
+  margin: 0 0 14px !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-markdown ul,
+.study-guide-shell.study-guide-themed .study-guide-markdown ol,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor ul,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor ol {
+  margin: 12px 0 16px !important;
+  padding-left: 24px !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-markdown li,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor li { margin-bottom: 7px !important; }
+
+.study-guide-shell.study-guide-themed .study-guide-rich-editor blockquote,
+.study-guide-shell.study-guide-themed .study-guide-markdown blockquote {
+  margin: 16px 0 !important;
+  border-left: 4px solid var(--sg-section-accent, var(--sg-accent)) !important;
+  background: color-mix(in srgb, var(--sg-section-accent, var(--sg-accent)) 9%, white) !important;
+  padding: 12px 14px !important;
+  color: var(--sg-text) !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-rich-editor table,
+.study-guide-shell.study-guide-themed .study-guide-markdown table {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  margin: 16px 0 !important;
+  overflow-x: auto;
+  border-collapse: collapse;
+  background: var(--sg-surface) !important;
+  color: var(--sg-text) !important;
+  font-size: 14.5px !important;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-rich-editor th,
+.study-guide-shell.study-guide-themed .study-guide-markdown th {
+  background: color-mix(in srgb, var(--sg-accent) 13%, white) !important;
+  color: var(--sg-heading) !important;
+  font-weight: 800;
+}
+
+.study-guide-shell.study-guide-themed .study-guide-rich-editor th,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor td,
+.study-guide-shell.study-guide-themed .study-guide-markdown th,
+.study-guide-shell.study-guide-themed .study-guide-markdown td {
+  border: 1px solid var(--sg-border) !important;
+  padding: 10px 12px !important;
+}
+
+.study-guide-shell.study-guide-themed a { color: var(--sg-accent) !important; font-weight: 700; }
+.study-guide-shell.study-guide-themed mark { color: #172033 !important; }
+.study-guide-shell.study-guide-themed .study-guide-section-chevron,
+.study-guide-shell.study-guide-themed .study-guide-section-copy-button,
+.study-guide-shell.study-guide-themed .study-guide-section-regenerate-button { color: var(--sg-section-accent, var(--sg-accent)) !important; }
+.study-guide-shell.study-guide-themed .study-guide-figure { margin: 20px 0 !important; }
+.study-guide-shell.study-guide-themed .study-guide-figure-image { border-radius: 8px !important; background: transparent !important; }
+.study-guide-shell.study-guide-themed .study-guide-figure-caption { color: var(--sg-muted) !important; }
+
+@media (max-width: 768px) {
+  .page-workspace .content-panel:has(.study-guide-themed) { padding: 0 !important; }
+  .study-guide-shell.study-guide-themed {
+    width: 100% !important;
+    padding: 8px !important;
+    border-radius: 0 !important;
+    background: linear-gradient(180deg, var(--sg-page), color-mix(in srgb, var(--sg-page) 92%, white)) !important;
+  }
+  .study-guide-shell.study-guide-themed .study-guide-title-card { padding: 16px !important; }
+  .study-guide-topic-header { grid-template-columns: 38px minmax(0, 1fr); gap: 10px; }
+  .study-guide-topic-icon { width: 38px; height: 38px; }
+  .study-guide-topic-icon svg { width: 19px; height: 19px; }
+  .study-guide-shell.study-guide-themed .study-guide-topic { font-size: 27px !important; line-height: 1.18 !important; }
+  .study-guide-topic-meta { margin-top: 9px; }
+  .study-guide-topic-meta span { padding: 3px 7px; font-size: 11px; }
+  .study-guide-shell.study-guide-themed .study-guide-section-card {
+    margin: 0 0 9px !important;
+    padding: 10px !important;
+    border-left-width: 3px !important;
+  }
+  .study-guide-shell.study-guide-themed .study-guide-section-card > summary { min-height: 38px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-section-heading { font-size: 18px !important; line-height: 1.28 !important; }
+  .study-guide-shell.study-guide-themed .study-guide-markdown,
+  .study-guide-shell.study-guide-themed .notes-markdown,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor p,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor li,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor td,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor th {
+    color: var(--sg-text) !important;
+    font-size: 15.5px !important;
+    line-height: 1.62 !important;
+  }
+  .study-guide-shell.study-guide-themed .study-guide-markdown p,
+  .study-guide-shell.study-guide-themed .notes-markdown p,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor p { margin-bottom: 12px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor table,
+  .study-guide-shell.study-guide-themed .study-guide-markdown table { display: block; font-size: 14px !important; overflow-x: auto; }
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor th,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor td,
+  .study-guide-shell.study-guide-themed .study-guide-markdown th,
+  .study-guide-shell.study-guide-themed .study-guide-markdown td { padding: 8px 9px !important; }
+}

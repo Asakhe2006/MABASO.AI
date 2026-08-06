@@ -6028,6 +6028,84 @@ function getGuideSectionTone(heading) {
   return "info";
 }
 
+const STUDY_GUIDE_THEMES = [
+  { id: "mabaso-emerald", match: /(education|pedagogy|teaching method|curriculum)/i, page: "#f3fbf6", surface: "#ffffff", surfaceAlt: "#e7f7ed", text: "#13251a", heading: "#073d24", muted: "#486556", accent: "#149a55", border: "#b9ddc7", sectionAccents: ["#149a55", "#0f766e", "#2563eb", "#7c3aed"] },
+  { id: "engineering-blue", match: /(engineering|control|circuit|electrical|electronic|mechanical|civil|architecture|robot|embedded)/i, page: "#f2f7fb", surface: "#ffffff", surfaceAlt: "#e4f0f8", text: "#142433", heading: "#0b3657", muted: "#4b6578", accent: "#1677a8", border: "#b7d2e2", sectionAccents: ["#1677a8", "#0f766e", "#d97706", "#7c3aed"] },
+  { id: "mathematics-indigo", match: /(math|algebra|calculus|geometry|trigonometry|statistics|probability|fourier|laplace)/i, page: "#f5f5ff", surface: "#ffffff", surfaceAlt: "#eaeafe", text: "#1d2035", heading: "#29266f", muted: "#5c5d78", accent: "#4f46b8", border: "#c8c7ec", sectionAccents: ["#4f46b8", "#2563eb", "#9333aa", "#0f766e"] },
+  { id: "physics-cobalt", match: /(physics|quantum|motion|force|energy|wave|optics|thermodynamic)/i, page: "#f1f7ff", surface: "#ffffff", surfaceAlt: "#e0edff", text: "#15243a", heading: "#123b72", muted: "#526985", accent: "#2869c7", border: "#b7cee9", sectionAccents: ["#2869c7", "#6d4bc3", "#0891b2", "#ca8a04"] },
+  { id: "chemistry-plum", match: /(chemistry|chemical|atom|molecule|bond|reaction|organic|inorganic)/i, page: "#fbf5fc", surface: "#ffffff", surfaceAlt: "#f4e7f5", text: "#2b1d2d", heading: "#632b68", muted: "#765b78", accent: "#9b3fa4", border: "#dfc3e1", sectionAccents: ["#9b3fa4", "#db2777", "#2563eb", "#0f766e"] },
+  { id: "biology-forest", match: /(biology|ecology|genetic|cell|anatomy|botany|zoology|environment)/i, page: "#f2f9f1", surface: "#ffffff", surfaceAlt: "#e4f3e2", text: "#172718", heading: "#235b2b", muted: "#58705b", accent: "#3b8a45", border: "#bdd9bd", sectionAccents: ["#3b8a45", "#0f766e", "#65a30d", "#b7791f"] },
+  { id: "medical-cyan", match: /(medical|medicine|health|nursing|clinical|patient|pharmac|disease)/i, page: "#f0fafb", surface: "#ffffff", surfaceAlt: "#ddf2f4", text: "#13272a", heading: "#115866", muted: "#4d6d72", accent: "#16879a", border: "#b4dce1", sectionAccents: ["#16879a", "#2563eb", "#0f766e", "#dc5a67"] },
+  { id: "computing-charcoal", match: /(computer|computing|software|program|algorithm|database|network|cyber|artificial intelligence|machine learning)/i, page: "#f2f6f4", surface: "#ffffff", surfaceAlt: "#e4ece8", text: "#16221c", heading: "#183e2b", muted: "#53685c", accent: "#168653", border: "#bed2c7", sectionAccents: ["#168653", "#2563eb", "#7c3aed", "#c46a13"] },
+  { id: "business-gold", match: /(business|management|marketing|entrepreneur|commerce|accounting|finance)/i, page: "#fbf8f0", surface: "#ffffff", surfaceAlt: "#f4ecd8", text: "#2a2417", heading: "#624912", muted: "#74694f", accent: "#a77512", border: "#dfd0aa", sectionAccents: ["#a77512", "#0f766e", "#315fa8", "#9a4868"] },
+  { id: "economics-teal", match: /(economics|economy|market|macroeconomic|microeconomic|trade|inflation)/i, page: "#f0f9f7", surface: "#ffffff", surfaceAlt: "#def1ec", text: "#152824", heading: "#15584d", muted: "#506e67", accent: "#16806e", border: "#b6d9d0", sectionAccents: ["#16806e", "#a77512", "#2563eb", "#7c3aed"] },
+  { id: "law-burgundy", match: /(law|legal|constitution|justice|court|criminal|contract|jurisprudence)/i, page: "#fbf5f5", surface: "#ffffff", surfaceAlt: "#f3e6e7", text: "#2c1e20", heading: "#682c36", muted: "#775b60", accent: "#9a4050", border: "#dfc2c7", sectionAccents: ["#9a4050", "#a77512", "#315fa8", "#59636f"] },
+  { id: "history-rust", match: /(history|historical|ancient|civilisation|civilization|war|revolution|heritage)/i, page: "#fbf6ee", surface: "#ffffff", surfaceAlt: "#f2e7d6", text: "#2b241c", heading: "#6b4325", muted: "#756555", accent: "#a65f2a", border: "#dfcab1", sectionAccents: ["#a65f2a", "#a67c18", "#2f6f67", "#7a4c8e"] },
+  { id: "geography-earth", match: /(geography|climate|weather|earth|geology|population|map|ocean)/i, page: "#f3f9f6", surface: "#ffffff", surfaceAlt: "#e2f0e9", text: "#17271f", heading: "#265b42", muted: "#577064", accent: "#37835d", border: "#bfd8ca", sectionAccents: ["#37835d", "#16879a", "#a77512", "#315fa8"] },
+  { id: "literature-violet", match: /(literature|english|language|poetry|novel|drama|linguistic|writing)/i, page: "#f9f4fb", surface: "#ffffff", surfaceAlt: "#efe5f3", text: "#291e2e", heading: "#5f3269", muted: "#745c79", accent: "#8d4b9a", border: "#d9c2df", sectionAccents: ["#8d4b9a", "#c2417a", "#315fa8", "#a65f2a"] },
+  { id: "social-coral", match: /(psychology|sociology|social|politic|communication|humanities)/i, page: "#fcf5f2", surface: "#ffffff", surfaceAlt: "#f7e5df", text: "#2c211e", heading: "#744033", muted: "#79635d", accent: "#bb604a", border: "#e3c7be", sectionAccents: ["#bb604a", "#8d4b9a", "#16806e", "#315fa8"] },
+  { id: "creative-spectrum", match: /(art|design|music|media|creative|photography|fashion)/i, page: "#fbf4f8", surface: "#ffffff", surfaceAlt: "#f4e4ed", text: "#2c2028", heading: "#713450", muted: "#795e6d", accent: "#b34275", border: "#dfc3d1", sectionAccents: ["#b34275", "#7c3aed", "#e06b2d", "#16879a"] },
+];
+
+function selectStudyGuideTheme(value = "") {
+  const text = String(value || "").toLowerCase();
+  const matchedTheme = STUDY_GUIDE_THEMES.find((theme) => theme.match.test(text));
+  if (matchedTheme) return matchedTheme;
+  const hash = [...text].reduce((total, character) => ((total * 31) + character.charCodeAt(0)) >>> 0, 7);
+  return STUDY_GUIDE_THEMES[hash % STUDY_GUIDE_THEMES.length];
+}
+
+function getStudyGuideThemeStyle(theme) {
+  return {
+    "--sg-page": theme.page,
+    "--sg-surface": theme.surface,
+    "--sg-surface-alt": theme.surfaceAlt,
+    "--sg-text": theme.text,
+    "--sg-heading": theme.heading,
+    "--sg-muted": theme.muted,
+    "--sg-accent": theme.accent,
+    "--sg-border": theme.border,
+  };
+}
+
+function getStudyGuideExportTheme(theme) {
+  return {
+    id: theme.id,
+    page: theme.page,
+    surface: theme.surface,
+    surfaceAlt: theme.surfaceAlt,
+    text: theme.text,
+    heading: theme.heading,
+    muted: theme.muted,
+    accent: theme.accent,
+    border: theme.border,
+    sectionAccents: [...(theme.sectionAccents || [])],
+  };
+}
+
+function getStudyGuideSectionThemeStyle(theme, index = 0, heading = "") {
+  const normalizedHeading = normalizeGuideHeading(heading);
+  const semanticAccent = [
+    [/(common mistake|warning|caution|risk|important)/, "#c2410c"],
+    [/(exam tip|remember)/, "#a16207"],
+    [/(worked example|example)/, "#7c3aed"],
+    [/(formula|equation|derivation)/, "#2563eb"],
+    [/(definition|key term)/, theme.accent],
+    [/(key takeaway|summary|quick summary)/, "#15803d"],
+  ].find(([pattern]) => pattern.test(normalizedHeading))?.[1];
+  const sectionAccents = theme.sectionAccents?.length ? theme.sectionAccents : [theme.accent];
+  return { "--sg-section-accent": semanticAccent || sectionAccents[index % sectionAccents.length] };
+}
+
+function getStudyGuideReadingMeta(value = "") {
+  const text = String(value || "").replace(/<[^>]+>/g, " ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const wordCount = text ? text.split(/\s+/).length : 0;
+  const minutes = Math.max(1, Math.ceil(wordCount / 220));
+  const technicalSignals = (String(value || "").match(/\$\$|\\frac|\\sum|\\int|formula|derivation|algorithm|architecture|analysis/gi) || []).length;
+  const difficulty = technicalSignals >= 5 || wordCount > 2400 ? "Advanced" : technicalSignals >= 2 || wordCount > 1100 ? "Intermediate" : "Foundational";
+  return { minutes, difficulty };
+}
+
 function compactGuideVisualText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -8353,6 +8431,9 @@ export default function App() {
     || extractHistoryTitle(formattedGuide || summary, workspaceFileLabel)
     || workspaceFileLabel
     || "Study Guide";
+  const studyGuideTheme = selectStudyGuideTheme(`${guideTopic}\n${formattedGuide || summary}`);
+  const studyGuideThemeStyle = getStudyGuideThemeStyle(studyGuideTheme);
+  const studyGuideReadingMeta = getStudyGuideReadingMeta(formattedGuide || summary);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
     || "Shared Study Guide";
@@ -9417,6 +9498,9 @@ export default function App() {
     const introKeys = [titleSection?.normalizedHeading, summarySection?.normalizedHeading].filter(Boolean);
     const isIntroActive = Boolean(showTeacherActivity && activeSectionKey && introKeys.includes(activeSectionKey));
     const visibleStudyImageList = getVisibleStudyImages(studyImageList);
+    const guideTheme = selectStudyGuideTheme(`${topic}\n${formattedContent}`);
+    const guideThemeStyle = getStudyGuideThemeStyle(guideTheme);
+    const readingMeta = getStudyGuideReadingMeta(formattedContent || summarySection?.content || "");
     const titleCardRef = registerTeacherRefs
       ? (node) => {
         if (node && titleSection) teacherSectionRefs.current[titleSection.normalizedHeading] = node;
@@ -9427,15 +9511,17 @@ export default function App() {
       : undefined;
 
     return (
-      <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
+      <div className={`study-guide-shell study-guide-themed study-guide-theme-${guideTheme.id} min-w-0 space-y-5 rounded-[28px] p-1`} style={guideThemeStyle} data-study-guide-theme={guideTheme.id}>
         <div
           ref={titleCardRef}
           className={`study-guide-title-card rounded-[24px] p-5 transition ${isIntroActive ? "study-guide-section-active" : ""}`}
         >
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="study-guide-topic-header">
+            <span className="study-guide-topic-icon" aria-hidden="true"><GraduationCap /></span>
             <div className="min-w-0">
               <p className="study-guide-kicker">Lecture Topic</p>
               <h4 className="study-guide-topic mt-2">{topic}</h4>
+              <div className="study-guide-topic-meta"><span>{readingMeta.minutes} min read</span><span>{readingMeta.difficulty}</span></div>
               {isIntroActive ? <p className="study-guide-focus-badge mt-4">Audio focus on this section</p> : null}
             </div>
           </div>
@@ -9466,6 +9552,7 @@ export default function App() {
                   key={`${section.heading}-${index}`}
                   ref={sectionRef}
                   className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                  style={getStudyGuideSectionThemeStyle(guideTheme, index, section.displayHeading || section.heading)}
                 >
                   {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                   <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
@@ -9478,7 +9565,7 @@ export default function App() {
             })}
           </div>
         ) : (
-          <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+          <div className="study-guide-fallback notes-markdown study-guide-markdown phone-safe-copy rounded-2xl p-4 max-w-none">
             <MobileFirstMarkdown>{formattedContent || emptyMessage}</MobileFirstMarkdown>
             <StudyGuideImageCards images={visibleStudyImageList} />
           </div>
@@ -26262,7 +26349,7 @@ export default function App() {
     const response = await authFetch("/export-study-pack-pdf/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, sections }),
+      body: JSON.stringify({ title, sections, theme: getStudyGuideExportTheme(studyGuideTheme) }),
       timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
     });
     if (!response.ok) {
@@ -26277,7 +26364,7 @@ export default function App() {
     const response = await authFetch("/export-study-pack-docx/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, sections }),
+      body: JSON.stringify({ title, sections, theme: getStudyGuideExportTheme(studyGuideTheme) }),
       timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
     });
     if (!response.ok) {
@@ -28156,7 +28243,7 @@ export default function App() {
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
-                  <div className="study-guide-shell min-w-0 space-y-3 rounded-[20px] p-0.5">
+                  <div className={`study-guide-shell study-guide-themed study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
                     <div
                       ref={(node) => {
                         if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
@@ -28166,10 +28253,12 @@ export default function App() {
                       }}
                       className={`study-guide-title-card rounded-[16px] p-4 transition ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
                     >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="study-guide-topic-header">
+                        <span className="study-guide-topic-icon" aria-hidden="true"><GraduationCap /></span>
                         <div className="min-w-0">
                           <p className="study-guide-kicker">Lecture Topic</p>
                           <h4 className="study-guide-topic mt-2">{guideTopic}</h4>
+                          <div className="study-guide-topic-meta"><span>{studyGuideReadingMeta.minutes} min read</span><span>{studyGuideReadingMeta.difficulty}</span></div>
                           {isTeacherOnGuideIntro ? <p className="study-guide-focus-badge mt-4">Audio focus on this section</p> : null}
                         </div>
                       </div>
@@ -28197,6 +28286,7 @@ export default function App() {
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
                               }}
                               className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[16px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                              style={getStudyGuideSectionThemeStyle(studyGuideTheme, index, section.displayHeading || section.heading)}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <summary className="cursor-pointer list-none">
@@ -28293,7 +28383,7 @@ export default function App() {
                         })}
                       </div>
                     ) : (
-                      <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+                      <div className="study-guide-fallback notes-markdown study-guide-markdown phone-safe-copy rounded-2xl p-4 max-w-none">
                         <MobileFirstMarkdown>{formattedGuide || "Your study guide will appear here after generation."}</MobileFirstMarkdown>
                         <StudyGuideImageCards images={getVisibleStudyImages(studyImages)} />
                       </div>

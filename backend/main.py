@@ -38,7 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import requests
 from chat_assistant import (
     ProviderStreamError,
@@ -1473,6 +1473,7 @@ class PdfSection(BaseModel):
 class PdfExportRequest(BaseModel):
     title: str
     sections: list[PdfSection]
+    theme: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocxExportRequest(BaseModel):
@@ -6162,7 +6163,7 @@ def latex_to_readable_export_text(value: str) -> str:
     }
     for old, new in command_replacements.items():
         text = text.replace(old, new)
-    text = re.sub(r"\\(?:left|right|,|;|!|quad|qquad)\b?", " ", text)
+    text = re.sub(r"\\(?:left|right|quad|qquad)\b|\\[,;!]", " ", text)
     text = re.sub(r"\\[A-Za-z]+", "", text)
     text = text.replace("{", "(").replace("}", ")")
     return re.sub(r"\s+", " ", text).strip()
@@ -6221,12 +6222,72 @@ def replace_inline_latex_for_export(value: str) -> str:
     )
 
 
-def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
+def normalize_study_guide_export_theme(raw_theme: dict[str, Any] | None = None) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "id": "mabaso-emerald",
+        "page": "#f3fbf6",
+        "surface": "#ffffff",
+        "surfaceAlt": "#e7f7ed",
+        "text": "#13251a",
+        "heading": "#073d24",
+        "muted": "#486556",
+        "accent": "#149a55",
+        "border": "#b9ddc7",
+        "sectionAccents": ["#149a55", "#0f766e", "#2563eb", "#7c3aed"],
+    }
+
+    def safe_hex(value: Any, fallback: str) -> str:
+        cleaned = compact_text(value).lower()
+        return cleaned if re.fullmatch(r"#[0-9a-f]{6}", cleaned) else fallback
+
+    source = raw_theme if isinstance(raw_theme, dict) else {}
+    normalized = {
+        key: safe_hex(source.get(key), fallback)
+        for key, fallback in defaults.items()
+        if key not in {"id", "sectionAccents"}
+    }
+    normalized["id"] = re.sub(r"[^a-z0-9-]", "", compact_text(source.get("id")).lower())[:48] or defaults["id"]
+    raw_accents = source.get("sectionAccents") if isinstance(source.get("sectionAccents"), list) else []
+    normalized["sectionAccents"] = [
+        safe_hex(value, defaults["accent"])
+        for value in raw_accents[:8]
+    ] or list(defaults["sectionAccents"])
+    return normalized
+
+
+def resolve_study_guide_export_accent(heading: str, index: int, theme: dict[str, Any]) -> str:
+    normalized = compact_text(heading).lower()
+    semantic_accents = (
+        (r"common mistake|warning|caution|risk|important", "#c2410c"),
+        (r"exam tip|remember", "#a16207"),
+        (r"worked example|example", "#7c3aed"),
+        (r"formula|equation|derivation", "#2563eb"),
+        (r"definition|key term", theme["accent"]),
+        (r"key takeaway|summary|quick summary", "#15803d"),
+    )
+    for pattern, color in semantic_accents:
+        if re.search(pattern, normalized):
+            return color
+    accents = theme["sectionAccents"]
+    return accents[index % len(accents)]
+
+
+def build_pdf_document(title: str, sections: list[PdfSection], theme: dict[str, Any] | None = None) -> bytes:
     if A4 is None:
         raise HTTPException(
             status_code=500,
             detail="PDF export is not configured on the server yet. Install reportlab and redeploy.",
         )
+
+    export_theme = normalize_study_guide_export_theme(theme)
+    page_color = colors.HexColor(export_theme["page"])
+    surface_color = colors.HexColor(export_theme["surface"])
+    surface_alt_color = colors.HexColor(export_theme["surfaceAlt"])
+    text_color = colors.HexColor(export_theme["text"])
+    heading_color = colors.HexColor(export_theme["heading"])
+    muted_color = colors.HexColor(export_theme["muted"])
+    accent_color = colors.HexColor(export_theme["accent"])
+    border_color = colors.HexColor(export_theme["border"])
 
     pdf_symbol_replacements = {
         "≥": ">=",
@@ -6400,17 +6461,17 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eff6ff")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                    ("BACKGROUND", (0, 0), (-1, 0), surface_alt_color),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), heading_color),
                     ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#dbeafe")),
-                    ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#cbd5e1")),
+                    ("GRID", (0, 0), (-1, -1), 0.6, border_color),
+                    ("BOX", (0, 0), (-1, -1), 0.8, border_color),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                     ("TOPPADDING", (0, 0), (-1, -1), 6),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+                    ("BACKGROUND", (0, 1), (-1, -1), surface_color),
                 ]
             )
         )
@@ -6418,11 +6479,11 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
 
     styles = getSampleStyleSheet()
     title_style = styles["Heading1"]
-    title_style.textColor = colors.HexColor("#0f172a")
+    title_style.textColor = heading_color
     title_style.spaceAfter = 12
     title_style.fontName = "Helvetica-Bold"
     heading_style = styles["Heading2"]
-    heading_style.textColor = colors.HexColor("#0f172a")
+    heading_style.textColor = heading_color
     heading_style.spaceBefore = 12
     heading_style.spaceAfter = 8
     heading_style.fontName = "Helvetica-Bold"
@@ -6433,7 +6494,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         fontName="Helvetica-Bold",
         fontSize=13,
         leading=16,
-        textColor=colors.HexColor("#2563eb"),
+        textColor=accent_color,
         spaceBefore=10,
         spaceAfter=6,
     )
@@ -6443,7 +6504,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         fontName="Helvetica-Bold",
         fontSize=11,
         leading=14,
-        textColor=colors.HexColor("#16a34a"),
+        textColor=accent_color,
         spaceBefore=8,
         spaceAfter=4,
     )
@@ -6453,7 +6514,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         fontName="Helvetica",
         fontSize=10.5,
         leading=15.5,
-        textColor=colors.HexColor("#1f2937"),
+        textColor=text_color,
         alignment=TA_LEFT,
         spaceAfter=8,
     )
@@ -6469,7 +6530,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         parent=body_style,
         fontSize=9,
         leading=12,
-        textColor=colors.HexColor("#475569"),
+        textColor=muted_color,
         spaceAfter=10,
     )
     equation_fallback_style = ParagraphStyle(
@@ -6479,7 +6540,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         fontSize=10.5,
         leading=15,
         alignment=TA_CENTER,
-        textColor=colors.HexColor("#111827"),
+        textColor=text_color,
         spaceBefore=8,
         spaceAfter=10,
     )
@@ -6493,6 +6554,17 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         topMargin=36,
         bottomMargin=36,
     )
+
+    def draw_study_guide_page(canvas, _document) -> None:
+        canvas.saveState()
+        canvas.setFillColor(page_color)
+        canvas.rect(0, 0, A4[0], A4[1], stroke=0, fill=1)
+        canvas.setFillColor(accent_color)
+        canvas.rect(0, A4[1] - 9, A4[0], 9, stroke=0, fill=1)
+        canvas.setStrokeColor(border_color)
+        canvas.setLineWidth(0.5)
+        canvas.line(36, 25, A4[0] - 36, 25)
+        canvas.restoreState()
 
     story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
     max_pdf_image_bytes = 8 * 1024 * 1024
@@ -6609,6 +6681,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         lines = cleaned.splitlines()
         paragraph_lines: list[str] = []
         index = 0
+        heading_sequence = 0
 
         def append_matching_heading_images(heading_text: str) -> None:
             if placed_keys is None:
@@ -6678,7 +6751,13 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 paragraph_lines = []
                 level = len(markdown_heading_match.group(1))
                 heading_text = markdown_heading_match.group(2).strip().strip("*").strip()
-                style = heading_style if level <= 2 else subheading_style if level == 3 else minor_heading_style
+                parent_style = heading_style if level <= 2 else subheading_style if level == 3 else minor_heading_style
+                style = ParagraphStyle(
+                    f"MabasoContentHeading{heading_sequence}",
+                    parent=parent_style,
+                    textColor=colors.HexColor(resolve_study_guide_export_accent(heading_text, heading_sequence, export_theme)),
+                )
+                heading_sequence += 1
                 story.append(Paragraph(build_pdf_markup(heading_text), style))
                 story.append(Spacer(1, 4))
                 append_matching_heading_images(heading_text)
@@ -6690,7 +6769,13 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 flush_paragraph_lines(paragraph_lines)
                 paragraph_lines = []
                 heading_text = bold_heading_match.group(1).strip()
-                story.append(Paragraph(build_pdf_markup(heading_text), minor_heading_style))
+                style = ParagraphStyle(
+                    f"MabasoBoldContentHeading{heading_sequence}",
+                    parent=minor_heading_style,
+                    textColor=colors.HexColor(resolve_study_guide_export_accent(heading_text, heading_sequence, export_theme)),
+                )
+                heading_sequence += 1
+                story.append(Paragraph(build_pdf_markup(heading_text), style))
                 story.append(Spacer(1, 4))
                 append_matching_heading_images(heading_text)
                 index += 1
@@ -6720,16 +6805,25 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
 
         flush_paragraph_lines(paragraph_lines)
 
-    for section in sections:
+    for section_index, section in enumerate(sections):
         if not section.content.strip() and not section.images:
             continue
         placed_image_keys: set[str] = set()
-        story.append(Paragraph(section.title, heading_style))
+        section_heading_style = ParagraphStyle(
+            f"MabasoSectionHeading{section_index}",
+            parent=heading_style,
+            textColor=colors.HexColor(resolve_study_guide_export_accent(section.title, section_index, export_theme)),
+            backColor=surface_alt_color,
+            borderColor=border_color,
+            borderWidth=0.5,
+            borderPadding=(6, 8, 6, 8),
+        )
+        story.append(Paragraph(section.title, section_heading_style))
         append_structured_pdf_content(section.content, section.images, placed_image_keys)
         append_pdf_images(section.images, placed_image_keys)
         story.append(Spacer(1, 6))
 
-    document.build(story)
+    document.build(story, onFirstPage=draw_study_guide_page, onLaterPages=draw_study_guide_page)
     return buffer.getvalue()
 
 
@@ -6795,7 +6889,14 @@ def build_docx_document(title: str, content: str) -> bytes:
     return buffer.getvalue()
 
 
-def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> bytes:
+def build_docx_study_pack_document(
+    title: str,
+    sections: list[PdfSection],
+    theme: dict[str, Any] | None = None,
+) -> bytes:
+    export_theme = normalize_study_guide_export_theme(theme)
+    theme_hex = {key: value.lstrip("#").upper() for key, value in export_theme.items() if isinstance(value, str) and value.startswith("#")}
+
     def clean_docx_text(text: str) -> str:
         cleaned = compact_text(replace_inline_latex_for_export(text))
         cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
@@ -6804,17 +6905,25 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
         cleaned = re.sub(r"`([^`]*)`", r"\1", cleaned)
         return cleaned
 
-    def run_xml(text: str, *, bold: bool = False, size: int = 24) -> str:
+    def run_xml(text: str, *, bold: bool = False, size: int = 24, color: str | None = None) -> str:
         escaped = html.escape(clean_docx_text(text), quote=True)
         bold_xml = "<w:b/>" if bold else ""
+        color_xml = f'<w:color w:val="{color or theme_hex["text"]}"/>'
         return (
             "<w:r>"
-            f"<w:rPr><w:rFonts w:ascii=\"Aptos\" w:hAnsi=\"Aptos\"/>{bold_xml}<w:sz w:val=\"{size}\"/></w:rPr>"
+            f"<w:rPr><w:rFonts w:ascii=\"Aptos\" w:hAnsi=\"Aptos\"/>{bold_xml}{color_xml}<w:sz w:val=\"{size}\"/></w:rPr>"
             f"<w:t xml:space=\"preserve\">{escaped}</w:t>"
             "</w:r>"
         )
 
-    def paragraph_xml(text: str, *, style: str = "body", bullet: bool = False) -> str:
+    def paragraph_xml(
+        text: str,
+        *,
+        style: str = "body",
+        bullet: bool = False,
+        color: str | None = None,
+        fill: str | None = None,
+    ) -> str:
         if not text:
             return "<w:p/>"
         if style == "title":
@@ -6828,10 +6937,12 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
         else:
             size, bold, spacing_after = 23, False, 150
         indent_xml = "<w:ind w:left=\"360\" w:hanging=\"180\"/>" if bullet else ""
+        resolved_color = color or (theme_hex["heading"] if style in {"title", "heading", "subheading"} else theme_hex["muted"] if style == "caption" else theme_hex["text"])
+        shading_xml = f'<w:shd w:val="clear" w:color="auto" w:fill="{fill}"/>' if fill else ""
         return (
             "<w:p>"
-            f"<w:pPr><w:spacing w:after=\"{spacing_after}\" w:line=\"330\" w:lineRule=\"auto\"/>{indent_xml}</w:pPr>"
-            f"{run_xml(text, bold=bold, size=size)}"
+            f"<w:pPr><w:spacing w:after=\"{spacing_after}\" w:line=\"330\" w:lineRule=\"auto\"/>{indent_xml}{shading_xml}</w:pPr>"
+            f"{run_xml(text, bold=bold, size=size, color=resolved_color)}"
             "</w:p>"
         )
 
@@ -6861,8 +6972,8 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             cells = row + [""] * (column_count - len(row))
             cell_xml = "".join(
                 "<w:tc>"
-                f"<w:tcPr><w:tcW w:w=\"{cell_width}\" w:type=\"dxa\"/><w:shd w:fill=\"{'EFF6FF' if row_index == 0 else 'FFFFFF'}\"/></w:tcPr>"
-                f"{paragraph_xml(cell, style='body')}"
+                f"<w:tcPr><w:tcW w:w=\"{cell_width}\" w:type=\"dxa\"/><w:shd w:fill=\"{theme_hex['surfaceAlt'] if row_index == 0 else theme_hex['surface']}\"/></w:tcPr>"
+                f"{paragraph_xml(cell, style='body', color=theme_hex['heading'] if row_index == 0 else theme_hex['text'])}"
                 "</w:tc>"
                 for cell in cells
             )
@@ -6870,12 +6981,12 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
         return (
             "<w:tbl>"
             "<w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>"
-            "<w:top w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
-            "<w:left w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
-            "<w:bottom w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
-            "<w:right w:val=\"single\" w:sz=\"6\" w:color=\"CBD5E1\"/>"
-            "<w:insideH w:val=\"single\" w:sz=\"6\" w:color=\"DBEAFE\"/>"
-            "<w:insideV w:val=\"single\" w:sz=\"6\" w:color=\"DBEAFE\"/>"
+            f"<w:top w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
+            f"<w:left w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
+            f"<w:bottom w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
+            f"<w:right w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
+            f"<w:insideH w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
+            f"<w:insideV w:val=\"single\" w:sz=\"6\" w:color=\"{theme_hex['border']}\"/>"
             "</w:tblBorders></w:tblPr>"
             + "".join(row_xml_parts)
             + "</w:tbl>"
@@ -6905,7 +7016,7 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
 
     media_parts: list[tuple[str, bytes]] = []
     image_relationships: list[str] = []
-    document_parts: list[str] = [paragraph_xml(title or "MABASO Study Pack", style="title")]
+    document_parts: list[str] = [paragraph_xml(title or "MABASO Study Pack", style="title", fill=theme_hex["surfaceAlt"])]
     image_counter = 0
 
     def append_docx_images(images: list[dict[str, Any]], placed_keys: set[str] | None = None) -> None:
@@ -6995,6 +7106,7 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
     def append_docx_content(content: str, images: list[dict[str, Any]], placed_keys: set[str]) -> None:
         lines = (content or "").replace("\r\n", "\n").splitlines()
         paragraph_lines: list[str] = []
+        heading_sequence = 0
 
         def flush_paragraph() -> None:
             nonlocal paragraph_lines
@@ -7059,7 +7171,9 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
                 flush_paragraph()
                 level = len(heading_match.group(1))
                 heading_text = heading_match.group(2).strip().strip("*").strip()
-                document_parts.append(paragraph_xml(heading_text, style="heading" if level <= 2 else "subheading"))
+                heading_color = resolve_study_guide_export_accent(heading_text, heading_sequence, export_theme).lstrip("#").upper()
+                heading_sequence += 1
+                document_parts.append(paragraph_xml(heading_text, style="heading" if level <= 2 else "subheading", color=heading_color))
                 append_heading_images(heading_text)
                 index += 1
                 continue
@@ -7067,7 +7181,9 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             if bold_heading_match:
                 flush_paragraph()
                 heading_text = bold_heading_match.group(1).strip()
-                document_parts.append(paragraph_xml(heading_text, style="subheading"))
+                heading_color = resolve_study_guide_export_accent(heading_text, heading_sequence, export_theme).lstrip("#").upper()
+                heading_sequence += 1
+                document_parts.append(paragraph_xml(heading_text, style="subheading", color=heading_color))
                 append_heading_images(heading_text)
                 index += 1
                 continue
@@ -7084,22 +7200,28 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             index += 1
         flush_paragraph()
 
-    for section in sections:
+    for section_index, section in enumerate(sections):
         if not section.content.strip() and not section.images:
             continue
         placed_keys: set[str] = set()
-        document_parts.append(paragraph_xml(section.title, style="heading"))
+        document_parts.append(paragraph_xml(
+            section.title,
+            style="heading",
+            color=resolve_study_guide_export_accent(section.title, section_index, export_theme).lstrip("#").upper(),
+            fill=theme_hex["surfaceAlt"],
+        ))
         append_docx_content(section.content, section.images, placed_keys)
         append_docx_images(section.images, placed_keys)
 
     document_xml = (
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
-        "<w:document "
+        f'<w:document '
         "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" "
         "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
         "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
         "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
         "xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+        f'<w:background w:color="{theme_hex["page"]}"/>'
         "<w:body>"
         + "".join(document_parts)
         + "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"900\" w:right=\"900\" w:bottom=\"900\" w:left=\"900\"/></w:sectPr>"
@@ -7115,6 +7237,7 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
         "<Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>"
         "<Default Extension=\"webp\" ContentType=\"image/webp\"/>"
         "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+        "<Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>"
         "</Types>"
     )
     rels_xml = (
@@ -7126,14 +7249,22 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
     document_rels_xml = (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        + "<Relationship Id=\"rIdSettings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings\" Target=\"settings.xml\"/>"
         + "".join(image_relationships)
         + "</Relationships>"
+    )
+    settings_xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+        "<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+        "<w:displayBackgroundShape/>"
+        "</w:settings>"
     )
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", content_types_xml)
         archive.writestr("_rels/.rels", rels_xml)
         archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/settings.xml", settings_xml)
         archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
         for media_name, image_bytes in media_parts:
             archive.writestr(f"word/media/{media_name}", image_bytes)
@@ -30688,7 +30819,7 @@ async def export_study_pack_pdf(
     current_user: str = Depends(require_authenticated_user),
 ):
     title = payload.title.strip() or "MABASO Study Pack"
-    pdf_bytes = await asyncio.to_thread(build_pdf_document, title, payload.sections)
+    pdf_bytes = await asyncio.to_thread(build_pdf_document, title, payload.sections, payload.theme)
     safe_name = sanitize_download_filename(title)
     return Response(
         content=pdf_bytes,
@@ -30703,7 +30834,7 @@ async def export_study_pack_docx(
     current_user: str = Depends(require_authenticated_user),
 ):
     title = payload.title.strip() or "MABASO Study Pack"
-    docx_bytes = await asyncio.to_thread(build_docx_study_pack_document, title, payload.sections)
+    docx_bytes = await asyncio.to_thread(build_docx_study_pack_document, title, payload.sections, payload.theme)
     safe_name = sanitize_download_filename(title)
     return Response(
         content=docx_bytes,
