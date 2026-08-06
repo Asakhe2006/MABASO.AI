@@ -32,7 +32,7 @@ export function renderMathInHtmlElement(element) {
 
 export default function MathMarkdown({ content = "", components, className = "" }) {
   return (
-    <div className={`math-markdown ${className}`.trim()}>
+    <div className={`math-markdown academic-math ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[[remarkMath, { singleDollarTextMath: true }], remarkGfm]}
         rehypePlugins={[[rehypeKatex, KATEX_OPTIONS]]}

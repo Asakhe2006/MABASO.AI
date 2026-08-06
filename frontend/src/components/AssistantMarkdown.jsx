@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import MathMarkdown from "./MathMarkdown";
+import { getAcademicReadingCssVariables } from "../academicReadingTheme";
 
 function themed(theme, darkValue, lightValue) {
   return theme === "light" ? lightValue : darkValue;
@@ -41,17 +42,20 @@ function CopyableCodeBlock({ children, className = "", theme = "dark", ...props 
 
 export default function AssistantMarkdown({ content = "", theme = "dark" }) {
   return (
-    <div className={`assistant-markdown text-sm leading-7 ${themed(theme, "text-slate-100", "text-slate-800")}`}>
+    <div
+      className={`assistant-markdown academic-reading-theme ${themed(theme, "text-slate-100", "text-slate-800")}`}
+      style={getAcademicReadingCssVariables()}
+    >
       <MathMarkdown
         content={content}
         components={{
-          h1: (props) => <h1 className="mb-3 text-xl font-semibold" {...cleanMarkdownProps(props)} />,
-          h2: (props) => <h2 className="mb-3 text-lg font-semibold" {...cleanMarkdownProps(props)} />,
-          h3: (props) => <h3 className="mb-2 text-base font-semibold" {...cleanMarkdownProps(props)} />,
-          p: (props) => <p className="mb-3 last:mb-0" {...cleanMarkdownProps(props)} />,
-          ul: (props) => <ul className="mb-3 list-disc pl-5 last:mb-0" {...cleanMarkdownProps(props)} />,
-          ol: (props) => <ol className="mb-3 list-decimal pl-5 last:mb-0" {...cleanMarkdownProps(props)} />,
-          li: (props) => <li className="mb-1" {...cleanMarkdownProps(props)} />,
+          h1: (props) => <h1 {...cleanMarkdownProps(props)} />,
+          h2: (props) => <h2 {...cleanMarkdownProps(props)} />,
+          h3: (props) => <h3 {...cleanMarkdownProps(props)} />,
+          p: (props) => <p {...cleanMarkdownProps(props)} />,
+          ul: (props) => <ul {...cleanMarkdownProps(props)} />,
+          ol: (props) => <ol {...cleanMarkdownProps(props)} />,
+          li: (props) => <li {...cleanMarkdownProps(props)} />,
           blockquote: (props) => (
             <blockquote
               className={`mb-3 rounded-2xl border-l-4 px-4 py-3 italic ${themed(theme, "border-emerald-300/45 bg-white/5 text-slate-200", "border-emerald-600/55 bg-emerald-50 text-slate-700")}`}

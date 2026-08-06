@@ -61,4 +61,6 @@ export const MATH_MARKDOWN_FIXTURES = Object.freeze({
   linearAlgebra: "$$A=\\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}$$",
   statistics: "$$\\bar{x}=\\frac{1}{n}\\sum_{i=1}^{n}x_i$$",
   piecewise: "$$f(x)=\\begin{cases}x^2,&x\\ge0\\\\-x,&x<0\\end{cases}$$",
+  alignedDerivation: "$$\\begin{aligned}F(s)&=\\int_0^\\infty e^{-st}f(t)\\,dt\\\\&=\\frac{1}{s^2}\\end{aligned}$$",
+  limitAndVector: "$$\\lim_{n\\to\\infty}\\sum_{k=1}^{n}\\frac{\\vec{v}_k}{n}=\\boldsymbol{\\mu}$$",
 });

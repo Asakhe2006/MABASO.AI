@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowLeft, Check, Copy, ExternalLink, LoaderCircle } from "lucide-react";
 import AssistantMarkdown from "./AssistantMarkdown";
+import { renderMathInHtmlElement } from "./MathMarkdown";
+import { getAcademicReadingCssVariables } from "../academicReadingTheme";
 
 function resolveApiBaseUrl() {
   const configured = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
@@ -13,6 +15,23 @@ function parseSharePath(pathname) {
   return match ? { type: match[1].toLowerCase(), token: match[2] } : null;
 }
 
+function SharedAcademicHtml({ content = "" }) {
+  const contentRef = useRef(null);
+
+  useEffect(() => {
+    renderMathInHtmlElement(contentRef.current);
+  }, [content]);
+
+  return (
+    <div
+      ref={contentRef}
+      className="public-share-rich-html academic-reading-theme"
+      style={getAcademicReadingCssVariables()}
+      dangerouslySetInnerHTML={{ __html: content }}
+    />
+  );
+}
+
 function MaterialSnapshot({ snapshot }) {
   const editedSections = Object.entries(snapshot.studyGuideDocumentHtml || {});
   return (
@@ -21,7 +40,7 @@ function MaterialSnapshot({ snapshot }) {
       {editedSections.length ? editedSections.map(([section, content]) => (
         <section key={section} className="public-share-section">
           <h2>{section.replace(/[-_]+/g, " ")}</h2>
-          <div className="public-share-rich-html" dangerouslySetInnerHTML={{ __html: content }} />
+          <SharedAcademicHtml content={content} />
         </section>
       )) : <AssistantMarkdown content={snapshot.summary || "This shared material has no readable study guide content."} theme="dark" />}
       {(snapshot.studyImages || []).map((image, index) => (
@@ -49,7 +68,9 @@ function ChatSnapshot({ snapshot }) {
 
 export default function PublicSharePage() {
   const route = useMemo(() => parseSharePath(window.location.pathname), []);
-  const [state, setState] = useState({ loading: true, share: null, error: "" });
+  const [state, setState] = useState(() => route
+    ? { loading: true, share: null, error: "" }
+    : { loading: false, share: null, error: "This shared link is unavailable." });
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -58,7 +79,6 @@ export default function PublicSharePage() {
     robots.setAttribute("name", "robots");
     robots.setAttribute("content", "noindex, nofollow");
     if (!route) {
-      setState({ loading: false, share: null, error: "This shared link is unavailable." });
       return () => { active = false; };
     }
     fetch(`${resolveApiBaseUrl()}/api/public/share/${route.type}/${encodeURIComponent(route.token)}`, {

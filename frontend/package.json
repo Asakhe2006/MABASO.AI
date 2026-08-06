@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "test:auth": "node scripts/verify-auth-single-flight.mjs",
     "test:math": "node scripts/verify-math-rendering.mjs",
+    "test:academic-reading": "node scripts/verify-academic-reading-theme.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

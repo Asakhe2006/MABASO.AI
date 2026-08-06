@@ -15,6 +15,7 @@ import { consumeAssistantStream, useLectureAssistant } from "./useLectureAssista
 import AssistantMarkdown from "./components/AssistantMarkdown";
 import MathMarkdown, { renderMathInHtmlElement } from "./components/MathMarkdown";
 import { normalizeMathMarkdown } from "./mathRendering";
+import { getAcademicExportTypography, getAcademicReadingCssVariables } from "./academicReadingTheme";
 import PublicLandingPage from "./PublicLandingPage";
 import { useAuth } from "./auth/AuthContext";
 
@@ -3041,7 +3042,7 @@ function MobileFirstMarkdown({ children }) {
 
 function StudyToolMarkdownCard({ content = "", emptyMessage = "" }) {
   return (
-    <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+    <div className="notes-markdown study-guide-markdown academic-reading-theme phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]" style={getAcademicReadingCssVariables()}>
       <MobileFirstMarkdown>{content || emptyMessage}</MobileFirstMarkdown>
     </div>
   );
@@ -6057,6 +6058,7 @@ function selectStudyGuideTheme(value = "") {
 
 function getStudyGuideThemeStyle(theme) {
   return {
+    ...getAcademicReadingCssVariables(),
     "--sg-page": theme.page,
     "--sg-surface": theme.surface,
     "--sg-surface-alt": theme.surfaceAlt,
@@ -6080,6 +6082,7 @@ function getStudyGuideExportTheme(theme) {
     accent: theme.accent,
     border: theme.border,
     sectionAccents: [...(theme.sectionAccents || [])],
+    typography: getAcademicExportTypography(),
   };
 }
 
@@ -9511,7 +9514,7 @@ export default function App() {
       : undefined;
 
     return (
-      <div className={`study-guide-shell study-guide-themed study-guide-theme-${guideTheme.id} min-w-0 space-y-5 rounded-[28px] p-1`} style={guideThemeStyle} data-study-guide-theme={guideTheme.id}>
+      <div className={`study-guide-shell study-guide-themed academic-reading-document study-guide-theme-${guideTheme.id} min-w-0 space-y-5 rounded-[28px] p-1`} style={guideThemeStyle} data-study-guide-theme={guideTheme.id}>
         <div
           ref={titleCardRef}
           className={`study-guide-title-card rounded-[24px] p-5 transition ${isIntroActive ? "study-guide-section-active" : ""}`}
@@ -11503,7 +11506,7 @@ export default function App() {
                     studyImageList: activeRoom?.study_images || [],
                     emptyMessage: "No shared study guide selected yet.",
                   }) : null}
-                  {activeRoom.active_tab === "transcript" ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
+                  {activeRoom.active_tab === "transcript" ? <div className="academic-reading-theme phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-slate-200" style={getAcademicReadingCssVariables()}>{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
                   {activeRoom.active_tab === "formulas" ? (
                     <StudyToolFormulaPanel
                       rows={activeRoomFormulaRows}
@@ -28243,7 +28246,7 @@ export default function App() {
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
-                  <div className={`study-guide-shell study-guide-themed study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
+                  <div className={`study-guide-shell study-guide-themed academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
                     <div
                       ref={(node) => {
                         if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
@@ -28391,7 +28394,7 @@ export default function App() {
 
                   </div>
                 ) : null}
-                {activeTab === "transcript" ? <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
+                {activeTab === "transcript" ? <div className="academic-reading-theme whitespace-pre-wrap break-words text-slate-200" style={getAcademicReadingCssVariables()}>{deferredTranscript || "The lecture transcript will appear here after transcription."}</div> : null}
                 {activeTab === "examples" ? (
                   <div
                     ref={teacherExamplesPanelRef}
