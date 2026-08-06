@@ -2,6 +2,7 @@ import { Component, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import { AuthProvider } from './auth/AuthContext.jsx'
 
 class RootErrorBoundary extends Component {
   constructor(props) {
@@ -49,7 +50,9 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <RootErrorBoundary>
       <Suspense fallback={<div className="min-h-screen bg-[var(--page-bg)] px-6 py-8 text-slate-100">Loading Mabaso AI...</div>}>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </Suspense>
     </RootErrorBoundary>
   </StrictMode>,

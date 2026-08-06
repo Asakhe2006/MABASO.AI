@@ -93,6 +93,12 @@ services:
         value: "90"
       - key: SESSION_REFRESH_WINDOW_MINUTES
         value: "20"
+      - key: SESSION_CONTEXT_CACHE_TTL_SECONDS
+        value: "12"
+      - key: SESSION_LAST_SEEN_INTERVAL_SECONDS
+        value: "90"
+      - key: SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS
+        value: "300"
       - key: SESSION_JWT_ISSUER
         value: "mabaso-ai"
       - key: SESSION_JWT_AUDIENCE

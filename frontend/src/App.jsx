@@ -16,6 +16,7 @@ import AssistantMarkdown from "./components/AssistantMarkdown";
 import MathMarkdown, { renderMathInHtmlElement } from "./components/MathMarkdown";
 import { normalizeMathMarkdown } from "./mathRendering";
 import PublicLandingPage from "./PublicLandingPage";
+import { useAuth } from "./auth/AuthContext";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
 const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
@@ -6580,6 +6581,14 @@ function getLatestCollaborationRoomMessageRecord(room) {
 }
 
 export default function App() {
+  const {
+    status: sharedAuthStatus,
+    session: sharedAuthSession,
+    error: sharedAuthError,
+    checkSession: checkSharedSession,
+    acceptSession: acceptSharedSession,
+    clearSession: clearSharedSession,
+  } = useAuth();
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
   const [authToken, setAuthToken] = useState("");
@@ -6780,7 +6789,6 @@ export default function App() {
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
   const [copiedStudyChatMessageId, setCopiedStudyChatMessageId] = useState("");
-  const [authSessionRetryCount, setAuthSessionRetryCount] = useState(0);
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
@@ -6951,8 +6959,6 @@ export default function App() {
   const authTokenRef = useRef("");
   const authBroadcastChannelRef = useRef(null);
   const authExpiryHandledRef = useRef(false);
-  const sessionValidationRunRef = useRef(0);
-  const lastSessionValidationAtRef = useRef(0);
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
   const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
@@ -14772,7 +14778,8 @@ export default function App() {
     );
   };
 
-  const clearSession = (message = "Please sign in again.", { broadcast = true } = {}) => {
+  const clearSession = (message = "Please sign in again.", { broadcast = true, syncContext = true } = {}) => {
+    if (syncContext) clearSharedSession();
     const previousEmail = normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
     transcriptionAbortControllerRef.current?.abort();
     transcriptionAbortControllerRef.current = null;
@@ -14899,113 +14906,81 @@ export default function App() {
     }
   };
 
-  const verifySession = async ({ resumed = false } = {}) => {
-    const runId = sessionValidationRunRef.current + 1;
-    sessionValidationRunRef.current = runId;
-    const hadSessionMarker = window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true";
-    const isBackgroundCheck = resumed && Boolean(authTokenRef.current);
-    if (!isBackgroundCheck) {
-      setAuthCheckError("");
-      setAuthChecked(false);
-      setAuthServerStateReady(false);
-    }
-    try {
-      const response = await apiFetch(
-        "/auth/me",
-        {
-          headers: withAuthHeaders({ Accept: "application/json", "Cache-Control": "no-cache" }, COOKIE_SESSION_AUTH_STATE),
-          cache: "no-store",
-        },
-        7000,
-      );
-      const data = await parseJsonSafe(response);
-      if (sessionValidationRunRef.current !== runId) return false;
-      if (response.status === 401 || response.status === 403) {
-        authExpiryHandledRef.current = true;
-        clearSession(
-          hadSessionMarker || resumed
-            ? "Your session has expired. Please sign in again."
-            : "Sign in to continue.",
-          { broadcast: hadSessionMarker },
-        );
-        return false;
-      }
-      if (!response.ok || !String(data.email || "").trim()) {
-        throw new Error(data.detail || "We could not verify your session.");
-      }
+  const applyVerifiedSession = (data = {}) => {
+    const nextEmail = normalizeHistoryOwnerEmail(data.email);
+    const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
+    const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
+    const nextSessionMode = data.session_mode || "user";
+    const routedPage = resolveCurrentPageFromRoute(browserPath);
+    const routedResourceId = resolveProtectedResourceIdFromRoute(browserPath);
+    const nextWorkspaceId = routedPage !== "voice" && routedResourceId
+      ? routedResourceId
+      : loadOrCreatePrivateContextId(getWorkspaceContextIdStorageKey(nextEmail), "ws");
+    const nextConversationId = routedPage === "voice" && routedResourceId
+      ? routedResourceId
+      : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail, routedPage === "voice" ? "global" : "workspace"), "chat");
 
-      const nextEmail = normalizeHistoryOwnerEmail(data.email);
-      const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
-      const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : [];
-      const nextSessionMode = data.session_mode || "user";
-      const routedPage = resolveCurrentPageFromRoute(browserPath);
-      const routedResourceId = resolveProtectedResourceIdFromRoute(browserPath);
-      const nextWorkspaceId = routedPage !== "voice" && routedResourceId
-        ? routedResourceId
-        : loadOrCreatePrivateContextId(getWorkspaceContextIdStorageKey(nextEmail), "ws");
-      const nextConversationId = routedPage === "voice" && routedResourceId
-        ? routedResourceId
-        : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail, routedPage === "voice" ? "global" : "workspace"), "chat");
-
-      authTokenRef.current = nextToken;
-      authExpiryHandledRef.current = false;
-      lastSessionValidationAtRef.current = Date.now();
-      setAuthToken(nextToken);
-      setAuthEmail(nextEmail);
-      setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
-      setAuthSessionMode(nextSessionMode);
-      setAuthAvailableModes(nextAvailableModes);
-      setWorkspaceContextId(nextWorkspaceId);
-      setActiveStudyChatId(nextConversationId);
-      applyServerAccountState(data);
-      setAuthServerStateReady(true);
-      setAuthChecked(true);
-      setAuthSessionRetryCount(0);
-      if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
-        setCurrentPage("admin");
-      } else if (routedPage && routedPage !== "admin") {
-        setCurrentPage(routedPage);
-      } else {
-        setCurrentPage("capture");
-      }
-      return true;
-    } catch (error) {
-      if (sessionValidationRunRef.current !== runId) return false;
-      if (isBackgroundCheck) {
-        console.warn("[MABASO session] Background session verification failed.", {
-          errorName: error?.name || "",
-        });
-        return false;
-      }
-      setAuthToken("");
-      authTokenRef.current = "";
-      setAuthServerStateReady(false);
-      setAuthChecked(false);
-      setAuthCheckError(
-        isAbortError(error)
-          ? "We could not verify your session. Check your connection and try again."
-          : getReadableRequestError(error) || "We could not verify your session. Check your connection and try again.",
-      );
-      return false;
+    authTokenRef.current = nextToken;
+    authExpiryHandledRef.current = false;
+    setAuthToken(nextToken);
+    setAuthEmail(nextEmail);
+    setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
+    setAuthSessionMode(nextSessionMode);
+    setAuthAvailableModes(nextAvailableModes);
+    setWorkspaceContextId(nextWorkspaceId);
+    setActiveStudyChatId(nextConversationId);
+    applyServerAccountState(data);
+    setAuthCheckError("");
+    setAuthServerStateReady(true);
+    setAuthChecked(true);
+    if (nextSessionMode === "admin" || (browserPath === "/admin/dashboard" && nextAvailableModes.includes("admin"))) {
+      setCurrentPage("admin");
+    } else if (routedPage && routedPage !== "admin") {
+      setCurrentPage(routedPage);
+    } else {
+      setCurrentPage("capture");
     }
   };
 
-  useEffect(() => {
-    void verifySession();
-    return () => {
-      sessionValidationRunRef.current += 1;
-    };
-  }, []);
+  const verifySession = async () => {
+    setAuthCheckError("");
+    const result = await checkSharedSession({ force: true });
+    return result.status === "authenticated";
+  };
 
   useEffect(() => {
-    if (!authCheckError || authToken || isAuthReady) return undefined;
-    const retryDelayMs = Math.min(6500, 1200 + (authSessionRetryCount * 900));
-    const retryTimer = window.setTimeout(() => {
-      setAuthSessionRetryCount((current) => current + 1);
-      void verifySession({ resumed: true });
-    }, retryDelayMs);
-    return () => window.clearTimeout(retryTimer);
-  }, [authCheckError, authSessionRetryCount, authToken, isAuthReady]);
+    if (sharedAuthStatus === "checking") {
+      setAuthChecked(false);
+      setAuthServerStateReady(false);
+      setAuthCheckError("");
+      return;
+    }
+    if (sharedAuthStatus === "authenticated" && sharedAuthSession) {
+      const sharedEmail = normalizeHistoryOwnerEmail(sharedAuthSession.email);
+      if (authTokenRef.current && normalizeHistoryOwnerEmail(authEmail) === sharedEmail) {
+        setAuthCheckError("");
+        setAuthServerStateReady(true);
+        setAuthChecked(true);
+        return;
+      }
+      applyVerifiedSession(sharedAuthSession);
+      return;
+    }
+    if (sharedAuthStatus === "unauthenticated") {
+      const hadSessionMarker = window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true";
+      authExpiryHandledRef.current = true;
+      clearSession(
+        hadSessionMarker ? "Your session has expired. Please sign in again." : "Sign in to continue.",
+        { broadcast: hadSessionMarker, syncContext: false },
+      );
+      return;
+    }
+    setAuthToken("");
+    authTokenRef.current = "";
+    setAuthChecked(false);
+    setAuthServerStateReady(false);
+    setAuthCheckError(sharedAuthError || "We could not verify your session. Check your connection and try again.");
+  }, [sharedAuthError, sharedAuthSession, sharedAuthStatus]);
 
   useEffect(() => {
     try {
@@ -15491,41 +15466,6 @@ export default function App() {
     });
   }, [authChecked, authEmail, file]);
 
-  useEffect(() => {
-    if (!authToken) return undefined;
-    const interval = window.setInterval(() => {
-      apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000).then(async (response) => {
-        if (response.status === 401 || response.status === 403) {
-          if (!authExpiryHandledRef.current) {
-            authExpiryHandledRef.current = true;
-            clearSession("Your session has expired. Please sign in again.");
-          }
-          return;
-        }
-        if (!response.ok) return;
-        const data = await parseJsonSafe(response);
-        lastSessionValidationAtRef.current = Date.now();
-        if (data.csrf_token) rememberAuthCsrfToken(data.csrf_token);
-        const nextToken = resolveAuthStateToken(data.token || "", COOKIE_SESSION_AUTH_STATE, data.csrf_token || "");
-        authTokenRef.current = nextToken;
-        setAuthToken(nextToken);
-        const nextAvailableModes = Array.isArray(data.available_modes) ? data.available_modes : authAvailableModes;
-        const nextSessionMode = data.session_mode || authSessionMode;
-        const keepAdminRouteStable = browserPath === "/admin/dashboard"
-          && authSessionMode === "admin"
-          && nextSessionMode !== "admin"
-          && nextAvailableModes.includes("admin");
-        if (nextSessionMode && !keepAdminRouteStable) setAuthSessionMode(nextSessionMode);
-        setAuthAvailableModes(nextAvailableModes);
-      }).catch(() => {
-        // Keep the saved session locally if the server is temporarily unavailable.
-      });
-    }, 10 * 60 * 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [authAvailableModes, authSessionMode, authToken, browserPath]);
-
   useEffect(() => () => {
     if (podcastAudioUrlRef.current) window.URL.revokeObjectURL(podcastAudioUrlRef.current);
   }, []);
@@ -15616,25 +15556,6 @@ export default function App() {
   }, [activeTeacherSegmentIndex, authEmail, isTeacherPaused, isTeacherPlaying, recording, teacherLessonData]);
 
   useEffect(() => {
-    if (!authToken) return undefined;
-    const revalidateVisibleSession = (event) => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      const restoredFromPageCache = event?.type === "pageshow" && event.persisted === true;
-      const inactiveForMs = Date.now() - Number(lastSessionValidationAtRef.current || 0);
-      if (!restoredFromPageCache && inactiveForMs < 5 * 60 * 1000) return;
-      void verifySession({ resumed: true });
-    };
-    window.addEventListener("focus", revalidateVisibleSession);
-    window.addEventListener("pageshow", revalidateVisibleSession);
-    document.addEventListener("visibilitychange", revalidateVisibleSession);
-    return () => {
-      window.removeEventListener("focus", revalidateVisibleSession);
-      window.removeEventListener("pageshow", revalidateVisibleSession);
-      document.removeEventListener("visibilitychange", revalidateVisibleSession);
-    };
-  }, [authAvailableModes, authEmail, authSessionMode, authToken]);
-
-  useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const handleRemoteLogout = (event) => {
       const payload = event?.data || {};
@@ -15703,9 +15624,9 @@ export default function App() {
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
     applyServerAccountState(data);
+    acceptSharedSession({ ...data, email: nextEmail });
     authTokenRef.current = nextToken;
     authExpiryHandledRef.current = false;
-    lastSessionValidationAtRef.current = Date.now();
     setAuthToken(nextToken);
     setAuthEmail(nextEmail);
     setAuthEmailInput(nextEmail || window.localStorage.getItem(REMEMBERED_EMAIL_KEY) || "");
@@ -16435,19 +16356,10 @@ export default function App() {
     if (!currentToken) throw new Error("Please sign in to continue.");
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
     const requestMethod = String(requestOptions.method || "GET").toUpperCase();
-    let headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
+    const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
     let response;
     try {
       response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
-      if (response.status === 403 && !["GET", "HEAD", "OPTIONS"].includes(requestMethod)) {
-        const sessionResponse = await apiFetch("/auth/me", { headers: withAuthHeaders({}, COOKIE_SESSION_AUTH_STATE) }, 8000);
-        if (sessionResponse.ok) {
-          const sessionData = await parseJsonSafe(sessionResponse);
-          if (sessionData.csrf_token) rememberAuthCsrfToken(sessionData.csrf_token);
-          headers = withAuthHeaders(requestOptions.headers || {}, COOKIE_SESSION_AUTH_STATE);
-          response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
-        }
-      }
     } catch (err) {
       const requestError = new Error(getReadableRequestError(err, path));
       requestError.aborted = isAbortError(err);

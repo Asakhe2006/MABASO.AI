@@ -236,6 +236,9 @@ LOGIN_CODE_TTL_MINUTES = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "10"))
 REGISTRATION_TOKEN_TTL_MINUTES = int(os.getenv("REGISTRATION_TOKEN_TTL_MINUTES", str(LOGIN_CODE_TTL_MINUTES)))
 SESSION_TTL_MINUTES = int(os.getenv("SESSION_TTL_MINUTES", "90"))
 SESSION_REFRESH_WINDOW_MINUTES = int(os.getenv("SESSION_REFRESH_WINDOW_MINUTES", "20"))
+SESSION_CONTEXT_CACHE_TTL_SECONDS = max(2.0, float(os.getenv("SESSION_CONTEXT_CACHE_TTL_SECONDS", "12")))
+SESSION_LAST_SEEN_INTERVAL_SECONDS = max(30.0, float(os.getenv("SESSION_LAST_SEEN_INTERVAL_SECONDS", "90")))
+SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS = max(60.0, float(os.getenv("SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS", "300")))
 SLOW_REQUEST_LOG_MS = max(100, int(os.getenv("SLOW_REQUEST_LOG_MS", "1200")))
 SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
 LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
@@ -1579,6 +1582,42 @@ async def add_security_headers(request: Request, call_next):
             request.url.path,
             response.status_code,
             duration_ms,
+        )
+    return response
+
+
+@app.middleware("http")
+async def resolve_authenticated_session_once(request: Request, call_next):
+    auth_started_at = time.perf_counter()
+    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    bearer_token = get_bearer_token_from_authorization(request.headers.get("authorization"))
+    token = cookie_token or bearer_token
+    cache_hit = False
+    context = None
+    if token:
+        try:
+            context, cache_hit = get_cached_session_context(token)
+        except HTTPException as exc:
+            request.state.session_auth_error = exc
+        request.state.session_token = token
+        request.state.session_context = context
+        request.state.user = context.get("email", "") if context else ""
+        request.state.session_auth_resolved = True
+        request.state.session_auth_cache_hit = cache_hit
+        queue_session_maintenance(token, context, request)
+    request.state.authentication_ms = int((time.perf_counter() - auth_started_at) * 1000)
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Auth-Time-Ms", str(request.state.authentication_ms))
+    if token:
+        response.headers.setdefault("X-Auth-Cache", "hit" if cache_hit else "miss")
+    if request.url.path == "/auth/me" or request.state.authentication_ms >= 100:
+        logger.info(
+            "Session verification path=%s authenticated=%s cache_hit=%s auth_ms=%s",
+            request.url.path,
+            bool(context),
+            cache_hit,
+            request.state.authentication_ms,
         )
     return response
 
@@ -2952,6 +2991,7 @@ def set_user_account_status(email: str, status: str, updated_by: str):
             """,
             (normalized_email, normalized_status, utc_now().isoformat(), normalize_email(updated_by)),
         )
+    invalidate_session_context_cache(email=normalized_email)
 
 
 def revoke_all_sessions_for_user(email: str):
@@ -2976,6 +3016,7 @@ def revoke_all_sessions_for_user(email: str):
             "UPDATE active_sessions SET status = 'revoked', last_activity_at = ? WHERE email = ? AND status = 'active'",
             (utc_now().isoformat(), normalized_email),
         )
+    invalidate_session_context_cache(email=normalized_email)
 
 
 def get_client_ip(request: Request | None) -> str:
@@ -4415,6 +4456,8 @@ def create_session(email: str, session_mode: str = "user", revoke_existing: bool
             "UPDATE users SET verified_at = COALESCE(verified_at, ?) WHERE email = ?",
             (utc_now().isoformat(), email),
         )
+    if revoke_existing:
+        invalidate_session_context_cache(email=email)
     return raw_token
 
 
@@ -4435,6 +4478,7 @@ def revoke_session(token: str):
                 """,
                 (hash_value(token), expires_at, utc_now().isoformat()),
             )
+    invalidate_session_context_cache(token=token)
 
 
 def refresh_session_expiry(token_hash: str):
@@ -5303,8 +5347,114 @@ def get_session_context(token: str) -> dict[str, Any] | None:
     }
 
 
-def get_session_email(token: str) -> str | None:
+_session_context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_session_context_cache_lock = threading.Lock()
+_session_last_seen_at: dict[str, float] = {}
+_session_subscription_checked_at: dict[str, float] = {}
+_session_maintenance_lock = threading.Lock()
+
+
+def invalidate_session_context_cache(token: str = "", email: str = "") -> None:
+    token_hash = hash_value(token) if token else ""
+    normalized_email = normalize_email(email)
+    with _session_context_cache_lock:
+        if token_hash:
+            _session_context_cache.pop(token_hash, None)
+        if normalized_email:
+            stale_keys = [
+                cache_key
+                for cache_key, (_, context) in _session_context_cache.items()
+                if normalize_email(context.get("email", "")) == normalized_email
+            ]
+            for cache_key in stale_keys:
+                _session_context_cache.pop(cache_key, None)
+
+
+def get_cached_session_context(token: str) -> tuple[dict[str, Any] | None, bool]:
+    if not token:
+        return None, False
+    token_hash = hash_value(token)
+    now_monotonic = time.monotonic()
+    with _session_context_cache_lock:
+        cached = _session_context_cache.get(token_hash)
+        if cached and cached[0] > now_monotonic:
+            return dict(cached[1]), True
+        if cached:
+            _session_context_cache.pop(token_hash, None)
+
     context = get_session_context(token)
+    if context:
+        with _session_context_cache_lock:
+            _session_context_cache[token_hash] = (
+                now_monotonic + SESSION_CONTEXT_CACHE_TTL_SECONDS,
+                dict(context),
+            )
+    return context, False
+
+
+def get_verified_request_session(
+    request: Request,
+    authorization: str | None = None,
+    *,
+    require_csrf: bool = True,
+) -> tuple[str, dict[str, Any] | None]:
+    token = getattr(request.state, "session_token", "") or get_request_session_token(
+        request,
+        authorization,
+        require_csrf=False,
+    )
+    cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    if require_csrf and cookie_token:
+        validate_cookie_csrf(request, cookie_token)
+    if getattr(request.state, "session_auth_resolved", False) and token == getattr(request.state, "session_token", ""):
+        auth_error = getattr(request.state, "session_auth_error", None)
+        if auth_error:
+            raise auth_error
+        return token, getattr(request.state, "session_context", None)
+
+    started_at = time.perf_counter()
+    context, cache_hit = get_cached_session_context(token)
+    request.state.session_token = token
+    request.state.session_context = context
+    request.state.user = context.get("email", "") if context else ""
+    request.state.session_auth_resolved = True
+    request.state.session_auth_cache_hit = cache_hit
+    request.state.authentication_ms = int((time.perf_counter() - started_at) * 1000)
+    return token, context
+
+
+def queue_session_maintenance(token: str, context: dict[str, Any] | None, request: Request | None) -> None:
+    if not token or not context:
+        return
+    token_hash = hash_value(token)
+    normalized_email = normalize_email(context.get("email", ""))
+    now_monotonic = time.monotonic()
+    should_touch = False
+    should_check_subscription = False
+    with _session_maintenance_lock:
+        if now_monotonic - _session_last_seen_at.get(token_hash, 0.0) >= SESSION_LAST_SEEN_INTERVAL_SECONDS:
+            _session_last_seen_at[token_hash] = now_monotonic
+            should_touch = True
+        if normalized_email and now_monotonic - _session_subscription_checked_at.get(normalized_email, 0.0) >= SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS:
+            _session_subscription_checked_at[normalized_email] = now_monotonic
+            should_check_subscription = True
+    if not should_touch and not should_check_subscription:
+        return
+
+    def _maintain_session() -> None:
+        try:
+            if should_touch:
+                touch_account_session(token, request)
+            if should_check_subscription and normalized_email:
+                expire_subscription_if_needed(normalized_email)
+        except Exception:
+            logger.debug("Background session maintenance failed for %s", normalized_email, exc_info=True)
+
+    threading.Thread(target=_maintain_session, daemon=True, name="mabaso-session-maintenance").start()
+
+
+def get_session_email(token: str) -> str | None:
+    context, _ = get_cached_session_context(token)
     return context["email"] if context else None
 
 
@@ -5316,19 +5466,14 @@ def get_authorization_token(authorization: str | None) -> str:
 
 
 def require_authenticated_user(request: Request, authorization: str | None = Header(None)) -> str:
-    auth_started_at = time.perf_counter()
-    token = get_request_session_token(request, authorization)
-    context = get_session_context(token)
+    _, context = get_verified_request_session(request, authorization)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
-    expire_subscription_if_needed(context["email"])
-    request.state.authentication_ms = int((time.perf_counter() - auth_started_at) * 1000)
     return context["email"]
 
 
 def require_admin_user(request: Request, authorization: str | None = Header(None)) -> str:
-    token = get_request_session_token(request, authorization)
-    context = get_session_context(token)
+    _, context = get_verified_request_session(request, authorization)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
     if context["mode"] != "admin" or not is_admin_email(context["email"]):
@@ -16232,11 +16377,10 @@ async def apple_login(payload: AppleAuthRequest, request: Request, response: Res
 
 @app.get("/auth/me")
 async def auth_me(request: Request, response: Response, authorization: str | None = Header(None)):
-    started_at = utc_now()
+    started_at = time.perf_counter()
     bearer_token = get_bearer_token_from_authorization(authorization)
     cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
-    token = get_request_session_token(request, authorization, require_csrf=False)
-    context = get_session_context(token)
+    token, context = get_verified_request_session(request, authorization, require_csrf=False)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
@@ -16244,27 +16388,50 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
     if should_refresh_session_token(token):
         refreshed_token = create_session(context["email"], session_mode=context["mode"], revoke_existing=False)
         register_account_session(context["email"], refreshed_token, request, action="auth.session.refresh")
-    else:
-        touch_account_session(token, request)
-    record_audit_log(
-        action="auth.session.resume",
-        email=context["email"],
-        request=request,
-        resource_type="auth",
-        resource_name=context["mode"],
-        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-        metadata={"token_refreshed": bool(refreshed_token)},
-    )
+        invalidate_session_context_cache(token=token)
     active_token = refreshed_token or token
     csrf_token = set_auth_cookies(response, active_token)
-    # Session bootstrap must stay small: account, billing, and history hydrate after
-    # the protected shell is unlocked instead of blocking every login or refresh.
-    payload = build_auth_response(context["email"], active_token, include_account_snapshot=False)
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
+    threading.Thread(
+        target=record_audit_log,
+        kwargs={
+            "action": "auth.session.resume",
+            "email": context["email"],
+            "request": request,
+            "resource_type": "auth",
+            "resource_name": context["mode"],
+            "duration_ms": duration_ms,
+            "metadata": {"token_refreshed": bool(refreshed_token)},
+        },
+        daemon=True,
+        name="mabaso-auth-audit",
+    ).start()
+    payload = {
+        "token": "",
+        "email": context["email"],
+        "session_mode": context["mode"],
+        "available_modes": list(context.get("available_modes") or ["user"]),
+        "is_admin": "admin" in (context.get("available_modes") or []),
+        "cookie_session": True,
+        "session_cookie_name": SESSION_COOKIE_NAME,
+        "csrf_cookie_name": CSRF_COOKIE_NAME,
+        "account": None,
+    }
     payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
     payload["auth_transport"] = "cookie" if cookie_token else ("bearer" if bearer_token else "none")
     payload["cookie_session_active"] = bool(cookie_token)
+    payload["authentication_ms"] = int(getattr(request.state, "authentication_ms", 0) or 0)
+    payload["bootstrap_ms"] = duration_ms
     if csrf_token:
         payload["csrf_token"] = csrf_token
+    logger.info(
+        "Auth bootstrap completed email=%s auth_ms=%s total_ms=%s cache_hit=%s refreshed=%s",
+        context["email"],
+        payload["authentication_ms"],
+        duration_ms,
+        bool(getattr(request.state, "session_auth_cache_hit", False)),
+        bool(refreshed_token),
+    )
     return payload
 
 
@@ -16276,8 +16443,7 @@ async def select_auth_mode(
     authorization: str | None = Header(None),
 ):
     started_at = utc_now()
-    token = get_request_session_token(request, authorization)
-    context = get_session_context(token)
+    token, context = get_verified_request_session(request, authorization)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
@@ -16300,10 +16466,10 @@ async def logout(request: Request, response: Response, authorization: str | None
     token = ""
     context = None
     try:
-        token = get_request_session_token(request, authorization, require_csrf=False)
-        context = get_session_context(token)
+        token, context = get_verified_request_session(request, authorization, require_csrf=False)
         if token:
             revoke_session(token)
+            invalidate_session_context_cache(token=token, email=context.get("email", "") if context else "")
     except HTTPException:
         context = None
     clear_auth_cookies(response)
