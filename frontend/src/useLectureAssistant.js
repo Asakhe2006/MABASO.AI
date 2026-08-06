@@ -105,6 +105,37 @@ function compactText(value = "", fallback = "") {
   return text || fallback;
 }
 
+const CONTEXT_STOP_WORDS = new Set([
+  "about", "after", "again", "also", "because", "before", "could", "does", "from", "have", "into",
+  "more", "please", "should", "that", "their", "there", "these", "they", "this", "those", "what",
+  "when", "where", "which", "with", "would", "your",
+]);
+
+function selectRelevantContextExcerpt(value = "", question = "", maxChars = 6000) {
+  const source = compactText(value);
+  if (!source || source.length <= maxChars) return source;
+  const terms = new Set(
+    compactText(question).toLowerCase().match(/[a-z0-9][a-z0-9_-]{2,}/g)?.filter((term) => !CONTEXT_STOP_WORDS.has(term)) || [],
+  );
+  const blocks = source.split(/\n\s*\n|(?<=\.)\s+(?=[A-Z])/).map((block) => block.trim()).filter(Boolean);
+  const ranked = blocks.map((block, index) => {
+    const normalized = block.toLowerCase();
+    const score = [...terms].reduce((total, term) => total + (normalized.includes(term) ? 1 : 0), 0);
+    return { block, index, score };
+  });
+  const preferred = ranked.filter((item) => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index);
+  const candidates = preferred.length ? preferred : ranked;
+  const selected = [];
+  let length = 0;
+  for (const item of candidates) {
+    if (length + item.block.length > maxChars && selected.length) continue;
+    selected.push(item);
+    length += item.block.length + 2;
+    if (length >= maxChars) break;
+  }
+  return selected.sort((a, b) => a.index - b.index).map((item) => item.block).join("\n\n").slice(0, maxChars);
+}
+
 function createClientId(prefix = "assistant") {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -1122,6 +1153,7 @@ export function useLectureAssistant({
   const attachedImageInputRef = useRef(null);
   const copyResetTimerRef = useRef(0);
   const conversationLoadPromisesRef = useRef(new Map());
+  const relevantContextCacheRef = useRef(new Map());
   const speechRestartTimerRef = useRef(0);
   const voiceListeningTimerRef = useRef(0);
   const speechRecognitionErrorRef = useRef("");
@@ -1227,6 +1259,8 @@ export function useLectureAssistant({
       conversationId: compactText(metric.conversationId),
       interactionMode: compactText(metric.interactionMode, "text"),
       provider: compactText(metric.provider),
+      authenticationMs: Number(metric.authenticationMs) || 0,
+      contextRetrievalMs: Number(metric.contextRetrievalMs) || 0,
       speechToTextMs: Number(metric.speechToTextMs) || 0,
       aiFirstTokenMs: Number(metric.aiFirstTokenMs) || 0,
       aiGenerationMs: Number(metric.aiGenerationMs) || 0,
@@ -3834,15 +3868,32 @@ export function useLectureAssistant({
     const voiceSpeechStream = shouldStreamVoiceReply ? startVoiceSpeechStream() : null;
 
     try {
+      const contextCacheKey = `${normalizedContextKey}|${question.toLowerCase().replace(/\s+/g, " ").slice(0, 220)}`;
+      let relevantContext = relevantContextCacheRef.current.get(contextCacheKey);
+      if (!relevantContext) {
+        relevantContext = {
+          transcript: selectRelevantContextExcerpt(transcript, question, 7000),
+          summary: selectRelevantContextExcerpt(summary, question, 9000),
+          formulas: selectRelevantContextExcerpt(formulas, question, 4500),
+          workedExamples: selectRelevantContextExcerpt(workedExamples, question, 5500),
+          lectureNotes: selectRelevantContextExcerpt(lectureNotes, question, 6000),
+          lectureSlides: selectRelevantContextExcerpt(lectureSlides, question, 6000),
+          pastQuestionPapers: selectRelevantContextExcerpt(pastQuestionPapers, question, 4500),
+        };
+        relevantContextCacheRef.current.set(contextCacheKey, relevantContext);
+        if (relevantContextCacheRef.current.size > 24) {
+          relevantContextCacheRef.current.delete(relevantContextCacheRef.current.keys().next().value);
+        }
+      }
       const response = await requestStream({
         question,
-        transcript,
-        summary,
-        formulas,
-        worked_examples: workedExamples,
-        lecture_notes: lectureNotes,
-        lecture_slides: lectureSlides,
-        past_question_papers: pastQuestionPapers,
+        transcript: relevantContext.transcript,
+        summary: relevantContext.summary,
+        formulas: relevantContext.formulas,
+        worked_examples: relevantContext.workedExamples,
+        lecture_notes: relevantContext.lectureNotes,
+        lecture_slides: relevantContext.lectureSlides,
+        past_question_papers: relevantContext.pastQuestionPapers,
         messages: requestMessages.map((message) => ({
           role: message.role,
           content: message.content,
@@ -3901,7 +3952,10 @@ export function useLectureAssistant({
           if (!chunk) return;
           if (!traceMetrics.aiFirstTokenMs) {
             traceMetrics.aiFirstTokenMs = Math.round(nowMs() - requestStartedAt);
-            traceMetrics.frontendRenderMs = traceMetrics.aiFirstTokenMs;
+            const firstDeltaReceivedAt = nowMs();
+            window.requestAnimationFrame(() => {
+              traceMetrics.frontendRenderMs = Math.max(0, Math.round(nowMs() - firstDeltaReceivedAt));
+            });
           }
           streamedText += chunk;
           if (voiceSpeechStream) {
@@ -3922,6 +3976,8 @@ export function useLectureAssistant({
           setActiveProvider(compactText(data.provider));
           traceMetrics.provider = compactText(data.provider, traceMetrics.provider);
           traceMetrics.aiGenerationMs = Number(data.generation_ms) || Math.round(nowMs() - requestStartedAt);
+          traceMetrics.authenticationMs = Number(data.authentication_ms) || 0;
+          traceMetrics.contextRetrievalMs = Number(data.context_retrieval_ms) || 0;
           setIsSyncingConversation(false);
           if (voiceSpeechStream) {
             voiceSpeechStream.markDone();
@@ -3940,6 +3996,9 @@ export function useLectureAssistant({
           setStatusText(useVoiceInteraction
             ? `${data.label || formatProviderLabel(data.provider)} finished streaming. Voice reply may still be speaking...`
             : `${data.label || formatProviderLabel(data.provider)} finished the reply.`);
+          window.setTimeout(() => {
+            console.info("[MABASO chat timing]", { ...traceMetrics, traceId: clientRequestId });
+          }, 0);
           return;
         }
         if (event === "conversation_saved") {

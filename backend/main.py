@@ -82,7 +82,7 @@ except ImportError:
 
 try:
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.platypus import Image as ReportLabImage
@@ -323,6 +323,7 @@ STUDY_IMAGE_SIZE = (os.getenv("STUDY_IMAGE_SIZE", "1024x1024") or "1024x1024").s
 STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "high") or "high").strip()
 STUDY_IMAGE_GENERATION_TIMEOUT = float(os.getenv("STUDY_IMAGE_GENERATION_TIMEOUT", "120"))
 MAX_STUDY_IMAGE_INLINE_BYTES = int(os.getenv("MAX_STUDY_IMAGE_INLINE_BYTES", "3500000"))
+TARGET_STUDY_IMAGE_INLINE_BYTES = min(MAX_STUDY_IMAGE_INLINE_BYTES, int(os.getenv("TARGET_STUDY_IMAGE_INLINE_BYTES", "1600000")))
 FREE_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("FREE_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
@@ -801,10 +802,10 @@ Rules:
 - Do not simply paraphrase the transcript line by line. Reorganize the material into teachable notes.
 - In LECTURE TITLE, write one clean topic line only so the student can see the lecture topic immediately at the top.
 - If formulas appear, rewrite them in readable human style.
-- Never use LaTeX syntax or math delimiters such as \\, \\, $$, \\frac, \\int, \\mathcal, or \\begin.
-- Do not write exponents with caret notation like s^2, t^n, or e^(-at) in the final answer.
-- Write exponents and indices in textbook style using proper symbols where possible, for example s², tⁿ, e⁻ᵃᵗ, ∫₀∞.
-- Write formulas the way a lecturer would write them on a board using plain readable text.
+- Use valid LaTeX with $...$ for inline mathematics and $$...$$ for displayed equations.
+- Use standard LaTeX commands for fractions, roots, integrals, sums, limits, matrices, vectors, piecewise functions, Greek letters, subscripts, and superscripts.
+- Write exponents and indices in textbook LaTeX, for example $s^2$, $t^n$, $e^{-at}$, and $\int_0^\infty$.
+- Write formulas the way a lecturer would write them on a board, then explain each symbol in plain language.
 - In IMPORTANT FORMULAS, prefer a study-sheet layout using short lines in this style:
   t -> 1 / s²
   tⁿ -> n! / s⁽ⁿ ⁺ ¹⁾
@@ -1002,23 +1003,16 @@ FORMATTING AND DEPTH RULES
 
 FORMULA RULES
 - If formulas appear, rewrite them in readable human style.
-- Never use LaTeX syntax or math delimiters such as \\, $$, \\frac, \\int, \\mathcal, or \\begin.
-- Do not use caret notation like s^2 or t^n in the final answer.
-- Write formulas the way a lecturer would write them on a board using plain readable text.
-- Prefer short readable mappings when listing standard transform pairs, rules, or conversions.
-- Put a blank line before and after each formula block.
+- Use valid LaTeX for every mathematical expression: $...$ inline and $$...$$ for important or multi-line equations.
+- Use \\frac, \\sqrt, \\int, \\sum, \\lim, \\vec, \\begin{bmatrix}, \\begin{cases}, subscripts, superscripts, and Greek commands where appropriate.
+- Put a blank line before and after each display equation and use \\begin{aligned}...\\end{aligned} for derivations.
+- Never place LaTeX inside code fences. Never mix decorative Unicode mathematics with LaTeX in the same formula.
+- For mathematical major topics, prefer this learning sequence: Definition -> Formula -> Derivation -> Worked Example -> Diagram -> Interpretation -> Exam Tip -> Common Mistake.
+- Explain every important formula in words, define variables and units, and verify worked answers before continuing.
 
 VISUAL LEARNING RULES
-- After difficult concepts, add [Suggested Visual: ...] only when it genuinely improves understanding.
-- Good examples:
-  - [Suggested Visual: Flowchart of cellular respiration]
-  - [Suggested Visual: Diagram comparing Functionalism vs Conflict Theory]
-- Only suggest visuals that improve understanding.
-- Make each suggested visual explicit enough for the app to render it. Include the main stages, compared sides, plotted signals, axes, labels, figure title, caption idea, and exam detail inside the suggestion itself.
-- Prefer render-friendly phrasing such as:
-  - [Suggested Visual: Flowchart - Input -> Transform -> Output]
-  - [Suggested Visual: Stacked comparison cards - Continuous vs Discrete | formula, operation, output]
-  - [Suggested Visual: Plot - x(t), h(t), y(t)]
+- Never print placeholder instructions such as [Suggested Visual: ...], image prompts, or layout notes in the Study Guide.
+- The separate visual-generation pipeline places finished figures beside the relevant explanation.
 - Prefer educational visuals over generic photos: flowcharts, timelines, labelled diagrams, architecture diagrams, process graphics, cause-effect diagrams, concept maps, and worked-example infographics.
 - If the lecture covers concrete physical things such as organs, instruments, valves, structures, machines, or components, mention the visual subtypes students should recognize.
 - Only include charts, graphs, axes, or trend sketches when the lecture discusses data or variable relationships. Do not invent fake numerical data.
@@ -5322,11 +5316,13 @@ def get_authorization_token(authorization: str | None) -> str:
 
 
 def require_authenticated_user(request: Request, authorization: str | None = Header(None)) -> str:
+    auth_started_at = time.perf_counter()
     token = get_request_session_token(request, authorization)
     context = get_session_context(token)
     if not context:
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
     expire_subscription_if_needed(context["email"])
+    request.state.authentication_ms = int((time.perf_counter() - auth_started_at) * 1000)
     return context["email"]
 
 
@@ -5730,6 +5726,131 @@ def build_study_image_caption_lines(image: dict[str, Any], fallback_number: int 
     return lines
 
 
+_EXPORT_MATH_IMAGE_CACHE: dict[str, bytes] = {}
+_EXPORT_MATH_IMAGE_CACHE_LOCK = threading.Lock()
+_EXPORT_MATH_IMAGE_CACHE_LIMIT = 160
+
+
+def normalize_export_latex(value: str) -> str:
+    """Repair common model-produced notation without touching surrounding Markdown."""
+    cleaned = compact_text(value).strip().strip("$").strip()
+    if not cleaned:
+        return ""
+    command_names = (
+        "frac|dfrac|tfrac|sqrt|sum|prod|int|iint|iiint|oint|lim|vec|hat|bar|"
+        "overline|underline|mathbf|mathrm|mathbb|mathcal|partial|nabla|infty|"
+        "alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|psi|omega"
+    )
+    cleaned = re.sub(
+        rf"(^|[^\\\w])({command_names})(?=\s*[{{_^]|\b)",
+        lambda match: f"{match.group(1)}\\{match.group(2)}",
+        cleaned,
+    )
+    replacements = {
+        "−": "-",
+        "×": r"\times ",
+        "÷": r"\div ",
+        "≤": r"\le ",
+        "≥": r"\ge ",
+        "≠": r"\ne ",
+        "≈": r"\approx ",
+        "→": r"\to ",
+        "∞": r"\infty ",
+    }
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+    return cleaned.strip()
+
+
+def latex_to_readable_export_text(value: str) -> str:
+    """Produce a legible fallback for malformed or unsupported export equations."""
+    text = normalize_export_latex(value)
+    text = re.sub(r"\\begin\{(?:aligned|align\*?|gathered)\}", "", text)
+    text = re.sub(r"\\end\{(?:aligned|align\*?|gathered)\}", "", text)
+    text = re.sub(r"\\begin\{bmatrix\}", "[ ", text)
+    text = re.sub(r"\\end\{bmatrix\}", " ]", text)
+    text = re.sub(r"\\begin\{(?:pmatrix|matrix)\}", "( ", text)
+    text = re.sub(r"\\end\{(?:pmatrix|matrix)\}", " )", text)
+    text = re.sub(r"\\begin\{cases\}", "{ ", text)
+    text = re.sub(r"\\end\{cases\}", "", text)
+    text = text.replace(r"\\", " ; ").replace("&", "  ")
+    for pattern, replacement in (
+        (r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"(\1)/(\2)"),
+        (r"\\sqrt\{([^{}]+)\}", r"sqrt(\1)"),
+        (r"\\vec\{([^{}]+)\}", r"vector(\1)"),
+        (r"\\bar\{([^{}]+)\}", r"mean(\1)"),
+    ):
+        text = re.sub(pattern, replacement, text)
+    command_replacements = {
+        r"\times": "x", r"\div": "/", r"\le": "<=", r"\ge": ">=", r"\ne": "!=",
+        r"\approx": "approximately", r"\to": "->", r"\infty": "infinity", r"\partial": "partial",
+        r"\nabla": "nabla", r"\sum": "sum", r"\prod": "product", r"\int": "integral",
+        r"\lim": "limit", r"\alpha": "alpha", r"\beta": "beta", r"\gamma": "gamma",
+        r"\delta": "delta", r"\theta": "theta", r"\lambda": "lambda", r"\mu": "mu",
+        r"\pi": "pi", r"\rho": "rho", r"\sigma": "sigma", r"\phi": "phi",
+        r"\psi": "psi", r"\omega": "omega",
+    }
+    for old, new in command_replacements.items():
+        text = text.replace(old, new)
+    text = re.sub(r"\\(?:left|right|,|;|!|quad|qquad)\b?", " ", text)
+    text = re.sub(r"\\[A-Za-z]+", "", text)
+    text = text.replace("{", "(").replace("}", ")")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def render_export_equation_png(value: str) -> bytes | None:
+    """Render display math only during export; chat requests never import matplotlib."""
+    expression = normalize_export_latex(value)
+    if not expression:
+        return None
+    cache_key = hashlib.sha256(expression.encode("utf-8")).hexdigest()
+    with _EXPORT_MATH_IMAGE_CACHE_LOCK:
+        cached = _EXPORT_MATH_IMAGE_CACHE.get(cache_key)
+    if cached:
+        return cached
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        figure = Figure(figsize=(9.2, 0.9), dpi=220, facecolor="white")
+        FigureCanvasAgg(figure)
+        canvas = figure.add_subplot(111)
+        canvas.axis("off")
+        try:
+            canvas.text(0.5, 0.5, f"${expression}$", ha="center", va="center", fontsize=15, color="#111827")
+            output = BytesIO()
+            figure.savefig(output, format="png", dpi=220, bbox_inches="tight", pad_inches=0.16, facecolor="white")
+        except Exception:
+            figure.clear()
+            canvas = figure.add_subplot(111)
+            canvas.axis("off")
+            readable = latex_to_readable_export_text(expression) or "Equation could not be rendered"
+            canvas.text(0.5, 0.5, readable, ha="center", va="center", fontsize=12, color="#111827", wrap=True)
+            output = BytesIO()
+            figure.savefig(output, format="png", dpi=220, bbox_inches="tight", pad_inches=0.16, facecolor="white")
+        rendered = output.getvalue()
+    except Exception as exc:
+        logger.warning("Could not render export equation: %s", exc)
+        return None
+    with _EXPORT_MATH_IMAGE_CACHE_LOCK:
+        if len(_EXPORT_MATH_IMAGE_CACHE) >= _EXPORT_MATH_IMAGE_CACHE_LIMIT:
+            _EXPORT_MATH_IMAGE_CACHE.pop(next(iter(_EXPORT_MATH_IMAGE_CACHE)), None)
+        _EXPORT_MATH_IMAGE_CACHE[cache_key] = rendered
+    return rendered
+
+
+def replace_inline_latex_for_export(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"\\\((.+?)\\\)", lambda match: latex_to_readable_export_text(match.group(1)), text)
+    return re.sub(
+        r"(?<!\$)\$([^$\n]+?)\$(?!\$)",
+        lambda match: latex_to_readable_export_text(match.group(1)),
+        text,
+    )
+
+
 def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     if A4 is None:
         raise HTTPException(
@@ -5861,7 +5982,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
     })
 
     def normalize_pdf_export_text(value: str) -> str:
-        cleaned = compact_text(value)
+        cleaned = compact_text(replace_inline_latex_for_export(value))
         if not cleaned:
             return ""
         cleaned = cleaned.translate(superscript_translation)
@@ -5981,6 +6102,17 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         textColor=colors.HexColor("#475569"),
         spaceAfter=10,
     )
+    equation_fallback_style = ParagraphStyle(
+        "MabasoEquationFallback",
+        parent=body_style,
+        fontName="Helvetica",
+        fontSize=10.5,
+        leading=15,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#111827"),
+        spaceBefore=8,
+        spaceAfter=10,
+    )
 
     buffer = BytesIO()
     document = SimpleDocTemplate(
@@ -6054,6 +6186,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 scale = min(max_width / max(1, pdf_image.drawWidth), max_height / max(1, pdf_image.drawHeight), 1)
                 pdf_image.drawWidth *= scale
                 pdf_image.drawHeight *= scale
+                pdf_image.hAlign = "CENTER"
                 story.append(pdf_image)
                 for caption_line in build_study_image_caption_lines(image, image_index):
                     story.append(Paragraph(build_pdf_markup(caption_line), caption_style))
@@ -6062,6 +6195,31 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                     placed_keys.add(image_key)
             except Exception as exc:
                 logger.warning("Could not embed study image in PDF: %s", exc)
+
+    def append_pdf_equation(expression: str) -> None:
+        rendered = render_export_equation_png(expression)
+        if rendered:
+            try:
+                equation_image = ReportLabImage(BytesIO(rendered))
+                max_width = document.width * 0.94
+                max_height = 150
+                scale = min(
+                    max_width / max(1, equation_image.drawWidth),
+                    max_height / max(1, equation_image.drawHeight),
+                    1,
+                )
+                equation_image.drawWidth *= scale
+                equation_image.drawHeight *= scale
+                equation_image.hAlign = "CENTER"
+                story.append(Spacer(1, 7))
+                story.append(equation_image)
+                story.append(Spacer(1, 9))
+                return
+            except Exception as exc:
+                logger.warning("Could not embed rendered equation in PDF: %s", exc)
+        fallback = latex_to_readable_export_text(expression)
+        if fallback:
+            story.append(Paragraph(html.escape(fallback, quote=False), equation_fallback_style))
 
     def flush_paragraph_lines(paragraph_lines: list[str]) -> None:
         text = "\n".join(paragraph_lines).strip()
@@ -6101,6 +6259,33 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 flush_paragraph_lines(paragraph_lines)
                 paragraph_lines = []
                 index += 1
+                continue
+
+            display_delimiter = "$$" if stripped.startswith("$$") else r"\[" if stripped.startswith(r"\[") else ""
+            if display_delimiter:
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                closing_delimiter = "$$" if display_delimiter == "$$" else r"\]"
+                equation_lines: list[str] = []
+                remainder = stripped[len(display_delimiter):]
+                if closing_delimiter in remainder:
+                    equation_lines.append(remainder.split(closing_delimiter, 1)[0])
+                    index += 1
+                else:
+                    if remainder:
+                        equation_lines.append(remainder)
+                    index += 1
+                    while index < len(lines):
+                        equation_line = lines[index].strip()
+                        if closing_delimiter in equation_line:
+                            before_close = equation_line.split(closing_delimiter, 1)[0]
+                            if before_close:
+                                equation_lines.append(before_close)
+                            index += 1
+                            break
+                        equation_lines.append(equation_line)
+                        index += 1
+                append_pdf_equation("\n".join(equation_lines))
                 continue
 
             if stripped.startswith("|") and next_line.strip().startswith("|") and is_markdown_table_separator(next_line):
@@ -6242,7 +6427,7 @@ def build_docx_document(title: str, content: str) -> bytes:
 
 def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> bytes:
     def clean_docx_text(text: str) -> str:
-        cleaned = compact_text(text)
+        cleaned = compact_text(replace_inline_latex_for_export(text))
         cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
         cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
         cleaned = re.sub(r"\*(.*?)\*", r"\1", cleaned)
@@ -6398,6 +6583,45 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             if placed_keys is not None and key:
                 placed_keys.add(key)
 
+    def append_docx_equation(expression: str) -> None:
+        nonlocal image_counter
+        rendered = render_export_equation_png(expression)
+        if not rendered:
+            fallback = latex_to_readable_export_text(expression)
+            if fallback:
+                document_parts.append(paragraph_xml(fallback, style="body"))
+            return
+        image_counter += 1
+        relationship_id = f"rIdImage{image_counter}"
+        media_name = f"equation{image_counter}.png"
+        image_width = int.from_bytes(rendered[16:20], "big") if len(rendered) >= 24 and rendered[:8] == b"\x89PNG\r\n\x1a\n" else 900
+        image_height = int.from_bytes(rendered[20:24], "big") if len(rendered) >= 24 and rendered[:8] == b"\x89PNG\r\n\x1a\n" else 150
+        extent_cx = 5_200_000
+        extent_cy = max(300_000, int(extent_cx * image_height / max(1, image_width)))
+        if extent_cy > 2_600_000:
+            extent_cx = max(1_200_000, int(extent_cx * 2_600_000 / extent_cy))
+            extent_cy = 2_600_000
+        media_parts.append((media_name, rendered))
+        image_relationships.append(
+            f"<Relationship Id=\"{relationship_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{media_name}\"/>"
+        )
+        doc_pr_id = image_counter
+        document_parts.append(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/><w:spacing w:before=\"120\" w:after=\"160\"/></w:pPr><w:r><w:drawing>"
+            "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
+            f"<wp:extent cx=\"{extent_cx}\" cy=\"{extent_cy}\"/>"
+            f"<wp:docPr id=\"{doc_pr_id}\" name=\"Equation {doc_pr_id}\"/>"
+            "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+            "<pic:pic><pic:nvPicPr>"
+            f"<pic:cNvPr id=\"{doc_pr_id}\" name=\"{html.escape(media_name, quote=True)}\"/>"
+            "<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>"
+            f"<a:blip r:embed=\"{relationship_id}\"/>"
+            "<a:stretch><a:fillRect/></a:stretch></pic:blipFill>"
+            f"<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{extent_cx}\" cy=\"{extent_cy}\"/></a:xfrm>"
+            "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
+            "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        )
+
     def append_docx_content(content: str, images: list[dict[str, Any]], placed_keys: set[str]) -> None:
         lines = (content or "").replace("\r\n", "\n").splitlines()
         paragraph_lines: list[str] = []
@@ -6423,6 +6647,31 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             if not stripped:
                 flush_paragraph()
                 index += 1
+                continue
+            display_delimiter = "$$" if stripped.startswith("$$") else r"\[" if stripped.startswith(r"\[") else ""
+            if display_delimiter:
+                flush_paragraph()
+                closing_delimiter = "$$" if display_delimiter == "$$" else r"\]"
+                equation_lines: list[str] = []
+                remainder = stripped[len(display_delimiter):]
+                if closing_delimiter in remainder:
+                    equation_lines.append(remainder.split(closing_delimiter, 1)[0])
+                    index += 1
+                else:
+                    if remainder:
+                        equation_lines.append(remainder)
+                    index += 1
+                    while index < len(lines):
+                        equation_line = lines[index].strip()
+                        if closing_delimiter in equation_line:
+                            before_close = equation_line.split(closing_delimiter, 1)[0]
+                            if before_close:
+                                equation_lines.append(before_close)
+                            index += 1
+                            break
+                        equation_lines.append(equation_line)
+                        index += 1
+                append_docx_equation("\n".join(equation_lines))
                 continue
             if stripped.startswith("|") and next_line.strip().startswith("|") and is_docx_table_separator(next_line):
                 flush_paragraph()
@@ -10512,6 +10761,12 @@ def build_lecture_assistant_system_prompt(payload: LectureAssistantRequest) -> s
         "Understand quickly and respond with the most helpful answer first.",
         "Do not repeat the user's question back to them.",
         f"Reply in {output_language}.",
+        "Sound warm, natural, emotionally aware, accurate, and professional without pretending to have human feelings or experiences.",
+        "Use a brief reaction such as 'Ah, I see', 'Exactly', or 'Thank you for explaining' only when it genuinely fits; never repeat praise, greetings, apologies, or filler mechanically.",
+        "Infer confusion, frustration, nervousness, or excitement from the learner's wording and adjust clarity and tone without exaggerating.",
+        "If you misunderstood or made a mistake, acknowledge it directly, apologize naturally, correct the answer, and do not become defensive.",
+        "Preserve the learner's language and conversational tone, understand informal spelling, and ask for clarification only when the intended question cannot be inferred safely.",
+        "Keep easy answers brief. For difficult academic or technical questions, use structured teaching, useful examples, and complete reasoning.",
     ]
     if voice_mode:
         rules.extend(
@@ -20234,6 +20489,39 @@ async def build_ai_study_image_specs(
     return specs or build_fallback_ai_study_image_specs(summary, limit)
 
 
+def build_durable_study_image_data_url(image_bytes: bytes, content_type: str = "image/png") -> str:
+    if not image_bytes:
+        return ""
+    try:
+        from PIL import Image as PillowImage
+
+        with PillowImage.open(BytesIO(image_bytes)) as source:
+            source.load()
+            source.thumbnail((1800, 1350), PillowImage.Resampling.LANCZOS)
+            has_alpha = source.mode in {"RGBA", "LA"} or "transparency" in source.info
+            output = BytesIO()
+            if has_alpha:
+                source.convert("RGBA").save(output, format="WEBP", quality=88, method=6)
+                mime_type = "image/webp"
+            else:
+                source.convert("RGB").save(output, format="WEBP", quality=88, method=6)
+                mime_type = "image/webp"
+            optimized = output.getvalue()
+            if len(optimized) <= MAX_STUDY_IMAGE_INLINE_BYTES:
+                if len(optimized) > TARGET_STUDY_IMAGE_INLINE_BYTES:
+                    output = BytesIO()
+                    source.convert("RGBA" if has_alpha else "RGB").save(output, format="WEBP", quality=78, method=6)
+                    optimized = output.getvalue()
+                if len(optimized) <= MAX_STUDY_IMAGE_INLINE_BYTES:
+                    return build_data_url(optimized, mime_type, "study-visual.webp")
+    except Exception as exc:
+        logger.warning("Could not optimize study image for durable storage: %s", exc)
+
+    if len(image_bytes) <= MAX_STUDY_IMAGE_INLINE_BYTES:
+        return build_data_url(image_bytes, content_type, "study-visual")
+    return ""
+
+
 def download_remote_study_image_as_data_url(image_url: str) -> str:
     cleaned_url = compact_text(image_url)
     if not cleaned_url or cleaned_url.startswith("data:"):
@@ -20258,13 +20546,16 @@ def download_remote_study_image_as_data_url(image_url: str) -> str:
             if not chunk:
                 continue
             total_bytes += len(chunk)
-            if total_bytes > MAX_STUDY_IMAGE_INLINE_BYTES:
-                logger.info("Study image URL too large to inline: %s bytes from %s", total_bytes, parsed_url.netloc)
+            if total_bytes > MAX_STUDY_IMAGE_INLINE_BYTES * 4:
+                logger.info("Study image URL too large to process: %s bytes from %s", total_bytes, parsed_url.netloc)
                 return ""
             chunks.append(chunk)
         if not chunks:
             return ""
-        return build_data_url(b"".join(chunks), "image/jpeg" if content_type == "image/jpg" else content_type, "study-visual")
+        return build_durable_study_image_data_url(
+            b"".join(chunks),
+            "image/jpeg" if content_type == "image/jpg" else content_type,
+        )
     except Exception as exc:
         logger.warning("Could not make study image URL durable: %s", exc)
         return ""
@@ -20301,9 +20592,13 @@ def generate_openai_study_image_url(prompt: str) -> str:
         return ""
     b64_json = getattr(image, "b64_json", "") or (image.get("b64_json", "") if isinstance(image, dict) else "")
     if b64_json:
-        return f"data:image/png;base64,{b64_json}"
+        try:
+            return build_durable_study_image_data_url(base64.b64decode(b64_json), "image/png")
+        except (ValueError, TypeError) as exc:
+            logger.warning("Could not decode generated study image: %s", exc)
+            return ""
     remote_url = getattr(image, "url", "") or (image.get("url", "") if isinstance(image, dict) else "")
-    return download_remote_study_image_as_data_url(remote_url) or remote_url
+    return download_remote_study_image_as_data_url(remote_url)
 
 
 async def generate_ai_study_images(
@@ -23984,7 +24279,7 @@ async def generate_presentation_package(
 "- Avoid repeating the same information across multiple slides.\n"
 "- Each slide should naturally build on the previous one so the presentation flows like a university lecture.\n"
 "- Worked examples should progressively solve the problem instead of showing only the final answer.\n"
-"- Keep formulas readable using proper mathematical symbols instead of LaTeX whenever possible.\n"
+"- Keep formulas readable using proper mathematical symbols instead of raw LaTeX whenever possible.\n"
 "- Preserve all scientific symbols, Greek letters, subscripts, superscripts, and mathematical notation correctly.\n"
 "- Every slide should feel modern, polished, and suitable for a premium educational presentation.\n"
 "- Ensure the final presentation looks consistent in typography, terminology, visual style, and educational quality across every slide.\n"
@@ -24651,7 +24946,7 @@ async def generate_study_guide(
 "- Use comparison tables whenever concepts, diseases, algorithms, technologies, methods, structures, or systems are compared.\n"
 "- Use numbered steps for procedures, experiments, calculations, algorithms, and workflows.\n"
 "- Present formulas together with variable definitions, units where appropriate, interpretation, and worked examples.\n"
-"- Use Unicode mathematical symbols instead of LaTeX whenever possible.\n"
+"- Use valid LaTeX for formulas so web, PDF, and DOCX rendering remain consistent.\n"
 "- Generate realistic labelled diagrams, process flows, hierarchy diagrams, timelines, architecture diagrams, or concept visuals whenever they improve understanding.\n"
 "- Do not insert decorative visuals; every visual must directly teach the surrounding concept.\n"
 "- Place figures immediately after the paragraph that introduces them.\n"
@@ -28491,10 +28786,38 @@ def chat_history_storage_mode() -> str:
     return "postgres" if isinstance(chat_history_store, DatabaseChatHistoryStore) else "supabase"
 
 
+CHAT_CONTEXT_CACHE_TTL_SECONDS = max(5, int(os.getenv("CHAT_CONTEXT_CACHE_TTL_SECONDS", "30")))
+CHAT_ACCOUNT_MEMORY_CACHE_TTL_SECONDS = max(15, int(os.getenv("CHAT_ACCOUNT_MEMORY_CACHE_TTL_SECONDS", "60")))
+_chat_context_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_chat_account_memory_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_chat_context_cache_lock = threading.Lock()
+
+
+def invalidate_lecture_assistant_cache(email: str, conversation_id: str = "") -> None:
+    normalized_email = normalize_email(email)
+    normalized_id = compact_text(conversation_id)
+    with _chat_context_cache_lock:
+        if normalized_id:
+            _chat_context_cache.pop((normalized_email, normalized_id), None)
+        else:
+            for key in [key for key in _chat_context_cache if key[0] == normalized_email]:
+                _chat_context_cache.pop(key, None)
+        _chat_account_memory_cache.pop(normalized_email, None)
+
+
 def load_persisted_lecture_assistant_context(current_user: str, payload: LectureAssistantRequest) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
     conversation_id = compact_text(payload.conversation_id)
     if not chat_history_store.available or not conversation_id:
         return None, [], ""
+    cache_key = (normalize_email(current_user), conversation_id)
+    now = time.monotonic()
+    with _chat_context_cache_lock:
+        cached = _chat_context_cache.get(cache_key)
+        if cached and cached[0] > now:
+            bundle = cached[1]
+            conversation = bundle.get("conversation") or None
+            recent_messages = list(bundle.get("recent_messages") or [])
+            return conversation, recent_messages, compact_text((conversation or {}).get("memory_summary"))
     try:
         bundle = chat_history_store.load_context_bundle(
             email=current_user,
@@ -28507,6 +28830,11 @@ def load_persisted_lecture_assistant_context(current_user: str, payload: Lecture
     conversation = bundle.get("conversation") or None
     recent_messages = bundle.get("recent_messages") or []
     memory_summary = compact_text((conversation or {}).get("memory_summary"))
+    with _chat_context_cache_lock:
+        _chat_context_cache[cache_key] = (now + CHAT_CONTEXT_CACHE_TTL_SECONDS, {
+            "conversation": conversation,
+            "recent_messages": list(recent_messages),
+        })
     return conversation, recent_messages, memory_summary
 
 
@@ -28533,16 +28861,24 @@ def load_relevant_account_conversation_memory(
     }
     if not question_terms:
         return ""
-    try:
-        result = chat_history_store.list_conversations(
-            email=current_user,
-            include_archived=False,
-            limit=60,
-            offset=0,
-        )
-    except Exception:
-        logger.exception("Failed to load account-scoped conversation memory")
-        return ""
+    normalized_email = normalize_email(current_user)
+    now = time.monotonic()
+    with _chat_context_cache_lock:
+        cached_account_memory = _chat_account_memory_cache.get(normalized_email)
+        result = cached_account_memory[1] if cached_account_memory and cached_account_memory[0] > now else None
+    if result is None:
+        try:
+            result = chat_history_store.list_conversations(
+                email=current_user,
+                include_archived=False,
+                limit=60,
+                offset=0,
+            )
+            with _chat_context_cache_lock:
+                _chat_account_memory_cache[normalized_email] = (now + CHAT_ACCOUNT_MEMORY_CACHE_TTL_SECONDS, result)
+        except Exception:
+            logger.exception("Failed to load account-scoped conversation memory")
+            return ""
 
     current_conversation_id = compact_text(payload.conversation_id)
     ranked: list[tuple[int, dict[str, Any]]] = []
@@ -28718,6 +29054,7 @@ def persist_lecture_assistant_turn(
                 "metadata_json": conversation_metadata,
             },
         )
+        invalidate_lecture_assistant_cache(current_user, conversation_id)
         return updated or conversation
     except SupabaseChatHistoryError:
         logger.exception("Failed to persist lecture assistant conversation history")
@@ -28755,6 +29092,8 @@ def create_lecture_assistant_stream(
     )
 
     started_at = utc_now()
+    authentication_ms = int(getattr(request.state, "authentication_ms", 0) or 0)
+    context_started_at = time.perf_counter()
     persisted_conversation, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
         current_user,
         payload,
@@ -28778,6 +29117,7 @@ def create_lecture_assistant_stream(
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
+    context_retrieval_ms = int((time.perf_counter() - context_started_at) * 1000)
 
     def event_stream():
         selected_attempt: dict[str, str] | None = None
@@ -28821,6 +29161,8 @@ def create_lecture_assistant_stream(
                     "conversation_id": compact_text(payload.conversation_id),
                     "session_id": compact_text(payload.session_id),
                     "provider_order": [attempt["provider"] for attempt in attempts],
+                    "authentication_ms": authentication_ms,
+                    "context_retrieval_ms": context_retrieval_ms,
                 },
             )
 
@@ -28892,6 +29234,9 @@ def create_lecture_assistant_stream(
                             "trace_id": compact_text(payload.client_request_id),
                             "first_token_ms": int(((first_token_at or utc_now()) - generation_started_at).total_seconds() * 1000),
                             "generation_ms": generation_ms,
+                            "authentication_ms": authentication_ms,
+                            "context_retrieval_ms": context_retrieval_ms,
+                            "streaming_ms": generation_ms,
                         },
                     )
                     threading.Thread(
@@ -29014,6 +29359,10 @@ def create_lecture_assistant_stream(
                     "session_id": compact_text(payload.session_id),
                     "client_request_id": compact_text(payload.client_request_id),
                     "errored": bool(terminal_error and not selected_attempt),
+                    "authentication_ms": authentication_ms,
+                    "context_retrieval_ms": context_retrieval_ms,
+                    "first_token_ms": int(((first_token_at or utc_now()) - generation_started_at).total_seconds() * 1000),
+                    "streaming_ms": int((utc_now() - generation_started_at).total_seconds() * 1000),
                 },
             )
 

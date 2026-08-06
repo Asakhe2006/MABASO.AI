@@ -927,9 +927,9 @@ function LectureAssistantPanelContent({ assistant }) {
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
                       ) : null}
 
-                      <div className={`max-w-[90%] rounded-[26px] border px-4 py-3 ${message.role === "assistant"
-                        ? themed(theme, "border-emerald-300/18 bg-emerald-300/10 text-slate-100", "border-emerald-100 bg-white text-slate-800")
-                        : themed(theme, "border-white/10 bg-white/[0.08] text-white", "border-slate-200 bg-slate-900 text-white")}`}
+                      <div className={`max-w-[90%] ${message.role === "assistant"
+                        ? themed(theme, "px-0 py-2 text-slate-100", "px-0 py-2 text-slate-800")
+                        : themed(theme, "rounded-[20px] border border-emerald-100/10 bg-emerald-950/55 px-4 py-3 text-white", "rounded-[20px] border border-slate-200 bg-slate-900 px-4 py-3 text-white")}`}
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <p className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${message.role === "assistant"

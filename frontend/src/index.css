@@ -3721,14 +3721,6 @@ iframe {
     content: "X ";
   }
 
-  .timetable-compact-surface.is-rotated.is-focus-mode .timetable-focus-body,
-  .timetable-compact-surface.is-rotated.is-focus-mode .lecture-timetable-scroll {
-    width: 100dvh;
-    max-width: none;
-    transform: rotate(90deg) translateY(-100%);
-    transform-origin: left top;
-  }
-
   .study-timetable-scroll,
   .lecture-timetable-scroll {
     border: 0 !important;
@@ -5464,15 +5456,6 @@ iframe {
   box-shadow: none !important;
 }
 
-.page-materials article > .force-mobile-stack > .force-mobile-stack > button:first-child {
-  font-size: 0 !important;
-}
-
-.page-materials article > .force-mobile-stack > .force-mobile-stack > button:first-child::after {
-  content: "Open now";
-  font-size: 0.78rem;
-}
-
 @media (max-width: 1050px) {
   .public-landing-hero {
     grid-template-columns: 1fr minmax(280px, 0.75fr);
@@ -6447,5 +6430,630 @@ iframe {
   .page-workspace .study-guide-figure-grid {
     width: 100% !important;
     overflow: visible !important;
+  }
+}
+
+/* Shared publication-quality mathematics for chat, history, and Study Guides. */
+.math-markdown {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Workspace actions remain compact; secondary actions live in the More menu. */
+.workspace-more-anchor {
+  position: relative;
+  z-index: 80;
+}
+
+.workspace-more-menu {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  z-index: 120;
+  width: 180px;
+  padding: 0.35rem;
+  border: 1px solid rgba(110, 231, 183, 0.2);
+  border-radius: 10px;
+  background: #031a11;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
+}
+
+.workspace-more-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #ecfdf5;
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.workspace-more-menu button:hover,
+.workspace-more-menu button:focus-visible {
+  background: rgba(52, 211, 153, 0.12);
+  outline: none;
+}
+
+.timetable-icon-button {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #ecfdf5;
+}
+
+.timetable-icon-button:hover,
+.timetable-icon-button:focus-visible {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.12);
+  outline: none;
+}
+
+.timetable-bottom-tool {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.timetable-bottom-tool:last-child {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.timetable-bottom-tool summary {
+  display: flex;
+  min-height: 48px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #ecfdf5;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.timetable-bottom-tool[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.timetable-bottom-tool-content {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0 0 0.85rem;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.timetable-tool-command {
+  display: inline-flex;
+  width: fit-content;
+  min-height: 38px;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: 8px;
+  background: rgba(52, 211, 153, 0.1);
+  color: #ecfdf5;
+  font-weight: 700;
+}
+
+/* Shared public information document shell. */
+.enterprise-document-header {
+  max-width: 860px;
+  margin-inline: auto;
+  padding-top: 1.25rem !important;
+  padding-bottom: 2rem !important;
+}
+
+.enterprise-document-breadcrumb {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border: 0;
+  background: transparent;
+  color: #a7f3d0;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.enterprise-document-header .enterprise-page-copy h1 {
+  max-width: 780px;
+  font-size: clamp(2rem, 4vw, 3rem) !important;
+  line-height: 1.12 !important;
+}
+
+.enterprise-document-updated {
+  margin-top: 1rem !important;
+  color: #91a69b !important;
+  font-size: 0.75rem !important;
+}
+
+.enterprise-document-metadata {
+  color: #aabdb3;
+  font-size: 0.76rem;
+}
+
+.enterprise-document-metadata strong {
+  color: #ecfdf5;
+  font-weight: 700;
+}
+
+.enterprise-document-toc {
+  position: sticky;
+  top: 4.7rem;
+  z-index: 55;
+  max-width: 860px;
+  margin: 0 auto 0.5rem;
+  border-bottom: 1px solid rgba(134, 239, 172, 0.14);
+  background: rgba(0, 19, 11, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.enterprise-document-toc summary {
+  display: flex;
+  min-height: 42px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  justify-content: space-between;
+  color: #d1fae5;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.enterprise-document-toc details[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.enterprise-document-toc details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+  padding: 0.1rem 0 0.65rem;
+}
+
+.enterprise-document-toc a {
+  min-height: 30px;
+  padding: 0.3rem 0;
+  color: #91a69b;
+  font-size: 0.73rem;
+  text-decoration: none;
+}
+
+.enterprise-document-toc a.is-active,
+.enterprise-document-toc a:hover,
+.enterprise-document-toc a:focus-visible {
+  color: #63f39b;
+  outline: none;
+}
+
+.enterprise-site-shell .relative.mt-8 > div {
+  max-width: 860px;
+  margin-inline: auto;
+}
+
+.enterprise-information-list {
+  display: block !important;
+}
+
+.enterprise-information-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 0.85rem;
+  padding: 1.1rem 0 !important;
+  border-bottom: 1px solid rgba(134, 239, 172, 0.1) !important;
+}
+
+.enterprise-information-item:last-child {
+  border-bottom: 0 !important;
+}
+
+.enterprise-information-icon {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  color: #63f39b;
+}
+
+.enterprise-information-item h2,
+.enterprise-information-item > p,
+.enterprise-information-item > div:not(.enterprise-information-icon) {
+  grid-column: 2;
+}
+
+.enterprise-information-item h2 {
+  margin-top: 0 !important;
+  font-size: 1rem !important;
+}
+
+.enterprise-information-item p {
+  margin-top: 0.35rem !important;
+  font-size: 0.82rem !important;
+}
+
+.enterprise-document-section {
+  margin-top: 0 !important;
+  padding: 2rem 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgba(134, 239, 172, 0.1) !important;
+  background: transparent !important;
+}
+
+.enterprise-workflow-step {
+  padding: 0.55rem 0 !important;
+}
+
+.enterprise-inline-list-item {
+  padding: 0.35rem 0;
+  color: #d6e6dc;
+  font-size: 0.8rem;
+}
+
+.enterprise-faq-row {
+  border-bottom: 1px solid rgba(134, 239, 172, 0.12);
+}
+
+.enterprise-faq-row > div {
+  border-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+.enterprise-legal-copy,
+.enterprise-legal-copy h1,
+.enterprise-legal-copy h2,
+.enterprise-legal-copy h3,
+.enterprise-legal-copy p,
+.enterprise-legal-copy li,
+.enterprise-legal-copy strong {
+  color: #dbe7e0 !important;
+}
+
+.enterprise-legal-copy h1,
+.enterprise-legal-copy h2,
+.enterprise-legal-copy h3 {
+  margin-top: 1.75rem;
+  margin-bottom: 0.55rem;
+  letter-spacing: 0 !important;
+}
+
+.enterprise-legal-copy p,
+.enterprise-legal-copy li {
+  font-size: 0.84rem;
+  line-height: 1.75;
+}
+
+/* A compact textbook rhythm shared by desktop and mobile Study Guides. */
+.page-workspace .study-guide-shell,
+.page-workspace .study-guide-title-card,
+.page-workspace .study-guide-section-card {
+  background: #fff !important;
+}
+
+.page-workspace .study-guide-title-card,
+.page-workspace .study-guide-section-card {
+  margin-bottom: 0 !important;
+}
+
+.page-workspace .study-guide-rich-editor {
+  margin-top: 0.45rem !important;
+  line-height: 1.58 !important;
+}
+
+.page-workspace .study-guide-rich-editor p,
+.page-workspace .study-guide-rich-editor ul,
+.page-workspace .study-guide-rich-editor ol,
+.page-workspace .study-guide-rich-editor blockquote,
+.page-workspace .study-guide-rich-editor table {
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+.page-workspace .study-guide-section-copy-button,
+.page-workspace .study-guide-section-regenerate-button {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  padding: 0.32rem !important;
+}
+
+@media (max-width: 768px) {
+  .enterprise-public-nav {
+    grid-template-columns: 1fr auto !important;
+  }
+
+  .enterprise-public-menu,
+  .enterprise-public-links {
+    display: none !important;
+  }
+
+  .enterprise-public-actions {
+    display: flex !important;
+    gap: 0.35rem;
+  }
+
+  .enterprise-public-actions button {
+    min-height: 36px;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.68rem;
+  }
+
+  .enterprise-document-header {
+    padding: 0.5rem 0 1.4rem !important;
+  }
+
+  .enterprise-document-header .enterprise-page-copy h1 {
+    font-size: clamp(1.75rem, 8vw, 2.3rem) !important;
+  }
+
+  .enterprise-document-toc {
+    top: calc(58px + env(safe-area-inset-top));
+    margin-inline: -0.1rem;
+  }
+
+  .enterprise-document-toc details > div {
+    max-height: 34dvh;
+    overflow-y: auto;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .enterprise-information-item {
+    grid-template-columns: 28px minmax(0, 1fr);
+    column-gap: 0.55rem;
+    padding: 0.85rem 0 !important;
+  }
+
+  .enterprise-information-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .enterprise-document-section {
+    padding: 1.45rem 0 !important;
+  }
+
+  .workspace-more-menu {
+    position: fixed;
+    top: auto;
+    right: 0.75rem;
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
+    width: min(200px, calc(100vw - 1.5rem));
+  }
+
+  .timetable-icon-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 8px;
+  }
+
+  .study-timetable-grid button,
+  .study-timetable-grid button span,
+  .study-timetable-grid select {
+    font-size: 0.58rem !important;
+    line-height: 1.18 !important;
+  }
+
+  .lecture-timetable-table input,
+  .lecture-timetable-table select,
+  .lecture-timetable-table button {
+    font-size: 0.6rem !important;
+  }
+
+  .page-workspace .content-panel:has(.study-guide-shell) {
+    padding: 0.35rem !important;
+    border-color: transparent !important;
+    background: #fff !important;
+  }
+
+  .page-workspace .study-guide-title-card,
+  .page-workspace .study-guide-section-card {
+    padding: 0.58rem !important;
+    margin: 0 !important;
+  }
+
+  .page-workspace .study-guide-section-card > summary > div {
+    min-height: 36px !important;
+  }
+
+  .page-workspace .study-guide-section-card > summary span:first-child {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    min-height: 28px !important;
+    border-radius: 7px !important;
+    font-size: 0.72rem !important;
+  }
+
+  .page-workspace .study-guide-section-heading {
+    font-size: 0.88rem !important;
+  }
+
+  .page-workspace .study-guide-section-copy-button,
+  .page-workspace .study-guide-section-regenerate-button {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    min-height: 24px !important;
+    padding: 0.27rem !important;
+  }
+
+  .page-workspace .study-guide-section-copy-button svg,
+  .page-workspace .study-guide-section-regenerate-button svg {
+    width: 12px !important;
+    height: 12px !important;
+  }
+
+  .page-workspace .study-guide-rich-editor {
+    margin-top: 0.28rem !important;
+    font-size: 0.86rem !important;
+    line-height: 1.5 !important;
+  }
+
+  .page-workspace .study-guide-rich-editor p,
+  .page-workspace .study-guide-rich-editor li,
+  .page-workspace .study-guide-rich-editor td,
+  .page-workspace .study-guide-rich-editor th {
+    margin-top: 0.2rem !important;
+    margin-bottom: 0.32rem !important;
+    font-size: 0.86rem !important;
+    line-height: 1.5 !important;
+  }
+}
+
+.math-markdown .katex {
+  max-width: 100%;
+  font-size: 1.02em;
+  line-height: 1.35;
+}
+
+.math-markdown .katex-display {
+  width: 100%;
+  max-width: 100%;
+  margin: 0.95rem 0 1.05rem;
+  padding: 0.45rem 0.2rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  -webkit-overflow-scrolling: touch;
+}
+
+.math-markdown .katex-display > .katex {
+  min-width: min-content;
+  max-width: 100%;
+  text-align: center;
+  white-space: normal;
+}
+
+.math-markdown .katex-display .base {
+  margin-block: 0.08em;
+}
+
+.math-markdown .katex-error {
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.math-markdown p + .katex-display,
+.math-markdown ul + .katex-display,
+.math-markdown ol + .katex-display,
+.math-markdown table + .katex-display {
+  margin-top: 1.05rem;
+}
+
+.math-markdown .katex-display + p,
+.math-markdown .katex-display + ul,
+.math-markdown .katex-display + ol,
+.math-markdown .katex-display + table {
+  margin-top: 0.85rem;
+}
+
+/* Assistant answers use the page background; only student questions are dim bubbles. */
+.study-chat-page-messages .study-chat-message.is-assistant,
+.study-chat-embedded-messages .study-chat-message.is-assistant {
+  width: min(100%, 820px) !important;
+  max-width: 820px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 0.4rem 0 !important;
+  box-shadow: none !important;
+}
+
+.study-chat-page-messages .study-chat-message.is-user,
+.study-chat-embedded-messages .study-chat-message.is-user {
+  width: fit-content !important;
+  max-width: min(78%, 640px) !important;
+  margin-left: auto !important;
+  border: 1px solid rgba(74, 222, 128, 0.13) !important;
+  border-radius: 17px !important;
+  background: rgba(1, 28, 18, 0.72) !important;
+  padding: 0.58rem 0.78rem !important;
+  box-shadow: none !important;
+}
+
+.study-chat-page-messages .study-chat-message.is-assistant .mabaso-ai-response,
+.study-chat-embedded-messages .study-chat-message.is-assistant .mabaso-ai-response {
+  width: 100% !important;
+  max-width: 100% !important;
+  background: transparent !important;
+}
+
+.study-chat-page {
+  grid-template-rows: minmax(0, 1fr) !important;
+  height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+.study-chat-main {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.study-chat-page-scroll {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+.study-chat-page-composer {
+  position: sticky !important;
+  inset: auto 0 0 !important;
+  z-index: 30 !important;
+  flex: 0 0 auto !important;
+}
+
+@media (max-width: 768px) {
+  .math-markdown .katex {
+    font-size: 0.96em;
+  }
+
+  .math-markdown .katex-display {
+    margin: 0.72rem 0 0.82rem;
+    padding: 0.3rem 0;
+  }
+
+  .study-chat-page-messages .study-chat-message.is-assistant,
+  .study-chat-embedded-messages .study-chat-message.is-assistant {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0.3rem 0 !important;
+  }
+
+  .study-chat-page-messages .study-chat-message.is-user,
+  .study-chat-embedded-messages .study-chat-message.is-user {
+    max-width: 86% !important;
+    padding: 0.48rem 0.62rem !important;
+  }
+
+  .study-chat-page-composer {
+    position: sticky !important;
+    right: auto !important;
+    bottom: 0 !important;
+    left: auto !important;
+    width: calc(100% - 0.85rem) !important;
+    margin: 0 auto max(0.35rem, env(safe-area-inset-bottom)) !important;
   }
 }

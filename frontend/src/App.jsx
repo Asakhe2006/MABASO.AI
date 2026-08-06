@@ -1,10 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pause, Pencil, Play, Plus, RefreshCw, Search, SlidersHorizontal, Square, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -17,9 +13,10 @@ import {
 } from "./siteRouting";
 import { consumeAssistantStream, useLectureAssistant } from "./useLectureAssistant";
 import AssistantMarkdown from "./components/AssistantMarkdown";
+import MathMarkdown, { renderMathInHtmlElement } from "./components/MathMarkdown";
+import { normalizeMathMarkdown } from "./mathRendering";
 import PublicLandingPage from "./PublicLandingPage";
 
-const ReactMarkdown = lazy(() => import("react-markdown"));
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
 const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
 const EnterpriseFooter = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseFooter })));
@@ -3034,13 +3031,10 @@ const studyGuideMarkdownComponents = {
 
 function MobileFirstMarkdown({ children }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
+    <MathMarkdown
+      content={convertMarkdownTablesToMobileCards(children || "", { preserveTables: true })}
       components={studyGuideMarkdownComponents}
-    >
-      {convertMarkdownTablesToMobileCards(children || "", { preserveTables: true })}
-    </ReactMarkdown>
+    />
   );
 }
 
@@ -3657,6 +3651,7 @@ function normalizeStudyGuideContentSpacing(value = "") {
   let text = String(value || "")
     .replace(/\r\n?/g, "\n")
     .replace(/\u00a0/g, " ")
+    .replace(/^\s*\[Suggested Visual:[^\]]+\]\s*$/gim, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n[ \t]+/g, "\n")
     .replace(/-{3,}/g, "\n\n")
@@ -3680,7 +3675,7 @@ function normalizeStudyGuideContentSpacing(value = "") {
 }
 
 function markdownToEditableStudyGuideHtml(markdown = "") {
-  const lines = normalizeStudyGuideContentSpacing(markdown).split(/\r?\n/);
+  const lines = normalizeStudyGuideContentSpacing(normalizeMathMarkdown(markdown)).split(/\r?\n/);
   const htmlParts = [];
   let listType = "";
   const parseTableRow = (line) => line
@@ -6791,6 +6786,7 @@ export default function App() {
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
   const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [isHistoryLoadingFromServer, setIsHistoryLoadingFromServer] = useState(false);
+  const [openingHistoryItemId, setOpeningHistoryItemId] = useState("");
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
@@ -6891,7 +6887,6 @@ export default function App() {
   const [timetableCompletionPrompt, setTimetableCompletionPrompt] = useState(null);
   const [timetableSubjectRemovalPrompt, setTimetableSubjectRemovalPrompt] = useState(null);
   const [isTimetableFocusMode, setIsTimetableFocusMode] = useState(false);
-  const [isTimetableRotated, setIsTimetableRotated] = useState(false);
   const [activeStudySessionId, setActiveStudySessionId] = useState("");
   const [activeStudySessionQuestion, setActiveStudySessionQuestion] = useState("");
   const [activeStudySessionNotesDraft, setActiveStudySessionNotesDraft] = useState("");
@@ -9237,7 +9232,43 @@ export default function App() {
           </div>
         </article>
       ) : null}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">{historyItems.length ? historyItems.map((item) => <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p><h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3><p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p><div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span><span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span></div></div><div className="force-mobile-stack flex flex-wrap gap-2"><button type="button" onClick={() => loadHistoryItem(item)} className={`rounded-full px-4 py-2 text-sm font-semibold ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}>{activeHistoryId === item.id ? "Opened" : "Open"}</button><button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button><button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button><button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button></div></div><p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p></article>) : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">{isHistoryLoadingFromServer ? "Loading your saved materials for this email..." : "Your saved workspace history will appear here after the first successful study guide on this account."}</div>}</div>
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        {historyItems.length ? historyItems.map((item) => (
+          <article key={item.id} className={`rounded-[24px] border p-5 transition ${activeHistoryId === item.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-white/[0.04]"}`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p>
+                <h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3>
+                <p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureNotes?.trim() ? "Notes added" : "No notes"}</span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.lectureSlideFileNames?.length || 0} slide source{(item.lectureSlideFileNames?.length || 0) === 1 ? "" : "s"}</span>
+                  <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.pastQuestionPaperFileNames?.length || 0} past paper{(item.pastQuestionPaperFileNames?.length || 0) === 1 ? "" : "s"}</span>
+                </div>
+              </div>
+              <div className="force-mobile-stack flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onPointerEnter={() => { if (item.isCompactHistoryItem) void resolveFullHistoryItem(item); }}
+                  onFocus={() => { if (item.isCompactHistoryItem) void resolveFullHistoryItem(item); }}
+                  onClick={() => loadHistoryItem(item)}
+                  disabled={Boolean(openingHistoryItemId)}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold disabled:cursor-wait disabled:opacity-60 ${activeHistoryId === item.id ? "border border-white/10 bg-emerald-300/15 text-emerald-50" : "bg-white text-slate-950"}`}
+                >
+                  {openingHistoryItemId === item.id ? "Opening..." : activeHistoryId === item.id ? "Opened" : "Open now"}
+                </button>
+                <button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button>
+                <button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button>
+                <button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button>
+              </div>
+            </div>
+            <p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p>
+          </article>
+        )) : (
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 lg:col-span-2">{isHistoryLoadingFromServer ? "Loading your saved materials for this email..." : "Your saved workspace history will appear here after the first successful study guide on this account."}</div>
+        )}
+      </div>
       {collaborationMaterialsSection}
     </section>
   ) : null;
@@ -10454,7 +10485,7 @@ export default function App() {
     }));
 
     return (
-      <section className={`timetable-compact-surface ${isTimetableFocusMode ? "is-focus-mode" : ""} ${isTimetableRotated ? "is-rotated" : ""} min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6`}>
+      <section className={`timetable-compact-surface ${isTimetableFocusMode ? "is-focus-mode" : ""} min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6`}>
         <div className="flex flex-col gap-5 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-4">
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
@@ -10464,21 +10495,17 @@ export default function App() {
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Plan subjects, availability, revision blocks, past-paper sessions, and weekly progress.</p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={() => setIsTimetableFocusMode((current) => !current)} className="timetable-focus-button rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">{isTimetableFocusMode ? "Close" : "Focus"}</button>
-            <button type="button" onClick={() => setIsTimetableRotated((current) => !current)} className="timetable-focus-button rounded-[14px] border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white">Rotate</button>
+          <div className="timetable-header-actions flex flex-wrap gap-2">
+            <button type="button" onClick={() => setIsTimetableFocusMode((current) => !current)} className="timetable-icon-button timetable-focus-button" title={isTimetableFocusMode ? "Close focus view" : "Open timetable focus view"} aria-label={isTimetableFocusMode ? "Close timetable focus view" : "Open timetable focus view"}>
+              {isTimetableFocusMode ? <X className="h-4 w-4" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />}
+            </button>
             {!isTimetableLoaderVisible && shouldShowTimetableGrid && timetableRows.length ? (
-              <button type="button" onClick={downloadTimetableWeekImage} disabled={isDownloadingTimetableImage} className="rounded-[14px] border border-sky-300/35 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-50 disabled:opacity-60">
-                {isDownloadingTimetableImage ? "Downloading..." : "Download Week Image"}
-              </button>
-            ) : null}
-            {!isTimetableLoaderVisible && shouldShowTimetableGrid && timetableRows.length && !isTimetableEditing ? (
-              <button type="button" onClick={rescheduleMissedTimetableRecovery} disabled={isReschedulingTimetableRecovery} className="rounded-[14px] border border-rose-300/35 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-50 disabled:opacity-60" title="Reschedule missed weak-subject work">
-                {isReschedulingTimetableRecovery ? "Rescheduling..." : "AI Reschedule Missed"}
+              <button type="button" onClick={downloadTimetableWeekImage} disabled={isDownloadingTimetableImage} className="timetable-icon-button" title="Download timetable image" aria-label="Download timetable image">
+                {isDownloadingTimetableImage ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
               </button>
             ) : null}
             {!isTimetableLoaderVisible && !isTimetableEditing ? (
-              <button type="button" onClick={startReEditingTimetable} className="rounded-[14px] border border-emerald-400/40 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-50">Re-edit Timetable</button>
+              <button type="button" onClick={startReEditingTimetable} className="timetable-icon-button" title="Re-edit timetable" aria-label="Re-edit timetable"><Pencil className="h-4 w-4" aria-hidden="true" /></button>
             ) : null}
           </div>
         </div>
@@ -10592,24 +10619,6 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        {timetableCoachPrompt ? (
-          <div className="mt-5 rounded-[24px] border border-cyan-300/25 bg-cyan-400/10 p-4 text-sm text-cyan-50">
-            <div className="force-mobile-stack flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">{timetableCoachPrompt.title}</p>
-                <h3 className="mt-2 text-xl font-semibold text-white">Daily feedback</h3>
-                <div className="mt-3 space-y-2 leading-6 text-slate-100">
-                  <p>{timetableCoachPrompt.missedLine}</p>
-                  <p>{timetableCoachPrompt.weakestLine}</p>
-                  <p>{timetableCoachPrompt.recommendationLine}</p>
-                  {timetableCoachPrompt.examLine ? <p>{timetableCoachPrompt.examLine}</p> : null}
-                  {timetableCoachPrompt.recoveryLine ? <p>{timetableCoachPrompt.recoveryLine}</p> : null}
-                </div>
-              </div>
-              <button type="button" onClick={() => setTimetableCoachPrompt(null)} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white">Close</button>
-            </div>
-          </div>
-        ) : null}
         {examCountdowns.length ? (
           <div className="mt-5 grid gap-3 lg:grid-cols-3">
             {examCountdowns.slice(0, 3).map((exam) => (
@@ -10620,18 +10629,6 @@ export default function App() {
                 <p className="mt-2 text-sm leading-6 text-slate-300">The planner increases revision, past papers, and weak-topic sessions as this exam gets closer.</p>
               </div>
             ))}
-          </div>
-        ) : null}
-        {timetableRecoveryMoves.length ? (
-          <div className="mt-5 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-50">
-            <p className="font-semibold">Missed work recovery</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              {timetableRecoveryMoves.slice(0, 4).map((move) => (
-                <p key={`${move.sourceSession.id}-${move.recoverySession.id}`} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                  {normalizeTimetableSubjectName(move.sourceSession.title, "Missed work")} missed. Moved to {move.movedToDay} {move.movedToTime}.
-                </p>
-              ))}
-            </div>
           </div>
         ) : null}
 
@@ -10920,6 +10917,37 @@ export default function App() {
             ["Recovery", "bg-rose-500/30", "Red-lined sessions are missed weak-subject work rescheduled by AI."],
             ["Empty", "bg-black", "Black spaces mean no subject was selected."],
           ].map(([label, className, detail]) => <div key={label} className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="flex items-center gap-3"><span className={`h-5 w-5 rounded ${className}`} /><p className="font-semibold text-white">{label}</p></div><p className="mt-2 text-sm leading-6 text-slate-300">{detail}</p></div>)}
+        </div>
+        <div className="timetable-bottom-tools mt-5 space-y-2">
+          <details className="timetable-bottom-tool">
+            <summary><span>Missed work recovery</span><ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
+            <div className="timetable-bottom-tool-content">
+              {timetableRecoveryMoves.length ? timetableRecoveryMoves.slice(0, 4).map((move) => (
+                <p key={`${move.sourceSession.id}-${move.recoverySession.id}`}>
+                  {normalizeTimetableSubjectName(move.sourceSession.title, "Missed work")} missed. Moved to {move.movedToDay} {move.movedToTime}.
+                </p>
+              )) : <p>No missed sessions need recovery.</p>}
+              {!isTimetableEditing && shouldShowTimetableGrid && timetableRows.length ? (
+                <button type="button" onClick={rescheduleMissedTimetableRecovery} disabled={isReschedulingTimetableRecovery} className="timetable-tool-command">
+                  <Bot className="h-4 w-4" aria-hidden="true" />{isReschedulingTimetableRecovery ? "Rescheduling..." : "AI schedule recovery"}
+                </button>
+              ) : null}
+            </div>
+          </details>
+          <details className="timetable-bottom-tool">
+            <summary><span>AI Study Coach</span><ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
+            <div className="timetable-bottom-tool-content">
+              {timetableCoachPrompt ? (
+                <>
+                  <p>{timetableCoachPrompt.missedLine}</p>
+                  <p>{timetableCoachPrompt.weakestLine}</p>
+                  <p>{timetableCoachPrompt.recommendationLine}</p>
+                  {timetableCoachPrompt.examLine ? <p>{timetableCoachPrompt.examLine}</p> : null}
+                  {timetableCoachPrompt.recoveryLine ? <p>{timetableCoachPrompt.recoveryLine}</p> : null}
+                </>
+              ) : <p>Your coaching notes will appear after the timetable is saved.</p>}
+            </div>
+          </details>
         </div>
         </div>
           </>
@@ -20743,11 +20771,14 @@ export default function App() {
   };
 
   const loadHistoryItem = async (item) => {
+    if (!item?.id || openingHistoryItemId) return;
+    setOpeningHistoryItemId(item.id);
     let resolvedItem;
     try {
       resolvedItem = await resolveFullHistoryItem(item);
     } catch (err) {
       setError(err.message || "Could not open this saved study workspace.");
+      setOpeningHistoryItemId("");
       return;
     }
     replacePodcastAudioUrl("");
@@ -20819,6 +20850,7 @@ export default function App() {
     });
     openProtectedAppPage("workspace");
     setStatus(`Loaded ${resolvedItem.title} from history.`);
+    setOpeningHistoryItemId("");
   };
 
   const resetGeneratedOutputs = () => {
@@ -27900,20 +27932,6 @@ export default function App() {
               </section>
             </div>
           ) : null}
-          {isWorkspaceMobileMoreOpen ? (
-            <div className="workspace-mobile-sheet-layer lg:hidden">
-              <button type="button" className="workspace-mobile-sheet-scrim" aria-label="Close more actions" onClick={() => setIsWorkspaceMobileMoreOpen(false)} />
-              <section className="workspace-mobile-sheet" aria-label="More Study Workspace actions">
-                <div className="workspace-mobile-sheet-head"><div><p>Study Workspace</p><h3>More actions</h3></div><button type="button" onClick={() => setIsWorkspaceMobileMoreOpen(false)} aria-label="Close more actions"><X className="h-5 w-5" aria-hidden="true" /></button></div>
-                <div className="workspace-mobile-sheet-list">
-                  <button type="button" onClick={() => { void shareCurrentWorkspaceLink(); setIsWorkspaceMobileMoreOpen(false); }}>Share private link</button>
-                  <button type="button" onClick={() => { window.print(); setIsWorkspaceMobileMoreOpen(false); }}>Print</button>
-                  <button type="button" onClick={() => { openProtectedAppPage("materials"); setIsWorkspaceMobileMoreOpen(false); }}>History</button>
-                </div>
-              </section>
-            </div>
-          ) : null}
-
           <div className="workspace-layout mt-6 grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
             <aside className="workspace-sidebar hidden lg:block">
               <div className="sticky top-5 p-2">
@@ -28022,19 +28040,26 @@ export default function App() {
                       </div>
                     ) : null}
                   </div>
-                  <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen(true)} className="workspace-icon-action workspace-mobile-more-button lg:hidden" title="More" aria-label="More Study Workspace actions" data-mobile-label="More">
-                    <Ellipsis className="h-4 w-4" aria-hidden="true" />
-                  </button>
+                  <div className="workspace-more-anchor">
+                    <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen((current) => !current)} className={`workspace-icon-action workspace-mobile-more-button ${isWorkspaceMobileMoreOpen ? "is-active" : ""}`} title="More" aria-label="More Study Workspace actions" aria-expanded={isWorkspaceMobileMoreOpen} data-mobile-label="More">
+                      <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                    {isWorkspaceMobileMoreOpen ? (
+                      <div className="workspace-more-menu" role="menu" aria-label="More Study Workspace actions">
+                        <button type="button" role="menuitem" onClick={() => { openProtectedAppPage("materials"); setIsWorkspaceMobileMoreOpen(false); }}><FolderOpen className="h-4 w-4" aria-hidden="true" />History</button>
+                        <button type="button" role="menuitem" onClick={() => { void shareCurrentWorkspaceLink(); setIsWorkspaceMobileMoreOpen(false); }}><Link className="h-4 w-4" aria-hidden="true" />Share link</button>
+                        <button type="button" role="menuitem" onClick={() => { openCollaborationPage(); setIsWorkspaceMobileMoreOpen(false); }}><UsersRound className="h-4 w-4" aria-hidden="true" />Rooms</button>
+                      </div>
+                    ) : null}
+                  </div>
                   {workspaceSaveStatus ? <span className="workspace-save-status workspace-secondary-action">{workspaceSaveStatus}</span> : null}
-                  <button type="button" onClick={() => void shareCurrentWorkspaceLink()} className="workspace-secondary-action rounded-full border border-white/10 bg-slate-950/75 px-3 py-1.5 text-xs font-semibold text-white">Share link</button>
-                  <button type="button" onClick={() => openCollaborationPage()} className="workspace-secondary-action rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50">Rooms</button>
                   </div>
                 </div>
               </>
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
-                  <div className="study-guide-shell min-w-0 space-y-5 rounded-[28px] p-1">
+                  <div className="study-guide-shell min-w-0 space-y-3 rounded-[20px] p-0.5">
                     <div
                       ref={(node) => {
                         if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
@@ -28042,7 +28067,7 @@ export default function App() {
                         if (node && guideSummarySection) teacherSectionRefs.current[guideSummarySection.normalizedHeading] = node;
                         else if (guideSummarySection) delete teacherSectionRefs.current[guideSummarySection.normalizedHeading];
                       }}
-                      className={`study-guide-title-card rounded-[24px] p-5 transition ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
+                      className={`study-guide-title-card rounded-[16px] p-4 transition ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
                     >
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
@@ -28059,7 +28084,7 @@ export default function App() {
                     </div>
 
                     {visibleGuideSections.length ? (
-                      <div className="space-y-4">
+                      <div className="space-y-2.5">
                         {visibleGuideSections.map((section, index) => {
                           const isActiveSection = activeTeacherSectionKey
                             ? activeTeacherSectionKey === section.normalizedHeading
@@ -28074,25 +28099,25 @@ export default function App() {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
                               }}
-                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[24px] p-5 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[16px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <summary className="cursor-pointer list-none">
-                                <div className="flex min-h-[72px] items-center justify-between gap-3">
+                                <div className="flex min-h-[48px] items-center justify-between gap-2">
                                   <div className="flex min-w-0 items-center gap-3">
-                                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-base font-black text-emerald-700">{index + 1}</span>
+                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-sm font-black text-emerald-700">{index + 1}</span>
                                     <div className="study-guide-section-title-row min-w-0">
                                     <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
                                     <ChevronDown className="study-guide-section-chevron h-4 w-4" aria-hidden="true" />
                                     </div>
                                   </div>
-                                  <div className="flex shrink-0 items-center gap-2">
+                                  <div className="flex shrink-0 items-center gap-1">
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (canUseSubtopicExplainMore) regenerateGuideSection(section); else openUpgradeModal(); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title={canUseSubtopicExplainMore ? "Regenerate" : "Upgrade to regenerate this subtopic"} aria-label={canUseSubtopicExplainMore ? "Regenerate this subtopic" : "Upgrade to regenerate this subtopic"}>{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button>
                                   </div>
                                 </div>
                               </summary>
-                              <div className="phone-safe-copy mt-4 max-w-none">
+                              <div className="phone-safe-copy mt-2 max-w-none">
                                 <div
                                   ref={(node) => {
                                     const sectionKey = getGuideSectionEditKey(section);
@@ -28102,8 +28127,15 @@ export default function App() {
                                       const isActiveEditor = typeof document !== "undefined" && document.activeElement === node;
                                       const shouldInitializeEditor = !node.dataset.renderedHtml;
                                       const canSyncInactiveEditor = !isWorkspaceEditMode && !isWorkspaceHighlightMode && !isActiveEditor;
-                                      if (shouldInitializeEditor || canSyncInactiveEditor) {
+                                      const hasRenderedMath = Boolean(node.querySelector?.(".katex"));
+                                      if ((isWorkspaceEditMode || isWorkspaceHighlightMode) && hasRenderedMath) {
+                                        node.innerHTML = nextHtml;
+                                        node.dataset.renderedHtml = nextHtml;
+                                      } else if (shouldInitializeEditor || canSyncInactiveEditor) {
                                         syncGuideEditorHtml(node, nextHtml);
+                                      }
+                                      if (!isWorkspaceEditMode && !isWorkspaceHighlightMode) {
+                                        renderMathInHtmlElement(node);
                                       }
                                     } else {
                                       delete studyGuideEditorRefs.current[sectionKey];

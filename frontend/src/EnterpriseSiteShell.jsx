@@ -1,4 +1,4 @@
-import { createElement, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion as Motion } from "framer-motion";
 import * as LucideIcons from "lucide-react";
@@ -9,6 +9,13 @@ const cardMotion = {
   initial: false,
   transition: { duration: 0 },
 };
+
+const INTERNAL_PLANNING_COPY = /suggested visual|visual direction|public visitors?|public page|page should|layout architecture|design notes|placeholder|polished sample|premium .*cards?|what it should feel like|hero \+|cta rail/i;
+
+function isUsefulPublicCopy(value = "") {
+  const text = String(value || "").trim();
+  return Boolean(text) && !INTERNAL_PLANNING_COPY.test(text);
+}
 
 function toPascalCase(value = "") {
   return String(value || "")
@@ -501,6 +508,7 @@ export function EnterpriseSiteShell({
 }) {
   const [faqQuery, setFaqQuery] = useState("");
   const [activeFaqIndex, setActiveFaqIndex] = useState(0);
+  const [activeDocumentSection, setActiveDocumentSection] = useState("overview");
 
   const isLocked = !isAuthenticated && page.access !== "public";
   const filteredFaq = useMemo(() => {
@@ -509,7 +517,36 @@ export function EnterpriseSiteShell({
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
-  const visibleModules = (page.modules || []).filter((module) => !/^(enterprise notes|design notes|what it should feel like|visual direction|layout architecture)$/i.test(module.title || ""));
+  const visibleContains = (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const visibleModules = (page.modules || [])
+    .filter((module) => isUsefulPublicCopy(module.title))
+    .map((module) => ({ ...module, items: (module.items || []).filter(isUsefulPublicCopy) }))
+    .filter((module) => module.items.length);
+  const visibleWorkflow = (page.workflow || []).filter(isUsefulPublicCopy);
+  const visibleFileGroups = (page.fileGroups || [])
+    .map((group) => ({ ...group, items: (group.items || []).filter(isUsefulPublicCopy) }))
+    .filter((group) => isUsefulPublicCopy(group.label) && group.items.length);
+  const documentSections = useMemo(() => [
+    { id: "overview", label: "Overview", visible: true },
+    { id: "key-information", label: "Key information", visible: visibleContains.length > 0 },
+    { id: "capabilities", label: "Details", visible: visibleModules.length > 0 },
+    { id: "workflow", label: "How it works", visible: visibleWorkflow.length > 0 },
+    { id: "supported-content", label: "Supported content", visible: visibleFileGroups.length > 0 },
+    { id: "developer-examples", label: "Examples", visible: Boolean(page.codeSamples?.length) },
+    { id: "questions", label: "Questions", visible: Boolean(page.faq?.length) },
+    { id: "full-content", label: "Full details", visible: Boolean(page.markdown) },
+  ].filter((section) => section.visible), [page.codeSamples, page.faq, page.markdown, visibleContains.length, visibleFileGroups.length, visibleModules.length, visibleWorkflow.length]);
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return undefined;
+    const nodes = documentSections.map((section) => document.getElementById(section.id)).filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+      if (visible?.target?.id) setActiveDocumentSection(visible.target.id);
+    }, { rootMargin: "-18% 0px -68%", threshold: [0.05, 0.35] });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [documentSections]);
 
   if (adminBlocked) {
     return <ProtectedAdminState page={page} onNavigate={onNavigate} onOpenApp={onOpenApp} />;
@@ -517,20 +554,17 @@ export function EnterpriseSiteShell({
 
   return (
     <div className="enterprise-site-shell min-h-screen bg-[var(--page-bg)] text-slate-100">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="hero-glow hero-glow-left" />
-        <div className="hero-glow hero-glow-right" />
-        <div className="hero-grid" />
-      </div>
-      <main className="relative mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="relative mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
         <EnterpriseNavigation currentRoute={currentRoute} isAuthenticated={isAuthenticated} onNavigate={onNavigate} onOpenApp={onOpenApp} onOpenSignIn={onOpenSignIn} onPrepareSignIn={onPrepareSignIn} />
 
-        <section className="enterprise-page-hero rounded-[34px] border border-white/10 bg-[linear-gradient(180deg,rgba(2,6,23,0.9),rgba(15,23,42,0.82))] p-6 shadow-[0_32px_100px_rgba(2,8,23,0.42)] backdrop-blur xl:p-8">
-          <div className="grid gap-8 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <section id="overview" className="enterprise-page-hero enterprise-document-header">
+          <div>
             <Motion.div className="enterprise-page-copy" {...cardMotion}>
+              <button type="button" onClick={() => onNavigate("/")} className="enterprise-document-breadcrumb"><LucideIcons.ChevronLeft className="h-4 w-4" aria-hidden="true" />Mabaso AI</button>
               <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/70">{page.hero?.eyebrow || `${page.category} / ${page.title}`}</p>
               <h1 className="mt-4 text-3xl font-semibold text-white sm:text-4xl xl:text-5xl">{page.hero?.headline || page.title}</h1>
               <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
+              <p className="enterprise-document-updated">Last updated 6 August 2026</p>
               <div className="mt-7 flex flex-wrap gap-3">
                 {(page.hero?.ctas || []).map((cta) => (
                   <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
@@ -551,20 +585,27 @@ export function EnterpriseSiteShell({
                   }} />
                 ))}
               </div>
-              <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              <div className="enterprise-document-metadata mt-7 flex flex-wrap gap-x-6 gap-y-2">
                 {(page.hero?.metrics || []).map((metric) => (
-                  <div key={`${page.route}-${metric.label}`} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
-                    <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">{metric.label}</p>
-                    <p className="mt-3 text-xl font-semibold text-white">{metric.value}</p>
+                  <div key={`${page.route}-${metric.label}`}>
+                    <span>{metric.label}: </span><strong>{metric.value}</strong>
                   </div>
                 ))}
               </div>
             </Motion.div>
-            <Motion.div className="enterprise-page-preview" {...cardMotion}>
-              <WorkspacePreview page={page} />
-            </Motion.div>
           </div>
         </section>
+
+        <nav className="enterprise-document-toc" aria-label="On this page">
+          <details open>
+            <summary>On this page<LucideIcons.ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
+            <div>
+              {documentSections.map((section) => (
+                <a key={section.id} href={`#${section.id}`} className={activeDocumentSection === section.id ? "is-active" : ""}>{section.label}</a>
+              ))}
+            </div>
+          </details>
+        </nav>
 
         {page.pricingPlans?.length ? (
           <section className="enterprise-pricing-section" aria-labelledby="pricing-plan-heading">
@@ -591,15 +632,15 @@ export function EnterpriseSiteShell({
 
         <div className="relative mt-8">
           <div className={`${isLocked ? "pointer-events-none select-none blur-[12px] saturate-[0.65] opacity-45" : ""}`}>
-            {page.contains?.length ? (
-              <section className="grid gap-4 xl:grid-cols-3">
-                {page.contains.map((item) => (
+            {visibleContains.length ? (
+              <section id="key-information" className="enterprise-information-list">
+                {visibleContains.map((item) => (
                   <Motion.div
                     key={`${page.route}-contains-${item.title}`}
                     {...cardMotion}
-                    className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5 shadow-[0_18px_60px_rgba(2,8,23,0.25)]"
+                    className="enterprise-information-item"
                   >
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/10 text-cyan-100">
+                    <div className="enterprise-information-icon">
                       <SiteIcon name={item.icon} />
                     </div>
                     <h2 className="mt-5 text-xl font-semibold text-white">{item.title}</h2>
@@ -610,7 +651,7 @@ export function EnterpriseSiteShell({
             ) : null}
 
             {visibleModules.length ? (
-              <section className="enterprise-capability-list mt-8" aria-labelledby="enterprise-capabilities-heading">
+              <section id="capabilities" className="enterprise-capability-list mt-8" aria-labelledby="enterprise-capabilities-heading">
                 <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Capabilities</p>
                 <h2 id="enterprise-capabilities-heading" className="mt-2 text-2xl font-semibold text-white">What you can do</h2>
                 <div className="mt-5 grid gap-x-8 gap-y-3 lg:grid-cols-2">
@@ -638,13 +679,13 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
-            {page.workflow?.length ? (
-              <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+            {visibleWorkflow.length ? (
+              <section id="workflow" className="enterprise-document-section">
                 <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Workflow</p>
                 <h2 className="mt-3 text-2xl font-semibold text-white">Step-by-step platform flow</h2>
                 <div className="mt-6 grid gap-4 xl:grid-cols-3">
-                  {page.workflow.map((item, index) => (
-                    <Motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4">
+                  {visibleWorkflow.map((item, index) => (
+                    <Motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="enterprise-workflow-step">
                       <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-400/12 text-sm font-semibold text-cyan-100">{index + 1}</div>
                         <p className="text-sm leading-7 text-slate-100">{item}</p>
@@ -655,14 +696,14 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
-            {page.fileGroups?.length ? (
-              <section className="mt-8 grid gap-4 xl:grid-cols-3">
-                {page.fileGroups.map((group) => (
-                  <Motion.div key={`${page.route}-files-${group.label}`} {...cardMotion} className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5">
+            {visibleFileGroups.length ? (
+              <section id="supported-content" className="enterprise-information-list mt-8">
+                {visibleFileGroups.map((group) => (
+                  <Motion.div key={`${page.route}-files-${group.label}`} {...cardMotion} className="enterprise-information-item">
                     <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{group.label}</p>
                     <div className="mt-4 grid gap-2">
                       {group.items?.map((item) => (
-                        <div key={item} className="rounded-2xl border border-white/10 bg-slate-950/65 px-4 py-3 text-sm text-slate-100">
+                        <div key={item} className="enterprise-inline-list-item">
                           {item}
                         </div>
                       ))}
@@ -673,7 +714,7 @@ export function EnterpriseSiteShell({
             ) : null}
 
             {page.codeSamples?.length ? (
-              <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+              <section id="developer-examples" className="enterprise-document-section">
                 <p className="text-xs uppercase tracking-[0.28em] text-cyan-200/70">Developer examples</p>
                 <div className="mt-5 grid gap-4 xl:grid-cols-3">
                   {page.codeSamples.map((sample) => (
@@ -699,7 +740,7 @@ export function EnterpriseSiteShell({
             ) : null}
 
             {page.faq?.length ? (
-              <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+              <section id="questions" className="enterprise-document-section">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">FAQ</p>
@@ -716,7 +757,7 @@ export function EnterpriseSiteShell({
                   {(filteredFaq.length ? filteredFaq : [{ question: page.emptyState?.title || "Nothing matched", answer: page.emptyState?.description || "Try a different search phrase." }]).map((item, index) => {
                     const isOpen = index === activeFaqIndex;
                     return (
-                      <div key={`${page.route}-faq-${item.question}`} className="overflow-hidden rounded-[24px] border border-white/10 bg-white/[0.04]">
+                      <div key={`${page.route}-faq-${item.question}`} className="enterprise-faq-row">
                         <button
                           type="button"
                           onClick={() => setActiveFaqIndex(isOpen ? -1 : index)}
@@ -734,9 +775,9 @@ export function EnterpriseSiteShell({
             ) : null}
 
             {page.markdown ? (
-              <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
+              <section id="full-content" className="enterprise-document-section">
                 <p className="text-xs uppercase tracking-[0.28em] text-cyan-200/70">Full page content</p>
-                <div className="notes-markdown mt-5 max-w-none rounded-[26px] bg-white p-5 text-slate-900 shadow-[0_18px_50px_rgba(15,23,42,0.08)] sm:p-6">
+                <div className="notes-markdown enterprise-legal-copy mt-5 max-w-none text-slate-100">
                   <ReactMarkdown>{page.markdown}</ReactMarkdown>
                 </div>
               </section>
