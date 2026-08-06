@@ -1686,32 +1686,37 @@ iframe {
 .public-share-url input { min-width: 0; flex: 1; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; background: #020805; padding: 9px; font-size: 12px; }
 .public-share-url button,
 .public-share-dialog-actions button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 7px; border-radius: 9px; background: #22c55e; padding: 8px 13px; color: #021108; font-size: 13px; font-weight: 700; }
+.public-share-url button.is-copied { background: #86efac; color: #021108; }
 .public-share-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .public-share-dialog-actions button:first-child:not(:last-child) { border: 1px solid rgba(255,255,255,.12); background: transparent; color: white; }
 
-.public-share-page { min-height: 100dvh; background: #f8faf9; color: #14231b; }
-.public-share-header { position: sticky; z-index: 20; top: 0; display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #dfe9e3; background: rgba(248,250,249,.94); padding: 8px clamp(14px,4vw,36px); backdrop-filter: blur(12px); }
-.public-share-header span { color: #08783e; font-size: 14px; font-weight: 900; letter-spacing: .18em; }
-.public-share-header button { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; color: #14532d; font-size: 13px; font-weight: 700; }
+.public-share-page { min-height: 100dvh; background: #001a10; color: #e7f8ee; }
+.public-share-header { position: sticky; z-index: 20; top: 0; display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid rgba(74,222,128,.16); background: rgba(0,20,12,.95); padding: 8px clamp(14px,4vw,36px); backdrop-filter: blur(12px); }
+.public-share-header > span { color: #55e88b; font-size: 14px; font-weight: 900; letter-spacing: .18em; }
+.public-share-header button { display: inline-flex; min-height: 40px; align-items: center; gap: 7px; color: #dff8e8; font-size: 13px; font-weight: 700; }
 .public-share-header svg { width: 17px; height: 17px; }
+.public-share-header-actions { display: flex; align-items: center; gap: 8px; }
+.public-share-header-actions button { border: 1px solid rgba(134,239,172,.2); border-radius: 9px; padding: 7px 10px; }
+.public-share-header-actions button:hover { border-color: rgba(134,239,172,.42); background: rgba(34,197,94,.08); }
+.public-share-header-actions button.is-copied { border-color: rgba(134,239,172,.5); color: #86efac; }
 .public-share-document { width: min(100% - 30px, 780px); margin: 0 auto; padding: 42px 0 72px; font-size: 16px; line-height: 1.68; }
-.public-share-document > h1 { margin-bottom: 30px; color: #10251a; font-size: clamp(26px,4vw,38px); line-height: 1.18; }
+.public-share-document > h1 { margin-bottom: 30px; color: #f3fff7; font-size: clamp(26px,4vw,38px); line-height: 1.18; }
 .public-share-section { margin: 0 0 28px; }
-.public-share-section h2 { margin: 24px 0 10px; color: #155e35; font-size: 20px; text-transform: capitalize; }
+.public-share-section h2 { margin: 24px 0 10px; color: #6ee7a0; font-size: 20px; text-transform: capitalize; }
 .public-share-rich-html p { margin: 0 0 14px; }
 .public-share-rich-html ul,.public-share-rich-html ol { margin: 12px 0 16px; padding-left: 24px; }
 .public-share-rich-html table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 14px; }
-.public-share-rich-html th,.public-share-rich-html td { border: 1px solid #d7e4dc; padding: 10px 12px; }
+.public-share-rich-html th,.public-share-rich-html td { border: 1px solid rgba(167,243,208,.18); padding: 10px 12px; }
 .public-share-figure { margin: 22px 0; }
 .public-share-figure img { display: block; width: 100%; max-height: 620px; object-fit: contain; }
-.public-share-figure figcaption { display: grid; gap: 4px; margin-top: 9px; color: #496155; font-size: 13px; line-height: 1.5; }
+.public-share-figure figcaption { display: grid; gap: 4px; margin-top: 9px; color: #b7d0c1; font-size: 13px; line-height: 1.5; }
 .public-share-message { margin-bottom: 22px; }
-.public-share-message.is-user { width: fit-content; max-width: 78%; margin-left: auto; border-radius: 14px; background: #e4eee8; padding: 9px 13px; }
+.public-share-message.is-user { width: fit-content; max-width: 78%; margin-left: auto; border: 1px solid rgba(134,239,172,.14); border-radius: 14px; background: #08291b; padding: 9px 13px; }
 .public-share-state { display: grid; min-height: calc(100dvh - 58px); place-content: center; justify-items: center; gap: 12px; padding: 24px; text-align: center; }
-.public-share-state svg { width: 26px; height: 26px; color: #16a34a; }
-.public-share-footer { display: flex; width: min(100% - 30px,780px); justify-content: space-between; gap: 12px; margin: 0 auto; border-top: 1px solid #dfe9e3; padding: 22px 0 36px; font-size: 13px; }
-.public-share-footer button { color: #15803d; font-weight: 700; }
-.public-share-footer a { color: #52665b; }
+.public-share-state svg { width: 26px; height: 26px; color: #4ade80; }
+.public-share-footer { display: flex; width: min(100% - 30px,780px); justify-content: space-between; gap: 12px; margin: 0 auto; border-top: 1px solid rgba(167,243,208,.16); padding: 22px 0 36px; font-size: 13px; }
+.public-share-footer button { color: #6ee7a0; font-weight: 700; }
+.public-share-footer a { color: #a8c5b3; }
 
 @media (max-width: 768px) {
   :root { --assistant-font-size: 15.5px; --assistant-side-padding: 15px; }
@@ -1758,8 +1763,8 @@ iframe {
   .timetable-compact-surface.is-focus-mode .study-timetable-grid { min-width: 700px !important; }
   .study-timetable-grid button,
   .study-timetable-grid select { font-size: 10.5px !important; line-height: 1.25 !important; }
-  .public-share-header > button:last-child { font-size: 0; }
-  .public-share-header > button:last-child svg { margin: 0; }
+  .public-share-header-actions .public-share-continue { width: 40px; justify-content: center; padding-inline: 0; font-size: 0; }
+  .public-share-header-actions .public-share-continue svg { margin: 0; }
   .public-share-document { width: calc(100% - 28px); padding-top: 26px; font-size: 15.5px; }
   .public-share-message.is-user { max-width: 88%; }
   .public-share-footer { width: calc(100% - 28px); flex-direction: column; }

@@ -6816,6 +6816,7 @@ export default function App() {
   const [openingHistoryItemId, setOpeningHistoryItemId] = useState("");
   const [materialMenuItemId, setMaterialMenuItemId] = useState("");
   const [publicShareDialog, setPublicShareDialog] = useState(null);
+  const [copiedPublicShareUrl, setCopiedPublicShareUrl] = useState("");
   const [publicShareRecords, setPublicShareRecords] = useState({});
   const [isUpdatingPublicShare, setIsUpdatingPublicShare] = useState(false);
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
@@ -25363,6 +25364,8 @@ export default function App() {
       if (!share?.token) throw new Error("The share link was not returned.");
       const url = new URL(`/share/material/${share.token}`, window.location.origin).toString();
       await navigator.clipboard.writeText(url);
+      setCopiedPublicShareUrl(url);
+      window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
       const shareRecord = { open: true, type: "material", itemId: item.id, shareId: share.id, title: share.title || item.title, url, warnings: share.warnings || [] };
       setPublicShareRecords((current) => ({ ...current, [item.id]: shareRecord }));
       setPublicShareDialog(shareRecord);
@@ -25397,6 +25400,8 @@ export default function App() {
       if (!share?.token) throw new Error("The share link was not returned.");
       const url = new URL(`/share/chat/${share.token}`, window.location.origin).toString();
       await navigator.clipboard.writeText(url);
+      setCopiedPublicShareUrl(url);
+      window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
       setPublicShareDialog((current) => ({ ...current, shareId: share.id, url, warnings: share.warnings || [] }));
       setStatus("Read-only conversation link copied.");
     } catch (error) {
@@ -25439,6 +25444,19 @@ export default function App() {
     }
   };
 
+  const copyPublicShareUrl = async () => {
+    const url = publicShareDialog?.url;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedPublicShareUrl(url);
+      setStatus("Read-only share link copied.");
+      window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
+    } catch {
+      setError("The share link could not be copied.");
+    }
+  };
+
   const renderPublicShareDialog = () => publicShareDialog?.open ? (
     <div className="public-share-dialog-layer" role="dialog" aria-modal="true" aria-label="Share read-only content">
       <div className="public-share-dialog">
@@ -25448,7 +25466,7 @@ export default function App() {
         {!publicShareDialog.shareId ? <label className="public-share-expiry"><span>Link expiry</span><select value={Number(publicShareDialog.expiryDays || 0)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, expiryDays: Number(event.target.value) }))}><option value={0}>No automatic expiry</option><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select></label> : null}
         {publicShareDialog.type === "chat" && publicShareDialog.chooseMessages && !publicShareDialog.url ? <div className="public-share-message-picker">{chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && message.content !== "Thinking...").map((message) => <label key={message.id}><input type="checkbox" checked={(publicShareDialog.selectedIds || []).includes(message.id)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, selectedIds: event.target.checked ? [...(current.selectedIds || []), message.id] : (current.selectedIds || []).filter((id) => id !== message.id) }))} /><span>{message.role === "assistant" ? "Mabaso" : "Question"}: {String(message.content).slice(0, 120)}</span></label>)}</div> : null}
         {(publicShareDialog.warnings || []).length ? <p className="public-share-warning">Review before sharing: this content may contain {(publicShareDialog.warnings || []).join(", ")}.</p> : null}
-        {publicShareDialog.url ? <div className="public-share-url"><input readOnly value={publicShareDialog.url} aria-label="Public share link" /><button type="button" onClick={() => navigator.clipboard.writeText(publicShareDialog.url)}>Copy link</button></div> : null}
+        {publicShareDialog.url ? <div className="public-share-url"><input readOnly value={publicShareDialog.url} aria-label="Public share link" /><button type="button" className={copiedPublicShareUrl === publicShareDialog.url ? "is-copied" : ""} onClick={copyPublicShareUrl} aria-label={copiedPublicShareUrl === publicShareDialog.url ? "Share link copied" : "Copy share link"}>{copiedPublicShareUrl === publicShareDialog.url ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}{copiedPublicShareUrl === publicShareDialog.url ? "Copied" : "Copy link"}</button></div> : null}
         <div className="public-share-dialog-actions">{publicShareDialog.shareId ? <button type="button" onClick={() => disablePublicShare()} disabled={isUpdatingPublicShare}>Disable link</button> : null}{publicShareDialog.shareId ? <button type="button" onClick={updatePublicShareSnapshot} disabled={isUpdatingPublicShare}>Update shared version</button> : null}<button type="button" onClick={publicShareDialog.type === "chat" ? createChatPublicShare : () => createMaterialPublicShare(historyItems.find((item) => item.id === publicShareDialog.itemId), Number(publicShareDialog.expiryDays || 0))} disabled={isUpdatingPublicShare}>{isUpdatingPublicShare ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{publicShareDialog.shareId ? "Regenerate link" : "Create link"}</button></div>
       </div>
     </div>

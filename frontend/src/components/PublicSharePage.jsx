@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowLeft, ExternalLink, LoaderCircle } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, Copy, ExternalLink, LoaderCircle } from "lucide-react";
 import AssistantMarkdown from "./AssistantMarkdown";
 
 function resolveApiBaseUrl() {
@@ -23,7 +23,7 @@ function MaterialSnapshot({ snapshot }) {
           <h2>{section.replace(/[-_]+/g, " ")}</h2>
           <div className="public-share-rich-html" dangerouslySetInnerHTML={{ __html: content }} />
         </section>
-      )) : <AssistantMarkdown content={snapshot.summary || "This shared material has no readable study guide content."} theme="light" />}
+      )) : <AssistantMarkdown content={snapshot.summary || "This shared material has no readable study guide content."} theme="dark" />}
       {(snapshot.studyImages || []).map((image, index) => (
         <figure key={`${image.url}-${index}`} className="public-share-figure">
           <img src={image.url} alt={image.title || image.caption || `Figure ${index + 1}`} loading="lazy" />
@@ -40,7 +40,7 @@ function ChatSnapshot({ snapshot }) {
       <h1>{snapshot.title || "Shared Mabaso AI conversation"}</h1>
       {(snapshot.messages || []).map((message, index) => (
         <section key={message.id || index} className={`public-share-message is-${message.role}`}>
-          <AssistantMarkdown content={message.content} theme="light" />
+          <AssistantMarkdown content={message.content} theme="dark" />
         </section>
       ))}
     </article>
@@ -50,6 +50,7 @@ function ChatSnapshot({ snapshot }) {
 export default function PublicSharePage() {
   const route = useMemo(() => parseSharePath(window.location.pathname), []);
   const [state, setState] = useState({ loading: true, share: null, error: "" });
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -75,12 +76,28 @@ export default function PublicSharePage() {
   }, [route]);
 
   const continuePrivately = () => window.location.assign(`/?continue=${route?.type || "share"}`);
+  const copyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
     <main className="public-share-page">
       <header className="public-share-header">
         <button type="button" onClick={continuePrivately} aria-label="Return to Mabaso AI"><ArrowLeft aria-hidden="true" /></button>
         <span>MABASO AI</span>
-        <button type="button" onClick={continuePrivately}>Continue in Mabaso AI <ExternalLink aria-hidden="true" /></button>
+        <div className="public-share-header-actions">
+          <button type="button" className={copied ? "is-copied" : ""} onClick={copyShareLink} aria-label={copied ? "Share link copied" : "Copy share link"}>
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            <span>{copied ? "Copied" : "Copy link"}</span>
+          </button>
+          <button type="button" className="public-share-continue" onClick={continuePrivately}>Continue in Mabaso AI <ExternalLink aria-hidden="true" /></button>
+        </div>
       </header>
       {state.loading ? <div className="public-share-state"><LoaderCircle className="animate-spin" aria-hidden="true" /><span>Opening shared content...</span></div> : null}
       {state.error ? <div className="public-share-state"><AlertCircle aria-hidden="true" /><h1>This shared link is unavailable</h1><p>{state.error}</p></div> : null}
