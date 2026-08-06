@@ -62,7 +62,7 @@ export default function AssistantMarkdown({ content = "", theme = "dark" }) {
             <a
               className={`underline underline-offset-4 ${themed(theme, "text-cyan-200 hover:text-white", "text-cyan-700 hover:text-cyan-900")}`}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               {...cleanMarkdownProps(props)}
             />
           ),

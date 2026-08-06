@@ -1,0 +1,92 @@
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, ArrowLeft, ExternalLink, LoaderCircle } from "lucide-react";
+import AssistantMarkdown from "./AssistantMarkdown";
+
+function resolveApiBaseUrl() {
+  const configured = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+  if (configured) return configured;
+  return import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
+}
+
+function parseSharePath(pathname) {
+  const match = String(pathname || "").match(/^\/share\/(material|chat)\/([^/?#]+)/i);
+  return match ? { type: match[1].toLowerCase(), token: match[2] } : null;
+}
+
+function MaterialSnapshot({ snapshot }) {
+  const editedSections = Object.entries(snapshot.studyGuideDocumentHtml || {});
+  return (
+    <article className="public-share-document">
+      <h1>{snapshot.title || "Shared study material"}</h1>
+      {editedSections.length ? editedSections.map(([section, content]) => (
+        <section key={section} className="public-share-section">
+          <h2>{section.replace(/[-_]+/g, " ")}</h2>
+          <div className="public-share-rich-html" dangerouslySetInnerHTML={{ __html: content }} />
+        </section>
+      )) : <AssistantMarkdown content={snapshot.summary || "This shared material has no readable study guide content."} theme="light" />}
+      {(snapshot.studyImages || []).map((image, index) => (
+        <figure key={`${image.url}-${index}`} className="public-share-figure">
+          <img src={image.url} alt={image.title || image.caption || `Figure ${index + 1}`} loading="lazy" />
+          <figcaption><strong>{image.figureNumber || `Figure ${index + 1}`}{image.title ? `: ${image.title}` : ""}</strong>{image.caption ? <span>{image.caption}</span> : null}{image.explanation ? <span>{image.explanation}</span> : null}</figcaption>
+        </figure>
+      ))}
+    </article>
+  );
+}
+
+function ChatSnapshot({ snapshot }) {
+  return (
+    <article className="public-share-document public-share-chat">
+      <h1>{snapshot.title || "Shared Mabaso AI conversation"}</h1>
+      {(snapshot.messages || []).map((message, index) => (
+        <section key={message.id || index} className={`public-share-message is-${message.role}`}>
+          <AssistantMarkdown content={message.content} theme="light" />
+        </section>
+      ))}
+    </article>
+  );
+}
+
+export default function PublicSharePage() {
+  const route = useMemo(() => parseSharePath(window.location.pathname), []);
+  const [state, setState] = useState({ loading: true, share: null, error: "" });
+
+  useEffect(() => {
+    let active = true;
+    const robots = document.querySelector('meta[name="robots"]') || document.head.appendChild(document.createElement("meta"));
+    robots.setAttribute("name", "robots");
+    robots.setAttribute("content", "noindex, nofollow");
+    if (!route) {
+      setState({ loading: false, share: null, error: "This shared link is unavailable." });
+      return () => { active = false; };
+    }
+    fetch(`${resolveApiBaseUrl()}/api/public/share/${route.type}/${encodeURIComponent(route.token)}`, {
+      method: "GET",
+      credentials: "omit",
+      headers: { Accept: "application/json" },
+    }).then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "This shared link is unavailable.");
+      if (active) setState({ loading: false, share: data.share, error: "" });
+    }).catch((error) => {
+      if (active) setState({ loading: false, share: null, error: error.message || "This shared link is unavailable." });
+    });
+    return () => { active = false; };
+  }, [route]);
+
+  const continuePrivately = () => window.location.assign(`/?continue=${route?.type || "share"}`);
+  return (
+    <main className="public-share-page">
+      <header className="public-share-header">
+        <button type="button" onClick={continuePrivately} aria-label="Return to Mabaso AI"><ArrowLeft aria-hidden="true" /></button>
+        <span>MABASO AI</span>
+        <button type="button" onClick={continuePrivately}>Continue in Mabaso AI <ExternalLink aria-hidden="true" /></button>
+      </header>
+      {state.loading ? <div className="public-share-state"><LoaderCircle className="animate-spin" aria-hidden="true" /><span>Opening shared content...</span></div> : null}
+      {state.error ? <div className="public-share-state"><AlertCircle aria-hidden="true" /><h1>This shared link is unavailable</h1><p>{state.error}</p></div> : null}
+      {state.share?.resource_type === "material" ? <MaterialSnapshot snapshot={state.share.snapshot || {}} /> : null}
+      {state.share?.resource_type === "chat" ? <ChatSnapshot snapshot={state.share.snapshot || {}} /> : null}
+      {state.share ? <footer className="public-share-footer"><button type="button" onClick={continuePrivately}>Continue privately in Mabaso AI</button><a href="/?support=share" rel="noopener noreferrer">Report this shared content</a></footer> : null}
+    </main>
+  );
+}

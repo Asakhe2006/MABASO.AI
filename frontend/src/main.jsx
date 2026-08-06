@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import { AuthProvider } from './auth/AuthContext.jsx'
+import PublicSharePage from './components/PublicSharePage.jsx'
 
 class RootErrorBoundary extends Component {
   constructor(props) {
@@ -46,13 +47,17 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   })
 }
 
+const isPublicShareRoute = typeof window !== 'undefined' && /^\/share\/(?:material|chat)\//i.test(window.location.pathname)
+
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <RootErrorBoundary>
       <Suspense fallback={<div className="min-h-screen bg-[var(--page-bg)] px-6 py-8 text-slate-100">Loading Mabaso AI...</div>}>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
+        {isPublicShareRoute ? <PublicSharePage /> : (
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        )}
       </Suspense>
     </RootErrorBoundary>
   </StrictMode>,

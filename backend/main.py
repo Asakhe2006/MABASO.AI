@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 import html
+from html.parser import HTMLParser
 import hashlib
 import hmac
 from http.cookiejar import MozillaCookieJar
@@ -1301,6 +1302,16 @@ class HistoryItemUpsertRequest(BaseModel):
     item: dict[str, Any] = {}
 
 
+class PublicShareCreateRequest(BaseModel):
+    expiry_days: int = 0
+    selected_message_ids: list[str] = []
+
+
+class PublicShareUpdateRequest(BaseModel):
+    action: str
+    expiry_days: int = 0
+
+
 class SiteRatingRequest(BaseModel):
     stars: int
     comment: str = ""
@@ -2057,6 +2068,29 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_email_updated_at
             ON study_history_items (email, updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public_shares (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                owner_email TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                snapshot_json TEXT NOT NULL,
+                expires_at TEXT NOT NULL DEFAULT '',
+                revoked_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_public_shares_owner_resource
+            ON public_shares (owner_email, resource_type, resource_id, updated_at DESC)
             """
         )
         connection.execute(
@@ -4514,6 +4548,16 @@ def parse_history_datetime(value: str | None, fallback: datetime | None = None) 
     return parsed.astimezone(timezone.utc)
 
 
+def extract_history_topic_title(summary: Any, fallback: Any = "") -> str:
+    source = str(summary or "")
+    labelled = re.search(r"(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:lecture\s+topic|lecture\s+title|topic|subject)(?:\*\*)?\s*(?::|-|\n)\s*([^\n]+)", source, flags=re.I)
+    candidate = compact_text(labelled.group(1)) if labelled else ""
+    candidate = re.sub(r"[*#_`]+", "", candidate).strip()
+    if candidate and len(candidate) <= 110 and not re.match(r"^(?:create|generate|write|make|explain|include|add|use)\b", candidate, flags=re.I):
+        return candidate
+    return compact_text(fallback, "Untitled lecture")[:110]
+
+
 def normalize_history_item_payload(raw_item: Any) -> dict[str, Any]:
     if not isinstance(raw_item, dict):
         raise HTTPException(status_code=400, detail="Each history item must be an object.")
@@ -4534,6 +4578,7 @@ def normalize_history_item_payload(raw_item: Any) -> dict[str, Any]:
     item["id"] = item_id
     item["createdAt"] = created_at.isoformat()
     item["updatedAt"] = updated_at.isoformat()
+    item["title"] = extract_history_topic_title(item.get("summary"), item.get("title") or item.get("fileName"))
     return item
 
 
@@ -5345,6 +5390,186 @@ def get_session_context(token: str) -> dict[str, Any] | None:
         "mode": "user",
         "available_modes": get_available_auth_modes(legacy_email),
     }
+
+
+PUBLIC_SHARE_MAX_BYTES = max(250_000, int(os.getenv("PUBLIC_SHARE_MAX_BYTES", "8000000")))
+PUBLIC_SHARE_ALLOWED_MATERIAL_FIELDS = {
+    "title", "summary", "formula", "example", "flashcards", "quizQuestions",
+    "studyImages", "studyGuideDocumentHtml", "createdAt", "updatedAt",
+}
+
+
+class PublicShareHtmlSanitizer(HTMLParser):
+    allowed_tags = {"p", "br", "strong", "b", "em", "i", "u", "s", "mark", "h1", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td", "span", "div", "a"}
+    blocked_tags = {"script", "style", "iframe", "object", "embed", "form", "svg", "math"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.blocked_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
+        normalized_tag = tag.lower()
+        if normalized_tag in self.blocked_tags:
+            self.blocked_depth += 1
+            return
+        if self.blocked_depth or normalized_tag not in self.allowed_tags:
+            return
+        safe_attrs = []
+        if normalized_tag == "mark":
+            style = next((str(value or "") for name, value in attrs if name.lower() == "style"), "")
+            color = re.search(r"background-color\s*:\s*(#[0-9a-f]{3,8}|rgba?\([0-9.,%\s]+\)|[a-z]{3,20})", style, flags=re.I)
+            if color:
+                safe_attrs.append(("style", f"background-color: {color.group(1)}"))
+        if normalized_tag == "a":
+            href = next((str(value or "").strip() for name, value in attrs if name.lower() == "href"), "")
+            if href.startswith(("https://", "mailto:")):
+                safe_attrs.extend([("href", href), ("target", "_blank"), ("rel", "noopener noreferrer")])
+        attributes = "".join(f' {name}="{html.escape(value, quote=True)}"' for name, value in safe_attrs)
+        self.parts.append(f"<{normalized_tag}{attributes}>")
+
+    def handle_endtag(self, tag: str):
+        normalized_tag = tag.lower()
+        if normalized_tag in self.blocked_tags:
+            self.blocked_depth = max(0, self.blocked_depth - 1)
+            return
+        if not self.blocked_depth and normalized_tag in self.allowed_tags and normalized_tag != "br":
+            self.parts.append(f"</{normalized_tag}>")
+
+    def handle_data(self, data: str):
+        if not self.blocked_depth:
+            self.parts.append(html.escape(data, quote=False))
+
+
+def sanitize_public_share_html(value: Any) -> str:
+    parser = PublicShareHtmlSanitizer()
+    parser.feed(str(value or "")[:1_500_000])
+    parser.close()
+    return "".join(parser.parts)
+
+
+def sanitize_public_image(image_value: Any) -> dict[str, Any] | None:
+    if not isinstance(image_value, dict):
+        return None
+    raw_url = compact_text(image_value.get("dataUrl") or image_value.get("url"))
+    if not raw_url:
+        return None
+    if raw_url.startswith("data:image/"):
+        if not re.match(r"^data:image/(?:png|jpeg|jpg|webp|gif);base64,", raw_url, flags=re.I) or len(raw_url) > 4_500_000:
+            return None
+    else:
+        parsed = urlparse(raw_url)
+        hostname = (parsed.hostname or "").lower()
+        unsafe_ip = False
+        try:
+            address = ipaddress.ip_address(hostname)
+            unsafe_ip = address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
+        except ValueError:
+            pass
+        if parsed.scheme != "https" or not hostname or parsed.username or parsed.password or hostname == "localhost" or unsafe_ip:
+            return None
+    return {
+        "url": raw_url,
+        "title": compact_text(image_value.get("title") or image_value.get("name"))[:180],
+        "caption": compact_text(image_value.get("caption"))[:1200],
+        "explanation": compact_text(image_value.get("explanation") or image_value.get("aiExplanation"))[:2400],
+        "figureNumber": compact_text(image_value.get("figureNumber") or image_value.get("figure_number"))[:40],
+    }
+
+
+def build_public_material_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for key in PUBLIC_SHARE_ALLOWED_MATERIAL_FIELDS:
+        value = item.get(key)
+        if key == "studyImages":
+            snapshot[key] = [image for image in (sanitize_public_image(entry) for entry in (value or [])) if image]
+        elif key == "studyGuideDocumentHtml" and isinstance(value, dict):
+            snapshot[key] = {str(name)[:160]: sanitize_public_share_html(content) for name, content in list(value.items())[:120]}
+        elif key in {"flashcards", "quizQuestions"}:
+            snapshot[key] = value if isinstance(value, list) else []
+        elif key in {"summary", "formula", "example"}:
+            snapshot[key] = str(value or "")[:1_500_000]
+        else:
+            snapshot[key] = compact_text(value)
+    snapshot["title"] = extract_history_topic_title(snapshot.get("summary"), snapshot.get("title") or "Shared study material")[:180]
+    encoded = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
+    if len(encoded) > PUBLIC_SHARE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="This material is too large to share safely.")
+    return snapshot
+
+
+def build_public_chat_snapshot(exported: dict[str, Any], selected_message_ids: list[str]) -> dict[str, Any]:
+    conversation = exported.get("conversation") if isinstance(exported, dict) else {}
+    selected = {compact_text(value) for value in selected_message_ids if compact_text(value)}
+    messages = []
+    for message in (exported.get("messages") or []):
+        role = compact_text(message.get("role")).lower()
+        message_id = compact_text(message.get("id"))
+        if role not in {"user", "assistant"} or (selected and message_id not in selected):
+            continue
+        content = compact_text(message.get("content"))
+        if not content:
+            continue
+        messages.append({"id": message_id, "role": role, "content": content[:120_000]})
+    snapshot = {
+        "title": compact_text((conversation or {}).get("title"), "Shared Mabaso AI conversation")[:180],
+        "messages": messages[:160],
+    }
+    if len(json.dumps(snapshot, ensure_ascii=False).encode("utf-8")) > PUBLIC_SHARE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="This conversation is too large to share safely.")
+    return snapshot
+
+
+def public_share_sensitive_warnings(snapshot: dict[str, Any]) -> list[str]:
+    text = json.dumps(snapshot, ensure_ascii=False)
+    warnings = []
+    if re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", text, flags=re.I): warnings.append("email address")
+    if re.search(r"(?:\+?\d[\d\s().-]{7,}\d)", text): warnings.append("phone or account number")
+    if re.search(r"\b(?:student|id|account)\s*(?:number|no\.?|#)\s*[:\-]?\s*[A-Z0-9-]{5,}\b", text, flags=re.I): warnings.append("student or account identifier")
+    return warnings
+
+
+def create_public_share(owner_email: str, resource_type: str, resource_id: str, title: str, snapshot: dict[str, Any], expiry_days: int = 0) -> dict[str, Any]:
+    share_id = f"share_{uuid4().hex}"
+    token = secrets.token_urlsafe(36)
+    token_hash = hash_value(token)
+    now_iso = utc_now().isoformat()
+    expires_at = (utc_now() + timedelta(days=max(1, min(int(expiry_days), 365)))).isoformat() if expiry_days else ""
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE public_shares SET revoked_at = ?, updated_at = ? WHERE lower(owner_email) = ? AND resource_type = ? AND resource_id = ? AND revoked_at = ''",
+            (now_iso, now_iso, normalize_email(owner_email), resource_type, resource_id),
+        )
+        connection.execute(
+            "INSERT INTO public_shares (id, token_hash, owner_email, resource_type, resource_id, title, snapshot_json, expires_at, revoked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+            (share_id, token_hash, normalize_email(owner_email), resource_type, resource_id, title[:180], json.dumps(snapshot, ensure_ascii=False), expires_at, now_iso, now_iso),
+        )
+    return {"id": share_id, "token": token, "resource_type": resource_type, "title": title[:180], "expires_at": expires_at, "warnings": public_share_sensitive_warnings(snapshot)}
+
+
+def get_public_share_by_token(token: str, expected_type: str) -> dict[str, Any] | None:
+    normalized_token = compact_text(token)
+    if len(normalized_token) < 32 or len(normalized_token) > 160:
+        return None
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT resource_type, title, snapshot_json, expires_at, revoked_at, updated_at FROM public_shares WHERE token_hash = ? AND resource_type = ? LIMIT 1",
+            (hash_value(normalized_token), expected_type),
+        ).fetchone()
+    if not row or compact_text(row["revoked_at"]):
+        return None
+    expires_at = compact_text(row["expires_at"])
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= utc_now():
+                return None
+        except ValueError:
+            return None
+    try:
+        snapshot = json.loads(row["snapshot_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return {"resource_type": row["resource_type"], "title": row["title"], "snapshot": snapshot, "updated_at": row["updated_at"]}
 
 
 _session_context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -16936,6 +17161,126 @@ async def save_study_history_item(
     current_user: str = Depends(require_authenticated_user),
 ):
     return {"item": upsert_history_item_for_user(current_user, payload.item, item_id)}
+
+
+@app.post("/api/shares/material/{item_id}")
+async def create_material_public_share(
+    item_id: str,
+    payload: PublicShareCreateRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    enforce_rate_limit(scope="share_create", request=request, limit=20, window_seconds=3600, identity=current_user)
+    item = get_history_item_for_user(current_user, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Saved material not found.")
+    snapshot = build_public_material_snapshot(item)
+    share = create_public_share(current_user, "material", item_id, snapshot["title"], snapshot, payload.expiry_days)
+    record_audit_log(action="share.material.created", email=current_user, request=request, resource_type="material_share", resource_name=item_id, metadata={"share_id": share["id"]})
+    return {"share": share}
+
+
+@app.get("/api/shares/status/material/{item_id}")
+async def get_material_public_share_status(
+    item_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    if not get_history_item_for_user(current_user, item_id):
+        raise HTTPException(status_code=404, detail="Saved material not found.")
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT id, title, expires_at, updated_at FROM public_shares WHERE lower(owner_email) = ? AND resource_type = 'material' AND resource_id = ? AND revoked_at = '' ORDER BY updated_at DESC LIMIT 1",
+            (normalize_email(current_user), item_id),
+        ).fetchone()
+    if not row:
+        return {"share": None}
+    expires_at = compact_text(row["expires_at"])
+    if expires_at:
+        try:
+            if datetime.fromisoformat(expires_at) <= utc_now():
+                return {"share": None}
+        except ValueError:
+            return {"share": None}
+    return {"share": {"id": row["id"], "title": row["title"], "expires_at": expires_at, "updated_at": row["updated_at"]}}
+
+
+@app.post("/api/shares/chat/{conversation_id}")
+async def create_chat_public_share(
+    conversation_id: str,
+    payload: PublicShareCreateRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    enforce_rate_limit(scope="share_create", request=request, limit=20, window_seconds=3600, identity=current_user)
+    exported = chat_history_store.export_conversation(email=current_user, conversation_id=conversation_id) if chat_history_store.available else None
+    if not exported:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    snapshot = build_public_chat_snapshot(exported, payload.selected_message_ids)
+    if not snapshot["messages"]:
+        raise HTTPException(status_code=400, detail="Select at least one conversation message to share.")
+    share = create_public_share(current_user, "chat", conversation_id, snapshot["title"], snapshot, payload.expiry_days)
+    record_audit_log(action="share.chat.created", email=current_user, request=request, resource_type="chat_share", resource_name=conversation_id, metadata={"share_id": share["id"], "message_count": len(snapshot["messages"])})
+    return {"share": share}
+
+
+@app.patch("/api/shares/{share_id}")
+async def update_public_share(
+    share_id: str,
+    payload: PublicShareUpdateRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT id, resource_type, resource_id FROM public_shares WHERE id = ? AND lower(owner_email) = ? LIMIT 1",
+            (share_id, normalize_email(current_user)),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Share link not found.")
+    action = compact_text(payload.action).lower()
+    now_iso = utc_now().isoformat()
+    if action == "disable":
+        with get_db_connection() as connection:
+            connection.execute("UPDATE public_shares SET revoked_at = ?, updated_at = ? WHERE id = ? AND lower(owner_email) = ?", (now_iso, now_iso, share_id, normalize_email(current_user)))
+        record_audit_log(action="share.disabled", email=current_user, request=request, resource_type=f"{row['resource_type']}_share", resource_name=row["resource_id"])
+        return {"disabled": True}
+    if row["resource_type"] == "material":
+        item = get_history_item_for_user(current_user, row["resource_id"])
+        if not item:
+            raise HTTPException(status_code=404, detail="Saved material not found.")
+        snapshot = build_public_material_snapshot(item)
+    else:
+        exported = chat_history_store.export_conversation(email=current_user, conversation_id=row["resource_id"]) if chat_history_store.available else None
+        if not exported:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        snapshot = build_public_chat_snapshot(exported, [])
+    if action == "update":
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE public_shares SET title = ?, snapshot_json = ?, updated_at = ? WHERE id = ? AND lower(owner_email) = ? AND revoked_at = ''",
+                (snapshot["title"], json.dumps(snapshot, ensure_ascii=False), now_iso, share_id, normalize_email(current_user)),
+            )
+        return {"updated": True, "warnings": public_share_sensitive_warnings(snapshot)}
+    if action == "regenerate":
+        share = create_public_share(current_user, row["resource_type"], row["resource_id"], snapshot["title"], snapshot, payload.expiry_days)
+        return {"share": share}
+    raise HTTPException(status_code=400, detail="Unsupported share action.")
+
+
+@app.get("/api/public/share/{resource_type}/{token}")
+async def open_public_share(resource_type: str, token: str, request: Request, response: Response):
+    normalized_type = compact_text(resource_type).lower()
+    if normalized_type not in {"material", "chat"}:
+        raise HTTPException(status_code=404, detail="This shared link is unavailable.")
+    enforce_rate_limit(scope="public_share_open", request=request, limit=90, window_seconds=900)
+    share = get_public_share_by_token(token, normalized_type)
+    if not share:
+        raise HTTPException(status_code=404, detail="This shared link is unavailable.")
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return {"share": share}
 
 
 @app.post("/site-ratings")

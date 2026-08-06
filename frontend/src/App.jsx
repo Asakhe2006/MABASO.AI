@@ -4222,9 +4222,27 @@ function classifyLectureBundleFile(selectedFile) {
 }
 
 function extractHistoryTitle(summary, fallbackName) {
-  const lines = (summary || "").split("\n").map((line) => line.replace(/\*\*/g, "").trim()).filter(Boolean);
-  const index = lines.findIndex((line) => line.toUpperCase() === "LECTURE TITLE");
-  return index >= 0 && lines[index + 1] ? lines[index + 1] : fallbackName || "Untitled lecture";
+  const source = String(summary || "");
+  const lines = source
+    .split("\n")
+    .map((line) => line.replace(/^\s{0,3}#{1,6}\s*/, "").replace(/\*\*/g, "").trim())
+    .filter(Boolean);
+  const labelledTitle = source.match(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?(?:lecture\s+topic|lecture\s+title|topic|subject)(?:\*\*)?\s*[:\-]\s*([^\n]+)/i)?.[1];
+  const titleLabelIndex = lines.findIndex((line) => /^(?:lecture\s+topic|lecture\s+title|topic|subject)\s*:?$/i.test(line));
+  const candidate = labelledTitle || (titleLabelIndex >= 0 ? lines[titleLabelIndex + 1] : "") || lines.find((line) => (
+    line.length >= 3
+    && line.length <= 110
+    && !/^(?:create|generate|write|make|explain|summari[sz]e|include|add|use|analyse|analyze)\b/i.test(line)
+    && !/[.!?]$/.test(line)
+  ));
+  const cleaned = String(candidate || "")
+    .replace(/^\s*(?:title|topic|subject)\s*[:\-]\s*/i, "")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned) return cleaned.slice(0, 110);
+  const fallback = String(fallbackName || "").replace(/\.[a-z0-9]{1,8}$/i, "").trim();
+  return fallback || "Untitled lecture";
 }
 
 function flashcardsToText(flashcards) {
@@ -6776,6 +6794,7 @@ export default function App() {
   const [roomQuizSubmitted, setRoomQuizSubmitted] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
+  const [isOpeningStudyChat, setIsOpeningStudyChat] = useState(false);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
@@ -6795,6 +6814,10 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState(() => loadHistoryItems(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [isHistoryLoadingFromServer, setIsHistoryLoadingFromServer] = useState(false);
   const [openingHistoryItemId, setOpeningHistoryItemId] = useState("");
+  const [materialMenuItemId, setMaterialMenuItemId] = useState("");
+  const [publicShareDialog, setPublicShareDialog] = useState(null);
+  const [publicShareRecords, setPublicShareRecords] = useState({});
+  const [isUpdatingPublicShare, setIsUpdatingPublicShare] = useState(false);
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState([]);
@@ -7756,6 +7779,14 @@ export default function App() {
 
   const openProtectedAppPage = (pageId, { replace = false } = {}) => {
     const normalizedPageId = normalizeAppPageId(pageId, "capture");
+    if (normalizedPageId === "workspace" && !hasStudyInputs && !hasResults && !activeHistoryId) {
+      currentPageRef.current = "capture";
+      setCurrentPage("capture");
+      setStatus("Add or open lecture material before entering Study Workspace.");
+      const captureRoute = resolveAppRouteForPage("capture", authSessionMode, workspaceContextId);
+      if (captureRoute) navigateToPath(captureRoute, { replace: true });
+      return;
+    }
     if (!authToken) {
       currentPageRef.current = normalizedPageId;
       setCurrentPage(normalizedPageId);
@@ -9244,7 +9275,7 @@ export default function App() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">{new Date(item.updatedAt || item.createdAt).toLocaleString()}</p>
-                <h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{item.title}</h3>
+                <h3 className="phone-safe-copy mt-3 text-xl font-semibold text-white">{extractHistoryTitle(item.summary, item.title)}</h3>
                 <p className="phone-safe-copy mt-2 text-sm text-slate-300">{item.fileName || "Saved lecture"}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-1 text-xs text-slate-200">{item.quizQuestions?.length || 0} test question{item.quizQuestions?.length === 1 ? "" : "s"}</span>
@@ -9266,7 +9297,16 @@ export default function App() {
                 </button>
                 <button type="button" onClick={() => downloadHistoryItemPdf(item)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Study Pack PDF</button>
                 <button type="button" onClick={() => downloadHistoryQuizPdf(item)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">Test PDF</button>
-                <button type="button" onClick={() => removeHistoryItem(item.id)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Remove</button>
+                <div className="material-more-anchor">
+                  <button type="button" onClick={() => toggleMaterialMoreMenu(item)} className="material-more-button" aria-label={`More actions for ${item.title}`} aria-haspopup="menu" aria-expanded={materialMenuItemId === item.id}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+                  {materialMenuItemId === item.id ? <div className="material-more-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => publicShareRecords[item.id]?.url ? navigator.clipboard.writeText(publicShareRecords[item.id].url).then(() => { setStatus("Read-only share link copied."); setMaterialMenuItemId(""); }) : createMaterialPublicShare(item)}><Link className="h-4 w-4" />Copy Share Link</button>
+                    <button type="button" role="menuitem" onClick={() => createMaterialPublicShare(item)}><RefreshCw className="h-4 w-4" />Regenerate Link</button>
+                    <button type="button" role="menuitem" onClick={() => { setMaterialMenuItemId(""); setPublicShareDialog(publicShareRecords[item.id] || { open: true, type: "material", itemId: item.id, title: item.title }); }}><RefreshCw className="h-4 w-4" />Update shared version</button>
+                    {publicShareRecords[item.id]?.shareId ? <button type="button" role="menuitem" onClick={() => { setMaterialMenuItemId(""); void disablePublicShare(publicShareRecords[item.id]); }}><X className="h-4 w-4" />Disable Link</button> : null}
+                    <button type="button" role="menuitem" onClick={() => removeHistoryItem(item.id)}><X className="h-4 w-4" />Remove from history</button>
+                  </div> : null}
+                </div>
               </div>
             </div>
             <p className="phone-safe-copy mt-4 max-h-[8.2rem] overflow-hidden text-sm leading-7 text-slate-300">{(item.summary || "Saved study guide content will appear here.").replace(/\*\*/g, "")}</p>
@@ -10516,7 +10556,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2">
+        {!isTimetableFocusMode ? <div className="mt-5 grid gap-3 md:grid-cols-2">
           <button type="button" onClick={() => setTimetableViewMode("study")} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "study" ? "border-emerald-300/45 bg-emerald-400/15 text-white shadow-[0_0_28px_rgba(16,185,129,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Current system</p>
             <h3 className="mt-2 text-2xl font-semibold">My Timetable</h3>
@@ -10527,7 +10567,7 @@ export default function App() {
             <h3 className="mt-2 text-2xl font-semibold">Lecture Timetable</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">Manually save modules, lecturers, days, times, and venues.</p>
           </button>
-        </div>
+        </div> : null}
 
         {timetableViewMode === "lecture" ? (
           <div className="mt-5 rounded-[28px] border border-sky-300/20 bg-slate-950/75 p-5">
@@ -10638,7 +10678,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {isTimetableEditing ? (
+        {!isTimetableFocusMode && isTimetableEditing ? (
           <div className="mt-5 grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
             <div className="space-y-5">
               <div className="rounded-[24px] border border-white/10 bg-slate-950/80 p-5">
@@ -10746,7 +10786,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {isTimetableEditing ? (
+        {!isTimetableFocusMode && isTimetableEditing ? (
           <div className="mt-5 flex flex-col gap-4 rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-emerald-50">
@@ -15114,6 +15154,7 @@ export default function App() {
       setChatMessages([]);
     }
     if (authToken && activeStudyChatId) {
+      if (!hasLocalMessages) setIsOpeningStudyChat(true);
       void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
         timeoutMs: hasLocalMessages ? 2800 : 6500,
         retries: 0,
@@ -15129,7 +15170,11 @@ export default function App() {
         })));
       }).catch(() => {
         // A newly created conversation has no server row until its first completed answer.
+      }).finally(() => {
+        if (!cancelled) setIsOpeningStudyChat(false);
       });
+    } else {
+      setIsOpeningStudyChat(false);
     }
     return () => {
       cancelled = true;
@@ -24734,6 +24779,7 @@ export default function App() {
 
   const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => (
     <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
+      {isOpeningStudyChat ? <div className="study-chat-message-loader" role="status" aria-label="Loading conversation"><LoaderCircle className="animate-spin" aria-hidden="true" /></div> : null}
       {chatMessages.length ? chatMessages.slice(-limit).map((message, index) => (
         <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`} aria-label={message.role === "assistant" ? "Mabaso AI answer" : "Your question"}>
           {Array.isArray(message.images) && message.images.length ? (
@@ -24911,6 +24957,7 @@ export default function App() {
           <header className="study-chat-page-topbar">
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className="study-chat-top-button lg:hidden" aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
             <span className="study-chat-mobile-title">Study Chat</span>
+            <button type="button" onClick={() => openChatShareDialog()} className="study-chat-exit-button" aria-label="Share this conversation"><Link className="h-4 w-4" aria-hidden="true" /></button>
             <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="study-chat-exit-button" aria-label="Close AI Chat">
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
@@ -24922,6 +24969,7 @@ export default function App() {
           {renderStudyChatComposer({ fullPage: true })}
         </section>
         {renderStudyChatVoiceCaptureOverlay()}
+        {renderPublicShareDialog()}
       </div>
     );
   };
@@ -25280,21 +25328,131 @@ export default function App() {
   };
 
   const shareCurrentWorkspaceLink = async () => {
-    const route = resolveAppRouteForPage("workspace", authSessionMode, workspaceContextId);
-    const url = new URL(route, window.location.origin).toString();
-    const title = activeHistoryItem?.title || file?.name || "Mabaso AI Study Workspace";
+    if (!activeHistoryId) {
+      setError("Save or open this material before creating a public link.");
+      return;
+    }
+    await createMaterialPublicShare(activeHistoryItem || historyItems.find((item) => item.id === activeHistoryId));
+  };
+
+  const toggleMaterialMoreMenu = async (item) => {
+    if (!item?.id) return;
+    const opening = materialMenuItemId !== item.id;
+    setMaterialMenuItemId(opening ? item.id : "");
+    if (!opening || publicShareRecords[item.id]) return;
     try {
-      if (typeof navigator.share === "function") {
-        await navigator.share({ title, url });
-        setStatus("Workspace link shared. The recipient must sign in and have access.");
-      } else {
-        await navigator.clipboard.writeText(url);
-        setStatus("Private workspace link copied. The recipient must sign in and have access.");
+      const { data } = await authJsonWithTransientRetries(`/api/shares/status/material/${encodeURIComponent(item.id)}`, {}, { timeoutMs: 6000, retries: 0 });
+      if (data?.share?.id) {
+        setPublicShareRecords((current) => ({ ...current, [item.id]: { open: true, type: "material", itemId: item.id, shareId: data.share.id, title: data.share.title || item.title, url: "", warnings: [] } }));
       }
-    } catch (error) {
-      if (error?.name !== "AbortError") setError("The workspace link could not be shared.");
+    } catch {
+      // Sharing remains available by generating a new link if status loading fails.
     }
   };
+
+  const createMaterialPublicShare = async (item, expiryDays = 0) => {
+    if (!item?.id || isUpdatingPublicShare) return;
+    setIsUpdatingPublicShare(true);
+    try {
+      const { data } = await authJsonWithTransientRetries(`/api/shares/material/${encodeURIComponent(item.id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expiry_days: expiryDays }),
+      }, { timeoutMs: 15000, retries: 0 });
+      const share = data?.share;
+      if (!share?.token) throw new Error("The share link was not returned.");
+      const url = new URL(`/share/material/${share.token}`, window.location.origin).toString();
+      await navigator.clipboard.writeText(url);
+      const shareRecord = { open: true, type: "material", itemId: item.id, shareId: share.id, title: share.title || item.title, url, warnings: share.warnings || [] };
+      setPublicShareRecords((current) => ({ ...current, [item.id]: shareRecord }));
+      setPublicShareDialog(shareRecord);
+      setMaterialMenuItemId("");
+      setStatus("Read-only share link copied.");
+    } catch (error) {
+      setError(error?.message || "The material share link could not be created.");
+    } finally {
+      setIsUpdatingPublicShare(false);
+    }
+  };
+
+  const openChatShareDialog = () => {
+    const eligible = chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && message.content && message.content !== "Thinking...");
+    if (!eligible.length) {
+      setError("Start a conversation before sharing it.");
+      return;
+    }
+    setPublicShareDialog({ open: true, type: "chat", conversationId: activeStudyChatId, title: deriveStudyChatTopicTitle(eligible.find((message) => message.role === "user")?.content || "Study Chat"), selectedIds: eligible.map((message) => message.id), chooseMessages: false });
+  };
+
+  const createChatPublicShare = async () => {
+    if (!publicShareDialog?.conversationId || isUpdatingPublicShare) return;
+    setIsUpdatingPublicShare(true);
+    try {
+      const { data } = await authJsonWithTransientRetries(`/api/shares/chat/${encodeURIComponent(publicShareDialog.conversationId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_message_ids: publicShareDialog.selectedIds || [], expiry_days: Number(publicShareDialog.expiryDays || 0) }),
+      }, { timeoutMs: 15000, retries: 0 });
+      const share = data?.share;
+      if (!share?.token) throw new Error("The share link was not returned.");
+      const url = new URL(`/share/chat/${share.token}`, window.location.origin).toString();
+      await navigator.clipboard.writeText(url);
+      setPublicShareDialog((current) => ({ ...current, shareId: share.id, url, warnings: share.warnings || [] }));
+      setStatus("Read-only conversation link copied.");
+    } catch (error) {
+      setError(error?.message || "The conversation share link could not be created.");
+    } finally {
+      setIsUpdatingPublicShare(false);
+    }
+  };
+
+  const disablePublicShare = async (shareRecord = publicShareDialog) => {
+    if (!shareRecord?.shareId || isUpdatingPublicShare) return;
+    setIsUpdatingPublicShare(true);
+    try {
+      await authJsonWithTransientRetries(`/api/shares/${encodeURIComponent(shareRecord.shareId)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "disable" }),
+      }, { timeoutMs: 12000, retries: 0 });
+      setPublicShareDialog(null);
+      if (shareRecord.itemId) setPublicShareRecords((current) => { const next = { ...current }; delete next[shareRecord.itemId]; return next; });
+      setStatus("Share link disabled.");
+    } catch (error) {
+      setError(error?.message || "The share link could not be disabled.");
+    } finally {
+      setIsUpdatingPublicShare(false);
+    }
+  };
+
+  const updatePublicShareSnapshot = async () => {
+    if (!publicShareDialog?.shareId || isUpdatingPublicShare) return;
+    setIsUpdatingPublicShare(true);
+    try {
+      const { data } = await authJsonWithTransientRetries(`/api/shares/${encodeURIComponent(publicShareDialog.shareId)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "update" }),
+      }, { timeoutMs: 15000, retries: 0 });
+      setPublicShareDialog((current) => ({ ...current, warnings: data?.warnings || [] }));
+      setStatus("Shared version updated.");
+    } catch (error) {
+      setError(error?.message || "The shared version could not be updated.");
+    } finally {
+      setIsUpdatingPublicShare(false);
+    }
+  };
+
+  const renderPublicShareDialog = () => publicShareDialog?.open ? (
+    <div className="public-share-dialog-layer" role="dialog" aria-modal="true" aria-label="Share read-only content">
+      <div className="public-share-dialog">
+        <div className="public-share-dialog-head"><div><p>Share read-only copy</p><h3>{publicShareDialog.title}</h3></div><button type="button" onClick={() => setPublicShareDialog(null)} aria-label="Close share panel"><X className="h-4 w-4" /></button></div>
+        <p>Only the selected study content is shared. Your account, source files, private history, and session information stay private.</p>
+        {publicShareDialog.type === "chat" && !publicShareDialog.url ? <label className="public-share-choice"><input type="checkbox" checked={Boolean(publicShareDialog.chooseMessages)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, chooseMessages: event.target.checked }))} /> Choose individual messages</label> : null}
+        {!publicShareDialog.shareId ? <label className="public-share-expiry"><span>Link expiry</span><select value={Number(publicShareDialog.expiryDays || 0)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, expiryDays: Number(event.target.value) }))}><option value={0}>No automatic expiry</option><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select></label> : null}
+        {publicShareDialog.type === "chat" && publicShareDialog.chooseMessages && !publicShareDialog.url ? <div className="public-share-message-picker">{chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && message.content !== "Thinking...").map((message) => <label key={message.id}><input type="checkbox" checked={(publicShareDialog.selectedIds || []).includes(message.id)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, selectedIds: event.target.checked ? [...(current.selectedIds || []), message.id] : (current.selectedIds || []).filter((id) => id !== message.id) }))} /><span>{message.role === "assistant" ? "Mabaso" : "Question"}: {String(message.content).slice(0, 120)}</span></label>)}</div> : null}
+        {(publicShareDialog.warnings || []).length ? <p className="public-share-warning">Review before sharing: this content may contain {(publicShareDialog.warnings || []).join(", ")}.</p> : null}
+        {publicShareDialog.url ? <div className="public-share-url"><input readOnly value={publicShareDialog.url} aria-label="Public share link" /><button type="button" onClick={() => navigator.clipboard.writeText(publicShareDialog.url)}>Copy link</button></div> : null}
+        <div className="public-share-dialog-actions">{publicShareDialog.shareId ? <button type="button" onClick={() => disablePublicShare()} disabled={isUpdatingPublicShare}>Disable link</button> : null}{publicShareDialog.shareId ? <button type="button" onClick={updatePublicShareSnapshot} disabled={isUpdatingPublicShare}>Update shared version</button> : null}<button type="button" onClick={publicShareDialog.type === "chat" ? createChatPublicShare : () => createMaterialPublicShare(historyItems.find((item) => item.id === publicShareDialog.itemId), Number(publicShareDialog.expiryDays || 0))} disabled={isUpdatingPublicShare}>{isUpdatingPublicShare ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{publicShareDialog.shareId ? "Regenerate link" : "Create link"}</button></div>
+      </div>
+    </div>
+  ) : null;
 
   const copyTeacherTranscript = async () => {
     const transcriptText = teacherTranscriptText.trim();
@@ -26040,15 +26198,21 @@ export default function App() {
   const openSavedStudyChat = (conversationId = "") => {
     const normalizedConversationId = String(conversationId || "").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 96);
     if (!normalizedConversationId) return;
+    let restoredFromCache = false;
     try {
       const cachedMessages = JSON.parse(window.localStorage.getItem(
         getStudyChatStorageKey(authEmail, studyChatMaterialKey, normalizedConversationId),
       ) || "[]");
       if (Array.isArray(cachedMessages) && cachedMessages.length) {
         setChatMessages(cachedMessages.slice(-60));
+        restoredFromCache = true;
       }
     } catch {
       // The server refresh below remains the source of truth when local cache parsing fails.
+    }
+    if (!restoredFromCache) {
+      setChatMessages([]);
+      setIsOpeningStudyChat(true);
     }
     setActiveStudyChatId(normalizedConversationId);
     setIsStudyChatSidebarOpen(false);
@@ -26280,7 +26444,8 @@ export default function App() {
   const downloadHistoryItemPdf = async (item) => {
     try {
       const resolvedItem = await resolveFullHistoryItem(item);
-      await exportPdf(resolvedItem.title || resolvedItem.fileName || "Saved lecture", [
+      const topicTitle = extractHistoryTitle(resolvedItem.summary, resolvedItem.title || resolvedItem.fileName || "Saved lecture");
+      await exportPdf(topicTitle, [
         { title: "Study Guide", content: resolvedItem.summary || "", images: sanitizeStudyImagesForStorage(getVisibleStudyImages(resolvedItem.studyImages || [])) },
         { title: "Transcript", content: resolvedItem.transcript || "" },
         { title: "Past Question Paper References", content: resolvedItem.pastQuestionPapers || "" },
@@ -26292,7 +26457,7 @@ export default function App() {
         { title: "Podcast Debate Script", content: resolvedItem.podcastData?.script || "" },
         { title: "Study Audio Session", content: teacherLessonToText(resolvedItem.teacherLessonData) },
       ]);
-      setStatus(`${resolvedItem.title} PDF downloaded.`);
+      setStatus(`${topicTitle} PDF downloaded.`);
     } catch (err) {
       setError(err.message || "Could not create the history PDF.");
     }
@@ -26305,10 +26470,11 @@ export default function App() {
         setError("This saved workspace does not have a generated test yet.");
         return;
       }
-      await exportPdf(`${resolvedItem.title || resolvedItem.fileName || "Saved lecture"} test`, [
+      const topicTitle = extractHistoryTitle(resolvedItem.summary, resolvedItem.title || resolvedItem.fileName || "Saved lecture");
+      await exportPdf(`${topicTitle} test`, [
         { title: "Test", content: buildQuizExportText(resolvedItem.quizQuestions || []) },
       ]);
-      setStatus(`${resolvedItem.title} test PDF downloaded.`);
+      setStatus(`${topicTitle} test PDF downloaded.`);
     } catch (err) {
       setError(err.message || "Could not create the test PDF.");
     }
@@ -27458,6 +27624,7 @@ export default function App() {
         <div className="hero-grid" />
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
+      {renderPublicShareDialog()}
       {siteRatingModal}
       <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
         {currentPage !== "capture" && currentPage !== "workspace" ? (
@@ -28015,18 +28182,14 @@ export default function App() {
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
                               <summary className="cursor-pointer list-none">
-                                <div className="flex min-h-[48px] items-center justify-between gap-2">
-                                  <div className="flex min-w-0 items-center gap-3">
-                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-sm font-black text-emerald-700">{index + 1}</span>
-                                    <div className="study-guide-section-title-row min-w-0">
-                                    <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
-                                    <ChevronDown className="study-guide-section-chevron h-4 w-4" aria-hidden="true" />
-                                    </div>
-                                  </div>
-                                  <div className="flex shrink-0 items-center gap-1">
+                                <div className="study-guide-section-summary-row">
+                                  <span className="study-guide-section-number">{index + 1}</span>
+                                  <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
+                                  <div className="study-guide-section-actions">
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (canUseSubtopicExplainMore) regenerateGuideSection(section); else openUpgradeModal(); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title={canUseSubtopicExplainMore ? "Regenerate" : "Upgrade to regenerate this subtopic"} aria-label={canUseSubtopicExplainMore ? "Regenerate this subtopic" : "Upgrade to regenerate this subtopic"}>{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button>
                                   </div>
+                                  <ChevronDown className="study-guide-section-chevron h-4 w-4" aria-hidden="true" />
                                 </div>
                               </summary>
                               <div className="phone-safe-copy mt-2 max-w-none">
