@@ -5333,12 +5333,35 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
   }
 }
 
+function getCsrfTokenFromCookie() {
+  const name = "mabaso_csrf";
+  const cookies = document.cookie.split(";");
+  for (let i = 0; i < cookies.length; i += 1) {
+    const cookie = cookies[i].trim();
+    if (cookie.startsWith(name + "=")) {
+      return decodeURIComponent(cookie.substring(name.length + 1));
+    }
+  }
+  return "";
+}
+
 async function apiFetch(path, options = {}, timeoutMs = 15000) {
   const url = /^https?:\/\//i.test(String(path || "")) ? path : `${API_BASE_URL}${path}`;
+  const headers = new Headers(options.headers || {});
+  
+  // Add CSRF token for write requests (POST, PUT, DELETE, PATCH)
+  const method = String(options.method || "GET").toUpperCase();
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    const csrfToken = getCsrfTokenFromCookie();
+    if (csrfToken) {
+      headers.set("x-csrf-token", csrfToken);
+    }
+  }
+  
   const nextOptions = {
     credentials: "include",
     ...options,
-    headers: new Headers(options.headers || {}),
+    headers,
   };
   return fetchWithTimeout(url, nextOptions, timeoutMs);
 }
