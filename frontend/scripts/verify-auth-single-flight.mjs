@@ -15,10 +15,14 @@ assert.equal(
   "AuthContext must own exactly one /auth/me request path.",
 );
 assert.match(authSource, /startupSessionPromise/, "AuthContext must retain a module-level single-flight promise.");
+assert.match(authSource, /sessionStateRevision/, "AuthContext must version session state so stale startup checks cannot overwrite a completed login.");
+assert.match(authSource, /requestRevision !== sessionStateRevision/, "Stale session results must be ignored after login or logout changes the session revision.");
 assert.match(authSource, /status:\s*"unknown"/, "AuthContext must classify timeout, network, and 5xx session checks as unknown.");
 assert.match(authSource, /response\.status === 401 \|\| response\.status === 403/, "Only definite 401/403 responses should mark the session unauthenticated.");
 assert.match(appSource, /sharedAuthStatus === "unknown"/, "App.jsx must keep restorable sessions available while auth is unknown.");
 assert.match(appSource, /loadPersistedAuthStateToken/, "App.jsx must restore the cookie-backed local auth marker before the background session check finishes.");
+assert.match(appSource, /authSessionRevisionRef/, "Protected requests must be tied to the session revision that started them.");
+assert.match(appSource, /requestSessionRevision !== authSessionRevisionRef\.current/, "A stale protected 401 must not log out a newer successful session.");
 assert.doesNotMatch(appSource, /setInterval\([^)]*\/auth\/me/s, "Session verification must not run on an interval.");
 
 console.log("Auth bootstrap single-flight checks passed.");

@@ -8,6 +8,7 @@ const SESSION_UNKNOWN_MESSAGE = "Session check is still restoring. We will retry
 
 let startupSessionPromise = null;
 let startupSessionResult = null;
+let sessionStateRevision = 0;
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -88,7 +89,13 @@ function getSessionSingleFlight({ force = false } = {}) {
   if (!force && startupSessionResult && startupSessionResult.status !== "unknown") return Promise.resolve(startupSessionResult);
   if (startupSessionPromise) return startupSessionPromise;
   if (force) startupSessionResult = null;
+  const requestRevision = sessionStateRevision;
   startupSessionPromise = requestSession().then((result) => {
+    // A login or logout completed while this request was in flight. Its result is
+    // now stale and must not overwrite the newer authenticated state.
+    if (requestRevision !== sessionStateRevision) {
+      return startupSessionResult || { status: "unknown", session: null, error: SESSION_UNKNOWN_MESSAGE };
+    }
     if (result.status !== "unknown") startupSessionResult = result;
     return result;
   }).finally(() => {
@@ -129,12 +136,14 @@ export function AuthProvider({ children }) {
 
   const acceptSession = useCallback((session) => {
     const nextState = { status: "authenticated", session, error: "" };
+    sessionStateRevision += 1;
     startupSessionResult = nextState;
     setAuthState(nextState);
   }, []);
 
   const clearSession = useCallback(() => {
     const nextState = { status: "unauthenticated", session: null, error: "" };
+    sessionStateRevision += 1;
     startupSessionResult = nextState;
     setAuthState(nextState);
   }, []);

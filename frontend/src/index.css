@@ -401,6 +401,7 @@ iframe {
 }
 
 .study-chat-embedded-panel {
+  position: relative;
   min-height: min(760px, calc(100dvh - 9rem));
   overflow: hidden;
   border: 0;
@@ -475,6 +476,31 @@ iframe {
   color: #f0fdf4;
 }
 
+.ai-streaming-dots {
+  display: inline-flex;
+  min-height: 16px;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+}
+
+.ai-streaming-dots > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #86efac;
+  animation: mabaso-chat-dot 1.25s ease-in-out infinite;
+}
+
+.ai-streaming-dots > span:nth-child(2) { animation-delay: 140ms; }
+.ai-streaming-dots > span:nth-child(3) { animation-delay: 280ms; }
+.ai-streaming-dots.is-light > span { background: #15803d; }
+
+@keyframes mabaso-chat-dot {
+  0%, 60%, 100% { opacity: 0.42; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
 .mabaso-copy-guard,
 .mabaso-copy-guard * {
   -webkit-user-select: none;
@@ -534,8 +560,9 @@ iframe {
 
 .study-chat-message.is-assistant {
   align-self: flex-start;
-  border-color: rgba(16, 185, 129, 0.2);
-  background: rgba(16, 185, 129, 0.1);
+  border: 0;
+  background: transparent;
+  padding-inline: 0;
 }
 
 .study-chat-message.is-user {
@@ -557,6 +584,35 @@ iframe {
   bottom: 0.5rem;
   z-index: 8;
   backdrop-filter: blur(12px);
+}
+
+.study-chat-embedded-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(34, 197, 94, 0.5) transparent;
+}
+
+.study-chat-embedded-scroll > .study-chat-embedded-messages {
+  max-height: none !important;
+  overflow: visible !important;
+  overscroll-behavior: auto;
+}
+
+.study-chat-jump-latest {
+  position: absolute;
+  right: 1rem;
+  bottom: 5.25rem;
+  z-index: 24;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(134, 239, 172, 0.28);
+  border-radius: 999px;
+  background: #05261a;
+  color: #dcfce7;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
 }
 
 .study-chat-composer-row {
@@ -1828,6 +1884,66 @@ iframe {
   overflow: hidden !important;
 }
 
+.active-study-chat {
+  display: grid;
+  height: min(680px, calc(100dvh - 7rem));
+  min-height: 430px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  border-radius: 24px;
+  background: #00170e;
+  padding: 1rem;
+}
+
+.active-study-chat-messages {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.5rem 0 1rem;
+  scrollbar-color: rgba(34, 197, 94, 0.5) transparent;
+}
+
+.active-study-chat-message {
+  width: min(100%, 760px);
+  margin: 0 auto 0.85rem;
+  color: #f8fafc;
+  font-size: 15.5px;
+  line-height: 1.65;
+}
+
+.active-study-chat-message.is-user {
+  width: fit-content;
+  max-width: min(78%, 620px);
+  margin-right: 0;
+  border: 1px solid rgba(134, 239, 172, 0.15);
+  border-radius: 16px;
+  background: rgba(8, 41, 27, 0.72);
+  padding: 0.55rem 0.75rem;
+}
+
+.active-study-chat-message.is-assistant {
+  margin-left: 0;
+}
+
+.active-study-chat-empty {
+  color: #a7c7b4;
+  font-size: 0.9rem;
+}
+
+.active-study-chat-composer {
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: 22px;
+  background: #05261a;
+  padding: 0.38rem 0.48rem;
+}
+
+.active-study-chat-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
 .study-chat-upload-status {
   margin: 0.2rem 0.55rem 0;
   color: #86efac;
@@ -1864,6 +1980,31 @@ iframe {
     border-radius: 16px !important;
   }
 
+  .active-study-chat {
+    height: min(580px, calc(100dvh - 7.5rem));
+    min-height: 360px;
+    border-radius: 16px;
+    padding: 0.55rem;
+  }
+
+  .active-study-chat > div:first-child {
+    padding-bottom: 0.5rem !important;
+  }
+
+  .active-study-chat > div:first-child h2 {
+    margin-top: 0.2rem !important;
+    font-size: 1rem !important;
+  }
+
+  .active-study-chat-message {
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .active-study-chat-message.is-user {
+    max-width: 86%;
+  }
+
   .study-chat-embedded-head {
     padding: 0.5rem 0.55rem !important;
   }
@@ -1888,15 +2029,15 @@ iframe {
 
   .study-chat-embedded-messages .study-chat-message,
   .study-chat-page-messages .study-chat-message {
-    font-size: 0.78rem !important;
-    line-height: 1.48 !important;
+    font-size: 15px !important;
+    line-height: 1.6 !important;
   }
 
   .study-chat-composer-input {
     min-height: 34px !important;
     max-height: 96px !important;
-    font-size: 0.8rem !important;
-    line-height: 1.4 !important;
+    font-size: 15px !important;
+    line-height: 1.45 !important;
   }
 
   .study-chat-composer-icon,
@@ -1939,6 +2080,18 @@ iframe {
   .timetable-compact-surface table td {
     padding: 0.32rem !important;
     font-size: 0.66rem !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-streaming-dots > span {
+    animation: none;
+    opacity: 0.72;
+    transform: none;
+  }
+
+  .study-chat-jump-latest {
+    scroll-behavior: auto;
   }
 }
 

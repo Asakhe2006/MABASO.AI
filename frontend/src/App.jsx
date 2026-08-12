@@ -6895,6 +6895,7 @@ export default function App() {
   const [isStudyChatVoiceSessionOpen, setIsStudyChatVoiceSessionOpen] = useState(false);
   const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
   const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
+  const [showStudyChatJumpToLatest, setShowStudyChatJumpToLatest] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
   const [copiedStudyChatMessageId, setCopiedStudyChatMessageId] = useState("");
@@ -7028,9 +7029,15 @@ export default function App() {
   const chatImageInputRef = useRef(null);
   const activeStudySessionImageInputRef = useRef(null);
   const activeStudySessionVoiceRecognitionRef = useRef(null);
+  const activeStudySessionChatScrollRef = useRef(null);
+  const activeStudySessionAssistantStartRef = useRef(null);
+  const pendingActiveStudySessionAnchorIdRef = useRef("");
   const roomBoardImageInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
   const studyChatEndRef = useRef(null);
+  const studyChatScrollRef = useRef(null);
+  const studyChatAssistantStartRef = useRef(null);
+  const pendingStudyChatAnchorIdRef = useRef("");
   const studyChatComposerInputRef = useRef(null);
   const browserVoiceEndRef = useRef(null);
   const studyChatVoiceRecognitionRef = useRef(null);
@@ -7071,6 +7078,7 @@ export default function App() {
   const landingAuthPanelRef = useRef(null);
   const pendingAuthRedirectPathRef = useRef(normalizePostAuthRedirectPath(window.localStorage.getItem(AUTH_REDIRECT_PATH_KEY) || ""));
   const authTokenRef = useRef("");
+  const authSessionRevisionRef = useRef(0);
   const authBroadcastChannelRef = useRef(null);
   const authExpiryHandledRef = useRef(false);
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
@@ -10407,7 +10415,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="mt-5 rounded-[30px] border border-cyan-300/15 bg-black/50 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.3)] backdrop-blur">
+          <section className="active-study-chat mt-5">
             <div className="flex flex-col gap-3 border-b border-white/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/70">AI Study Assistant</p>
@@ -10431,11 +10439,18 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="mt-5 space-y-4">
+            <div ref={activeStudySessionChatScrollRef} className="active-study-chat-messages mt-4">
               {messages.length ? messages.map((message, index) => (
-                <div key={message.id || `${message.role}-${index}`} className={`max-w-[92%] rounded-2xl border px-4 py-3 text-sm leading-7 ${message.role === "assistant" ? "border-cyan-300/20 bg-cyan-300/10 text-slate-100" : "ml-auto border-emerald-300/20 bg-emerald-300/10 text-white"}`}>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">{message.role === "assistant" ? "MABASO" : "You"}</p>
-                  <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words">{message.content}</p>
+                <div
+                  key={message.id || `${message.role}-${index}`}
+                  ref={message.role === "assistant" && message.id === [...messages].reverse().find((item) => item.role === "assistant")?.id ? activeStudySessionAssistantStartRef : null}
+                  data-message-id={message.id || ""}
+                  className={`active-study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
+                >
+                  <div className="mabaso-ai-response">
+                    {message.content === "Thinking..." ? renderStreamingDots() : <AssistantMarkdown content={message.content} theme="dark" />}
+                    {isAskingActiveStudySession && message.role === "assistant" && message.id === [...messages].reverse().find((item) => item.role === "assistant")?.id && message.content !== "Thinking..." ? renderStreamingDots() : null}
+                  </div>
                   {Array.isArray(message.referenceImages) && message.referenceImages.length ? (
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                       {message.referenceImages.map((image, imageIndex) => (
@@ -10447,10 +10462,10 @@ export default function App() {
                   ) : null}
                 </div>
               )) : (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm leading-7 text-slate-300">Ask a question about this subject, a definition, a calculation, or anything else you need clarified.</div>
+                <div className="active-study-chat-empty">Ask a question about this subject when you are ready.</div>
               )}
             </div>
-            <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/80 p-3">
+            <div className="active-study-chat-composer">
               <input ref={activeStudySessionImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={handleActiveStudySessionReferenceFilesChange} />
               {activeStudySessionReferenceImages.length ? (
                 <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -10464,17 +10479,17 @@ export default function App() {
                   ))}
                 </div>
               ) : null}
-              <div className="flex items-end gap-3">
-                <button type="button" onClick={() => activeStudySessionImageInputRef.current?.click()} disabled={isAskingActiveStudySession || activeStudySessionReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-cyan-300/25 bg-cyan-300/10 text-cyan-50 disabled:opacity-50" aria-label="Add study reference photo or document">
+              <div className="active-study-chat-composer-row">
+                <button type="button" onClick={() => activeStudySessionImageInputRef.current?.click()} disabled={isAskingActiveStudySession || activeStudySessionReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add study reference photo or document">
                   <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
                   </svg>
                 </button>
-                <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={2} className="min-h-[64px] flex-1 resize-none bg-transparent px-2 py-3 text-sm leading-7 text-slate-100 outline-none placeholder:text-slate-500" placeholder="" />
-                <button type="button" onClick={toggleActiveStudySessionVoiceCapture} disabled={isAskingActiveStudySession} className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white disabled:opacity-50 ${isActiveStudySessionVoiceListening ? "ring-2 ring-emerald-300" : ""}`} aria-label={isActiveStudySessionVoiceListening ? "Stop voice question" : "Ask by voice"} aria-pressed={isActiveStudySessionVoiceListening}>
+                <textarea value={activeStudySessionQuestion} onChange={(event) => setActiveStudySessionQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!isAskingActiveStudySession) askActiveStudySessionAssistant(); } }} rows={1} className="study-chat-composer-input" placeholder="" />
+                <button type="button" onClick={toggleActiveStudySessionVoiceCapture} disabled={isAskingActiveStudySession} className={`study-chat-composer-icon ${isActiveStudySessionVoiceListening ? "is-listening" : ""}`} aria-label={isActiveStudySessionVoiceListening ? "Stop voice question" : "Ask by voice"} aria-pressed={isActiveStudySessionVoiceListening}>
                   <Mic className="h-5 w-5" aria-hidden="true" />
                 </button>
-                <button type="button" onClick={askActiveStudySessionAssistant} disabled={isAskingActiveStudySession} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#06b6d4,#22c55e)] text-white disabled:opacity-50" aria-label="Send study session question">
+                <button type="button" onClick={askActiveStudySessionAssistant} disabled={isAskingActiveStudySession || !activeStudySessionQuestion.trim()} className="study-chat-send-button" aria-label="Send study session question">
                   <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
                     <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
                   </svg>
@@ -14919,6 +14934,7 @@ export default function App() {
   };
 
   const clearSession = (message = "Please sign in again.", { broadcast = true, syncContext = true } = {}) => {
+    authSessionRevisionRef.current += 1;
     if (syncContext) clearSharedSession();
     const previousEmail = normalizeHistoryOwnerEmail(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
     transcriptionAbortControllerRef.current?.abort();
@@ -15060,6 +15076,7 @@ export default function App() {
       ? routedResourceId
       : loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(nextEmail, routedPage === "voice" ? "global" : "workspace"), "chat");
 
+    authSessionRevisionRef.current += 1;
     authTokenRef.current = nextToken;
     authExpiryHandledRef.current = false;
     setAuthToken(nextToken);
@@ -15177,16 +15194,19 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [chatMessages.length, isAskingChat]);
-
-  useEffect(() => {
-    if (!isAskingChat || typeof window === "undefined") return undefined;
+    if (typeof window === "undefined" || !pendingStudyChatAnchorIdRef.current) return undefined;
+    const targetMessageId = pendingStudyChatAnchorIdRef.current;
     const frameId = window.requestAnimationFrame(() => {
-      studyChatEndRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
+      const container = studyChatScrollRef.current;
+      const target = studyChatAssistantStartRef.current;
+      if (!container || !target || target.dataset.messageId !== targetMessageId) return;
+      const targetTop = Math.max(0, target.offsetTop - container.offsetTop - 12);
+      container.scrollTo({ top: targetTop, behavior: "auto" });
+      pendingStudyChatAnchorIdRef.current = "";
+      setShowStudyChatJumpToLatest(false);
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [isAskingChat, chatMessages[chatMessages.length - 1]?.content]);
+  }, [chatMessages.length]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -15786,6 +15806,7 @@ export default function App() {
     const nextEmail = data?.email || fallbackEmail || "";
     const nextMode = data?.session_mode || "user";
     const nextAvailableModes = Array.isArray(data?.available_modes) ? data.available_modes : [];
+    authSessionRevisionRef.current += 1;
     applyServerAccountState(data);
     acceptSharedSession({ ...data, email: nextEmail });
     authTokenRef.current = nextToken;
@@ -16518,6 +16539,7 @@ export default function App() {
     const currentToken = tokenOverride || authToken;
     if (!currentToken) throw new Error("Please sign in to continue.");
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
+    const requestSessionRevision = authSessionRevisionRef.current;
     const requestMethod = String(requestOptions.method || "GET").toUpperCase();
     const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
     let response;
@@ -16530,6 +16552,11 @@ export default function App() {
       throw requestError;
     }
     if (response.status === 401) {
+      if (requestSessionRevision !== authSessionRevisionRef.current) {
+        const staleAuthError = new Error("A stale authenticated request was ignored after the session changed.");
+        staleAuthError.staleAuthRequest = true;
+        throw staleAuthError;
+      }
       const latestToken = authTokenRef.current || "";
       if (isBearerAuthToken(latestToken) && latestToken !== activeToken) {
         const staleAuthError = new Error("A stale authenticated request was ignored after the session token changed.");
@@ -17629,6 +17656,18 @@ export default function App() {
     });
     return null;
   };
+  useEffect(() => {
+    if (typeof window === "undefined" || !pendingActiveStudySessionAnchorIdRef.current) return undefined;
+    const targetMessageId = pendingActiveStudySessionAnchorIdRef.current;
+    const frameId = window.requestAnimationFrame(() => {
+      const container = activeStudySessionChatScrollRef.current;
+      const target = activeStudySessionAssistantStartRef.current;
+      if (!container || !target || target.dataset.messageId !== targetMessageId) return;
+      container.scrollTo({ top: Math.max(0, target.offsetTop - container.offsetTop - 8), behavior: "auto" });
+      pendingActiveStudySessionAnchorIdRef.current = "";
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [timetableSessions]);
   const openActiveStudySession = (session) => {
     if (!session || ["break", "empty"].includes(session.status) || ["break", "empty", "exam"].includes(session.type)) return;
     const nowIso = new Date().toISOString();
@@ -17819,6 +17858,7 @@ export default function App() {
     const turnId = `active-study-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${turnId}-user`, role: "user", content: question, referenceImages: selectedReferenceImages };
     const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "Thinking..." };
+    pendingActiveStudySessionAnchorIdRef.current = pendingAssistantMessage.id;
     const pendingMessages = [...existingMessages, userMessage, pendingAssistantMessage].slice(-20);
     setActiveStudySessionQuestion("");
     setActiveStudySessionReferenceImages([]);
@@ -17838,6 +17878,16 @@ export default function App() {
         responseLength: "concise",
         referenceImages: selectedReferenceImages.map((image) => image.dataUrl).filter(Boolean),
         referenceDocuments: selectedReferenceImages.filter((item) => item.text).map((item) => ({ name: item.name, text: item.text })),
+        onDelta: (streamedAnswer) => {
+          updateActiveStudySessionRecord(session.id, (item) => ({
+            ...item,
+            studyMessages: (item.studyMessages || []).map((message) => (
+              message.id === pendingAssistantMessage.id
+                ? { ...message, content: streamedAnswer || "Thinking..." }
+                : message
+            )),
+          }), { save: false });
+        },
       });
       const completedMessages = pendingMessages.map((message) => (
         message.id === pendingAssistantMessage.id ? { ...message, content: answer } : message
@@ -24399,6 +24449,7 @@ export default function App() {
     const chatTurnId = `study-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question, images: referenceImagesForQuestion };
     const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
+    pendingStudyChatAnchorIdRef.current = pendingAssistantMessage.id;
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
@@ -24895,11 +24946,39 @@ export default function App() {
     event.target.style.height = `${Math.min(event.target.scrollHeight, maxComposerHeight)}px`;
   };
 
-  const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => (
+  const renderStreamingDots = (label = "Mabaso AI is generating a response") => (
+    <span className="ai-streaming-dots" role="status" aria-label={label}>
+      <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
+    </span>
+  );
+
+  const handleStudyChatScroll = (event) => {
+    const node = event.currentTarget;
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    setShowStudyChatJumpToLatest(distanceFromBottom > 120);
+  };
+
+  const jumpStudyChatToLatest = () => {
+    const node = studyChatScrollRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    setShowStudyChatJumpToLatest(false);
+  };
+
+  const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => {
+    const visibleMessages = chatMessages.slice(-limit);
+    const lastAssistantId = [...visibleMessages].reverse().find((message) => message.role === "assistant")?.id || "";
+    return (
     <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
       {isOpeningStudyChat ? <div className="study-chat-message-loader" role="status" aria-label="Loading conversation"><LoaderCircle className="animate-spin" aria-hidden="true" /></div> : null}
-      {chatMessages.length ? chatMessages.slice(-limit).map((message, index) => (
-        <div key={message.id || `${message.role}-${index}`} className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`} aria-label={message.role === "assistant" ? "Mabaso AI answer" : "Your question"}>
+      {visibleMessages.length ? visibleMessages.map((message, index) => (
+        <div
+          key={message.id || `${message.role}-${index}`}
+          ref={message.role === "assistant" && message.id === lastAssistantId ? studyChatAssistantStartRef : null}
+          data-message-id={message.id || ""}
+          className={`study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
+          aria-label={message.role === "assistant" ? "Mabaso AI answer" : "Your question"}
+        >
           {Array.isArray(message.images) && message.images.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
               {message.images.map((image) => image.dataUrl
@@ -24907,8 +24986,13 @@ export default function App() {
                 : <span key={image.id || image.name} className="inline-flex max-w-[220px] items-center gap-2 text-xs text-slate-300"><FileText className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="truncate">{image.name || "Document"}</span></span>)}
             </div>
           ) : null}
-          <div className="mabaso-ai-response mt-2">
-            <AssistantMarkdown content={message.content} theme="dark" />
+          <div className="mabaso-ai-response">
+            {message.content === "Thinking..."
+              ? renderStreamingDots()
+              : <AssistantMarkdown content={message.content} theme="dark" />}
+            {isAskingChat && message.role === "assistant" && message.id === lastAssistantId && message.content !== "Thinking..."
+              ? renderStreamingDots()
+              : null}
           </div>
           {message.role === "assistant" && message.content !== "Thinking..." ? (
             <div className="study-chat-message-actions">
@@ -24929,7 +25013,8 @@ export default function App() {
       ))}
       <div ref={studyChatEndRef} />
     </div>
-  );
+    );
+  };
 
   const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
@@ -24987,7 +25072,6 @@ export default function App() {
           ))}
         </div>
       ) : null}
-      <p className="mt-2 text-xs text-slate-400">{isAskingChat ? "Mabaso is answering..." : studyChatVoiceStatus || lectureAssistant.statusText}</p>
     </div>
   );
 
@@ -25013,8 +25097,11 @@ export default function App() {
           </div>
         </div>
       </div>
-      {renderStudyChatMessages({ limit: 12 })}
+      <div ref={studyChatScrollRef} onScroll={handleStudyChatScroll} className="study-chat-embedded-scroll">
+        {renderStudyChatMessages({ limit: 12 })}
+      </div>
       {renderStudyChatComposer({ compact })}
+      {showStudyChatJumpToLatest ? <button type="button" onClick={jumpStudyChatToLatest} className="study-chat-jump-latest" aria-label="Jump to latest message">↓</button> : null}
     </div>
   );
 
@@ -25080,10 +25167,11 @@ export default function App() {
               <X className="h-4 w-4" aria-hidden="true" />
             </button>
           </header>
-          <main className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
+          <main ref={studyChatScrollRef} onScroll={handleStudyChatScroll} className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
             {chatMessages.length ? null : <h1>Ready when you are.</h1>}
             {renderStudyChatMessages({ limit: 80, fullPage: true })}
           </main>
+          {showStudyChatJumpToLatest ? <button type="button" onClick={jumpStudyChatToLatest} className="study-chat-jump-latest" aria-label="Jump to latest message">↓</button> : null}
           {renderStudyChatComposer({ fullPage: true })}
         </section>
         {renderStudyChatVoiceCaptureOverlay()}

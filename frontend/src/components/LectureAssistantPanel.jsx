@@ -117,17 +117,10 @@ function conversationMatchesLocalFilter(conversation, query = "") {
 }
 
 function TypingIndicator({ theme = "dark" }) {
-  const dotTone = themed(theme, "bg-emerald-200/90", "bg-emerald-600");
   return (
-    <div className="inline-flex items-center gap-1.5">
-      {[0, 1, 2].map((index) => (
-        <span
-          key={index}
-          className={`h-2.5 w-2.5 animate-pulse rounded-full ${dotTone}`}
-          style={{ animationDelay: `${index * 150}ms` }}
-        />
-      ))}
-    </div>
+    <span className={`ai-streaming-dots ${themed(theme, "", "is-light")}`} role="status" aria-label="Mabaso AI is generating a response">
+      <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
+    </span>
   );
 }
 
@@ -379,6 +372,7 @@ export default function LectureAssistantPanel({ assistant, visible = true }) {
 function LectureAssistantPanelContent({ assistant }) {
   const {
     activeConversation,
+    assistantStartRef,
     attachedImageInputRef,
     attachedImages = [],
     attachImageFiles,
@@ -922,7 +916,12 @@ function LectureAssistantPanelContent({ assistant }) {
                 {!isLoadingConversationMessages && messages.length ? (
                   <div className="space-y-4">
                   {messages.map((message) => (
-                    <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div
+                      key={message.id}
+                      ref={message.role === "assistant" && message.id === lastAssistantMessageId ? assistantStartRef : null}
+                      data-message-id={message.id}
+                      className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
                       {message.role === "assistant" ? (
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
                       ) : null}
@@ -963,7 +962,9 @@ function LectureAssistantPanelContent({ assistant }) {
 
                         <div className="mt-3">
                           {message.role === "assistant" ? (
-                            <AssistantMarkdown content={message.content} theme={theme} />
+                            message.content
+                              ? <AssistantMarkdown content={message.content} theme={theme} />
+                              : <TypingIndicator theme={theme} />
                           ) : (
                             <p className="whitespace-pre-wrap break-words text-sm leading-7">{message.content}</p>
                           )}
@@ -1008,15 +1009,6 @@ function LectureAssistantPanelContent({ assistant }) {
                       ) : null}
                     </div>
                   ))}
-
-                  {isGenerating ? (
-                    <div className="flex gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#0f766e,#22c55e)] text-sm font-semibold text-white">AI</div>
-                      <div className={`rounded-[24px] border px-4 py-3 ${themed(theme, "border-emerald-300/18 bg-emerald-300/10", "border-emerald-100 bg-white")}`}>
-                        <TypingIndicator theme={theme} />
-                      </div>
-                    </div>
-                  ) : null}
 
                   <div ref={messagesEndRef} />
                   </div>

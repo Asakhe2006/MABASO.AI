@@ -1149,6 +1149,8 @@ export function useLectureAssistant({
   const abortControllerRef = useRef(null);
   const recognitionRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const assistantStartRef = useRef(null);
+  const pendingAssistantAnchorIdRef = useRef("");
   const composerRef = useRef(null);
   const attachedImageInputRef = useRef(null);
   const copyResetTimerRef = useRef(0);
@@ -3824,6 +3826,7 @@ export function useLectureAssistant({
       clientRequestId,
       metrics: traceMetrics,
     });
+    pendingAssistantAnchorIdRef.current = nextAssistantMessage.id;
     const baseContextMessages = [...currentMessages];
     if (!appendUserMessage && baseContextMessages.length) {
       const lastContextMessage = baseContextMessages[baseContextMessages.length - 1];
@@ -4380,11 +4383,16 @@ export function useLectureAssistant({
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || typeof window === "undefined") return;
-    window.requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
+    if (!isOpen || typeof window === "undefined" || !pendingAssistantAnchorIdRef.current) return;
+    const targetMessageId = pendingAssistantAnchorIdRef.current;
+    const frameId = window.requestAnimationFrame(() => {
+      const target = assistantStartRef.current;
+      if (!target || target.dataset.messageId !== targetMessageId) return;
+      target.scrollIntoView?.({ block: "start", behavior: "auto" });
+      pendingAssistantAnchorIdRef.current = "";
     });
-  }, [isGenerating, isOpen, messages.length]);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isOpen, messages.length]);
 
   useEffect(() => () => {
     abortControllerRef.current?.abort?.();
@@ -4411,6 +4419,7 @@ export function useLectureAssistant({
     attachedImages,
     attachImageFiles,
     assistantAudioState,
+    assistantStartRef,
     canSend: Boolean(compactText(draft) || attachedImages.length) && !isGenerating,
     canLoadMoreConversations,
     closePanel,
@@ -4441,6 +4450,7 @@ export function useLectureAssistant({
     loadOlderMessages,
     messages,
     messagesEndRef,
+    pendingAssistantAnchorIdRef,
     mobileSidebarOpen,
     openPanel,
     openMobileSidebar: () => setMobileSidebarOpen(true),
