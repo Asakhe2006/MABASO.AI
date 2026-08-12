@@ -27251,12 +27251,7 @@ export default function App() {
           <div className="px-8 py-10 text-center">
             <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
             <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
-            <p className="mt-4 text-sm text-slate-300">{authCheckError ? "Reconnecting securely..." : "Checking your session..."}</p>
-            {authCheckError ? (
-              <button type="button" onClick={() => void verifySession({ resumed: true })} className="mt-5 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white">
-                Try now
-              </button>
-            ) : null}
+            <p className="mt-4 text-sm text-slate-300">{authCheckError ? "Reconnecting securely in the background..." : "Checking your session..."}</p>
           </div>
         </div>
       </div>

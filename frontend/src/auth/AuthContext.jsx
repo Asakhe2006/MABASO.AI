@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const AuthContext = createContext(null);
 const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
-const SESSION_CHECK_TIMEOUT_MS = 10000;
+const SESSION_CHECK_TIMEOUT_MS = 6500;
+const SESSION_RETRY_DELAYS_MS = Object.freeze([800, 1600, 3000, 5000, 5000]);
 
 let startupSessionPromise = null;
 let startupSessionResult = null;
@@ -80,11 +81,11 @@ async function requestSession() {
 }
 
 function getSessionSingleFlight({ force = false } = {}) {
-  if (!force && startupSessionResult) return Promise.resolve(startupSessionResult);
+  if (!force && startupSessionResult && startupSessionResult.status !== "error") return Promise.resolve(startupSessionResult);
   if (startupSessionPromise) return startupSessionPromise;
   if (force) startupSessionResult = null;
   startupSessionPromise = requestSession().then((result) => {
-    startupSessionResult = result;
+    if (result.status !== "error") startupSessionResult = result;
     return result;
   }).finally(() => {
     startupSessionPromise = null;
@@ -93,6 +94,7 @@ function getSessionSingleFlight({ force = false } = {}) {
 }
 
 export function AuthProvider({ children }) {
+  const retryAttemptRef = useRef(0);
   const [authState, setAuthState] = useState(() => startupSessionResult || {
     status: "checking",
     session: null,
@@ -104,6 +106,15 @@ export function AuthProvider({ children }) {
       setAuthState((current) => ({ ...current, status: "checking", error: "" }));
     }
     const result = await getSessionSingleFlight({ force });
+    if (result.status === "error") {
+      setAuthState((current) => (
+        current.status === "authenticated"
+          ? { ...current, error: result.error }
+          : { status: "checking", session: null, error: result.error }
+      ));
+      return result;
+    }
+    retryAttemptRef.current = 0;
     if (!background || result.status !== "error") setAuthState(result);
     return result;
   }, []);
@@ -124,12 +135,35 @@ export function AuthProvider({ children }) {
     if (startupSessionResult) return;
     let active = true;
     void getSessionSingleFlight().then((result) => {
-      if (active) setAuthState(result);
+      if (!active) return;
+      if (result.status === "error") {
+        setAuthState({ status: "checking", session: null, error: result.error });
+      } else {
+        retryAttemptRef.current = 0;
+        setAuthState(result);
+      }
     });
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (authState.status !== "checking" || !authState.error) return undefined;
+    const delay = SESSION_RETRY_DELAYS_MS[Math.min(retryAttemptRef.current, SESSION_RETRY_DELAYS_MS.length - 1)];
+    const timer = window.setTimeout(() => {
+      retryAttemptRef.current += 1;
+      void getSessionSingleFlight({ force: true }).then((result) => {
+        if (result.status === "error") {
+          setAuthState({ status: "checking", session: null, error: result.error });
+          return;
+        }
+        retryAttemptRef.current = 0;
+        setAuthState(result);
+      });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [authState.error, authState.status]);
 
   const value = useMemo(() => ({
     ...authState,
