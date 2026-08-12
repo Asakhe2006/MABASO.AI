@@ -1246,7 +1246,7 @@ FORMULA RULES
 
 If formulas appear, present them in readable mathematical form.
 
-Never return raw LaTeX source such as:
+Use valid LaTeX for formulas so the website, PDF, and DOCX render publication-quality math. Use $...$ for inline math and $$...$$ for displayed equations.
 
 \frac
 
@@ -4405,6 +4405,21 @@ Would a student genuinely understand the topic better after reading it?
 
 Remove or repair weak content before returning the final answer.
 
+MATH RENDERING CONTRACT
+=======================
+
+All mathematical expressions must be valid renderable LaTeX.
+
+Use $...$ for inline math and $$...$$ for displayed equations.
+
+Use complete commands such as \frac, \int, \sum, \sqrt, \lim, \begin{matrix}, \begin{cases}, \alpha, \omega, and \infty.
+
+Do not use decorative Unicode superscripts or subscripts.
+
+Do not output incomplete LaTeX commands.
+
+Do not paste source labels, OCR labels, file names, transcript headers, or output instructions into the final study guide.
+
 ==================================================
 FINAL OUTPUT RULE
 =================
@@ -6624,6 +6639,18 @@ Do not add export instructions.
 Do not add a FLASHCARDS section.
 
 Do not add a standalone VISUAL LEARNING or VISUAL AIDS section.
+
+All mathematical expressions must be valid renderable LaTeX.
+
+Use $...$ for inline math and $$...$$ for displayed equations.
+
+Use complete commands such as \frac, \int, \sum, \sqrt, \lim, \begin{matrix}, \begin{cases}, \alpha, \omega, and \infty.
+
+Do not use decorative Unicode superscripts or subscripts.
+
+Do not output incomplete LaTeX commands.
+
+Do not paste source labels, OCR labels, file names, transcript headers, or output instructions into the final study guide.
 
 Generate the most educationally appropriate structure for the supplied material.
 
@@ -24579,6 +24606,147 @@ def make_formulas_human_readable(text: str) -> str:
     return cleaned.strip()
 
 
+def make_formulas_human_readable(text: str) -> str:
+    """Final math normalizer: preserve formulas as KaTeX-ready Markdown."""
+    if not text:
+        return ""
+
+    greek_to_latex = {
+        "\u03b1": r"\alpha ",
+        "\u03b2": r"\beta ",
+        "\u03b3": r"\gamma ",
+        "\u03b4": r"\delta ",
+        "\u03b5": r"\epsilon ",
+        "\u03b8": r"\theta ",
+        "\u03bb": r"\lambda ",
+        "\u03bc": r"\mu ",
+        "\u03bd": r"\nu ",
+        "\u03c0": r"\pi ",
+        "\u03c1": r"\rho ",
+        "\u03c3": r"\sigma ",
+        "\u03c4": r"\tau ",
+        "\u03c6": r"\phi ",
+        "\u03c8": r"\psi ",
+        "\u03c9": r"\omega ",
+        "\u03a3": r"\Sigma ",
+        "\u03a9": r"\Omega ",
+    }
+    superscript_to_ascii = {
+        "\u2070": "0",
+        "\u00b9": "1",
+        "\u00b2": "2",
+        "\u00b3": "3",
+        "\u2074": "4",
+        "\u2075": "5",
+        "\u2076": "6",
+        "\u2077": "7",
+        "\u2078": "8",
+        "\u2079": "9",
+        "\u207a": "+",
+        "\u207b": "-",
+        "\u207d": "(",
+        "\u207e": ")",
+    }
+    subscript_to_ascii = {
+        "\u2080": "0",
+        "\u2081": "1",
+        "\u2082": "2",
+        "\u2083": "3",
+        "\u2084": "4",
+        "\u2085": "5",
+        "\u2086": "6",
+        "\u2087": "7",
+        "\u2088": "8",
+        "\u2089": "9",
+        "\u208a": "+",
+        "\u208b": "-",
+        "\u208d": "(",
+        "\u208e": ")",
+    }
+    symbol_to_latex = {
+        "\u2212": "-",
+        "\u00d7": r"\times ",
+        "\u00f7": r"\div ",
+        "\u2264": r"\le ",
+        "\u2265": r"\ge ",
+        "\u2260": r"\ne ",
+        "\u2248": r"\approx ",
+        "\u2192": r"\to ",
+        "\u2190": r"\leftarrow ",
+        "\u2194": r"\leftrightarrow ",
+        "\u2211": r"\sum ",
+        "\u222b": r"\int ",
+        "\u221a": r"\sqrt",
+        "\u221e": r"\infty ",
+    }
+
+    def convert_script_runs(value: str, mapping: dict[str, str], marker: str) -> str:
+        chars = "".join(re.escape(char) for char in mapping)
+        return re.sub(f"[{chars}]+", lambda match: f"{marker}{{{''.join(mapping.get(char, char) for char in match.group(0))}}}", value)
+
+    def normalize_body(body: str) -> str:
+        normalized = (body or "").strip()
+        normalized = convert_script_runs(normalized, superscript_to_ascii, "^")
+        normalized = convert_script_runs(normalized, subscript_to_ascii, "_")
+        for old, new in {**greek_to_latex, **symbol_to_latex}.items():
+            normalized = normalized.replace(old, new)
+        normalized = re.sub(
+            r"(^|[^\\\w])(frac|dfrac|tfrac|sqrt|sum|prod|int|iint|iiint|oint|lim|vec|hat|bar|mathbf|mathrm|mathbb|mathcal|partial|nabla|infty|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|Omega|Sigma)(?=\s*[{_^]|\b)",
+            r"\1\\\2",
+            normalized,
+        )
+        def ensure_group(value: str) -> str:
+            value = (value or "").strip()
+            return value if value.startswith("{") and value.endswith("}") else f"{{{value}}}"
+
+        normalized = re.sub(r"\b([A-Za-z])\s*\^\s*([A-Za-z0-9]+)\b", r"\1^{\2}", normalized)
+        normalized = re.sub(r"\b([A-Za-z])\s*_\s*([A-Za-z0-9]+)\b", r"\1_{\2}", normalized)
+        normalized = re.sub(
+            r"\\(sum|int)\s*_\s*(\{[^{}]*\}|[^\\\s^]+)\s*\^\s*(\{[^{}]*\}|[^\\\s]+)",
+            lambda match: f"\\{match.group(1)}_{ensure_group(match.group(2))}^{ensure_group(match.group(3))}",
+            normalized,
+        )
+        return re.sub(r"\s{2,}", " ", normalized).strip()
+
+    def normalize_segment(segment: str) -> str:
+        cleaned = re.sub(r"\\\[([\s\S]*?)\\\]", lambda match: f"$${normalize_body(match.group(1))}$$", segment)
+        cleaned = re.sub(r"\\\(([^()\n]*?)\\\)", lambda match: f"${normalize_body(match.group(1))}$", cleaned)
+        cleaned = re.sub(r"\$\$([\s\S]*?)\$\$", lambda match: f"$${normalize_body(match.group(1))}$$", cleaned)
+        cleaned = re.sub(r"(?<!\\)\$([^$\n]+?)(?<!\\)\$", lambda match: f"${normalize_body(match.group(1))}$", cleaned)
+
+        math_line_re = re.compile(
+            r"(?:=|\u2248|\u2260|\u2264|\u2265|\u2192|\u2190|\u2194|\u2211|\u222b|\u221a|\u221e|\\(?:frac|sqrt|sum|int|lim|begin|vec|mathbf|mathbb)|\b(?:sin|cos|tan|log|ln|lim)\s*\()"
+        )
+        latex_command_re = re.compile(
+            r"\\(?:begin|end|frac|dfrac|tfrac|sqrt|sum|prod|int|lim|vec|hat|bar|mathbf|mathrm|mathbb|mathcal|partial|nabla|infty|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|Omega|Sigma)\b"
+        )
+        normalized_lines: list[str] = []
+        for line in cleaned.splitlines():
+            stripped = line.strip()
+            if not stripped or "$" in stripped or stripped.startswith("|"):
+                normalized_lines.append(line)
+                continue
+            prose_word_count = len(re.findall(r"\b[A-Za-z]{3,}\b", stripped))
+            looks_like_math = (
+                bool(latex_command_re.search(stripped) or math_line_re.search(stripped))
+                and len(stripped) <= 360
+                and prose_word_count <= 6
+                and not re.search(r"[.!?]\s*$", stripped)
+            )
+            if looks_like_math and not stripped.startswith(("-", "*", "+")):
+                indent = re.match(r"^\s*", line).group(0)
+                normalized_lines.append(f"{indent}$${normalize_body(stripped)}$$")
+            else:
+                normalized_lines.append(line)
+        return "\n".join(normalized_lines)
+
+    parts = re.split(r"(```[\s\S]*?```|`[^`\n]*`)", str(text))
+    cleaned = "".join(part if index % 2 else normalize_segment(part) for index, part in enumerate(parts))
+    cleaned = re.sub(r"\$\$\s*\$\$", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def normalize_guide_heading(value: str) -> str:
     cleaned = compact_text(value).lower()
     cleaned = re.sub(r"^[#*\-\s]+", "", cleaned)
@@ -26096,6 +26264,86 @@ def tidy_study_guide_layout(summary: str) -> str:
 
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
+
+
+STUDY_GUIDE_SOURCE_ARTIFACT_RE = re.compile(
+    r"^(?:#{1,6}\s*)?(?:\*\*)?\s*(?:"
+    r"lecturer notes?|lecture notes?|lecture slides?|slide notes?|past question papers?|past papers?|"
+    r"lecture transcript|raw transcript|transcript|ocr(?: text)?|source material|source materials|"
+    r"source files?|uploaded files?|output instructions|file\s*:|page\s+\d+"
+    r")\b",
+    re.IGNORECASE,
+)
+
+STUDY_GUIDE_VISUAL_PLACEHOLDER_RE = re.compile(
+    r"(?im)^\s*(?:[-*]\s*)?\[(?:suggested visual|visual suggestion|image prompt|ai image prompt|diagram prompt)[^\]]*\]\s*$"
+)
+
+
+def strip_study_guide_generation_artifacts(markdown: str) -> str:
+    text = (markdown or "").replace("\r\n", "\n").strip()
+    if not text:
+        return ""
+
+    text = STUDY_GUIDE_VISUAL_PLACEHOLDER_RE.sub("", text)
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        normalized = re.sub(r"^[#*\-\s]+", "", line.strip()).replace("**", "").strip().rstrip(":").strip()
+        if STUDY_GUIDE_SOURCE_ARTIFACT_RE.match(normalized):
+            continue
+        kept_lines.append(line)
+    cleaned = "\n".join(kept_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def study_guide_needs_quality_repair(markdown: str) -> bool:
+    text = (markdown or "").replace("\r\n", "\n").strip()
+    if not text:
+        return True
+    if STUDY_GUIDE_VISUAL_PLACEHOLDER_RE.search(text):
+        return True
+
+    artifact_count = 0
+    for line in text.splitlines():
+        normalized = re.sub(r"^[#*\-\s]+", "", line.strip()).replace("**", "").strip().rstrip(":").strip()
+        if STUDY_GUIDE_SOURCE_ARTIFACT_RE.match(normalized):
+            artifact_count += 1
+    if artifact_count:
+        return True
+
+    sections = parse_study_guide_sections(text)
+    if len(text) > 1400 and len(sections) < 3:
+        return True
+
+    paragraphs = [block.strip() for block in re.split(r"\n\s*\n", text) if block.strip()]
+    for paragraph in paragraphs:
+        sentence_count = len(re.findall(r"[.!?](?:\s|$)", paragraph))
+        if len(paragraph) > 1500 and sentence_count >= 7:
+            return True
+        if len(paragraph) > 900 and not re.search(r"(?m)^\s*(?:[-*]|\d+[.)])\s+", paragraph):
+            return True
+    return False
+
+
+def prepare_generated_study_guide_output(markdown: str) -> str:
+    cleaned = strip_study_guide_generation_artifacts(markdown)
+    cleaned = make_formulas_human_readable(cleaned)
+    return tidy_study_guide_layout(cleaned)
+
+
+STUDY_GUIDE_REPAIR_PROMPT = """Rewrite the supplied draft into a clean Mabaso AI study guide.
+
+Rules:
+- Do not summarize the source dump. Teach the topic as structured academic notes.
+- Remove source labels such as lecturer notes, lecture slides, transcript, OCR, file names, page labels, and output instructions.
+- Keep topics and subtopics separate.
+- Use Markdown headings, short paragraphs, bullets, tables only when helpful, callouts, and worked examples.
+- For mathematical content, use valid LaTeX with $...$ inline and $$...$$ for display equations.
+- Never output placeholder text such as [Suggested Visual].
+- Keep diagrams, tables, images, and figure explanations beside the content they explain.
+- Preserve the academic meaning of the source material.
+"""
 
 
 def extract_study_assets(
@@ -30175,7 +30423,7 @@ async def generate_study_guide(
 "- Use comparison tables whenever concepts, diseases, algorithms, technologies, methods, structures, or systems are compared.\n"
 "- Use numbered steps for procedures, experiments, calculations, algorithms, and workflows.\n"
 "- Present formulas together with variable definitions, units where appropriate, interpretation, and worked examples.\n"
-"- Use Unicode mathematical symbols instead of LaTeX whenever possible.\n"
+"- Write formulas and derivations in valid LaTeX using $...$ for inline math and $$...$$ for displayed equations. Never convert formulas to decorative Unicode text.\n"
 "- Generate realistic labelled diagrams, process flows, hierarchy diagrams, timelines, architecture diagrams, or concept visuals whenever they improve understanding.\n"
 "- Do not insert decorative visuals; every visual must directly teach the surrounding concept.\n"
 "- Place figures immediately after the paragraph that introduces them.\n"
@@ -30193,10 +30441,18 @@ async def generate_study_guide(
     )
     combined_user_content = "\n\n".join(user_content_parts)
 
-    def _generate() -> str:
+    generation_models: list[str] = []
+    for model_name in [STUDY_GUIDE_MODEL, STUDY_GUIDE_FALLBACK_MODEL]:
+        normalized_model = compact_text(model_name)
+        if normalized_model and normalized_model not in generation_models:
+            generation_models.append(normalized_model)
+    if not generation_models:
+        generation_models.append(BASE_TEXT_MODEL)
+
+    def _generate(model_name: str) -> str:
         update_job(job_id, status="processing", stage="Preparing study material for notes", progress=20)
         response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
-            model=STUDY_GUIDE_MODEL,
+            model=model_name,
             max_completion_tokens=completion_token_budget,
             messages=[
                 {"role": "system", "content": STUDY_GUIDE_PROMPT},
@@ -30205,17 +30461,76 @@ async def generate_study_guide(
         )
         return (response.choices[0].message.content or "").strip()
 
+    def _repair(draft_markdown: str) -> str:
+        repair_source = "\n\n".join(
+            part
+            for part in [trimmed_notes, trimmed_slides, trimmed_past_papers, trimmed_transcript]
+            if part
+        )[:source_char_limit]
+        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+            model=generation_models[0],
+            max_completion_tokens=completion_token_budget,
+            messages=[
+                {"role": "system", "content": STUDY_GUIDE_REPAIR_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"OUTPUT LANGUAGE: {output_language}\n\n"
+                        f"DRAFT STUDY GUIDE TO REPAIR\n{draft_markdown[:source_char_limit]}\n\n"
+                        f"SOURCE EXCERPTS FOR FACT CHECKING\n{repair_source}"
+                    ),
+                },
+            ],
+        )
+        return (response.choices[0].message.content or "").strip()
+
     try:
-        update_job(job_id, status="processing", stage="Generating study guide", progress=55)
-        summary = await asyncio.to_thread(_generate)
-        cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(summary))
+        summary = ""
+        generation_error: Exception | None = None
+        for attempt_index, model_name in enumerate(generation_models):
+            try:
+                update_job(
+                    job_id,
+                    status="processing",
+                    stage="Generating study guide" if attempt_index == 0 else "Retrying study guide generation",
+                    progress=55 + min(attempt_index, 1) * 8,
+                )
+                summary = await asyncio.to_thread(_generate, model_name)
+                if summary.strip():
+                    break
+            except Exception as exc:
+                generation_error = exc
+                logger.warning("Study guide generation failed with model %s: %s", model_name, exc)
+
+        if not summary.strip():
+            raise generation_error or RuntimeError("Study guide generation returned no content.")
+
+        cleaned_summary = prepare_generated_study_guide_output(summary)
+        used_fallback = False
+        if study_guide_needs_quality_repair(cleaned_summary):
+            update_job(job_id, status="processing", stage="Repairing study guide structure", progress=72)
+            try:
+                repaired_summary = prepare_generated_study_guide_output(await asyncio.to_thread(_repair, cleaned_summary))
+                if repaired_summary and not study_guide_needs_quality_repair(repaired_summary):
+                    cleaned_summary = repaired_summary
+                else:
+                    raise RuntimeError("Study guide repair still looked like a source dump.")
+            except Exception as repair_exc:
+                logger.warning("Study guide repair failed, using structured fallback: %s", repair_exc)
+                fallback_source = "\n\n".join(
+                    part
+                    for part in [lecture_notes.strip(), lecture_slides.strip(), past_question_papers.strip(), transcript.strip()]
+                    if part
+                )
+                cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
+                used_fallback = True
         return add_student_support_sections(
             cleaned_summary,
             lecture_notes=lecture_notes,
             lecture_slides=lecture_slides,
             transcript=transcript,
             past_question_papers=past_question_papers,
-        ), False
+        ), used_fallback
     except Exception as exc:
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
@@ -30224,7 +30539,7 @@ async def generate_study_guide(
             for part in [lecture_notes.strip(), lecture_slides.strip(), past_question_papers.strip(), transcript.strip()]
             if part
         )
-        cleaned_summary = tidy_study_guide_layout(make_formulas_human_readable(build_fallback_study_guide(fallback_source)))
+        cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
         return add_student_support_sections(
             cleaned_summary,
             lecture_notes=lecture_notes,

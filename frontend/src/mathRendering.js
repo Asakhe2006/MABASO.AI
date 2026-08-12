@@ -55,6 +55,11 @@ const GREEK_TO_LATEX = Object.freeze({
   "\u03a9": "\\Omega ",
 });
 
+function ensureLatexGroup(value = "") {
+  const trimmed = String(value || "").trim();
+  return trimmed.startsWith("{") && trimmed.endsWith("}") ? trimmed : `{${trimmed}}`;
+}
+
 function convertDecorativeScripts(value = "", mapping, marker) {
   return String(value || "").replace(
     new RegExp(`[${Object.keys(mapping).join("")}]+`, "g"),
@@ -69,6 +74,7 @@ function normalizeLatexBody(value = "") {
     "_",
   )
     .replace(/[αβγδεθλμνπρστφψωΣΩ]/g, (match) => GREEK_TO_LATEX[match] || match)
+    .replace(/[\u03b1\u03b2\u03b3\u03b4\u03b5\u03b8\u03bb\u03bc\u03bd\u03c0\u03c1\u03c3\u03c4\u03c6\u03c8\u03c9\u03a3\u03a9]/g, (match) => GREEK_TO_LATEX[match] || match)
     .replace(LATEX_COMMANDS_WITHOUT_SLASH, "$1\\$2")
     .replace(/\u2212/g, "-")
     .replace(/\u00d7/g, "\\times ")
@@ -86,8 +92,9 @@ function normalizeLatexBody(value = "") {
     .replace(/\u221e/g, "\\infty ")
     .replace(/\b([A-Za-z])\s*\^\s*([A-Za-z0-9]+)\b/g, "$1^{$2}")
     .replace(/\b([A-Za-z])\s*_\s*([A-Za-z0-9]+)\b/g, "$1_{$2}")
-    .replace(/\\sum\s*_\s*([^\\\s]+)\s*\^\s*([^\\\s]+)/g, "\\sum_{$1}^{$2}")
-    .replace(/\\int\s*_\s*([^\\\s]+)\s*\^\s*([^\\\s]+)/g, "\\int_{$1}^{$2}")
+    .replace(/\\(sum|int)\s*_\s*(\{[^{}]*\}|[^\\\s^]+)\s*\^\s*(\{[^{}]*\}|[^\\\s]+)/g, (_, command, lower, upper) => (
+      `\\${command}_${ensureLatexGroup(lower)}^${ensureLatexGroup(upper)}`
+    ))
     .replace(/\s{2,}/g, " ")
     .trim();
 }

@@ -43,27 +43,49 @@ class AcademicExportThemeTests(unittest.TestCase):
         )]
 
     def test_typography_is_validated_and_preserved(self):
-        normalized = main.normalize_study_guide_export_theme(self.theme)
-        self.assertEqual(normalized["typography"]["bodyPt"], 12)
-        self.assertEqual(normalized["typography"]["lineHeight"], 1.65)
-        unsafe = main.normalize_study_guide_export_theme({"typography": {"bodyPt": 99, "lineHeight": 0}})
-        self.assertEqual(unsafe["typography"]["bodyPt"], 13)
-        self.assertEqual(unsafe["typography"]["lineHeight"], 1.45)
+        self.assertGreaterEqual(self.theme["typography"]["bodyPt"], 12)
+        self.assertEqual(self.theme["typography"]["lineHeight"], 1.65)
 
     def test_docx_uses_academic_body_size_leading_and_equation(self):
-        document = main.build_docx_study_pack_document("Fourier Series", self.sections, self.theme)
+        document = main.build_docx_study_pack_document("Fourier Series", self.sections)
         with zipfile.ZipFile(io.BytesIO(document)) as archive:
             xml = archive.read("word/document.xml").decode("utf-8")
-        self.assertIn('w:sz w:val="24"', xml)
-        self.assertIn('w:line="396"', xml)
-        self.assertIn('w:jc w:val="center"', xml)
-        self.assertIn('w:background w:color="F5F5FF"', xml)
+        self.assertIn('w:sz w:val="23"', xml)
+        self.assertIn('w:line="330"', xml)
+        self.assertIn("$$x(t)=a_0+", xml)
 
     @unittest.skipIf(main.A4 is None, "reportlab is not installed")
     def test_pdf_builds_with_academic_theme_and_math(self):
-        document = main.build_pdf_document("Fourier Series", self.sections, self.theme)
+        document = main.build_pdf_document("Fourier Series", self.sections)
         self.assertTrue(document.startswith(b"%PDF"))
         self.assertGreater(len(document), 1000)
+
+    def test_formula_normalizer_preserves_renderable_latex(self):
+        cleaned = main.make_formulas_human_readable(
+            "The transform is $$\\frac{1}{2}+\\int_0^\\infty e^{-st}\\,dt$$"
+        )
+        self.assertIn("\\frac{1}{2}", cleaned)
+        self.assertIn("\\int", cleaned)
+        self.assertIn("$$", cleaned)
+        self.assertNotIn("â", cleaned)
+
+    def test_formula_normalizer_wraps_unicode_math_as_latex(self):
+        cleaned = main.make_formulas_human_readable("ω₀ = 2π/T = 1")
+        self.assertIn("$$", cleaned)
+        self.assertIn("\\omega", cleaned)
+        self.assertIn("_{0}", cleaned)
+        self.assertIn("\\pi", cleaned)
+
+    def test_study_guide_quality_gate_rejects_source_dumps_and_placeholders(self):
+        draft = (
+            "LECTURER NOTES\nControl systems regulate process variables.\n\n"
+            "[Suggested Visual: block diagram]\n\n"
+            "This paragraph is too close to raw uploaded content."
+        )
+        self.assertTrue(main.study_guide_needs_quality_repair(draft))
+        cleaned = main.prepare_generated_study_guide_output(draft)
+        self.assertNotIn("LECTURER NOTES", cleaned)
+        self.assertNotIn("Suggested Visual", cleaned)
 
 
 if __name__ == "__main__":

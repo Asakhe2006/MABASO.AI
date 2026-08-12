@@ -4,6 +4,7 @@ const AuthContext = createContext(null);
 const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
 const SESSION_CHECK_TIMEOUT_MS = 6500;
 const SESSION_RETRY_DELAYS_MS = Object.freeze([800, 1600, 3000, 5000, 5000]);
+const SESSION_UNKNOWN_MESSAGE = "Session check is still restoring. We will retry in the background.";
 
 let startupSessionPromise = null;
 let startupSessionResult = null;
@@ -66,26 +67,29 @@ async function requestSession() {
     if (response.status === 401 || response.status === 403) {
       return { status: "unauthenticated", session: null, error: "" };
     }
-    if (!response.ok || !String(data.email || "").trim()) {
-      throw new Error(data.detail || "We could not verify your session.");
+    if (!response.ok) {
+      return { status: "unknown", session: null, error: SESSION_UNKNOWN_MESSAGE };
+    }
+    if (!String(data.email || "").trim()) {
+      return { status: "unknown", session: null, error: SESSION_UNKNOWN_MESSAGE };
     }
     return { status: "authenticated", session: data, error: "" };
   } catch (error) {
     const message = error?.name === "AbortError"
-      ? "We could not verify your session. Check your connection and try again."
-      : error?.message || "We could not verify your session. Check your connection and try again.";
-    return { status: "error", session: null, error: message };
+      ? SESSION_UNKNOWN_MESSAGE
+      : error?.message || SESSION_UNKNOWN_MESSAGE;
+    return { status: "unknown", session: null, error: message };
   } finally {
     window.clearTimeout(timeoutId);
   }
 }
 
 function getSessionSingleFlight({ force = false } = {}) {
-  if (!force && startupSessionResult && startupSessionResult.status !== "error") return Promise.resolve(startupSessionResult);
+  if (!force && startupSessionResult && startupSessionResult.status !== "unknown") return Promise.resolve(startupSessionResult);
   if (startupSessionPromise) return startupSessionPromise;
   if (force) startupSessionResult = null;
   startupSessionPromise = requestSession().then((result) => {
-    if (result.status !== "error") startupSessionResult = result;
+    if (result.status !== "unknown") startupSessionResult = result;
     return result;
   }).finally(() => {
     startupSessionPromise = null;
@@ -103,19 +107,23 @@ export function AuthProvider({ children }) {
 
   const checkSession = useCallback(async ({ force = false, background = false } = {}) => {
     if (!background) {
-      setAuthState((current) => ({ ...current, status: "checking", error: "" }));
+      setAuthState((current) => (
+        current.status === "authenticated"
+          ? { ...current, error: "" }
+          : { ...current, status: "checking", error: "" }
+      ));
     }
     const result = await getSessionSingleFlight({ force });
-    if (result.status === "error") {
+    if (result.status === "unknown") {
       setAuthState((current) => (
         current.status === "authenticated"
           ? { ...current, error: result.error }
-          : { status: "checking", session: null, error: result.error }
+          : { status: "unknown", session: null, error: result.error }
       ));
       return result;
     }
     retryAttemptRef.current = 0;
-    if (!background || result.status !== "error") setAuthState(result);
+    setAuthState(result);
     return result;
   }, []);
 
@@ -136,8 +144,8 @@ export function AuthProvider({ children }) {
     let active = true;
     void getSessionSingleFlight().then((result) => {
       if (!active) return;
-      if (result.status === "error") {
-        setAuthState({ status: "checking", session: null, error: result.error });
+      if (result.status === "unknown") {
+        setAuthState({ status: "unknown", session: null, error: result.error });
       } else {
         retryAttemptRef.current = 0;
         setAuthState(result);
@@ -149,13 +157,17 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (authState.status !== "checking" || !authState.error) return undefined;
+    if (!["checking", "unknown"].includes(authState.status) || !authState.error) return undefined;
     const delay = SESSION_RETRY_DELAYS_MS[Math.min(retryAttemptRef.current, SESSION_RETRY_DELAYS_MS.length - 1)];
     const timer = window.setTimeout(() => {
       retryAttemptRef.current += 1;
       void getSessionSingleFlight({ force: true }).then((result) => {
-        if (result.status === "error") {
-          setAuthState({ status: "checking", session: null, error: result.error });
+        if (result.status === "unknown") {
+          setAuthState((current) => (
+            current.status === "authenticated"
+              ? { ...current, error: result.error }
+              : { status: "unknown", session: null, error: result.error }
+          ));
           return;
         }
         retryAttemptRef.current = 0;

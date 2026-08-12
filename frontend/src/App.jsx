@@ -247,6 +247,14 @@ function loadPersistedAuthStateToken() {
   }
 }
 
+function hasPersistedCookieSessionMarker() {
+  try {
+    return window.localStorage.getItem(AUTH_COOKIE_SESSION_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 function createOpaqueResourceId(prefix = "ctx") {
   const normalizedPrefix = String(prefix || "ctx").replace(/[^a-z0-9_-]+/gi, "").slice(0, 12) || "ctx";
   const randomId = typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID
@@ -6690,7 +6698,7 @@ export default function App() {
   } = useAuth();
   const [publicPage, setPublicPage] = useState(resolveInitialPublicPage);
   const [browserPath, setBrowserPath] = useState(resolveBrowserPath);
-  const [authToken, setAuthToken] = useState("");
+  const [authToken, setAuthToken] = useState(loadPersistedAuthStateToken);
   const [authEmail, setAuthEmail] = useState(() => window.localStorage.getItem(AUTH_EMAIL_KEY) || "");
   const [authSessionMode, setAuthSessionMode] = useState(() => window.localStorage.getItem(AUTH_MODE_KEY) || "user");
   const [authAvailableModes, setAuthAvailableModes] = useState(() => {
@@ -6718,10 +6726,11 @@ export default function App() {
   const [isSigningInWithPassword, setIsSigningInWithPassword] = useState(false);
   const [isRequestingEmailCode, setIsRequestingEmailCode] = useState(false);
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [authServerStateReady, setAuthServerStateReady] = useState(false);
+  const [authChecked, setAuthChecked] = useState(hasPersistedCookieSessionMarker);
+  const [authServerStateReady, setAuthServerStateReady] = useState(hasPersistedCookieSessionMarker);
   const [authCheckError, setAuthCheckError] = useState("");
-  const isAuthReady = authChecked && authServerStateReady;
+  const hasRestorableSessionState = Boolean(authToken || hasPersistedCookieSessionMarker());
+  const isAuthReady = (authChecked && authServerStateReady) || (sharedAuthStatus === "unknown" && hasRestorableSessionState);
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
@@ -15081,8 +15090,16 @@ export default function App() {
 
   useEffect(() => {
     if (sharedAuthStatus === "checking") {
-      setAuthChecked(false);
-      setAuthServerStateReady(false);
+      if (hasRestorableSessionState) {
+        const nextToken = authTokenRef.current || authToken || COOKIE_SESSION_AUTH_STATE;
+        authTokenRef.current = nextToken;
+        if (!authToken) setAuthToken(nextToken);
+        setAuthChecked(true);
+        setAuthServerStateReady(true);
+      } else {
+        setAuthChecked(false);
+        setAuthServerStateReady(false);
+      }
       setAuthCheckError("");
       return;
     }
@@ -15106,12 +15123,22 @@ export default function App() {
       );
       return;
     }
-    setAuthToken("");
-    authTokenRef.current = "";
-    setAuthChecked(false);
-    setAuthServerStateReady(false);
-    setAuthCheckError(sharedAuthError || "We could not verify your session. Check your connection and try again.");
-  }, [sharedAuthError, sharedAuthSession, sharedAuthStatus]);
+    if (sharedAuthStatus === "unknown") {
+      setAuthCheckError(sharedAuthError || "Session check is still restoring. We will retry in the background.");
+      if (hasRestorableSessionState) {
+        const nextToken = authTokenRef.current || authToken || COOKIE_SESSION_AUTH_STATE;
+        authTokenRef.current = nextToken;
+        if (!authToken) setAuthToken(nextToken);
+        setAuthChecked(true);
+        setAuthServerStateReady(true);
+        return;
+      }
+      setAuthChecked(false);
+      setAuthServerStateReady(false);
+      return;
+    }
+    setAuthCheckError(sharedAuthError || "");
+  }, [authToken, hasRestorableSessionState, sharedAuthError, sharedAuthSession, sharedAuthStatus]);
 
   useEffect(() => {
     try {
@@ -27244,7 +27271,9 @@ export default function App() {
     return logoutConfirmModal;
   }
 
-  if (!isAuthReady) {
+  const shouldBlockForAuthBootstrap = !isAuthReady && !activeSitePage && !activeProtectedWorkspaceRoute && !["/", "/signin", "/register"].includes(browserPath);
+
+  if (shouldBlockForAuthBootstrap) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
