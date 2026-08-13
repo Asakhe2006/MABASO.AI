@@ -6590,7 +6590,6 @@ function StudyGuideImageCards({ images = [] }) {
         const figureNumber = Number(image.figure_number || image.figureNumber || index + 1);
         const title = image.title || image.query || image.diagram_label || `Study visual ${figureNumber}`;
         const caption = image.caption || image.key_highlight || image.diagram_label || "Use this visual as a study anchor for the explanation beside it.";
-        const explanation = image.ai_explanation || image.explanation || image.purpose || caption;
         const imageUrls = resolveStudyImageUrls(image);
         const imageUrl = imageUrls[0] || "";
         return (
@@ -6624,11 +6623,6 @@ function StudyGuideImageCards({ images = [] }) {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Figure {figureNumber}</p>
               <p className="text-base font-semibold leading-6 text-slate-950">{title}</p>
               <p className="text-sm leading-6 text-slate-600">{caption}</p>
-              <details className="study-guide-figure-explainer rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">Explain this figure</summary>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{explanation}</p>
-                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{image.matched_section || "Study visual"}</p>
-              </details>
             </figcaption>
           </figure>
         );
@@ -6816,6 +6810,8 @@ export default function App() {
   const [videoUrl, setVideoUrl] = useState("");
   const [isTranscribingVideo, setIsTranscribingVideo] = useState(false);
   const [file, setFile] = useState(null);
+  const [recoveredRecordingInfo, setRecoveredRecordingInfo] = useState(null);
+  const [isRecoveredRecordingConfirmOpen, setIsRecoveredRecordingConfirmOpen] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [summary, setSummary] = useState("");
   const [formula, setFormula] = useState("");
@@ -8873,7 +8869,22 @@ export default function App() {
   const persistWorkspaceDraft = (overrides = {}) => {
     const ownerEmail = getActiveWorkspaceOwnerEmail();
     if (!ownerEmail) return;
-    saveWorkspaceDraft(ownerEmail, buildWorkspaceSnapshot(overrides));
+    const snapshot = buildWorkspaceSnapshot(overrides);
+    const hasGeneratedContent = Boolean(
+      snapshot.activeHistoryId
+      || String(snapshot.summary || "").trim()
+      || String(snapshot.formula || "").trim()
+      || String(snapshot.example || "").trim()
+      || (Array.isArray(snapshot.flashcards) && snapshot.flashcards.length)
+      || (Array.isArray(snapshot.quizQuestions) && snapshot.quizQuestions.length)
+      || (Array.isArray(snapshot.studyImages) && snapshot.studyImages.length)
+      || snapshot.presentationData?.slides?.length
+      || snapshot.podcastData?.script
+      || snapshot.reportData?.body
+      || snapshot.mindMapData?.root
+      || snapshot.teacherLessonData?.segments?.length
+    );
+    saveWorkspaceDraft(ownerEmail, hasGeneratedContent ? snapshot : null);
   };
 
   const applyWorkspaceSnapshot = (
@@ -8902,7 +8913,7 @@ export default function App() {
     stopTeacherPlayback({ resetIndex: true });
     startTransition(() => {
       setFile(null);
-      setTranscript(snapshot.transcript || "");
+      setTranscript("");
       setSummary(normalizeStudyGuideContentSpacing(snapshot.summary || ""));
       setStudyGuideDocumentHtml(snapshot.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object" ? snapshot.studyGuideDocumentHtml : {});
       setFormula(snapshot.formula || "");
@@ -8913,13 +8924,13 @@ export default function App() {
       setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
       setStudyGuidePromptDraft("");
       setStudyGuidePromptSource(null);
-      setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
-      setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
+      setLectureNoteSources([]);
+      setLectureSlideSources([]);
       setPendingLectureNoteFiles([]);
       setPendingLectureSlideFiles([]);
       setPendingPastQuestionPaperFiles([]);
-      setPastQuestionPaperSources(normalizeStudySourceEntries(snapshot.pastQuestionPaperSources, "", [], "PAST QUESTION PAPER"));
-      setPastQuestionMemo(snapshot.pastQuestionMemo || "");
+      setPastQuestionPaperSources([]);
+      setPastQuestionMemo("");
       setPresentationData(restoredPresentationData);
       setSelectedPresentationDesign(restoredPresentationDesign);
       setPresentationView(snapshot.presentationView || "setup");
@@ -15668,6 +15679,24 @@ export default function App() {
     hasRestoredWorkspaceDraftRef.current = ownerEmail;
     const snapshot = loadWorkspaceDraft(ownerEmail);
     if (!snapshot) return;
+    const snapshotHasGeneratedContent = Boolean(
+      snapshot.activeHistoryId
+      || String(snapshot.summary || "").trim()
+      || String(snapshot.formula || "").trim()
+      || String(snapshot.example || "").trim()
+      || (Array.isArray(snapshot.flashcards) && snapshot.flashcards.length)
+      || (Array.isArray(snapshot.quizQuestions) && snapshot.quizQuestions.length)
+      || (Array.isArray(snapshot.studyImages) && snapshot.studyImages.length)
+      || snapshot.presentationData?.slides?.length
+      || snapshot.podcastData?.script
+      || snapshot.reportData?.body
+      || snapshot.mindMapData?.root
+      || snapshot.teacherLessonData?.segments?.length
+    );
+    if (!snapshotHasGeneratedContent) {
+      saveWorkspaceDraft(ownerEmail, null);
+      return;
+    }
     const hasLiveWorkspace = Boolean(
       transcript.trim()
       || summary.trim()
@@ -15725,6 +15754,10 @@ export default function App() {
       startTransition(() => {
         setFile(recoveredFile);
         setVideoUrl("");
+      });
+      setRecoveredRecordingInfo({
+        fileName: record.fileName || "mabaso-lecture.wav",
+        recordedAt: record.updatedAt || new Date().toISOString(),
       });
       setStatus("Recovered your saved recording after refresh. You can transcribe it now.");
     }).catch(() => {
@@ -21307,6 +21340,7 @@ export default function App() {
   const handleFileChange = (selectedFile) => {
     if (!selectedFile) return;
     clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
+    setRecoveredRecordingInfo(null);
     startTransition(() => {
       setFile(selectedFile);
       setVideoUrl("");
@@ -21613,6 +21647,7 @@ export default function App() {
       failureStatus = "Transcription failed.",
       surfaceError = true,
       resetOutputsBeforeTranscribe = true,
+      preserveRecoveredRecording = false,
     } = options;
 
     if (!selectedFile) {
@@ -21660,7 +21695,7 @@ export default function App() {
         setTranscript(transcriptText);
       });
       clearPendingJob();
-      clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
+      if (!preserveRecoveredRecording) clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
 
       if (autoGenerateGuide) {
         setStatus("Transcript ready. Generating study guide...");
@@ -22080,6 +22115,10 @@ export default function App() {
   };
 
   const generateStudyGuide = async (transcriptText = transcript, sourceOverrides = {}) => {
+    if (recoveredRecordingInfo && file && !sourceOverrides.confirmedRecoveredRecording) {
+      setIsRecoveredRecordingConfirmOpen(true);
+      return false;
+    }
     let resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
     let resolvedLectureNoteSources = Array.isArray(sourceOverrides.lectureNoteSources) ? sourceOverrides.lectureNoteSources : lectureNoteSources;
     let resolvedLectureSlideSources = Array.isArray(sourceOverrides.lectureSlideSources) ? sourceOverrides.lectureSlideSources : lectureSlideSources;
@@ -22096,23 +22135,7 @@ export default function App() {
     const resolvedStudyGuidePromptSource = sourceOverrides.studyGuidePromptSource === null
       ? null
       : (sourceOverrides.studyGuidePromptSource || studyGuidePromptSource);
-    if (resolvedStudyGuidePromptSource?.text) {
-      const promptSource = {
-        ...resolvedStudyGuidePromptSource,
-        text: normalizeStudySourceText(resolvedStudyGuidePromptSource.text),
-        prefix: resolvedStudyGuidePromptSource.prefix || "STUDY PROMPT",
-      };
-      if (promptSource.text) {
-        resolvedLectureNoteSources = [
-          promptSource,
-          ...resolvedLectureNoteSources.filter((source) => source.id !== promptSource.id),
-        ];
-        resolvedLectureNotes = [
-          studySourceEntriesToText([promptSource], "STUDY PROMPT"),
-          resolvedLectureNotes,
-        ].filter(Boolean).join("\n\n");
-      }
-    }
+    const resolvedGenerationPrompt = normalizeStudySourceText(resolvedStudyGuidePromptSource?.text || "");
     const shouldReadQueuedNotesForGuide = pendingLectureNoteFiles.length > 0
       && !Array.isArray(sourceOverrides.lectureNoteSources)
       && typeof sourceOverrides.lectureNotesText !== "string";
@@ -22147,6 +22170,7 @@ export default function App() {
           autoGenerateGuide: false,
           initialStatus: "Reading the selected lecture file...",
           resetOutputsBeforeTranscribe: false,
+          preserveRecoveredRecording: Boolean(recoveredRecordingInfo),
         });
         setCurrentJobType("study_guide");
       }
@@ -22240,6 +22264,7 @@ export default function App() {
               past_question_papers: resolvedPastQuestionPapers,
               language: outputLanguage,
               reference_images: getSafeAiReferenceImageUrls(visualReferences),
+              generation_prompt: resolvedGenerationPrompt,
             }),
             timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
             signal: abortController.signal,
@@ -22337,6 +22362,8 @@ export default function App() {
       });
       clearPendingJob();
       setFile(null);
+      setRecoveredRecordingInfo(null);
+      clearRecoveredRecordingFromDb(getActiveWorkspaceOwnerEmail());
       setStudyGuidePromptSource(null);
       setStudyGuidePromptDraft("");
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -23985,6 +24012,7 @@ export default function App() {
         session_id: conversationId,
         context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
         lecture_label: shouldUseLectureContext ? workspaceFileLabel : "",
+        chat_scope: shouldUseLectureContext ? "study" : "global",
         client_request_id: assistantMessageId || userMessageId,
         user_message_id: userMessageId,
         assistant_message_id: assistantMessageId,
@@ -27494,8 +27522,37 @@ export default function App() {
     </div>
   ) : null;
 
+  const recoveredRecordingConfirmModal = isRecoveredRecordingConfirmOpen ? (
+    <div className="fixed inset-0 z-[175] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[22px] border border-emerald-300/20 bg-slate-950 p-5 text-white shadow-[0_24px_70px_rgba(2,8,23,0.55)]">
+        <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Recovered recording</p>
+        <h3 className="mt-2 text-xl font-semibold">Generate from this recording?</h3>
+        <p className="mt-3 text-sm leading-6 text-slate-300">
+          A recording saved on {new Date(recoveredRecordingInfo?.recordedAt || Date.now()).toLocaleString()} is ready to be transcribed and used for this Study Guide.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={() => setIsRecoveredRecordingConfirmOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white">Cancel</button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsRecoveredRecordingConfirmOpen(false);
+              void generateStudyGuide(transcript, { confirmedRecoveredRecording: true });
+            }}
+            className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
+          >
+            Generate
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (isLogoutConfirmOpen) {
     return logoutConfirmModal;
+  }
+
+  if (isRecoveredRecordingConfirmOpen) {
+    return recoveredRecordingConfirmModal;
   }
 
   const shouldBlockForAuthBootstrap = !isAuthReady && !activeSitePage && !activeProtectedWorkspaceRoute && !["/", "/signin", "/register"].includes(browserPath);

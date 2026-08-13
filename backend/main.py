@@ -146,7 +146,7 @@ def get_early_int_env(name: str, default: int) -> int:
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
-BASE_TEXT_MODEL = normalize_openai_model_name(os.getenv("BASE_TEXT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL)
+BASE_TEXT_MODEL = normalize_openai_model_name(os.getenv("BASE_TEXT_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
 ADVANCED_ACADEMIC_MODEL = normalize_openai_model_name(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
 STUDY_GUIDE_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
 STUDY_GUIDE_FALLBACK_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
@@ -6756,6 +6756,7 @@ class StudyGuideRequest(BaseModel):
     past_question_papers: str = ""
     language: str = "English"
     reference_images: list[str] = []
+    generation_prompt: str = ""
 
 
 class PodcastGenerationRequest(BaseModel):
@@ -7004,6 +7005,7 @@ class LectureAssistantRequest(BaseModel):
     voice_profile_id: str = ""
     voice_profile_label: str = ""
     voice_style_prompt: str = ""
+    chat_scope: str = "study"
 
 
 class AssistantConversationUpdateRequest(BaseModel):
@@ -11324,20 +11326,9 @@ def build_study_image_caption_lines(image: dict[str, Any], fallback_number: int 
         or image.get("diagram_label")
         or "Use this visual as a study anchor for the explanation beside it."
     )
-    explanation = compact_text(
-        image.get("ai_explanation")
-        or image.get("explanation")
-        or image.get("purpose")
-        or caption
-    )
-    matched_section = compact_text(image.get("matched_section"))
-    lines = [f"{figure_label}: {title}"]
+    lines = [f"{figure_label}. {title}"]
     if caption:
-        lines.append(f"Caption: {caption}")
-    if explanation:
-        lines.append(f"AI explanation: {explanation}")
-    if matched_section:
-        lines.append(f"Linked section: {matched_section}")
+        lines.append(caption)
     return lines
 
 
@@ -11475,6 +11466,19 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         cleaned = compact_text(value)
         if not cleaned:
             return ""
+        def readable_inline_math(match: re.Match) -> str:
+            body = match.group(1)
+            body = re.sub(r"\\(?:d|t)?frac\{([^{}]+)\}\{([^{}]+)\}", r"(\1)/(\2)", body)
+            body = re.sub(r"\\sqrt\{([^{}]+)\}", r"sqrt(\1)", body)
+            body = re.sub(r"\\(?:text|mathrm|mathbf)\{([^{}]+)\}", r"\1", body)
+            for command, replacement in {
+                "times": " x ", "div": " / ", "le": " <= ", "ge": " >= ", "ne": " != ",
+                "approx": " approx ", "to": " -> ", "pi": "pi", "omega": "omega", "theta": "theta",
+                "lambda": "lambda", "mu": "mu", "sigma": "sigma", "infty": "infinity",
+            }.items():
+                body = re.sub(rf"\\{command}\b", replacement, body)
+            return body.replace("{", "(").replace("}", ")")
+        cleaned = re.sub(r"(?<!\$)\$([^$\n]+)\$(?!\$)", readable_inline_math, cleaned)
         cleaned = cleaned.translate(superscript_translation)
         cleaned = cleaned.translate(subscript_translation)
         for old, new in pdf_symbol_replacements.items():
@@ -11661,7 +11665,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                 image_buffer.seek(0)
                 pdf_image = ReportLabImage(image_buffer)
                 max_width = document.width
-                max_height = 260
+                max_height = 190
                 scale = min(max_width / max(1, pdf_image.drawWidth), max_height / max(1, pdf_image.drawHeight), 1)
                 pdf_image.drawWidth *= scale
                 pdf_image.drawHeight *= scale
@@ -11673,6 +11677,20 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
                     placed_keys.add(image_key)
             except Exception as exc:
                 logger.warning("Could not embed study image in PDF: %s", exc)
+
+    def append_pdf_math(latex: str) -> bool:
+        image_bytes = render_latex_math_png(latex, font_size=12.5)
+        if not image_bytes:
+            return False
+        math_image = ReportLabImage(BytesIO(image_bytes))
+        max_width = document.width * 0.9
+        max_height = 105
+        scale = min(max_width / max(1, math_image.drawWidth), max_height / max(1, math_image.drawHeight), 1)
+        math_image.drawWidth *= scale
+        math_image.drawHeight *= scale
+        math_image.hAlign = "CENTER"
+        story.extend([Spacer(1, 7), math_image, Spacer(1, 9)])
+        return True
 
     def flush_paragraph_lines(paragraph_lines: list[str]) -> None:
         text = "\n".join(paragraph_lines).strip()
@@ -11711,6 +11729,19 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
             if not stripped:
                 flush_paragraph_lines(paragraph_lines)
                 paragraph_lines = []
+                index += 1
+                continue
+
+            if stripped.startswith("$$"):
+                flush_paragraph_lines(paragraph_lines)
+                paragraph_lines = []
+                math_lines = [stripped]
+                while math_lines[-1].count("$$") < 2 and index + 1 < len(lines):
+                    index += 1
+                    math_lines.append(lines[index].strip())
+                latex = "\n".join(math_lines).strip().removeprefix("$$").removesuffix("$$").strip()
+                if not append_pdf_math(latex):
+                    story.append(Paragraph(build_pdf_markup(f"${latex}$"), body_style))
                 index += 1
                 continue
 
@@ -11964,6 +11995,47 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
     document_parts: list[str] = [paragraph_xml(title or "MABASO Study Pack", style="title")]
     image_counter = 0
 
+    def append_docx_picture(image_bytes: bytes, mime_type: str, *, name: str = "Figure", max_width_inches: float = 5.8, max_height_inches: float = 3.1) -> None:
+        nonlocal image_counter
+        extension = {
+            "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
+        }.get(mime_type, "png")
+        try:
+            with Image.open(BytesIO(image_bytes)) as source_image:
+                pixel_width, pixel_height = source_image.size
+        except Exception:
+            pixel_width, pixel_height = 1600, 900
+        ratio = max(0.01, pixel_width / max(1, pixel_height))
+        width_inches = min(max_width_inches, max_height_inches * ratio)
+        height_inches = width_inches / ratio
+        if height_inches > max_height_inches:
+            height_inches = max_height_inches
+            width_inches = height_inches * ratio
+        extent_width = max(1, int(width_inches * 914400))
+        extent_height = max(1, int(height_inches * 914400))
+        image_counter += 1
+        relationship_id = f"rIdImage{image_counter}"
+        media_name = f"image{image_counter}.{extension}"
+        media_parts.append((media_name, image_bytes))
+        image_relationships.append(
+            f"<Relationship Id=\"{relationship_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{media_name}\"/>"
+        )
+        document_parts.append(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/><w:spacing w:before=\"100\" w:after=\"120\"/></w:pPr><w:r><w:drawing>"
+            "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
+            f"<wp:extent cx=\"{extent_width}\" cy=\"{extent_height}\"/>"
+            f"<wp:docPr id=\"{image_counter}\" name=\"{html.escape(name, quote=True)}\"/>"
+            "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
+            "<pic:pic><pic:nvPicPr>"
+            f"<pic:cNvPr id=\"{image_counter}\" name=\"{html.escape(media_name, quote=True)}\"/>"
+            "<pic:cNvPicPr/></pic:nvPicPr><pic:blipFill>"
+            f"<a:blip r:embed=\"{relationship_id}\"/>"
+            "<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/>"
+            f"<a:ext cx=\"{extent_width}\" cy=\"{extent_height}\"/>"
+            "</a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
+            "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        )
+
     def append_docx_images(images: list[dict[str, Any]], placed_keys: set[str] | None = None) -> None:
         nonlocal image_counter
         for image_index, image in enumerate(images or [], start=1):
@@ -11974,36 +12046,7 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             if not loaded_image:
                 continue
             image_bytes, mime_type = loaded_image
-            extension = {
-                "image/jpeg": "jpg",
-                "image/jpg": "jpg",
-                "image/png": "png",
-                "image/webp": "webp",
-            }.get(mime_type, "png")
-            image_counter += 1
-            relationship_id = f"rIdImage{image_counter}"
-            media_name = f"image{image_counter}.{extension}"
-            media_parts.append((media_name, image_bytes))
-            image_relationships.append(
-                f"<Relationship Id=\"{relationship_id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{media_name}\"/>"
-            )
-            doc_pr_id = image_counter
-            document_parts.append(
-                "<w:p><w:r><w:drawing>"
-                "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">"
-                "<wp:extent cx=\"5000000\" cy=\"3000000\"/>"
-                f"<wp:docPr id=\"{doc_pr_id}\" name=\"Figure {doc_pr_id}\"/>"
-                "<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">"
-                "<pic:pic><pic:nvPicPr>"
-                f"<pic:cNvPr id=\"{doc_pr_id}\" name=\"{html.escape(media_name, quote=True)}\"/>"
-                "<pic:cNvPicPr/>"
-                "</pic:nvPicPr><pic:blipFill>"
-                f"<a:blip r:embed=\"{relationship_id}\"/>"
-                "<a:stretch><a:fillRect/></a:stretch>"
-                "</pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"5000000\" cy=\"3000000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
-                "</a:graphicData></a:graphic>"
-                "</wp:inline></w:drawing></w:r></w:p>"
-            )
+            append_docx_picture(image_bytes, mime_type, name=f"Figure {image_index}")
             for line in build_study_image_caption_lines(image, image_index):
                 document_parts.append(paragraph_xml(line, style="caption"))
             if placed_keys is not None and key:
@@ -12033,6 +12076,20 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
             next_line = lines[index + 1].rstrip() if index + 1 < len(lines) else ""
             if not stripped:
                 flush_paragraph()
+                index += 1
+                continue
+            if stripped.startswith("$$"):
+                flush_paragraph()
+                math_lines = [stripped]
+                while math_lines[-1].count("$$") < 2 and index + 1 < len(lines):
+                    index += 1
+                    math_lines.append(lines[index].strip())
+                latex = "\n".join(math_lines).strip().removeprefix("$$").removesuffix("$$").strip()
+                math_png = render_latex_math_png(latex, font_size=12.5)
+                if math_png:
+                    append_docx_picture(math_png, "image/png", name="Equation", max_width_inches=5.4, max_height_inches=1.2)
+                else:
+                    document_parts.append(paragraph_xml(latex, style="body"))
                 index += 1
                 continue
             if stripped.startswith("|") and next_line.strip().startswith("|") and is_docx_table_separator(next_line):
@@ -16407,6 +16464,8 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
     reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     if reference_images and not bool(payload.voice_mode):
         attempts = resolve_provider_attempts("openai", voice_mode=False)
+        if compact_text(payload.chat_scope, "study").lower() == "global":
+            return attempts
         vision_attempts = [
             {
                 **attempt,
@@ -16424,6 +16483,20 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
         return vision_attempts
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
+    if compact_text(payload.chat_scope, "study").lower() != "global":
+        study_attempts: list[dict[str, str]] = []
+        seen_attempts: set[tuple[str, str]] = set()
+        for attempt in attempts:
+            adjusted = dict(attempt)
+            if adjusted.get("provider") == "openai":
+                adjusted["model"] = normalize_openai_model_name(STUDY_CHAT_MODEL, FALLBACK_OPENAI_CHAT_MODEL)
+                adjusted["label"] = "OpenAI Study"
+            fingerprint = (compact_text(adjusted.get("provider")), compact_text(adjusted.get("model")))
+            if fingerprint in seen_attempts:
+                continue
+            seen_attempts.add(fingerprint)
+            study_attempts.append(adjusted)
+        attempts = study_attempts
     if not bool(payload.voice_mode):
         return attempts
     if not attempts:
@@ -25567,13 +25640,6 @@ def add_student_support_sections(
             recovered_formula_section,
             after_heading="IMPORTANT DEFINITIONS",
         )
-    if not compact_text(extract_section(cleaned, "STEP-BY-STEP EXPLANATIONS")):
-        cleaned = upsert_guide_section(
-            cleaned,
-            "STEP-BY-STEP EXPLANATIONS",
-            build_missing_step_by_step_section(cleaned),
-            after_heading="WORKED EXAMPLES",
-        )
     return cleaned.strip()
 
 
@@ -26512,8 +26578,126 @@ STUDY_GUIDE_SOURCE_ARTIFACT_RE = re.compile(
 )
 
 STUDY_GUIDE_VISUAL_PLACEHOLDER_RE = re.compile(
-    r"(?im)^\s*(?:[-*]\s*)?\[(?:suggested visual|visual suggestion|image prompt|ai image prompt|diagram prompt)[^\]]*\]\s*$"
+    r"(?im)^\s*(?:[-*]\s*)?\[(?:suggested visual|suggested diagram|visual suggestion|image prompt|ai image prompt|diagram prompt)[^\]]*\]\s*$"
 )
+
+STUDY_GUIDE_INTERNAL_VISUAL_LABEL_RE = re.compile(
+    r"(?im)^\s*(?:[-*]\s*)?(?:ai explanation|linked section|image prompt|diagram prompt)\s*:\s*.*$"
+)
+
+
+def normalize_study_guide_block_spacing(markdown: str) -> str:
+    """Keep semantic Markdown blocks separate without changing academic meaning."""
+    text = (markdown or "").replace("\r\n", "\n")
+    text = re.sub(r"(?<=[.!?])(?=[A-Z][a-z])", "\n\n", text)
+    text = re.sub(r"(?<=[a-z0-9])(?=(?:Step|Definition|Formula|Example|Answer|Exam Tip|Common Mistake)\s*\d*\s*:)", "\n\n", text)
+    text = re.sub(r"(?m)(?<=[^\n#])(?=#{1,6}\s+)", "\n\n", text)
+    text = re.sub(r"(?m)(^#{1,6}\s+[^\n]+)\n(?!\n)", r"\1\n\n", text)
+    text = re.sub(r"(?m)(^\s*(?:[-*]|\d+[.)])\s+[^\n]+)\n(?=\S)", r"\1\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def normalize_study_guide_heading_wording(markdown: str) -> str:
+    natural_compounds = {
+        "open-loop": "open loop",
+        "closed-loop": "closed loop",
+        "square-wave": "square wave",
+        "step-by-step": "step by step",
+    }
+
+    def clean_heading(match: re.Match) -> str:
+        marker, raw_heading = match.group(1), match.group(2)
+        heading = re.sub(r"[`$*]", "", raw_heading)
+        heading = re.sub(r"\\(?:text|mathrm|mathbf)\{([^{}]+)\}", r"\1", heading)
+        heading = re.sub(r"\\[A-Za-z]+", "", heading)
+        for compound in natural_compounds:
+            heading = re.sub(
+                rf"\b{re.escape(compound)}\b",
+                lambda compound_match: compound_match.group(0).replace("-", " "),
+                heading,
+                flags=re.IGNORECASE,
+            )
+        heading = re.sub(r"\s{2,}", " ", heading).strip(" :-")
+        return f"{marker} {heading}"
+
+    return re.sub(r"(?m)^(#{1,6})\s+(.+?)\s*$", clean_heading, markdown or "")
+
+
+def study_math_fingerprint(value: str) -> str:
+    text = compact_text(value).strip("$")
+    replacements = {
+        r"\frac": "frac", r"\sum": "sum", r"\int": "int", r"\sqrt": "sqrt",
+        r"\pi": "pi", r"\omega": "omega", r"\theta": "theta", r"\lambda": "lambda",
+        "π": "pi", "ω": "omega", "θ": "theta", "λ": "lambda",
+        "∑": "sum", "∫": "int", "√": "sqrt", "−": "-", "×": "*",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    text = re.sub(r"\\(?:left|right|displaystyle|text|mathrm|mathbf|begin|end)(?:\{[^{}]*\})?", "", text)
+    return re.sub(r"[^a-zA-Z0-9=+\-*/^]", "", text).lower()
+
+
+def remove_duplicate_study_guide_equations(markdown: str) -> str:
+    lines = (markdown or "").splitlines()
+    output: list[str] = []
+    recent_math: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if stripped.startswith("$$"):
+            block = [line]
+            if stripped.count("$$") < 2:
+                index += 1
+                while index < len(lines):
+                    block.append(lines[index])
+                    if "$$" in lines[index]:
+                        break
+                    index += 1
+            fingerprint = study_math_fingerprint("\n".join(block))
+            if fingerprint and fingerprint in recent_math[-3:]:
+                index += 1
+                continue
+            recent_math.append(fingerprint)
+            output.extend(block)
+        else:
+            looks_like_equation = bool(
+                len(stripped) <= 300
+                and re.search(r"[=^_]", stripped)
+                and not re.search(r"[.!?]\s*$", stripped)
+            )
+            fingerprint = study_math_fingerprint(stripped) if looks_like_equation else ""
+            if fingerprint and fingerprint in recent_math[-2:]:
+                index += 1
+                continue
+            if fingerprint:
+                recent_math.append(fingerprint)
+            output.append(line)
+        index += 1
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
+
+
+def render_latex_math_png(latex: str, *, font_size: float = 12.0) -> bytes | None:
+    body = compact_text(latex).strip("$").strip()
+    if not body:
+        return None
+    body = body.replace(r"\begin{aligned}", "").replace(r"\end{aligned}", "")
+    rows = [row.replace("&", "").strip() for row in re.split(r"\\\\", body) if row.strip()]
+    try:
+        from matplotlib.figure import Figure
+
+        figure_height = max(0.42, 0.34 * len(rows))
+        figure = Figure(figsize=(7.0, figure_height), dpi=180, facecolor="white")
+        for row_index, row in enumerate(rows or [body]):
+            y = 1.0 - ((row_index + 0.62) / max(1, len(rows)))
+            figure.text(0.5, y, f"${row}$", ha="center", va="center", fontsize=font_size, color="#172033")
+        output = BytesIO()
+        figure.savefig(output, format="png", dpi=180, bbox_inches="tight", pad_inches=0.08, facecolor="white")
+        figure.clear()
+        return output.getvalue()
+    except Exception as exc:
+        logger.warning("Could not render study equation: %s", exc)
+        return None
 
 
 def strip_study_guide_generation_artifacts(markdown: str) -> str:
@@ -26522,6 +26706,7 @@ def strip_study_guide_generation_artifacts(markdown: str) -> str:
         return ""
 
     text = STUDY_GUIDE_VISUAL_PLACEHOLDER_RE.sub("", text)
+    text = STUDY_GUIDE_INTERNAL_VISUAL_LABEL_RE.sub("", text)
     kept_lines: list[str] = []
     for line in text.splitlines():
         normalized = re.sub(r"^[#*\-\s]+", "", line.strip()).replace("**", "").strip().rstrip(":").strip()
@@ -26538,6 +26723,16 @@ def study_guide_needs_quality_repair(markdown: str) -> bool:
     if not text:
         return True
     if STUDY_GUIDE_VISUAL_PLACEHOLDER_RE.search(text):
+        return True
+    if STUDY_GUIDE_INTERNAL_VISUAL_LABEL_RE.search(text):
+        return True
+    if re.search(r"(?m)^\s*\|[^\n|]+\|[^\n]+\|\s*$", text) and not re.search(
+        r"(?m)^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$", text
+    ):
+        return True
+    if re.search(r"[a-z0-9][.!?](?:Answer|Step|Definition|Formula|[A-Z][a-z]{2,})", text):
+        return True
+    if re.search(r"(?:\$\$[^$]{1,240}\$\$\s*){2,}", text):
         return True
 
     artifact_count = 0
@@ -26564,7 +26759,11 @@ def study_guide_needs_quality_repair(markdown: str) -> bool:
 
 def prepare_generated_study_guide_output(markdown: str) -> str:
     cleaned = strip_study_guide_generation_artifacts(markdown)
+    cleaned = remove_duplicate_study_guide_equations(cleaned)
     cleaned = make_formulas_human_readable(cleaned)
+    cleaned = normalize_study_guide_block_spacing(cleaned)
+    cleaned = remove_duplicate_study_guide_equations(cleaned)
+    cleaned = normalize_study_guide_heading_wording(cleaned)
     return tidy_study_guide_layout(cleaned)
 
 
@@ -26577,6 +26776,10 @@ Rules:
 - Use Markdown headings, short paragraphs, bullets, tables only when helpful, callouts, and worked examples.
 - For mathematical content, use valid LaTeX with $...$ inline and $$...$$ for display equations.
 - Never output placeholder text such as [Suggested Visual].
+- Never expose AI explanation, image prompt, diagram prompt, linked section, or other generation metadata.
+- Keep exactly one representation of each equation. Never repeat a formula as Unicode, LaTeX, and plain text.
+- Every Markdown table must have one row per line and a valid separator row. If that is not possible, use bullets instead.
+- Put a blank line between headings, paragraphs, lists, equations, examples, and tables. Never join sentences as `end.Next`.
 - Keep diagrams, tables, images, and figure explanations beside the content they explain.
 - Preserve the academic meaning of the source material.
 """
@@ -30604,6 +30807,7 @@ async def generate_study_guide(
     job_id: str,
     output_language: str,
     owner_email: str = "",
+    generation_prompt: str = "",
 ) -> tuple[str, bool]:
     generation_budget = get_study_guide_generation_budget(owner_email)
     source_char_limit = generation_budget["source_chars"]
@@ -30636,6 +30840,14 @@ async def generate_study_guide(
         )
 
     user_content_parts = []
+    cleaned_generation_prompt = compact_text(generation_prompt)[:4000]
+    if cleaned_generation_prompt:
+        user_content_parts.append(
+            "STUDENT GUIDE REQUEST\n"
+            f"{cleaned_generation_prompt}\n\n"
+            "Treat this as an instruction about coverage, teaching level, and presentation. "
+            "Do not quote it, list it as source material, or let it override factual evidence."
+        )
     if trimmed_notes:
         user_content_parts.append(f"LECTURER NOTES\n{trimmed_notes}")
     if trimmed_slides:
@@ -30721,6 +30933,7 @@ async def generate_study_guide(
                     "role": "user",
                     "content": (
                         f"OUTPUT LANGUAGE: {output_language}\n\n"
+                        f"STUDENT GUIDE REQUEST: {cleaned_generation_prompt or 'No additional request.'}\n\n"
                         f"DRAFT STUDY GUIDE TO REPAIR\n{draft_markdown[:source_char_limit]}\n\n"
                         f"SOURCE EXCERPTS FOR FACT CHECKING\n{repair_source}"
                     ),
@@ -30776,7 +30989,7 @@ async def generate_study_guide(
                 cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
                 used_fallback = True
         return add_student_support_sections(
-            cleaned_summary,
+            prepare_generated_study_guide_output(cleaned_summary),
             lecture_notes=lecture_notes,
             lecture_slides=lecture_slides,
             transcript=transcript,
@@ -30796,7 +31009,7 @@ async def generate_study_guide(
         )
         cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
         return add_student_support_sections(
-            cleaned_summary,
+            prepare_generated_study_guide_output(cleaned_summary),
             lecture_notes=lecture_notes,
             lecture_slides=lecture_slides,
             transcript=transcript,
@@ -31041,6 +31254,7 @@ async def run_summary_job(
     output_language: str,
     reference_images: list[str],
     owner_email: str = "",
+    generation_prompt: str = "",
 ):
     try:
         raise_if_job_cancelled(job_id)
@@ -31053,6 +31267,7 @@ async def run_summary_job(
             job_id,
             output_language,
             owner_email,
+            generation_prompt,
         )
         raise_if_job_cancelled(job_id)
         study_image_limit = get_study_image_plan_limit(owner_email)
@@ -33003,6 +33218,7 @@ async def create_study_guide(
     past_question_papers = payload.past_question_papers.strip()
     output_language = normalize_output_language(payload.language)
     reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_GENERATION_REFERENCE_IMAGES)
+    generation_prompt = compact_text(getattr(payload, "generation_prompt", ""))[:4000]
     if not any([transcript, lecture_notes, lecture_slides, past_question_papers]):
         raise HTTPException(
             status_code=400,
@@ -33068,6 +33284,7 @@ async def create_study_guide(
             output_language,
             reference_images,
             current_user,
+            generation_prompt,
         ),
     )
     asyncio.create_task(monitor_study_guide_client_lease(job_id))
@@ -33082,6 +33299,7 @@ async def create_study_guide(
             "job_id": job_id,
             "language": output_language,
             "reference_images": len(reference_images),
+            "has_generation_prompt": bool(generation_prompt),
             "audio_source_processing_counted": has_audio_or_video_transcript,
         },
     )

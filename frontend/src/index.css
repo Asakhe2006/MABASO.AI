@@ -7806,3 +7806,62 @@ iframe {
   .study-guide-shell.study-guide-themed .study-guide-markdown th,
   .study-guide-shell.study-guide-themed .study-guide-markdown td { padding: 8px 9px !important; }
 }
+
+/* Authoritative Study Guide output sizing. This must remain after legacy theme rules. */
+.study-guide-shell.study-guide-themed .study-guide-topic { font-size: 26px !important; line-height: 1.2 !important; }
+.study-guide-shell.study-guide-themed .study-guide-section-heading { font-size: 17px !important; line-height: 1.3 !important; }
+.study-guide-shell.study-guide-themed .study-guide-markdown,
+.study-guide-shell.study-guide-themed .notes-markdown,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor { font-size: 15px !important; line-height: 1.58 !important; }
+.study-guide-shell.study-guide-themed .study-guide-markdown p,
+.study-guide-shell.study-guide-themed .notes-markdown p,
+.study-guide-shell.study-guide-themed .study-guide-rich-editor p { margin: 0 0 10px !important; }
+.study-guide-shell.study-guide-themed .study-guide-figure-grid,
+.study-guide-shell.study-guide-themed .study-guide-figure {
+  display: block !important;
+  width: 100% !important;
+  margin: 14px 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.study-guide-shell.study-guide-themed .study-guide-figure-image {
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: min(100%, 680px) !important;
+  max-height: 340px !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.study-guide-shell.study-guide-themed .study-guide-figure-caption {
+  width: min(100%, 680px) !important;
+  margin: 7px auto 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.study-guide-shell.study-guide-themed .study-guide-figure-caption p { margin: 2px 0 !important; font-size: 12.5px !important; line-height: 1.45 !important; }
+
+@media (max-width: 768px) {
+  .study-guide-shell.study-guide-themed .study-guide-title-card { padding: 13px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-topic { font-size: 22px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-section-card { margin-bottom: 6px !important; padding: 8px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-section-card[open] > summary { margin-bottom: 5px !important; padding-bottom: 5px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-section-heading { font-size: 16px !important; }
+  .study-guide-shell.study-guide-themed .study-guide-markdown,
+  .study-guide-shell.study-guide-themed .notes-markdown,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor p,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor li,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor td,
+  .study-guide-shell.study-guide-themed .study-guide-rich-editor th { font-size: 15px !important; line-height: 1.55 !important; }
+  .study-guide-shell.study-guide-themed .study-guide-figure-image { max-height: 240px !important; }
+}

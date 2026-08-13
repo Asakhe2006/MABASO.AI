@@ -52,7 +52,8 @@ class AcademicExportThemeTests(unittest.TestCase):
             xml = archive.read("word/document.xml").decode("utf-8")
         self.assertIn('w:sz w:val="23"', xml)
         self.assertIn('w:line="330"', xml)
-        self.assertIn("$$x(t)=a_0+", xml)
+        self.assertNotIn("$$x(t)=a_0+", xml)
+        self.assertTrue("Equation" in xml or "x(t)=a_0+" in xml)
 
     @unittest.skipIf(main.A4 is None, "reportlab is not installed")
     def test_pdf_builds_with_academic_theme_and_math(self):
@@ -86,6 +87,43 @@ class AcademicExportThemeTests(unittest.TestCase):
         cleaned = main.prepare_generated_study_guide_output(draft)
         self.assertNotIn("LECTURER NOTES", cleaned)
         self.assertNotIn("Suggested Visual", cleaned)
+
+    def test_study_guide_cleanup_removes_internal_visual_metadata_and_run_ons(self):
+        draft = (
+            "# Control Systems\nA sensor measures output.Accuracy matters.\n\n"
+            "[Suggested Diagram: feedback loop]\n"
+            "AI explanation: Internal generation detail.\n"
+            "Linked section: Feedback\n"
+        )
+        cleaned = main.prepare_generated_study_guide_output(draft)
+        self.assertNotIn("Suggested Diagram", cleaned)
+        self.assertNotIn("AI explanation", cleaned)
+        self.assertNotIn("Linked section", cleaned)
+        self.assertIn("output.\n\nAccuracy", cleaned)
+
+    def test_study_guide_cleanup_deduplicates_adjacent_equations(self):
+        draft = "# Formula\n\n$$x(t)=a_0+\\sum_{n=1}^{\\infty}a_n$$\n\n$$x(t)=a_0+\\sum_{n=1}^{\\infty}a_n$$"
+        cleaned = main.prepare_generated_study_guide_output(draft)
+        self.assertEqual(cleaned.count("\\sum"), 1)
+
+    def test_figure_caption_hides_ai_metadata(self):
+        lines = main.build_study_image_caption_lines({
+            "figure_number": 2,
+            "title": "Closed Loop Control",
+            "caption": "Signal flow through feedback.",
+            "ai_explanation": "Internal explanation",
+            "matched_section": "Feedback",
+        })
+        self.assertEqual(lines, ["Figure 2. Closed Loop Control", "Signal flow through feedback."])
+
+    def test_heading_wording_is_natural_and_contains_no_rendering_markup(self):
+        cleaned = main.prepare_generated_study_guide_output(
+            "# 3. Open-Loop Control\n\n## `$12. Square-Wave Synthesis$`"
+        )
+        self.assertIn("# 3. Open Loop Control", cleaned)
+        self.assertIn("## 12. Square Wave Synthesis", cleaned)
+        self.assertNotIn("Open-Loop", cleaned)
+        self.assertNotIn("`", cleaned)
 
 
 if __name__ == "__main__":
