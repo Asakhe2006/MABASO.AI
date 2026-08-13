@@ -6881,7 +6881,8 @@ class EmailPasswordRegistrationCompleteRequest(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    credential: str
+    credential: str = ""
+    access_token: str = ""
 
 
 class AppleAuthRequest(BaseModel):
@@ -11142,6 +11143,32 @@ def create_session_from_google_credential(credential: str) -> tuple[str, str]:
     if not token_info.get("email_verified"):
         raise HTTPException(status_code=401, detail="Google account email is not verified.")
 
+    ensure_user_account_is_active(email)
+    mark_user_verified(email)
+    return create_session(email), email
+
+
+def create_session_from_google_access_token(access_token: str) -> tuple[str, str]:
+    verify_google_auth_is_configured()
+    try:
+        response = requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"access_token": access_token},
+            timeout=12,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail="Google sign-in could not be reached. Please try again.") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.")
+    try:
+        token_info = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.") from exc
+    if compact_text(token_info.get("aud")) != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified.")
+    email = validate_email_address(token_info.get("email", ""))
+    if token_info.get("email_verified") not in {True, "true", "True", 1}:
+        raise HTTPException(status_code=401, detail="Google account email is not verified.")
     ensure_user_account_is_active(email)
     mark_user_verified(email)
     return create_session(email), email
@@ -21481,10 +21508,14 @@ async def google_login(payload: GoogleAuthRequest, request: Request, response: R
     started_at = utc_now()
     enforce_rate_limit(scope="auth_google_login", request=request, limit=10, window_seconds=15 * 60)
     credential = payload.credential.strip()
-    if not credential:
+    access_token = payload.access_token.strip()
+    if not credential and not access_token:
         raise HTTPException(status_code=400, detail="Google credential is required.")
     logger.info("Google auth request started.")
-    session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    if credential:
+        session_token, email = await asyncio.to_thread(create_session_from_google_credential, credential)
+    else:
+        session_token, email = await asyncio.to_thread(create_session_from_google_access_token, access_token)
     logger.info("Google auth verified for %s in %sms.", email, int((utc_now() - started_at).total_seconds() * 1000))
     threading.Thread(
         target=run_post_auth_background_sync,
