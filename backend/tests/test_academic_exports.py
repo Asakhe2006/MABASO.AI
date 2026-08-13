@@ -128,6 +128,19 @@ class AcademicExportThemeTests(unittest.TestCase):
         )
         self.assertTrue(main.study_guide_needs_quality_repair(draft))
 
+    def test_study_guide_removes_separately_generated_tools(self):
+        draft = (
+            "# Control Systems\n\n## Definition\nA controller regulates a process.\n\n"
+            "## Worked Examples\nSolve this full problem.\n\n### Step 1\nSubstitute values.\n\n"
+            "## Formula\n$$e(t)=r(t)-y(t)$$\n\n## Flashcards\nQ: What is feedback?"
+        )
+        cleaned = main.prepare_generated_study_guide_output(draft)
+        self.assertIn("## Definition", cleaned)
+        self.assertIn("## Formula", cleaned)
+        self.assertNotIn("Worked Examples", cleaned)
+        self.assertNotIn("Substitute values", cleaned)
+        self.assertNotIn("Flashcards", cleaned)
+
     def test_figure_caption_hides_ai_metadata(self):
         lines = main.build_study_image_caption_lines({
             "figure_number": 2,

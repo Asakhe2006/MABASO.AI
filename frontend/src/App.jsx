@@ -681,7 +681,6 @@ const tabs = [
   { id: "podcast", label: "Podcast Generator" },
   { id: "report", label: "Academic Report" },
   { id: "mindmap", label: "Mind Map Generator" },
-  { id: "chat", label: "Study Chat" },
   { id: "quality", label: "Note Quality Checker" },
   { id: "collaboration", label: "Collaboration" },
 ];
@@ -703,13 +702,11 @@ const WORKSPACE_TOOL_GROUPS = [
     id: "ai",
     label: "AI Generator",
     eyebrow: "Practice and thinking",
-    description: "Study chat, flashcards, exam mind map, oral exam, and marking tools.",
+    description: "Flashcards, exam mind maps, tests, and note-quality tools.",
     tools: [
-      { id: "chat", label: "Study Chat", diagram: "AI", targetTab: "chat", description: "Ask questions, upload photos, and continue study chat." },
       { id: "flashcards", label: "Flashcards", diagram: "FC", targetTab: "flashcards", description: "Generate quick memory cards from your lecture." },
       { id: "mindmap", label: "Exam Mind Map Generator", diagram: "MM", targetTab: "mindmap", description: "Create a visual exam revision map." },
       { id: "quiz", label: "Exam", diagram: "EX", targetTab: "quiz", description: "Generate tests and mark typed or photo answers." },
-      { id: "study-chat", label: "Study Chat", diagram: "AI", targetTab: "chat", description: "Ask by text or tap the mic for spoken practice in the same chat." },
       { id: "quality", label: "Note Quality Checker", diagram: "QC", targetTab: "quality", description: "Write what you understood, then get an exam-readiness rating and focus guide." },
     ],
   },
@@ -6819,6 +6816,7 @@ export default function App() {
   const [flashcards, setFlashcards] = useState([]);
   const [flashcardCount, setFlashcardCount] = useState(5);
   const [isGeneratingFlashcards, setIsGeneratingFlashcards] = useState(false);
+  const [isGeneratingWorkedExamples, setIsGeneratingWorkedExamples] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState([]);
   const [studyImages, setStudyImages] = useState([]);
   const [studyGuidePromptDraft, setStudyGuidePromptDraft] = useState("");
@@ -20962,7 +20960,6 @@ export default function App() {
     if (activeTab === "podcast") return podcastData.script || "No podcast debate generated yet.";
     if (activeTab === "report") return reportData.body || "No academic report generated yet.";
     if (activeTab === "mindmap") return mindMapToText(mindMapData.root) || "No mind map generated yet.";
-    if (activeTab === "chat") return chatToText(lectureAssistantMessages) || "No study chat yet.";
     return collaborationRoomToText(activeRoom);
   };
 
@@ -22309,8 +22306,8 @@ export default function App() {
       startTransition(() => {
         setSummary(normalizeStudyGuideContentSpacing(job.summary || ""));
         setFormula(job.formula || "");
-        setExample(job.worked_example || "");
-        setFlashcards(job.flashcards || []);
+        setExample("");
+        setFlashcards([]);
         setQuizQuestions([]);
         setStudyImages(Array.isArray(job.study_images) ? job.study_images : []);
         setQuizAnswers({});
@@ -22338,8 +22335,8 @@ export default function App() {
           summary: job.summary || "",
           transcript: job.transcript || resolvedTranscript,
           formula: job.formula || "",
-          example: job.worked_example || "",
-          flashcards: job.flashcards || [],
+          example: "",
+          flashcards: [],
           quizQuestions: [],
           studyImages: Array.isArray(job.study_images) ? job.study_images : [],
           lectureNotes: resolvedLectureNotes,
@@ -22494,6 +22491,72 @@ export default function App() {
       setIsGeneratingFlashcards(false);
       setCurrentJobType("");
       setProgress(0);
+    }
+  };
+
+  const generateWorkedExamples = async () => {
+    const toolContext = getResolvedStudyToolContext();
+    const sourceHistoryId = activeHistoryItem?.id || activeHistoryId || "";
+    if (!toolContext.hasContent) {
+      setError("Generate a study guide or add lecture material before creating worked examples.");
+      return false;
+    }
+    if (!(await ensurePremiumFeatureAvailable("worked_examples", "Worked Examples"))) return false;
+
+    setIsGeneratingWorkedExamples(true);
+    setError("");
+    setCurrentPage("workspace");
+    setActiveTab("examples");
+    setStatus("Generating worked examples...");
+    try {
+      const response = await authFetch("/generate-worked-examples/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+          transcript: toolContext.transcript,
+          summary: toolContext.summary,
+          lecture_notes: toolContext.lectureNotes,
+          lecture_slides: toolContext.lectureSlides,
+          past_question_papers: toolContext.pastQuestionPapers,
+          language: outputLanguage,
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Worked example generation failed.");
+      const nextExample = String(data.worked_example || "").trim();
+      setExample(nextExample);
+      addHistoryItem({
+        id: sourceHistoryId,
+        title: extractHistoryTitle(toolContext.summary || "", toolContext.sourceLabel),
+        fileName: toolContext.sourceLabel,
+        summary: toolContext.summary,
+        transcript: toolContext.transcript,
+        formula,
+        example: nextExample,
+        flashcards,
+        quizQuestions,
+        studyImages,
+        lectureNotes: toolContext.lectureNotes,
+        lectureNotesFileName: toolContext.lectureNotesFileName,
+        lectureNoteSources: sanitizeStudySourceEntriesForHistory(lectureNoteSources),
+        lectureNoteFileNames: toolContext.lectureNoteFileNames,
+        lectureSlides: toolContext.lectureSlides,
+        lectureSlideFileNames: toolContext.lectureSlideFileNames,
+        lectureSlideSources: sanitizeStudySourceEntriesForHistory(lectureSlideSources),
+        pastQuestionMemo,
+        pastQuestionPapers: toolContext.pastQuestionPapers,
+        pastQuestionPaperFileNames: toolContext.pastQuestionPaperFileNames,
+        pastQuestionPaperSources: sanitizeStudySourceEntriesForHistory(pastQuestionPaperSources),
+      });
+      setStatus("Worked examples are ready.");
+      return true;
+    } catch (err) {
+      setError(err.message || "Worked example generation failed.");
+      setStatus("Worked example generation failed.");
+      return false;
+    } finally {
+      setIsGeneratingWorkedExamples(false);
     }
   };
 
@@ -28056,7 +28119,17 @@ export default function App() {
           </div>
         ) : null}
         {currentPage === "capture" ? <header className="capture-app-header mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-          <div className="capture-mobile-header-row"><div><p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p><p className="capture-mobile-subtitle mt-2 text-sm text-slate-300">Record your lecture and get notes automatically.</p></div><div className="capture-mobile-profile sm:hidden">{renderCompactProfileMenu()}</div></div>
+          <div className="capture-mobile-header-row">
+            <div className="capture-brand-cluster">
+              <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
+              <p className="capture-mobile-subtitle mt-1 text-sm text-slate-300">Record your lecture and get notes automatically.</p>
+              <button type="button" onClick={() => openStudyChatPage()} className="capture-ai-chat-button mt-3">
+                <MessageCircle className="h-5 w-5" aria-hidden="true" />
+                <span>AI Chat</span>
+              </button>
+            </div>
+            <div className="capture-mobile-profile sm:hidden">{renderCompactProfileMenu()}</div>
+          </div>
           <div className="capture-header-actions flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
               <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
@@ -28075,6 +28148,8 @@ export default function App() {
                   {outputLanguageOptions.map((option) => <option key={option.value} value={option.value} className="bg-slate-950 text-white">{option.label}</option>)}
                 </select>
               </label>
+              <button type="button" onClick={() => navigateToPath("/company/about")} className="capture-header-link"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="capture-header-link"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
               <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
               <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
             </div>
@@ -28083,25 +28158,13 @@ export default function App() {
         {collaborationInvitePrompt}
 
         {currentPage === "capture" ? <section className="capture-panel mb-8 overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_30px_80px_rgba(8,15,30,0.45)] backdrop-blur xl:p-8">
-          <div className="capture-panel-desktop-header mb-6 flex items-center justify-between gap-4 border-b border-white/10 pb-5">
-            <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <button type="button" onClick={() => openStudyChatPage()} className="capture-ai-chat-button">
-                <MessageCircle className="h-5 w-5" aria-hidden="true" />
-                <span>AI Chat</span>
-              </button>
-              <p className="hidden max-w-[22rem] text-sm leading-6 text-slate-300 sm:block">Get instant help from MABASO about any topic.</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-4">
-              <button type="button" onClick={() => navigateToPath("/company/about")} className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition hover:text-white"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
-              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition hover:text-white"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
-            </div>
-          </div>
-
           <aside className="rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(6,18,12,0.96),rgba(1,7,4,0.98))] p-5 shadow-[0_20px_60px_rgba(2,8,23,0.55)] xl:p-6">
               <div onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); setDragActive(false); handleLectureBundleFilesChange(event.dataTransfer.files); }} className={`rounded-[24px] border border-dashed p-5 transition ${dragActive ? "border-emerald-300 bg-emerald-300/10" : "border-white/15 bg-white/[0.03]"}`}>
                 <div className="space-y-5">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#22c55e,#166534)] text-2xl font-black text-white">M</div>
-                  <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="capture-bundle-explainer mt-2 text-sm leading-7 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
+                  <div className="capture-workspace-intro">
+                    <div className="capture-workspace-mark">M</div>
+                    <div><h2 className="text-2xl font-semibold text-white">Build your lecture workspace</h2><p className="capture-bundle-explainer mt-1 text-sm leading-6 text-slate-300">Add one source at a time or use one combined lecture-file upload and let MABASO sort notes, slides, past papers, and lecture media in the background, then process the whole bundle automatically.</p></div>
+                  </div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <button type="button" onClick={() => fileInputRef.current?.click()} disabled={loading} className="capture-source-button border-white/10 bg-white/5 text-white disabled:opacity-50"><span className="capture-source-icon"><Video className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Select Video / Recording File</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-slate-400">Audio and video</span></span></button>
                     <button type="button" onClick={() => bulkLectureFileInputRef.current?.click()} disabled={loading} className="capture-source-button border-emerald-300/20 bg-emerald-300/10 text-emerald-50 disabled:opacity-50"><span className="capture-source-icon"><FileText className="h-6 w-6" aria-hidden="true" /></span><span><span className="block text-sm font-semibold">Add Lecture Files</span><span className="mt-2 block text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Auto-sort and process mixed files</span></span></button>
@@ -28727,6 +28790,15 @@ export default function App() {
                     ref={teacherExamplesPanelRef}
                     className="study-guide-shell min-w-0 space-y-4 rounded-[28px] p-1"
                   >
+                    <div className="flex flex-wrap items-center justify-between gap-3 px-1 pb-1">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Worked Examples</p>
+                        {!cleanedExampleContent ? <p className="mt-1 text-sm text-slate-300">Generate examples separately when you are ready to practise.</p> : null}
+                      </div>
+                      <button type="button" onClick={generateWorkedExamples} disabled={isGeneratingWorkedExamples} className="rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                        {isGeneratingWorkedExamples ? "Generating..." : cleanedExampleContent ? "Regenerate Examples" : "Generate Examples"}
+                      </button>
+                    </div>
                     {exampleSections.length ? exampleSections.map((section, index) => {
                       const isActiveSection = activeExampleSectionKey
                         ? activeExampleSectionKey === section.normalizedHeading
@@ -28751,7 +28823,7 @@ export default function App() {
                       );
                     }) : (
                       <div className="notes-markdown study-guide-markdown phone-safe-copy rounded-2xl bg-white p-4 max-w-none shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-                        <MobileFirstMarkdown>{cleanedExampleContent || "Worked examples will appear here after study guide generation."}</MobileFirstMarkdown>
+                        <MobileFirstMarkdown>{cleanedExampleContent || "No worked examples generated yet."}</MobileFirstMarkdown>
                       </div>
                     )}
                   </div>
@@ -28838,7 +28910,6 @@ export default function App() {
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
-                {activeTab === "chat" ? renderStudyChatPanel() : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
             </div>

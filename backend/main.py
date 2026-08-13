@@ -6837,6 +6837,15 @@ class FlashcardGenerationRequest(BaseModel):
     count: int = 5
 
 
+class WorkedExampleGenerationRequest(BaseModel):
+    transcript: str = ""
+    summary: str = ""
+    lecture_notes: str = ""
+    lecture_slides: str = ""
+    past_question_papers: str = ""
+    language: str = "English"
+
+
 class TeacherLessonRequest(BaseModel):
     transcript: str = ""
     summary: str = ""
@@ -26664,6 +26673,30 @@ def normalize_study_guide_heading_wording(markdown: str) -> str:
     return re.sub(r"(?m)^(#{1,6})\s+(.+?)\s*$", clean_heading, markdown or "")
 
 
+def remove_separate_study_tool_sections(markdown: str) -> str:
+    """Keep independently generated tools out of the Study Guide response."""
+    lines = (markdown or "").replace("\r\n", "\n").splitlines()
+    kept: list[str] = []
+    skipped_heading_level = 0
+    separate_headings = {"worked example", "worked examples", "flashcard", "flashcards"}
+    for line in lines:
+        heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line.strip())
+        if heading_match:
+            heading_level = len(heading_match.group(1))
+            normalized_heading = normalize_guide_heading(re.sub(r"^\d+[.)]?\s*", "", heading_match.group(2)))
+            if skipped_heading_level and heading_level > skipped_heading_level:
+                continue
+            if skipped_heading_level and heading_level <= skipped_heading_level:
+                skipped_heading_level = 0
+            if normalized_heading in separate_headings:
+                skipped_heading_level = heading_level
+                continue
+        elif skipped_heading_level:
+            continue
+        kept.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
 def study_math_fingerprint(value: str) -> str:
     text = compact_text(value).strip("$")
     replacements = {
@@ -26803,6 +26836,7 @@ def study_guide_needs_quality_repair(markdown: str) -> bool:
 
 def prepare_generated_study_guide_output(markdown: str) -> str:
     cleaned = strip_study_guide_generation_artifacts(markdown)
+    cleaned = remove_separate_study_tool_sections(cleaned)
     cleaned = remove_duplicate_study_guide_equations(cleaned)
     cleaned = make_formulas_human_readable(cleaned)
     cleaned = normalize_study_guide_block_spacing(cleaned)
@@ -26817,7 +26851,9 @@ Rules:
 - Do not summarize the source dump. Teach the topic as structured academic notes.
 - Remove source labels such as lecturer notes, lecture slides, transcript, OCR, file names, page labels, and output instructions.
 - Keep topics and subtopics separate.
-- Use Markdown headings, short paragraphs, bullets, tables only when helpful, callouts, and worked examples.
+- Use Markdown headings, short paragraphs, bullets, tables only when helpful, and concise callouts.
+- Do not generate a WORKED EXAMPLES section or flashcards. Those are separate tools generated only when the student requests them.
+- Do not include solved multi-step practice problems in the Study Guide. Keep formulas explanatory and leave full solutions to Worked Examples.
 - For mathematical content, use valid LaTeX with $...$ inline and $$...$$ for display equations.
 - Put one algebraic transformation per display line. Use `\\begin{aligned}...\\end{aligned}` for multi-step derivations.
 - Never concatenate alternative formulas, repeated substitutions, or partial-fraction stages into one equation.
@@ -30558,7 +30594,7 @@ def normalize_generated_quiz_questions(
     return normalized_questions
 
 
-async def generate_structured_study_assets(
+async def generate_study_formula_asset(
     summary: str,
     transcript: str,
     lecture_notes: str,
@@ -30567,8 +30603,8 @@ async def generate_structured_study_assets(
     job_id: str,
     output_language: str,
     visual_analysis: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    fallback_assets = extract_study_assets(
+) -> str:
+    fallback_formula = recover_formula_section(
         summary,
         lecture_notes=lecture_notes,
         lecture_slides=lecture_slides,
@@ -30589,7 +30625,7 @@ async def generate_structured_study_assets(
     ]
     combined_source = "\n\n".join(block for block in source_blocks if block)
 
-    def _generate_assets() -> dict[str, Any]:
+    def _generate_formula() -> dict[str, Any]:
         content = stream_job_chat_completion(
             job_id,
             model=ASSET_GENERATION_MODEL,
@@ -30599,24 +30635,16 @@ async def generate_structured_study_assets(
                 {
                     "role": "system",
                     "content": (
-                        "You build structured study assets for a university revision app. "
-                        "Return only valid JSON with the keys formula and worked_example.\n\n"
+                        "You build a formula study sheet for a university revision app. "
+                        "Return only valid JSON with one key: formula.\n\n"
                         "Rules:\n"
                         "- Do not mention how a student should feel.\n"
-                        "- Use plain readable formulas, never LaTeX.\n"
+                        "- Use valid LaTeX with $...$ for inline formulas and $$...$$ for display formulas.\n"
                         "- If formulas appear anywhere in the study guide, notes, slides, transcript, or past-paper reference, `formula` must extract them and must not claim that no formula exists.\n"
                         "- `formula` should be a compact markdown study sheet with readable formulas, important rearrangements, and derived forms when the supplied material shows them.\n"
-                        "- `worked_example` should explain every example that appears in the study guide WORKED EXAMPLES section.\n"
-                        "- If no explicit worked example appears but the lecture has formulas, derivations, methods, or likely exam-style procedures, create at least one original practice example using only the supplied topic context.\n"
-                        "- Include one advanced multi-step example tied directly to the lecture topic, with reasoning, verification, and an exam-level interpretation.\n"
-                        "- If the extracted source describes a question shown in an image, explain and solve that image-based question while clearly marking any unreadable detail.\n"
-                        "- If the supplied material contains a derivation, rearrangement, or formula build-up, include that derivation clearly inside `worked_example`.\n"
-                        "- `worked_example` must explain why each step happens, why the formula fits, and how the result is checked.\n"
-                        "- Use the STEP-BY-STEP EXPLANATIONS section to expand the reasoning, not to replace any example from the guide.\n"
                         "- If past question papers are provided, use them only as reference for topic coverage, phrasing style, and likely mark patterns. Do not copy them verbatim.\n"
                         f"- Write every returned field in {output_language}.\n"
-                        "- Return JSON only, with no markdown code fence.\n\n"
-                        f"{WORKED_EXAMPLE_ASSET_PROMPT.strip()}"
+                        "- Return JSON only, with no markdown code fence."
                     ),
                 },
                 {"role": "user", "content": combined_source},
@@ -30625,24 +30653,78 @@ async def generate_structured_study_assets(
         return parse_json_object(content)
 
     try:
-        update_job(job_id, status="processing", stage="Building flashcards and worked examples", progress=82)
-        generated_assets = await asyncio.to_thread(_generate_assets)
+        update_job(job_id, status="processing", stage="Extracting formulas", progress=82)
+        generated_assets = await asyncio.to_thread(_generate_formula)
     except Exception as exc:
         logger.warning("Structured asset generation failed, using extracted fallback assets: %s", exc)
         generated_assets = {}
 
-    return {
-        "formula": compact_text(generated_assets.get("formula"), fallback_assets["formula"]),
-        "worked_example": build_worked_example_asset(
-            summary,
-            compact_text(generated_assets.get("worked_example"), fallback_assets["worked_example"]),
-            lecture_notes=lecture_notes,
-            lecture_slides=lecture_slides,
-            transcript=transcript,
-            past_question_papers=past_question_papers,
-        ),
-        "flashcards": [],
-    }
+    return compact_text(generated_assets.get("formula"), fallback_formula or "No formula section was detected in the notes.")
+
+
+async def generate_worked_example_package(
+    *,
+    summary: str,
+    transcript: str,
+    lecture_notes: str,
+    lecture_slides: str,
+    past_question_papers: str,
+    output_language: str,
+) -> str:
+    fallback_worked_example = build_worked_example_asset(
+        summary,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
+    source_blocks = [
+        trimmed_context_block("STUDY GUIDE SUMMARY", summary, MAX_STUDY_GUIDE_INPUT_CHARS),
+        trimmed_context_block("LECTURER NOTES", lecture_notes, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE SLIDES", lecture_slides, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("PAST QUESTION PAPERS", past_question_papers, MAX_STUDY_GUIDE_INPUT_CHARS // 2),
+        trimmed_context_block("LECTURE TRANSCRIPT", transcript, MAX_TRANSCRIPT_STUDY_GUIDE_INPUT_CHARS // 2),
+    ]
+    combined_source = "\n\n".join(block for block in source_blocks if block)
+
+    def _generate_worked_example() -> dict[str, Any]:
+        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+            model=ASSET_GENERATION_MODEL,
+            max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3200),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You create worked examples for a university revision app. "
+                        "Return only valid JSON with one key: worked_example.\n\n"
+                        "- Generate examples only. Do not generate a study guide, formula sheet, flashcards, or quiz.\n"
+                        "- Explain why each step is used and verify the final result.\n"
+                        "- Include one advanced multi-step example tied directly to the supplied topic.\n"
+                        "- Use valid LaTeX with $...$ and $$...$$ for mathematics.\n"
+                        "- Use past papers only to match topic coverage and mark style; never copy them verbatim.\n"
+                        f"- Write in {output_language}.\n"
+                        "- Return JSON only, with no markdown code fence.\n\n"
+                        f"{WORKED_EXAMPLE_ASSET_PROMPT.strip()}"
+                    ),
+                },
+                {"role": "user", "content": combined_source},
+            ],
+        )
+        return parse_json_object(response.choices[0].message.content or "")
+
+    try:
+        generated = await asyncio.to_thread(_generate_worked_example)
+    except Exception as exc:
+        logger.warning("Worked example generation failed, using extracted fallback: %s", exc)
+        generated = {}
+    return build_worked_example_asset(
+        summary,
+        compact_text(generated.get("worked_example"), fallback_worked_example),
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        transcript=transcript,
+        past_question_papers=past_question_papers,
+    )
 
 
 def get_flashcard_count_bounds(plan_id: str) -> tuple[int, int]:
@@ -30914,13 +30996,13 @@ async def generate_study_guide(
             "- Label diagrams, stacked comparison cards, charts, and process visuals clearly inside the guide.\n"
             "- Use compact Markdown tables when they genuinely improve comparison or structure; avoid wide tables and long table cells.\n"
             "- Structure the guide like a premium digital textbook rather than lecture notes.\n"
-"- Automatically choose the best presentation format for each concept, including paragraphs, bullet lists, numbered steps, comparison tables, labelled diagrams, timelines, flowcharts, process graphics, hierarchy diagrams, architecture diagrams, and worked examples.\n"
+"- Automatically choose the best presentation format for each concept, including paragraphs, bullet lists, numbered steps, comparison tables, labelled diagrams, timelines, flowcharts, process graphics, hierarchy diagrams, and architecture diagrams.\n"
 "- Break long paragraphs into short, easy-to-read sections.\n"
 "- Keep related images, diagrams, tables, formulas, and explanations together. Never separate a visual from the content it explains.\n"
 "- Introduce every major topic with a concise explanation before presenting details.\n"
 "- Use comparison tables whenever concepts, diseases, algorithms, technologies, methods, structures, or systems are compared.\n"
 "- Use numbered steps for procedures, experiments, calculations, algorithms, and workflows.\n"
-"- Present formulas together with variable definitions, units where appropriate, interpretation, and worked examples.\n"
+"- Present formulas together with variable definitions, units where appropriate, and interpretation. Do not solve worked examples in this request.\n"
 "- Write formulas and derivations in valid LaTeX using $...$ for inline math and $$...$$ for displayed equations. Never convert formulas to decorative Unicode text.\n"
 "- Put one algebraic transformation on each display line. Use \\begin{aligned}...\\end{aligned} for multi-step derivations and never concatenate competing formula versions.\n"
 "- Verify every fraction, bracket, exponent, subscript, denominator, operator, and equality sign before returning mathematical content.\n"
@@ -30929,13 +31011,13 @@ async def generate_study_guide(
 "- Do not insert decorative visuals; every visual must directly teach the surrounding concept.\n"
 "- Place figures immediately after the paragraph that introduces them.\n"
 "- Add a concise figure title and explanation beneath every visual.\n"
-"- Present examples immediately after the concept they demonstrate.\n"
+"- Do not generate a WORKED EXAMPLES section, solved practice problems, or flashcards. Those tools are generated separately on demand.\n"
 "- Keep terminology, formatting, and notation consistent throughout the guide.\n"
 "- Rewrite lecture content into clear academic language while preserving factual accuracy.\n"
 "- Remove conversational filler, lecturer repetition, greetings, and transcription artefacts.\n"
 "- Prioritise clarity, readability, and visual learning over copying the original wording.\n"
 "- Ensure the final guide looks modern, polished, professional, and suitable for university-level revision.\n"
-            "- Use blockquote callouts such as > **Definition:**, > **Exam Tip:**, > **Common Mistake:**, > **Worked Example:**, > **Deep Dive:**, and > **Key Takeaway:** when useful.\n"
+            "- Use blockquote callouts such as > **Definition:**, > **Exam Tip:**, > **Common Mistake:**, > **Deep Dive:**, and > **Key Takeaway:** when useful.\n"
             "- End major topics with Quick Summary, Key Points, Common Mistakes, and Quick Revision Questions when the source material supports that depth."
             
         )
@@ -31335,7 +31417,7 @@ async def run_summary_job(
             )
             uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)[:study_image_limit]
         raise_if_job_cancelled(job_id)
-        assets = await generate_structured_study_assets(
+        formula = await generate_study_formula_asset(
             summary,
             transcript,
             lecture_notes,
@@ -31363,9 +31445,9 @@ async def run_summary_job(
             stage="Study guide ready",
             progress=100,
             summary=summary,
-            formula=assets["formula"],
-            worked_example=assets["worked_example"],
-            flashcards=assets["flashcards"],
+            formula=formula,
+            worked_example="",
+            flashcards=[],
             quiz_questions=[],
             study_images=study_images,
             used_fallback=used_fallback,
@@ -33456,6 +33538,55 @@ async def create_flashcards(
         "min_count": minimum_count,
         "max_count": maximum_count,
     }
+
+
+@app.post("/generate-worked-examples/")
+async def create_worked_examples(
+    payload: WorkedExampleGenerationRequest,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    started_at = utc_now()
+    enforce_rate_limit(scope="generate_worked_examples", request=request, limit=18, window_seconds=60 * 60, identity=current_user)
+    transcript = payload.transcript.strip()
+    summary = payload.summary.strip()
+    lecture_notes = payload.lecture_notes.strip()
+    lecture_slides = payload.lecture_slides.strip()
+    past_question_papers = payload.past_question_papers.strip()
+    output_language = normalize_output_language(payload.language)
+    if not any([summary, transcript, lecture_notes, lecture_slides, past_question_papers]):
+        raise HTTPException(status_code=400, detail="Generate a study guide or add lecture material before creating worked examples.")
+
+    ensure_plan_quota_available(
+        email=current_user,
+        feature="worked_examples",
+        request=request,
+        metadata={"route": "generate_worked_examples"},
+    )
+    ensure_openai_key()
+    worked_example = await generate_worked_example_package(
+        summary=summary,
+        transcript=transcript,
+        lecture_notes=lecture_notes,
+        lecture_slides=lecture_slides,
+        past_question_papers=past_question_papers,
+        output_language=output_language,
+    )
+    consume_plan_quota(
+        email=current_user,
+        feature="worked_examples",
+        request=request,
+        metadata={"route": "generate_worked_examples"},
+    )
+    record_audit_log(
+        action="worked_examples.request",
+        email=current_user,
+        request=request,
+        resource_type="worked_examples",
+        resource_name=output_language,
+        duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+    )
+    return {"worked_example": worked_example}
 
 
 @app.post("/generate-teacher-lesson/")
