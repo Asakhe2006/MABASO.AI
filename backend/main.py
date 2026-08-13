@@ -40,9 +40,11 @@ from openai import APIStatusError, InternalServerError, OpenAI
 from pydantic import BaseModel
 import requests
 from chat_assistant import (
+    DEFAULT_OPENAI_CHAT_MODEL,
     ProviderStreamError,
     format_provider_name,
     iter_provider_stream,
+    normalize_openai_model_name,
     resolve_provider_attempts,
 )
 from supabase_chat_history import (
@@ -142,25 +144,25 @@ def get_early_int_env(name: str, default: int) -> int:
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
-BASE_TEXT_MODEL = os.getenv("BASE_TEXT_MODEL", "gpt-4.1")
-ADVANCED_ACADEMIC_MODEL = os.getenv("ADVANCED_ACADEMIC_MODEL", "gpt-terra-5.6")
-STUDY_GUIDE_MODEL = os.getenv("STUDY_GUIDE_MODEL", ADVANCED_ACADEMIC_MODEL)
-STUDY_GUIDE_FALLBACK_MODEL = os.getenv("STUDY_GUIDE_FALLBACK_MODEL", BASE_TEXT_MODEL)
-VISION_MODEL = os.getenv("VISION_MODEL", ADVANCED_ACADEMIC_MODEL)
-STUDY_CHAT_MODEL = os.getenv("STUDY_CHAT_MODEL", STUDY_GUIDE_MODEL)
+BASE_TEXT_MODEL = normalize_openai_model_name(os.getenv("BASE_TEXT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL)
+ADVANCED_ACADEMIC_MODEL = normalize_openai_model_name(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
+STUDY_GUIDE_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
+STUDY_GUIDE_FALLBACK_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), BASE_TEXT_MODEL)
+VISION_MODEL = normalize_openai_model_name(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
+STUDY_CHAT_MODEL = normalize_openai_model_name(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
 GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
 GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
 MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES = int(os.getenv("MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES", str(12 * 1024 * 1024)))
-ASSET_GENERATION_MODEL = os.getenv("ASSET_GENERATION_MODEL", BASE_TEXT_MODEL)
-PODCAST_SCRIPT_MODEL = os.getenv("PODCAST_SCRIPT_MODEL", BASE_TEXT_MODEL)
+ASSET_GENERATION_MODEL = normalize_openai_model_name(os.getenv("ASSET_GENERATION_MODEL"), BASE_TEXT_MODEL)
+PODCAST_SCRIPT_MODEL = normalize_openai_model_name(os.getenv("PODCAST_SCRIPT_MODEL"), BASE_TEXT_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
-TEACHER_SCRIPT_MODEL = os.getenv("TEACHER_SCRIPT_MODEL", ADVANCED_ACADEMIC_MODEL)
-PRESENTATION_MODEL = os.getenv("PRESENTATION_MODEL", ADVANCED_ACADEMIC_MODEL)
-REPORT_MODEL = os.getenv("REPORT_MODEL", ADVANCED_ACADEMIC_MODEL)
-MIND_MAP_MODEL = os.getenv("MIND_MAP_MODEL", BASE_TEXT_MODEL)
+TEACHER_SCRIPT_MODEL = normalize_openai_model_name(os.getenv("TEACHER_SCRIPT_MODEL"), ADVANCED_ACADEMIC_MODEL)
+PRESENTATION_MODEL = normalize_openai_model_name(os.getenv("PRESENTATION_MODEL"), ADVANCED_ACADEMIC_MODEL)
+REPORT_MODEL = normalize_openai_model_name(os.getenv("REPORT_MODEL"), ADVANCED_ACADEMIC_MODEL)
+MIND_MAP_MODEL = normalize_openai_model_name(os.getenv("MIND_MAP_MODEL"), BASE_TEXT_MODEL)
 REALTIME_TUTOR_DEFAULT_MODEL = (
     os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
     or "gpt-realtime-mini"
@@ -16289,15 +16291,21 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
     reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     if reference_images and not bool(payload.voice_mode):
         attempts = resolve_provider_attempts("openai", voice_mode=False)
-        return [
+        vision_attempts = [
             {
                 **attempt,
-                "model": VISION_MODEL,
+                "model": normalize_openai_model_name(VISION_MODEL, BASE_TEXT_MODEL),
                 "label": "OpenAI Vision",
             }
             for attempt in attempts
             if attempt.get("provider") == "openai"
         ]
+        if vision_attempts and vision_attempts[0]["model"] != BASE_TEXT_MODEL:
+            vision_attempts.append({
+                **vision_attempts[0],
+                "model": BASE_TEXT_MODEL,
+            })
+        return vision_attempts
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
     if not bool(payload.voice_mode):

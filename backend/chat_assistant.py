@@ -10,6 +10,8 @@ import requests
 TEXT_CHAT_PROVIDER_ORDER = ("openai",)
 VOICE_CHAT_PROVIDER_ORDER = ("gemini", "groq")
 SUPPORTED_CHAT_PROVIDERS = ("openai", "gemini", "groq", "openrouter")
+DEFAULT_OPENAI_CHAT_MODEL = "gpt-4.1"
+UNAVAILABLE_OPENAI_MODEL_ALIASES = frozenset({"gpt-terra-5.6"})
 
 
 class ProviderStreamError(Exception):
@@ -43,6 +45,13 @@ def format_provider_name(provider: str) -> str:
     }.get(normalized, normalized.title() or "Provider")
 
 
+def normalize_openai_model_name(value: Any, fallback: str = DEFAULT_OPENAI_CHAT_MODEL) -> str:
+    model = compact_text(value, fallback)
+    if model.lower() in UNAVAILABLE_OPENAI_MODEL_ALIASES:
+        return compact_text(fallback, DEFAULT_OPENAI_CHAT_MODEL)
+    return model
+
+
 def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = False) -> list[dict[str, str]]:
     normalized_forced = compact_text(forced_provider).lower()
     if normalized_forced in SUPPORTED_CHAT_PROVIDERS and _resolve_provider_api_key(normalized_forced):
@@ -53,22 +62,27 @@ def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = F
 
     attempts: list[dict[str, str]] = []
     for provider in ordered_names:
-        attempts.append(
-            {
+        resolved_model = resolve_provider_model(provider, voice_mode=voice_mode)
+        attempts.append({
+            "provider": provider,
+            "label": format_provider_name(provider),
+            "model": resolved_model,
+        })
+        if provider == "openai" and resolved_model != DEFAULT_OPENAI_CHAT_MODEL:
+            attempts.append({
                 "provider": provider,
                 "label": format_provider_name(provider),
-                "model": resolve_provider_model(provider, voice_mode=voice_mode),
-            }
-        )
+                "model": DEFAULT_OPENAI_CHAT_MODEL,
+            })
     return attempts
 
 
 def resolve_provider_model(provider: str, *, voice_mode: bool = False) -> str:
     normalized = compact_text(provider).lower()
     if normalized == "openai":
-        return compact_text(
+        return normalize_openai_model_name(
             os.getenv("OPENAI_CHAT_MODEL"),
-            compact_text(os.getenv("STUDY_CHAT_MODEL"), "gpt-terra-5.6"),
+            normalize_openai_model_name(os.getenv("STUDY_CHAT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
         )
     if normalized == "gemini":
         if voice_mode:
@@ -124,6 +138,11 @@ def _raise_for_response(provider: str, response: requests.Response, default_mess
         detail = f"{label} is rate-limited right now."
     elif status_code in {401, 403}:
         detail = f"{label} rejected the backend API key."
+    elif compact_text(provider).lower() == "openai" and (
+        "model" in detail.lower()
+        and ("does not exist" in detail.lower() or "do not have access" in detail.lower())
+    ):
+        detail = "The selected OpenAI model is unavailable. Trying the supported fallback model."
     elif status_code >= 500:
         detail = f"{label} is temporarily unavailable right now."
     raise ProviderStreamError(
