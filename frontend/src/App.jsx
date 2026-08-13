@@ -137,6 +137,7 @@ const COLLABORATION_NOTIFICATION_EVENT_TYPE = "open-collaboration-reply";
 const REMEMBERED_EMAIL_KEY = "mabaso-remembered-email";
 const OUTPUT_LANGUAGE_KEY = "mabaso-output-language";
 let runtimeCsrfToken = "";
+let csrfRefreshPromise = null;
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
 const PUBLIC_TERMS_PATH = "/terms-and-conditions";
@@ -217,11 +218,15 @@ function getCookieValue(name = "") {
 
 function withAuthHeaders(headers = {}, token = "") {
   const nextHeaders = withDeviceHeaders(headers);
-  const csrfToken = getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken;
+  const csrfToken = getActiveCsrfToken();
   if (csrfToken) {
     nextHeaders.set("X-CSRF-Token", csrfToken);
   }
   return nextHeaders;
+}
+
+function getActiveCsrfToken() {
+  return getCookieValue(CSRF_COOKIE_NAME) || runtimeCsrfToken;
 }
 
 function rememberAuthCsrfToken(value = "") {
@@ -231,6 +236,42 @@ function rememberAuthCsrfToken(value = "") {
 
 function clearAuthCsrfToken() {
   runtimeCsrfToken = "";
+}
+
+async function refreshAuthCsrfToken({ force = false } = {}) {
+  if (!force) {
+    const currentToken = getActiveCsrfToken();
+    if (currentToken) return currentToken;
+  }
+  if (csrfRefreshPromise) return csrfRefreshPromise;
+
+  csrfRefreshPromise = (async () => {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/auth/csrf`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: withDeviceHeaders({
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      }),
+    }, 10000);
+    const data = await parseJsonSafe(response);
+    if (!response.ok) {
+      const error = new Error(data.detail || "Could not restore the security token.");
+      error.status = response.status;
+      throw error;
+    }
+    const nextToken = String(data.csrf_token || "").trim();
+    if (!nextToken) {
+      throw new Error("The security token response was incomplete.");
+    }
+    rememberAuthCsrfToken(nextToken);
+    return nextToken;
+  })().finally(() => {
+    csrfRefreshPromise = null;
+  });
+
+  return csrfRefreshPromise;
 }
 
 function resolveAuthStateToken(responseToken = "", fallbackToken = "", csrfToken = "") {
@@ -5334,15 +5375,7 @@ async function fetchWithTimeout(resource, options = {}, timeoutMs = 15000) {
 }
 
 function getCsrfTokenFromCookie() {
-  const name = "mabaso_csrf";
-  const cookies = document.cookie.split(";");
-  for (let i = 0; i < cookies.length; i += 1) {
-    const cookie = cookies[i].trim();
-    if (cookie.startsWith(name + "=")) {
-      return decodeURIComponent(cookie.substring(name.length + 1));
-    }
-  }
-  return "";
+  return getCookieValue(CSRF_COOKIE_NAME);
 }
 
 async function apiFetch(path, options = {}, timeoutMs = 15000) {
@@ -5351,10 +5384,10 @@ async function apiFetch(path, options = {}, timeoutMs = 15000) {
   
   // Add CSRF token for write requests (POST, PUT, DELETE, PATCH)
   const method = String(options.method || "GET").toUpperCase();
-  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-    const csrfToken = getCsrfTokenFromCookie();
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method) && !headers.has("X-CSRF-Token")) {
+    const csrfToken = getCsrfTokenFromCookie() || runtimeCsrfToken;
     if (csrfToken) {
-      headers.set("x-csrf-token", csrfToken);
+      headers.set("X-CSRF-Token", csrfToken);
     }
   }
   
@@ -15172,6 +15205,7 @@ export default function App() {
     if (sharedAuthStatus === "authenticated" && sharedAuthSession) {
       const sharedEmail = normalizeHistoryOwnerEmail(sharedAuthSession.email);
       if (authTokenRef.current && normalizeHistoryOwnerEmail(authEmail) === sharedEmail) {
+        rememberAuthCsrfToken(sharedAuthSession.csrf_token || "");
         setAuthCheckError("");
         setAuthServerStateReady(true);
         setAuthChecked(true);
@@ -16605,11 +16639,32 @@ export default function App() {
     const activeToken = await refreshSessionIfNeeded(tokenOverride);
     const requestSessionRevision = authSessionRevisionRef.current;
     const requestMethod = String(requestOptions.method || "GET").toUpperCase();
-    const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
+    const isWriteRequest = ["POST", "PUT", "PATCH", "DELETE"].includes(requestMethod);
+    const sendRequest = async ({ refreshCsrf = false } = {}) => {
+      if (isWriteRequest && (refreshCsrf || !getActiveCsrfToken())) {
+        if (refreshCsrf) clearAuthCsrfToken();
+        await refreshAuthCsrfToken({ force: refreshCsrf });
+      }
+      const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
+      return apiFetch(path, { ...requestOptions, headers }, timeoutMs);
+    };
     let response;
     try {
-      response = await apiFetch(path, { ...requestOptions, headers }, timeoutMs);
+      response = await sendRequest();
+      if (isWriteRequest && response.status === 403) {
+        const errorPayload = await parseJsonSafe(response.clone());
+        if (/security token|csrf/i.test(String(errorPayload.detail || ""))) {
+          response = await sendRequest({ refreshCsrf: true });
+        }
+      }
     } catch (err) {
+      if (err?.status === 401) {
+        if (!authExpiryHandledRef.current) {
+          authExpiryHandledRef.current = true;
+          clearSession("Your session has expired. Please sign in again.");
+        }
+        throw new Error("Your session has expired. Please sign in again.");
+      }
       const requestError = new Error(getReadableRequestError(err, path));
       requestError.aborted = isAbortError(err);
       if (requestError.aborted) requestError.name = "AbortError";

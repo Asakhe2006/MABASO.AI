@@ -21719,6 +21719,19 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
     return payload
 
 
+@app.get("/auth/csrf")
+async def refresh_auth_csrf(request: Request, response: Response, authorization: str | None = Header(None)):
+    """Restore the double-submit token for cross-origin browser clients."""
+    token = get_request_session_token(request, authorization, require_csrf=False)
+    context = get_session_context(token)
+    if not context:
+        raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
+    csrf_token = set_auth_cookies(response, token)
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    return {"csrf_token": csrf_token}
+
+
 @app.post("/auth/select-mode")
 async def select_auth_mode(
     payload: SessionModeRequest,
