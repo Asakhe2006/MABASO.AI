@@ -6947,7 +6947,10 @@ export default function App() {
   const [isStudyChatVoiceAnswering, setIsStudyChatVoiceAnswering] = useState(false);
   const [isStudyChatVoiceSessionOpen, setIsStudyChatVoiceSessionOpen] = useState(false);
   const [studyChatVoiceStatus, setStudyChatVoiceStatus] = useState("");
-  const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(false);
+  const [isStudyChatSidebarOpen, setIsStudyChatSidebarOpen] = useState(() => (
+    typeof window !== "undefined" && window.innerWidth >= 1024
+  ));
+  const [chatAttemptReminder, setChatAttemptReminder] = useState(null);
   const [showStudyChatJumpToLatest, setShowStudyChatJumpToLatest] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
@@ -7596,15 +7599,21 @@ export default function App() {
   };
 
   const renderUpgradeModal = () => (
-    <div ref={upgradeModalScrollRef} className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur">
-      <div className="w-full max-w-5xl rounded-[30px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.16),transparent_34%),linear-gradient(180deg,#0f172a,#020617)] p-5 text-white shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:p-6">
+    <div
+      ref={upgradeModalScrollRef}
+      className="upgrade-modal-backdrop fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget && !billingCheckoutPlanId) setIsUpgradeModalOpen(false);
+      }}
+    >
+      <div className="upgrade-modal-panel relative w-full max-w-5xl rounded-[30px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.16),transparent_34%),linear-gradient(180deg,#0f172a,#020617)] p-5 text-white shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:p-6">
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayFast or PayShap</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan, then continue with PayFast for automatic activation after payment confirmation or PayShap for manually verified bank payment.</p>
           </div>
-          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">Close</button>
+          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="upgrade-modal-close" aria-label="Close upgrade plans"><X className="h-4 w-4" aria-hidden="true" /></button>
         </div>
         {upgradeLimitMessage ? (
           <div className="mt-4 rounded-2xl border border-rose-300/25 bg-rose-500/10 px-4 py-3 text-sm font-semibold leading-7 text-rose-50">
@@ -7931,9 +7940,9 @@ export default function App() {
     );
   };
 
-  const openProtectedAppPage = (pageId, { replace = false } = {}) => {
+  const openProtectedAppPage = (pageId, { replace = false, allowLoadedWorkspace = false } = {}) => {
     const normalizedPageId = normalizeAppPageId(pageId, "capture");
-    if (normalizedPageId === "workspace" && !hasStudyInputs && !hasResults && !activeHistoryId) {
+    if (normalizedPageId === "workspace" && !allowLoadedWorkspace && !hasStudyInputs && !hasResults && !activeHistoryId) {
       currentPageRef.current = "capture";
       setCurrentPage("capture");
       setStatus("Add or open lecture material before entering Study Workspace.");
@@ -15309,6 +15318,20 @@ export default function App() {
   }, [isStudyChatSidebarOpen]);
 
   useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const dismissOpenPopovers = (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (isProfileMenuOpen && !target.closest(".profile-menu-anchor")) setIsProfileMenuOpen(false);
+      if (materialMenuItemId && !target.closest(".material-more-anchor")) setMaterialMenuItemId("");
+      if (inlineVoicePicker && !target.closest(".inline-voice-anchor")) setInlineVoicePicker("");
+      if (isMobileMoreMenuOpen && !target.closest(".mobile-app-nav")) setIsMobileMoreMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOpenPopovers);
+    return () => document.removeEventListener("pointerdown", dismissOpenPopovers);
+  }, [inlineVoicePicker, isMobileMoreMenuOpen, isProfileMenuOpen, materialMenuItemId]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !authEmail) {
       setStudyChatHistoryIndex([]);
       return undefined;
@@ -16892,6 +16915,28 @@ export default function App() {
   const getUsageFeatureState = (usage, featureId) => {
     const normalizedFeatureId = String(featureId || "").trim().toLowerCase();
     return (usage?.features || []).find((feature) => String(feature?.feature || "").trim().toLowerCase() === normalizedFeatureId) || null;
+  };
+
+  const applyStreamedChatUsage = (featureState = {}) => {
+    if (!featureState || featureState.feature !== "study_chat") return;
+    const planId = String(featureState.plan_id || billingUsage?.plan_id || "free").toLowerCase();
+    setBillingUsage((current) => {
+      const currentFeatures = Array.isArray(current?.features) ? current.features : [];
+      const nextFeature = {
+        ...currentFeatures.find((item) => item.feature === "study_chat"),
+        ...featureState,
+        label: "Study chat messages",
+        period_type: "daily",
+      };
+      return {
+        ...(current || {}),
+        plan_id: planId,
+        features: [nextFeature, ...currentFeatures.filter((item) => item.feature !== "study_chat")],
+      };
+    });
+    if (planId === "free" && Number(featureState.limit) === 3 && Number(featureState.remaining) === 2) {
+      setChatAttemptReminder({ remaining: 2, limit: 3 });
+    }
   };
 
   const formatUsageResetWait = (resetAt = "") => {
@@ -19028,16 +19073,6 @@ export default function App() {
     setBillingCheckoutMessage(trial ? "Opening the secure PayFast trial setup..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
     const checkoutKey = `${provider}:${trial ? "trial:" : ""}${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
-    const checkoutWindowName = `mabaso-payfast-${Date.now()}`;
-    let checkoutWindow = null;
-    if (provider === "payfast" && typeof window !== "undefined") {
-      checkoutWindow = window.open("about:blank", checkoutWindowName);
-      if (checkoutWindow) {
-        checkoutWindow.opener = null;
-        checkoutWindow.document.title = "Opening PayFast";
-        checkoutWindow.document.body.textContent = "Opening secure PayFast checkout...";
-      }
-    }
     try {
       if (provider === "payfast") {
         const response = await authFetch("/api/billing/checkout", {
@@ -19051,7 +19086,7 @@ export default function App() {
         setBillingCheckoutMessage(trial
           ? "PayFast is opening. Your card is required, nothing is charged today, and Pro bills R50 monthly after seven days unless cancelled."
           : "PayFast page is opening. Your plan will activate automatically after payment is confirmed.");
-        submitExternalCheckoutForm(data, checkoutWindow ? checkoutWindowName : "");
+        submitExternalCheckoutForm(data);
         return;
       }
       const { data } = await authJsonWithTransientRetries(
@@ -19074,7 +19109,6 @@ export default function App() {
         ? `PayShap reference ${paymentRequest.payment_reference} created. Pay with the exact reference, then click I Have Paid.`
         : "PayShap payment request created. Pay with the displayed reference, then click I Have Paid.");
     } catch (err) {
-      if (checkoutWindow && !checkoutWindow.closed) checkoutWindow.close();
       setBillingCheckoutMessage(getReadableRequestError(err));
     } finally {
       setBillingCheckoutPlanId("");
@@ -21124,8 +21158,8 @@ export default function App() {
       setActiveHistoryId(resolvedItem.id);
       setActiveTab("guide");
     });
-    openProtectedAppPage("workspace");
-    setStatus(`Loaded ${resolvedItem.title} from history.`);
+    openProtectedAppPage("workspace", { allowLoadedWorkspace: true });
+    setStatus(`Opened ${resolvedItem.title} in Study Guide.`);
     setOpeningHistoryItemId("");
   };
 
@@ -21841,6 +21875,9 @@ export default function App() {
   };
 
   const uploadStudyChatReferenceFile = async (selectedFile) => {
+    if (!(await ensurePremiumFeatureAvailable("study_chat_upload", "AI chat uploads"))) {
+      throw createUsageBlockedError("You have used all AI chat uploads for today.");
+    }
     const formData = new FormData();
     formData.append("file", selectedFile);
     const response = await authFetch("/extract-slide-text/", {
@@ -21851,6 +21888,7 @@ export default function App() {
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
+    refreshBillingStatusInBackground();
     const imageUrl = Array.isArray(data.image_urls) ? data.image_urls.find(Boolean) : "";
     return {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -24103,6 +24141,10 @@ export default function App() {
         savedConversation = data.conversation;
         return;
       }
+      if (event === "usage") {
+        applyStreamedChatUsage(data);
+        return;
+      }
       if (event === "error") {
         throw new Error(String(data?.message || "Study chat could not finish the answer."));
       }
@@ -25362,12 +25404,22 @@ export default function App() {
         })),
     ].slice(0, 80);
     return (
-      <div className="study-chat-page">
+      <div className={`study-chat-page ${isStudyChatSidebarOpen ? "is-sidebar-open" : "is-sidebar-closed"}`}>
+        {isUpgradeModalOpen ? renderUpgradeModal() : null}
+        {chatAttemptReminder ? (
+          <div className="chat-attempt-reminder-backdrop" onPointerDown={() => setChatAttemptReminder(null)}>
+            <div className="chat-attempt-reminder" role="dialog" aria-modal="true" aria-label="AI chat attempts remaining" onPointerDown={(event) => event.stopPropagation()}>
+              <button type="button" className="chat-attempt-reminder-close" onClick={() => setChatAttemptReminder(null)} aria-label="Dismiss attempts reminder"><X className="h-4 w-4" aria-hidden="true" /></button>
+              <p><strong>{chatAttemptReminder.remaining}/{chatAttemptReminder.limit} messages left today.</strong> Upgrade to Pro for 15 daily messages and 5 uploads.</p>
+              <button type="button" className="chat-attempt-reminder-upgrade" onClick={() => { setChatAttemptReminder(null); openUpgradeModal(); }}>Upgrade to Pro</button>
+            </div>
+          </div>
+        ) : null}
         {isStudyChatSidebarOpen ? <button type="button" className="study-chat-sidebar-scrim" aria-label="Close chat history" onClick={() => setIsStudyChatSidebarOpen(false)} /> : null}
         <aside className={`study-chat-sidebar ${isStudyChatSidebarOpen ? "is-open" : ""}`}>
           <div className="study-chat-sidebar-head">
             <p className="brand-mark text-lg font-black">MABASO</p>
-            <button type="button" onClick={() => setIsStudyChatSidebarOpen(false)} className="study-chat-sidebar-close lg:hidden" aria-label="Close chat history"><X className="h-4 w-4" aria-hidden="true" /></button>
+            <button type="button" onClick={() => setIsStudyChatSidebarOpen(false)} className="study-chat-sidebar-close" aria-label="Close chat history"><X className="h-4 w-4" aria-hidden="true" /></button>
           </div>
           <button type="button" onClick={startNewStudyChat} className="study-chat-new-button"><Pencil className="h-4 w-4" aria-hidden="true" /><span>New chat</span></button>
           <label className="study-chat-sidebar-voice">
@@ -25393,11 +25445,14 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="study-chat-sidebar-profile">{renderCompactProfileMenu()}</div>
+          <div className="study-chat-sidebar-footer">
+            <button type="button" onClick={openUpgradeModal} className="study-chat-sidebar-upgrade">Upgrade to Pro</button>
+            <div className="study-chat-sidebar-profile">{renderCompactProfileMenu()}</div>
+          </div>
         </aside>
         <section className="study-chat-main">
           <header className="study-chat-page-topbar">
-            <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className="study-chat-top-button lg:hidden" aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
+            <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className={`study-chat-top-button ${isStudyChatSidebarOpen ? "is-hidden" : ""}`} aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
             <span className="study-chat-mobile-title">Study Chat</span>
             <button type="button" onClick={() => openChatShareDialog()} className="study-chat-exit-button" aria-label="Share this conversation"><Link className="h-4 w-4" aria-hidden="true" /></button>
             <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="study-chat-exit-button" aria-label="Close AI Chat">

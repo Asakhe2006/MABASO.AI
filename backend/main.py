@@ -398,8 +398,8 @@ AUTH_RESPONSE_INCLUDE_TOKEN = os.getenv("AUTH_RESPONSE_INCLUDE_TOKEN", "false").
 PAYFAST_MERCHANT_ID = os.getenv("PAYFAST_MERCHANT_ID", "").strip()
 PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
 PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
-PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "true").strip().lower() not in {"0", "false", "no", "off"}
-PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "false").strip().lower() not in {"0", "false", "no", "off"}
+PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_PROCESS_URL = (
     "https://sandbox.payfast.co.za/eng/process"
     if PAYFAST_SANDBOX
@@ -493,8 +493,8 @@ def get_float_env(name: str, default: float) -> float:
 
 BILLING_PLAN_QUOTAS = {
     "free": {
-        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 10),
-        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 10),
+        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 3),
+        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 3),
         "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_DAY", 1),
         "worked_examples": get_int_env("FREE_PLAN_WORKED_EXAMPLES_PER_DAY", 2),
         "formula_solver": get_int_env("FREE_PLAN_FORMULA_SOLVER_PER_DAY", 2),
@@ -508,11 +508,11 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
         "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 3),
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
-        "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 3),
+        "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 1),
     },
     "pro_student": {
-        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
-        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 20),
+        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 15),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 15),
         "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 3),
         "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 3),
         "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 3),
@@ -526,7 +526,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
         "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
-        "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 15),
+        "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 5),
     },
     "premium_student": {
         "ai_chat": -1,
@@ -544,7 +544,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": -1,
         "voice_transcription": -1,
         "source_upload": -1,
-        "study_chat_upload": get_int_env("PREMIUM_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 15),
+        "study_chat_upload": -1,
     },
 }
 AI_FEATURE_COST_ESTIMATE_ZAR = {
@@ -21933,6 +21933,11 @@ async def create_billing_checkout(
     plan = get_billing_plan(payload.plan_id)
     is_trial = bool(payload.trial)
     if is_trial:
+        if not PAYFAST_SUBSCRIPTION_ENABLED:
+            raise HTTPException(
+                status_code=503,
+                detail="The seven-day trial requires PayFast recurring subscriptions to be enabled.",
+            )
         ensure_payfast_trial_eligible(email, plan["id"])
     checkout_id = f"mabaso-{uuid4().hex[:24]}"
     fields = build_payfast_checkout_fields(
@@ -35186,7 +35191,7 @@ def create_lecture_assistant_stream(
         payload = payload.model_copy(update={"reference_images": reference_images})
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
-    consume_plan_quota(
+    quota_usage = consume_plan_quota(
         email=current_user,
         feature="study_chat",
         request=request,
@@ -35204,6 +35209,19 @@ def create_lecture_assistant_stream(
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 
     def event_stream():
+        yield build_sse_event(
+            "usage",
+            {
+                "feature": "study_chat",
+                "plan_id": quota_usage.get("plan_id", "free"),
+                "used": quota_usage.get("used", 0),
+                "limit": quota_usage.get("limit", 0),
+                "remaining": quota_usage.get("remaining"),
+                "reset_at": quota_usage.get("reset_at", ""),
+                "reset_label": quota_usage.get("reset_label", ""),
+                "unlimited": int(quota_usage.get("limit", 0)) < 0,
+            },
+        )
         selected_attempt: dict[str, str] | None = None
         emitted_characters = 0
         fallback_count = 0

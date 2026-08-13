@@ -16,6 +16,16 @@ class ChatStreamHandshakeTests(unittest.TestCase):
         self.assertLess(ready_event, context_load)
         self.assertLess(context_load, context_event)
 
+    def test_stream_reports_the_consumed_daily_chat_usage(self):
+        source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
+        function_start = source.index("def create_lecture_assistant_stream(")
+        function_end = source.index('\n\n@app.post("/api/chat/stream")', function_start)
+        function_source = source[function_start:function_end]
+
+        self.assertIn("quota_usage = consume_plan_quota(", function_source)
+        self.assertIn('yield build_sse_event(\n            "usage"', function_source)
+        self.assertIn('"remaining": quota_usage.get("remaining")', function_source)
+
 
 if __name__ == "__main__":
     unittest.main()
