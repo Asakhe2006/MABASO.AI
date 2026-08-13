@@ -37,10 +37,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
+from PIL import Image
 from pydantic import BaseModel
 import requests
 from chat_assistant import (
     DEFAULT_OPENAI_CHAT_MODEL,
+    FALLBACK_OPENAI_CHAT_MODEL,
     ProviderStreamError,
     format_provider_name,
     iter_provider_stream,
@@ -147,7 +149,7 @@ FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whispe
 BASE_TEXT_MODEL = normalize_openai_model_name(os.getenv("BASE_TEXT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL)
 ADVANCED_ACADEMIC_MODEL = normalize_openai_model_name(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
 STUDY_GUIDE_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
-STUDY_GUIDE_FALLBACK_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), BASE_TEXT_MODEL)
+STUDY_GUIDE_FALLBACK_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
 VISION_MODEL = normalize_openai_model_name(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
 STUDY_CHAT_MODEL = normalize_openai_model_name(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
@@ -654,6 +656,7 @@ BLOCKED_UPLOAD_EXTENSIONS = {
 }
 
 jobs: dict[str, dict] = {}
+job_tasks: dict[str, asyncio.Task] = {}
 apple_jwk_client = PyJWKClient(APPLE_JWKS_URL) if PyJWKClient is not None else None
 
 ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
@@ -12177,6 +12180,9 @@ def create_job(job_type: str, owner_email: str = "") -> str:
         "_output_language": "English",
         "_usage_event_id": "",
         "_usage_event_ids": [],
+        "_cancel_requested": False,
+        "_abandon_revision": 0,
+        "_last_client_seen_monotonic": time.monotonic(),
     }
     return job_id
 
@@ -12186,6 +12192,116 @@ def update_job(job_id: str, **fields):
     if not job:
         return
     job.update(fields)
+
+
+class JobCancelledError(RuntimeError):
+    pass
+
+
+def job_cancel_requested(job_id: str) -> bool:
+    return bool(jobs.get(job_id, {}).get("_cancel_requested"))
+
+
+def raise_if_job_cancelled(job_id: str) -> None:
+    if job_cancel_requested(job_id):
+        raise JobCancelledError("Study guide generation was cancelled.")
+
+
+def start_tracked_job_task(job_id: str, coroutine: Any) -> asyncio.Task:
+    task = asyncio.create_task(coroutine)
+    job_tasks[job_id] = task
+
+    def _remove_finished_task(finished_task: asyncio.Task) -> None:
+        if job_tasks.get(job_id) is finished_task:
+            job_tasks.pop(job_id, None)
+
+    task.add_done_callback(_remove_finished_task)
+    return task
+
+
+def cancel_study_guide_job(job_id: str, reason: str = "cancelled_by_user") -> bool:
+    job = jobs.get(job_id)
+    if not job or job.get("job_type") != "study_guide":
+        return False
+    if job.get("status") in {"completed", "failed", "cancelled"}:
+        return False
+    job.update(
+        _cancel_requested=True,
+        _abandon_revision=int(job.get("_abandon_revision") or 0) + 1,
+        status="cancelled",
+        stage="Study guide generation cancelled",
+        progress=100,
+        error=None,
+    )
+    openai_stream = job.get("_openai_stream")
+    close_stream = getattr(openai_stream, "close", None)
+    if callable(close_stream):
+        try:
+            close_stream()
+        except Exception:
+            logger.debug("The cancelled study guide stream was already closed.")
+    job["_openai_stream"] = None
+    refund_job_usage_if_failed(job_id, reason)
+    return True
+
+
+async def cancel_abandoned_study_guide_job(job_id: str, revision: int, delay_seconds: float = 45.0) -> None:
+    await asyncio.sleep(delay_seconds)
+    job = jobs.get(job_id)
+    if not job or int(job.get("_abandon_revision") or 0) != revision:
+        return
+    cancel_study_guide_job(job_id, "study_guide_tab_closed")
+
+
+async def monitor_study_guide_client_lease(
+    job_id: str,
+    timeout_seconds: float = 60.0,
+    check_interval_seconds: float = 5.0,
+) -> None:
+    while True:
+        await asyncio.sleep(check_interval_seconds)
+        job = jobs.get(job_id)
+        if not job or job.get("status") not in {"queued", "processing"}:
+            return
+        last_seen = float(job.get("_last_client_seen_monotonic") or 0.0)
+        if last_seen and time.monotonic() - last_seen > timeout_seconds:
+            cancel_study_guide_job(job_id, "study_guide_client_disconnected")
+            return
+
+
+def stream_job_chat_completion(
+    job_id: str,
+    *,
+    model: str,
+    max_completion_tokens: int,
+    messages: list[dict[str, Any]],
+    timeout: float,
+) -> str:
+    raise_if_job_cancelled(job_id)
+    stream = client.with_options(timeout=timeout).chat.completions.create(
+        model=model,
+        max_completion_tokens=max_completion_tokens,
+        stream=True,
+        messages=messages,
+    )
+    update_job(job_id, _openai_stream=stream)
+    chunks: list[str] = []
+    try:
+        for chunk in stream:
+            raise_if_job_cancelled(job_id)
+            choices = getattr(chunk, "choices", None) or []
+            delta = getattr(choices[0], "delta", None) if choices else None
+            content = getattr(delta, "content", "") if delta else ""
+            if content:
+                chunks.append(content)
+    finally:
+        if jobs.get(job_id, {}).get("_openai_stream") is stream:
+            update_job(job_id, _openai_stream=None)
+        close_stream = getattr(stream, "close", None)
+        if callable(close_stream):
+            close_stream()
+    raise_if_job_cancelled(job_id)
+    return "".join(chunks).strip()
 
 
 def serialize_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -22423,7 +22539,46 @@ async def get_job(job_id: str, current_user: str = Depends(require_authenticated
         raise HTTPException(status_code=404, detail="Job not found.")
     if job.get("owner_email") and job["owner_email"] != current_user:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if job.get("job_type") == "study_guide" and job.get("status") in {"queued", "processing"}:
+        job["_abandon_revision"] = int(job.get("_abandon_revision") or 0) + 1
+        job["_last_client_seen_monotonic"] = time.monotonic()
     return serialize_job(job)
+
+
+def require_owned_job(job_id: str, current_user: str) -> dict[str, Any]:
+    job = jobs.get(job_id)
+    if not job or (job.get("owner_email") and job["owner_email"] != current_user):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job
+
+
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
+    job = require_owned_job(job_id, current_user)
+    if job.get("job_type") != "study_guide":
+        raise HTTPException(status_code=400, detail="This task cannot be cancelled here.")
+    cancelled = cancel_study_guide_job(job_id)
+    return {"job_id": job_id, "status": jobs[job_id].get("status"), "cancelled": cancelled}
+
+
+@app.post("/jobs/{job_id}/abandon")
+async def abandon_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
+    job = require_owned_job(job_id, current_user)
+    if job.get("job_type") != "study_guide" or job.get("status") not in {"queued", "processing"}:
+        return {"job_id": job_id, "status": job.get("status"), "scheduled": False}
+    revision = int(job.get("_abandon_revision") or 0) + 1
+    job["_abandon_revision"] = revision
+    asyncio.create_task(cancel_abandoned_study_guide_job(job_id, revision))
+    return {"job_id": job_id, "status": job.get("status"), "scheduled": True}
+
+
+@app.post("/jobs/{job_id}/resume")
+async def resume_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
+    job = require_owned_job(job_id, current_user)
+    if job.get("job_type") == "study_guide" and job.get("status") in {"queued", "processing"}:
+        job["_abandon_revision"] = int(job.get("_abandon_revision") or 0) + 1
+        job["_last_client_seen_monotonic"] = time.monotonic()
+    return {"job_id": job_id, "status": job.get("status"), "resumed": True}
 
 
 @app.get("/jobs/{job_id}/podcast-audio/{segment_index}")
@@ -26001,6 +26156,34 @@ def download_remote_study_image_as_data_url(image_url: str) -> str:
         return ""
 
 
+def make_study_image_data_url_durable(value: str) -> str:
+    cleaned = compact_text(value)
+    if not cleaned.startswith("data:image/") or "," not in cleaned:
+        return cleaned
+    header, encoded = cleaned.split(",", 1)
+    try:
+        raw_bytes = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return ""
+    if len(raw_bytes) <= MAX_STUDY_IMAGE_INLINE_BYTES:
+        return cleaned
+    try:
+        with Image.open(BytesIO(raw_bytes)) as source_image:
+            image = source_image.convert("RGBA")
+            image.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
+            flattened = Image.new("RGB", image.size, "white")
+            flattened.paste(image, mask=image.getchannel("A"))
+            output = BytesIO()
+            flattened.save(output, format="JPEG", quality=88, optimize=True, progressive=True)
+        optimized_bytes = output.getvalue()
+        if len(optimized_bytes) > MAX_STUDY_IMAGE_INLINE_BYTES:
+            return ""
+        return build_data_url(optimized_bytes, "image/jpeg", "study-visual")
+    except Exception as exc:
+        logger.warning("Could not optimize study image for durable storage: %s", exc)
+        return ""
+
+
 def generate_openai_study_image_url(prompt: str) -> str:
     safe_prompt = compact_text(prompt)
     if not safe_prompt:
@@ -26032,9 +26215,9 @@ def generate_openai_study_image_url(prompt: str) -> str:
         return ""
     b64_json = getattr(image, "b64_json", "") or (image.get("b64_json", "") if isinstance(image, dict) else "")
     if b64_json:
-        return f"data:image/png;base64,{b64_json}"
+        return make_study_image_data_url_durable(f"data:image/png;base64,{b64_json}")
     remote_url = getattr(image, "url", "") or (image.get("url", "") if isinstance(image, dict) else "")
-    return download_remote_study_image_as_data_url(remote_url) or remote_url
+    return make_study_image_data_url_durable(download_remote_study_image_as_data_url(remote_url)) or remote_url
 
 
 async def generate_ai_study_images(
@@ -26240,15 +26423,16 @@ def build_uploaded_study_visuals(
 ) -> list[dict[str, str]]:
     uploaded_visuals: list[dict[str, str]] = []
     for index, image_url in enumerate(reference_images[: len(visual_items) or len(reference_images)], start=0):
-        if not compact_text(image_url):
+        durable_image_url = make_study_image_data_url_durable(image_url)
+        if not durable_image_url:
             continue
         visual = visual_items[index] if index < len(visual_items) else {}
         uploaded_visuals.append(
             {
                 "query": compact_text(visual.get("matched_section"), "Uploaded lecture visual"),
                 "title": compact_text(visual.get("title"), f"Lecture visual {index + 1}"),
-                "image_url": image_url,
-                "source_url": image_url,
+                "image_url": durable_image_url,
+                "source_url": "" if durable_image_url.startswith("data:") else durable_image_url,
                 "source_type": "uploaded",
                 "visual_type": compact_text(visual.get("visual_type"), "diagram"),
                 "matched_section": compact_text(visual.get("matched_section"), "Key concept"),
@@ -30142,9 +30326,11 @@ async def generate_structured_study_assets(
     combined_source = "\n\n".join(block for block in source_blocks if block)
 
     def _generate_assets() -> dict[str, Any]:
-        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+        content = stream_job_chat_completion(
+            job_id,
             model=ASSET_GENERATION_MODEL,
             max_completion_tokens=min(MAX_COMPLETION_TOKENS, 3400),
+            timeout=STUDY_GUIDE_REQUEST_TIMEOUT,
             messages=[
                 {
                     "role": "system",
@@ -30172,7 +30358,7 @@ async def generate_structured_study_assets(
                 {"role": "user", "content": combined_source},
             ],
         )
-        return parse_json_object(response.choices[0].message.content or "")
+        return parse_json_object(content)
 
     try:
         update_job(job_id, status="processing", stage="Building flashcards and worked examples", progress=82)
@@ -30488,28 +30674,35 @@ async def generate_study_guide(
     if not generation_models:
         generation_models.append(BASE_TEXT_MODEL)
 
-    def _generate(model_name: str) -> str:
-        update_job(job_id, status="processing", stage="Preparing study material for notes", progress=20)
-        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
+    def _stream_completion(model_name: str, messages: list[dict[str, str]]) -> str:
+        return stream_job_chat_completion(
+            job_id,
             model=model_name,
             max_completion_tokens=completion_token_budget,
-            messages=[
+            messages=messages,
+            timeout=STUDY_GUIDE_REQUEST_TIMEOUT,
+        )
+
+    def _generate(model_name: str) -> str:
+        update_job(job_id, status="processing", stage="Preparing study material for notes", progress=20)
+        return _stream_completion(
+            model_name,
+            [
                 {"role": "system", "content": STUDY_GUIDE_PROMPT},
                 {"role": "user", "content": combined_user_content},
             ],
         )
-        return (response.choices[0].message.content or "").strip()
 
     def _repair(draft_markdown: str) -> str:
+        raise_if_job_cancelled(job_id)
         repair_source = "\n\n".join(
             part
             for part in [trimmed_notes, trimmed_slides, trimmed_past_papers, trimmed_transcript]
             if part
         )[:source_char_limit]
-        response = client.with_options(timeout=STUDY_GUIDE_REQUEST_TIMEOUT).chat.completions.create(
-            model=generation_models[0],
-            max_completion_tokens=completion_token_budget,
-            messages=[
+        return _stream_completion(
+            generation_models[0],
+            [
                 {"role": "system", "content": STUDY_GUIDE_REPAIR_PROMPT},
                 {
                     "role": "user",
@@ -30521,13 +30714,13 @@ async def generate_study_guide(
                 },
             ],
         )
-        return (response.choices[0].message.content or "").strip()
 
     try:
         summary = ""
         generation_error: Exception | None = None
         for attempt_index, model_name in enumerate(generation_models):
             try:
+                raise_if_job_cancelled(job_id)
                 update_job(
                     job_id,
                     status="processing",
@@ -30537,7 +30730,10 @@ async def generate_study_guide(
                 summary = await asyncio.to_thread(_generate, model_name)
                 if summary.strip():
                     break
+            except JobCancelledError:
+                raise
             except Exception as exc:
+                raise_if_job_cancelled(job_id)
                 generation_error = exc
                 logger.warning("Study guide generation failed with model %s: %s", model_name, exc)
 
@@ -30547,6 +30743,7 @@ async def generate_study_guide(
         cleaned_summary = prepare_generated_study_guide_output(summary)
         used_fallback = False
         if study_guide_needs_quality_repair(cleaned_summary):
+            raise_if_job_cancelled(job_id)
             update_job(job_id, status="processing", stage="Repairing study guide structure", progress=72)
             try:
                 repaired_summary = prepare_generated_study_guide_output(await asyncio.to_thread(_repair, cleaned_summary))
@@ -30554,6 +30751,8 @@ async def generate_study_guide(
                     cleaned_summary = repaired_summary
                 else:
                     raise RuntimeError("Study guide repair still looked like a source dump.")
+            except JobCancelledError:
+                raise
             except Exception as repair_exc:
                 logger.warning("Study guide repair failed, using structured fallback: %s", repair_exc)
                 fallback_source = "\n\n".join(
@@ -30570,6 +30769,10 @@ async def generate_study_guide(
             transcript=transcript,
             past_question_papers=past_question_papers,
         ), used_fallback
+    except JobCancelledError:
+        raise
+    except JobCancelledError:
+        raise
     except Exception as exc:
         logger.warning("Primary study guide generation failed, using fallback summary: %s", exc)
         update_job(job_id, status="processing", stage="Generating fallback study guide", progress=75)
@@ -30827,6 +31030,7 @@ async def run_summary_job(
     owner_email: str = "",
 ):
     try:
+        raise_if_job_cancelled(job_id)
         update_job(job_id, status="processing", stage="Starting study guide generation", progress=10)
         summary, used_fallback = await generate_study_guide(
             transcript,
@@ -30837,10 +31041,12 @@ async def run_summary_job(
             output_language,
             owner_email,
         )
+        raise_if_job_cancelled(job_id)
         study_image_limit = get_study_image_plan_limit(owner_email)
         uploaded_visuals: list[dict[str, str]] = []
         visual_analysis: list[dict[str, str]] = []
         if study_image_limit > 0:
+            raise_if_job_cancelled(job_id)
             visual_analysis = await analyze_reference_images_for_study_guide(
                 reference_images,
                 summary,
@@ -30849,6 +31055,7 @@ async def run_summary_job(
                 output_language,
             )
             uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)[:study_image_limit]
+        raise_if_job_cancelled(job_id)
         assets = await generate_structured_study_assets(
             summary,
             transcript,
@@ -30859,6 +31066,7 @@ async def run_summary_job(
             output_language,
             visual_analysis,
         )
+        raise_if_job_cancelled(job_id)
         generated_study_images = await generate_ai_study_images(
             summary,
             transcript,
@@ -30868,6 +31076,7 @@ async def run_summary_job(
             owner_email,
             output_language,
         )
+        raise_if_job_cancelled(job_id)
         study_images = merge_study_image_results(uploaded_visuals, generated_study_images)[:study_image_limit]
         update_job(
             job_id,
@@ -30892,6 +31101,11 @@ async def run_summary_job(
             duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
             metadata={"job_id": job_id, "used_fallback": used_fallback},
         )
+    except JobCancelledError:
+        cancel_study_guide_job(job_id)
+    except asyncio.CancelledError:
+        cancel_study_guide_job(job_id)
+        raise
     except Exception as exc:
         logger.exception("Study guide job failed")
         update_job(
@@ -32830,7 +33044,8 @@ async def create_study_guide(
         _usage_event_id=study_usage_event_id,
         _usage_event_ids=usage_event_ids,
     )
-    asyncio.create_task(
+    start_tracked_job_task(
+        job_id,
         run_summary_job(
             job_id,
             transcript,
@@ -32840,8 +33055,9 @@ async def create_study_guide(
             output_language,
             reference_images,
             current_user,
-        )
+        ),
     )
+    asyncio.create_task(monitor_study_guide_client_lease(job_id))
     record_audit_log(
         action="study_guide.request",
         email=current_user,

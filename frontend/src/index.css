@@ -3230,6 +3230,13 @@ iframe {
 .study-guide-figure {
   color: #0f172a;
   margin: 1.25rem 0;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  overflow: visible;
+  box-shadow: none;
   break-inside: avoid;
   page-break-inside: avoid;
 }
@@ -3237,10 +3244,13 @@ iframe {
 .study-guide-figure-image {
   display: block;
   width: 100%;
-  max-height: 460px;
-  border-radius: 12px;
+  height: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   box-shadow: none;
 }
 
@@ -4278,8 +4288,10 @@ iframe {
   }
 
   .study-guide-figure-image {
-    max-height: 300px;
-    border-radius: 14px;
+    height: auto;
+    max-height: none;
+    border-radius: 0;
+    object-fit: contain;
   }
 
   .study-guide-figure-caption {
@@ -5049,7 +5061,7 @@ iframe {
 
   .study-guide-figure-image {
     max-height: none !important;
-    border-radius: 8px;
+    border-radius: 0;
   }
 
   .page-workspace,
@@ -6790,7 +6802,7 @@ iframe {
     max-height: none !important;
     object-fit: contain !important;
     object-position: center !important;
-    border-radius: 6px !important;
+    border-radius: 0 !important;
   }
 
   .page-workspace .study-guide-figure,
@@ -7748,7 +7760,7 @@ iframe {
 .study-guide-shell.study-guide-themed .study-guide-section-copy-button,
 .study-guide-shell.study-guide-themed .study-guide-section-regenerate-button { color: var(--sg-section-accent, var(--sg-accent)) !important; }
 .study-guide-shell.study-guide-themed .study-guide-figure { margin: 20px 0 !important; }
-.study-guide-shell.study-guide-themed .study-guide-figure-image { border-radius: 8px !important; background: transparent !important; }
+.study-guide-shell.study-guide-themed .study-guide-figure-image { border-radius: 0 !important; background: transparent !important; }
 .study-guide-shell.study-guide-themed .study-guide-figure-caption { color: var(--sg-muted) !important; }
 
 @media (max-width: 768px) {

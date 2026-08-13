@@ -10,7 +10,8 @@ import requests
 TEXT_CHAT_PROVIDER_ORDER = ("openai",)
 VOICE_CHAT_PROVIDER_ORDER = ("gemini", "groq")
 SUPPORTED_CHAT_PROVIDERS = ("openai", "gemini", "groq", "openrouter")
-DEFAULT_OPENAI_CHAT_MODEL = "gpt-4.1"
+DEFAULT_OPENAI_CHAT_MODEL = "gpt-5.6-terra"
+FALLBACK_OPENAI_CHAT_MODEL = "gpt-4.1"
 UNAVAILABLE_OPENAI_MODEL_ALIASES = frozenset({"gpt-terra-5.6"})
 
 
@@ -48,7 +49,7 @@ def format_provider_name(provider: str) -> str:
 def normalize_openai_model_name(value: Any, fallback: str = DEFAULT_OPENAI_CHAT_MODEL) -> str:
     model = compact_text(value, fallback)
     if model.lower() in UNAVAILABLE_OPENAI_MODEL_ALIASES:
-        return compact_text(fallback, DEFAULT_OPENAI_CHAT_MODEL)
+        return DEFAULT_OPENAI_CHAT_MODEL
     return model
 
 
@@ -68,11 +69,11 @@ def resolve_provider_attempts(forced_provider: str = "", *, voice_mode: bool = F
             "label": format_provider_name(provider),
             "model": resolved_model,
         })
-        if provider == "openai" and resolved_model != DEFAULT_OPENAI_CHAT_MODEL:
+        if provider == "openai" and resolved_model != FALLBACK_OPENAI_CHAT_MODEL:
             attempts.append({
                 "provider": provider,
                 "label": format_provider_name(provider),
-                "model": DEFAULT_OPENAI_CHAT_MODEL,
+                "model": FALLBACK_OPENAI_CHAT_MODEL,
             })
     return attempts
 

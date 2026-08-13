@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from backend.chat_assistant import (
     DEFAULT_OPENAI_CHAT_MODEL,
+    FALLBACK_OPENAI_CHAT_MODEL,
     normalize_openai_model_name,
     resolve_provider_attempts,
 )
@@ -21,7 +22,7 @@ class ChatModelFallbackTests(unittest.TestCase):
         ):
             attempts = resolve_provider_attempts("openai")
 
-        self.assertEqual([attempt["model"] for attempt in attempts], ["custom-model", DEFAULT_OPENAI_CHAT_MODEL])
+        self.assertEqual([attempt["model"] for attempt in attempts], ["custom-model", FALLBACK_OPENAI_CHAT_MODEL])
 
     def test_removed_environment_model_never_reaches_provider(self):
         with patch.dict(
@@ -31,7 +32,10 @@ class ChatModelFallbackTests(unittest.TestCase):
         ):
             attempts = resolve_provider_attempts("openai")
 
-        self.assertEqual([attempt["model"] for attempt in attempts], [DEFAULT_OPENAI_CHAT_MODEL])
+        self.assertEqual(
+            [attempt["model"] for attempt in attempts],
+            [DEFAULT_OPENAI_CHAT_MODEL, FALLBACK_OPENAI_CHAT_MODEL],
+        )
 
 
 if __name__ == "__main__":

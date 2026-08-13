@@ -6552,7 +6552,7 @@ function StudyGuideImageCards({ images = [] }) {
       .map((item) => item.trim())
   );
   return (
-    <div className="study-guide-figure-grid mt-4 grid gap-4 md:grid-cols-2">
+    <div className="study-guide-figure-grid mt-4 grid gap-5">
       {images.map((image, index) => {
         const figureNumber = Number(image.figure_number || image.figureNumber || index + 1);
         const title = image.title || image.query || image.diagram_label || `Study visual ${figureNumber}`;
@@ -6568,7 +6568,8 @@ function StudyGuideImageCards({ images = [] }) {
                 alt={title}
                 className="study-guide-figure-image"
                 draggable={false}
-                loading="lazy"
+                loading="eager"
+                decoding="async"
                 referrerPolicy="no-referrer"
                 onError={(event) => {
                   const currentIndex = Number(event.currentTarget.dataset.fallbackIndex || 0);
@@ -7084,6 +7085,8 @@ export default function App() {
   const videoUrlInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const transcriptionAbortControllerRef = useRef(null);
+  const studyGuideAbortControllerRef = useRef(null);
+  const activeStudyGuideJobIdRef = useRef("");
   const recordingStreamRef = useRef(null);
   const recordingOwnedStreamsRef = useRef([]);
   const recordingAudioContextRef = useRef(null);
@@ -15730,6 +15733,21 @@ export default function App() {
   }, [recording]);
 
   useEffect(() => {
+    const markActiveStudyGuideAsAbandoned = () => {
+      const jobId = activeStudyGuideJobIdRef.current;
+      if (!jobId) return;
+      fetch(`${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/abandon`, {
+        method: "POST",
+        credentials: "include",
+        headers: withAuthHeaders({}, authTokenRef.current || ""),
+        keepalive: true,
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", markActiveStudyGuideAsAbandoned);
+    return () => window.removeEventListener("pagehide", markActiveStudyGuideAsAbandoned);
+  }, []);
+
+  useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return undefined;
 
     const clearHandlers = () => {
@@ -21392,7 +21410,7 @@ export default function App() {
     return destination.stream;
   };
 
-  const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus }) => {
+  const extractStudySourceFiles = async (selectedFiles, { sourceName, sourcePrefix, onProgress, onStatus, signal }) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return { extractedEntries: [], addedNames: [], skippedNames: [] };
     const requiresServerExtraction = files.some((selectedFile) => {
@@ -21408,6 +21426,7 @@ export default function App() {
     const addedNames = [];
     const skippedNames = [];
     for (const [index, selectedFile] of files.entries()) {
+      throwIfSignalAborted(signal, "Study guide generation cancelled.");
       const isTextFile = selectedFile.type.startsWith("text/") || /\.(txt|md|text)$/i.test(selectedFile.name || "");
       const isImageFile = selectedFile.type.startsWith("image/");
       onProgress?.(Math.min(90, 15 + Math.round(((index + 1) / files.length) * 70)));
@@ -21430,6 +21449,7 @@ export default function App() {
         method: "POST",
         body: formData,
         timeoutMs: Math.max(STUDY_SOURCE_EXTRACT_TIMEOUT_MS, getAdaptiveFileUploadTimeoutMs(selectedFile)),
+        signal,
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
@@ -21480,6 +21500,7 @@ export default function App() {
     successMessage,
     failureStatus,
     interactive = true,
+    signal,
   }) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return createStudySourceBatchSnapshot(currentSources, sourcePrefix);
@@ -21498,6 +21519,7 @@ export default function App() {
         sourcePrefix,
         onProgress: interactive ? (value) => setProgress(value) : undefined,
         onStatus: interactive ? (nextStatus) => setStatus(nextStatus) : undefined,
+        signal,
       });
       const nextSources = mergeStudySourceEntries(currentSources, result.extractedEntries);
       startTransition(() => {
@@ -21981,6 +22003,11 @@ export default function App() {
         setCurrentJobType(jobType);
         setStatus(data.stage || "Processing...");
         setProgress(Number(data.progress || 0));
+        if (data.status === "cancelled") {
+          const cancelledError = new Error("Study guide generation cancelled.");
+          cancelledError.cancelled = true;
+          throw cancelledError;
+        }
         if (data.status === "failed") throw new Error(data.error || `${jobType} failed.`);
         if (data.status === "completed") return data;
         await waitUnlessAborted(JOB_POLL_INTERVAL_MS, signal, "Transcription cancelled.");
@@ -22046,6 +22073,10 @@ export default function App() {
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
     if (resolvedTranscript.trim() && !(await ensurePremiumFeatureAvailable("source_upload", "Audio/source processing"))) return false;
+    const abortController = new AbortController();
+    studyGuideAbortControllerRef.current?.abort();
+    studyGuideAbortControllerRef.current = abortController;
+    activeStudyGuideJobIdRef.current = "";
     setIsGeneratingSummary(true);
     setError("");
     setUsedFallbackSummary(false);
@@ -22054,6 +22085,7 @@ export default function App() {
     setProgress(0);
     setChatMessages([]);
     try {
+      throwIfSignalAborted(abortController.signal, "Study guide generation cancelled.");
       if (shouldTranscribeSelectedLecture) {
         setStatus("Reading the selected lecture file...");
         resolvedTranscript = await transcribeLectureFile(file, {
@@ -22077,7 +22109,8 @@ export default function App() {
             jobType: "notes",
             startStatus: "Reading lecture notes...",
             successMessage: () => "Lecture notes read. Generating the study guide now.",
-            failureStatus: "Lecture note reading failed.",
+          failureStatus: "Lecture note reading failed.",
+          signal: abortController.signal,
           },
         );
         resolvedLectureNoteSources = noteResult.nextSources;
@@ -22103,6 +22136,7 @@ export default function App() {
             `${addedNames.length} slide source${addedNames.length === 1 ? "" : "s"} read.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generating the study guide now.`
           ),
           failureStatus: "Slide reading failed.",
+          signal: abortController.signal,
         });
         resolvedLectureSlideSources = slideResult.nextSources;
         resolvedLectureSlides = slideResult.text;
@@ -22126,6 +22160,7 @@ export default function App() {
             startStatus: "Reading past question papers...",
             successMessage: () => "Past question papers read. Generating the study guide now.",
             failureStatus: "Past question paper reading failed.",
+            signal: abortController.signal,
           },
         );
         resolvedPastQuestionPaperSources = pastPaperResult.nextSources;
@@ -22152,6 +22187,7 @@ export default function App() {
               reference_images: getSafeAiReferenceImageUrls(visualReferences),
             }),
             timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+            signal: abortController.signal,
           });
           const data = await parseJsonSafe(response);
           if (!response.ok) {
@@ -22160,6 +22196,7 @@ export default function App() {
             throw requestError;
           }
           jobRequest = data;
+          activeStudyGuideJobIdRef.current = data.job_id;
           persistPendingJob({
             jobId: data.job_id,
             jobType: "study_guide",
@@ -22175,7 +22212,7 @@ export default function App() {
           await wait(1400 * submitAttempt);
         }
       }
-      const job = await pollJob(jobRequest.job_id, "study_guide");
+      const job = await pollJob(jobRequest.job_id, "study_guide", { signal: abortController.signal });
       const resolvedLectureNoteFileNames = resolvedLectureNoteSources.map((item) => item.name);
       const resolvedLectureSlidesFileNames = resolvedLectureSlideSources.map((item) => item.name);
       const resolvedPastQuestionPaperFileNames = resolvedPastQuestionPaperSources.map((item) => item.name);
@@ -22257,15 +22294,49 @@ export default function App() {
       setProgress(100);
       scheduleSiteRatingPrompt(45000);
     } catch (err) {
+      if (err?.cancelled || abortController.signal.aborted) {
+        clearPendingJob();
+        setError("");
+        setStatus("Study guide generation cancelled.");
+        setProgress(0);
+        return false;
+      }
       const message = String(err?.message || "").trim();
       const isTransient = Boolean(err?.transient) || isTransientServerConnectionMessage(message);
       clearPendingJob();
       setError(isTransient ? getBackendConnectionTroubleshootingMessage("study-guide") : (err.message || "Study guide generation failed."));
       setStatus(resolvedTranscript.trim() ? "Transcript ready. Study guide generation failed." : "Study source ready. Study guide generation failed.");
     } finally {
-      setIsGeneratingSummary(false);
-      setCurrentJobType("");
+      if (studyGuideAbortControllerRef.current === abortController) {
+        studyGuideAbortControllerRef.current = null;
+        activeStudyGuideJobIdRef.current = "";
+        setIsGeneratingSummary(false);
+        setCurrentJobType("");
+      }
     }
+  };
+
+  const cancelStudyGuideGeneration = async () => {
+    const jobId = activeStudyGuideJobIdRef.current;
+    studyGuideAbortControllerRef.current?.abort();
+    transcriptionAbortControllerRef.current?.abort();
+    if (jobId) {
+      try {
+        await authFetch(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+          method: "POST",
+          timeoutMs: 10000,
+        });
+      } catch {
+        // The local cancellation remains immediate even if the server is reconnecting.
+      }
+    }
+    clearPendingJob();
+    activeStudyGuideJobIdRef.current = "";
+    setIsGeneratingSummary(false);
+    setCurrentJobType("");
+    setProgress(0);
+    setError("");
+    setStatus("Study guide generation cancelled.");
   };
 
   const generateFlashcards = async () => {
@@ -23445,6 +23516,13 @@ export default function App() {
     const timeoutId = window.setTimeout(async () => {
       try {
         setStatus("Restoring your last in-progress task...");
+        if (pendingJob.jobType === "study_guide") {
+          activeStudyGuideJobIdRef.current = pendingJob.jobId;
+          await authFetch(`/jobs/${encodeURIComponent(pendingJob.jobId)}/resume`, {
+            method: "POST",
+            timeoutMs: 10000,
+          });
+        }
         const resumedJob = await pollJob(
           pendingJob.jobId,
           pendingJob.jobType === "video" ? "video" : pendingJob.jobType,
@@ -23513,6 +23591,7 @@ export default function App() {
             podcastData: sanitizePodcastForHistory(podcastData),
             teacherLessonData: sanitizeTeacherLessonForHistory(createEmptyTeacherLessonData()),
           });
+          activeStudyGuideJobIdRef.current = "";
           clearPendingJob();
           setStatus("Recovered the study guide after refresh.");
           return;
@@ -28016,7 +28095,8 @@ export default function App() {
                         <span className={`h-2 w-2 rounded-full ${autoOpenStudyGuideWhenReady ? "bg-emerald-300" : "bg-slate-500"}`} />
                         <span>{autoOpenStudyGuideWhenReady ? "Auto-open guide on" : "Auto-open guide off"}</span>
                       </button>
-                      <button ref={generateStudyGuideButtonRef} type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
+                      <div className="relative">
+                        <button ref={generateStudyGuideButtonRef} type="button" onClick={() => generateStudyGuide()} disabled={loading || !hasStudyInputs} className="min-h-[124px] w-full rounded-[22px] bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-4 text-left text-white disabled:opacity-50">
                         <span className="block text-base font-semibold">Generate Study Guide</span>
                         {guideActionMeta.showProgress ? (
                           <div className="mt-4">
@@ -28029,7 +28109,18 @@ export default function App() {
                             </div>
                           </div>
                         ) : null}
-                      </button>
+                        </button>
+                        {isGeneratingSummary ? (
+                          <button
+                            type="button"
+                            onClick={cancelStudyGuideGeneration}
+                            className="absolute right-4 top-4 inline-flex min-h-9 items-center justify-center rounded-full border border-red-200/50 bg-red-700 px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] text-white shadow-sm transition hover:bg-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                            aria-label="Cancel study guide generation"
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
+                      </div>
                       <p className={`mt-2 text-xs leading-6 ${slideGuideStatusClassName}`}>{slideGuideStatusLine}</p>
                     </div>
                   </div>
