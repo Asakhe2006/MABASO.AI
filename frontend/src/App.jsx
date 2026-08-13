@@ -24151,9 +24151,13 @@ export default function App() {
 
   const getStudyGuideSectionHtml = (section) => {
     const sectionKey = getGuideSectionEditKey(section);
+    const editor = studyGuideEditorRefs.current[sectionKey];
+    const editorHtml = editor?.querySelector?.(".katex")
+      ? editor.dataset.renderedHtml
+      : editor?.innerHTML;
     return sanitizeStudyGuideDocumentHtml(
       studyGuideDocumentDraftRef.current[sectionKey]
-      || studyGuideEditorRefs.current[sectionKey]?.innerHTML
+      || editorHtml
       || studyGuideDocumentHtml[sectionKey]
       || markdownToEditableStudyGuideHtml(section?.content || "")
     );
@@ -24165,8 +24169,11 @@ export default function App() {
       ...(studyGuideDocumentDraftRef.current || {}),
     };
     Object.entries(studyGuideEditorRefs.current || {}).forEach(([sectionKey, editor]) => {
-      if (sectionKey && editor?.innerHTML) {
-        nextDocumentHtml[sectionKey] = sanitizeStudyGuideDocumentHtml(editor.innerHTML);
+      const editorHtml = editor?.querySelector?.(".katex")
+        ? editor.dataset.renderedHtml
+        : editor?.innerHTML;
+      if (sectionKey && editorHtml) {
+        nextDocumentHtml[sectionKey] = sanitizeStudyGuideDocumentHtml(editorHtml);
       }
     });
     return nextDocumentHtml;

@@ -55,6 +55,43 @@ const GREEK_TO_LATEX = Object.freeze({
   "\u03a9": "\\Omega ",
 });
 
+const TRAILING_MATH_EXPLANATION_PATTERN = /^(.*?)(\s+(?:for|where|when|with|if)\s+[A-Za-z][\s\S]*)$/i;
+
+function startsLikeMathematicalExpression(value = "") {
+  const text = String(value || "").trim();
+  return /^(?:[-+]?\d|\\[A-Za-z]+|[A-Za-z](?:\s*[_^=+\-*/(\[]|\d))/.test(text);
+}
+
+function hasMathematicalOperators(value = "") {
+  return /(?:=|[+*/^_]|\s-\s|\\(?:frac|sqrt|sum|prod|int|lim|begin|cos|sin|tan|log|ln)\b)/.test(value);
+}
+
+function wrapBareMathExpression(value = "", { display = false } = {}) {
+  const original = String(value || "").trim();
+  if (!original || original.includes("$") || !hasMathematicalOperators(original)) return original;
+  const normalized = normalizeLatexBody(original);
+  if (!startsLikeMathematicalExpression(normalized)) return original;
+
+  const trailingExplanation = normalized.match(TRAILING_MATH_EXPLANATION_PATTERN);
+  const expression = (trailingExplanation?.[1] || normalized).trim();
+  const explanation = trailingExplanation?.[2] || "";
+  if (!expression) return original;
+  return display ? `$$${expression}$$${explanation}` : `$${expression}$${explanation}`;
+}
+
+function normalizeMarkdownTableMath(line = "") {
+  if (!/^\s*\|/.test(line) || /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(line)) return line;
+  const leading = line.match(/^\s*/)?.[0] || "";
+  const hasTrailingPipe = /\|\s*$/.test(line);
+  const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+  const normalizedCells = cells.map((cell) => {
+    const padding = cell.match(/^\s*/)?.[0] || " ";
+    const trailingPadding = cell.match(/\s*$/)?.[0] || " ";
+    return `${padding}${wrapBareMathExpression(cell.trim())}${trailingPadding}`;
+  });
+  return `${leading}|${normalizedCells.join("|")}${hasTrailingPipe ? "|" : ""}`;
+}
+
 function ensureLatexGroup(value = "") {
   const trimmed = String(value || "").trim();
   return trimmed.startsWith("{") && trimmed.endsWith("}") ? trimmed : `{${trimmed}}`;
@@ -108,7 +145,8 @@ function normalizeTextSegment(value = "") {
 
   text = text.split("\n").map((line) => {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.includes("$") || /^\s*\|/.test(line)) return line;
+    if (!trimmed || trimmed.includes("$")) return line;
+    if (/^\s*\|/.test(line)) return normalizeMarkdownTableMath(line);
     const looksLikeBareLatex = LATEX_COMMAND_PATTERN.test(trimmed);
     const proseWordCount = (trimmed.match(/\b[A-Za-z]{3,}\b/g) || []).length;
     const looksLikeStandaloneEquation = MATH_LINE_PATTERN.test(trimmed)
@@ -116,6 +154,11 @@ function normalizeTextSegment(value = "") {
       && proseWordCount <= 5
       && !/[.!?]\s*$/.test(trimmed)
       && !/^[-*+]\s+/.test(trimmed);
+    const safelyWrappedExpression = wrapBareMathExpression(trimmed, { display: true });
+    if (safelyWrappedExpression !== trimmed) {
+      const indentation = line.match(/^\s*/)?.[0] || "";
+      return `${indentation}${safelyWrappedExpression}`;
+    }
     if (!looksLikeBareLatex && !looksLikeStandaloneEquation) return line;
     const indentation = line.match(/^\s*/)?.[0] || "";
     return `${indentation}$$${normalizeLatexBody(trimmed)}$$`;

@@ -16,6 +16,29 @@ const KATEX_OPTIONS = Object.freeze({
 // eslint-disable-next-line react-refresh/only-export-components
 export function renderMathInHtmlElement(element) {
   if (!element) return;
+  const ownerDocument = element.ownerDocument;
+  const nodeFilter = ownerDocument?.defaultView?.NodeFilter;
+  if (ownerDocument && nodeFilter) {
+    const walker = ownerDocument.createTreeWalker(element, nodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(".katex, script, noscript, style, textarea, pre, code")) {
+          return nodeFilter.FILTER_REJECT;
+        }
+        return nodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const textNodes = [];
+    let textNode = walker.nextNode();
+    while (textNode) {
+      textNodes.push(textNode);
+      textNode = walker.nextNode();
+    }
+    textNodes.forEach((node) => {
+      const normalized = normalizeMathMarkdown(node.nodeValue || "");
+      if (normalized !== node.nodeValue) node.nodeValue = normalized;
+    });
+  }
   renderMathInElement(element, {
     delimiters: [
       { left: "$$", right: "$$", display: true },

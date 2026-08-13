@@ -25000,11 +25000,52 @@ def make_formulas_human_readable(text: str) -> str:
         latex_command_re = re.compile(
             r"\\(?:begin|end|frac|dfrac|tfrac|sqrt|sum|prod|int|lim|vec|hat|bar|mathbf|mathrm|mathbb|mathcal|partial|nabla|infty|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|Omega|Sigma)\b"
         )
+        def starts_like_expression(value: str) -> bool:
+            return bool(re.match(r"^(?:[-+]?\d|\\[A-Za-z]+|[A-Za-z](?:\s*[_^=+\-*/(\[]|\d))", value or ""))
+
+        def wrap_bare_expression(value: str, *, display: bool = False) -> str:
+            raw_value = (value or "").strip()
+            has_math_operator = bool(
+                math_line_re.search(raw_value)
+                or re.search(r"(?:[+*/^_]|\s-\s|\\(?:frac|sqrt|sum|prod|int|lim|begin)\b)", raw_value)
+            )
+            if not raw_value or "$" in raw_value or not has_math_operator:
+                return raw_value
+            normalized_value = normalize_body(raw_value)
+            if not starts_like_expression(normalized_value):
+                return raw_value
+            trailing = re.match(
+                r"^(.*?)(\s+(?:for|where|when|with|if)\s+[A-Za-z][\s\S]*)$",
+                normalized_value,
+                re.IGNORECASE,
+            )
+            expression = (trailing.group(1) if trailing else normalized_value).strip()
+            explanation = trailing.group(2) if trailing else ""
+            delimiter = "$$" if display else "$"
+            return f"{delimiter}{expression}{delimiter}{explanation}" if expression else raw_value
+
+        def normalize_table_line(line: str) -> str:
+            if not re.match(r"^\s*\|", line) or re.match(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$", line):
+                return line
+            indent = re.match(r"^\s*", line).group(0)
+            has_trailing_pipe = bool(re.search(r"\|\s*$", line))
+            cells = line.strip().removeprefix("|").removesuffix("|").split("|")
+            normalized_cells = [f" {wrap_bare_expression(cell)} " for cell in cells]
+            return f"{indent}|{'|'.join(normalized_cells)}{'|' if has_trailing_pipe else ''}"
+
         normalized_lines: list[str] = []
         for line in cleaned.splitlines():
             stripped = line.strip()
-            if not stripped or "$" in stripped or stripped.startswith("|"):
+            if not stripped or "$" in stripped:
                 normalized_lines.append(line)
+                continue
+            if stripped.startswith("|"):
+                normalized_lines.append(normalize_table_line(line))
+                continue
+            safely_wrapped = wrap_bare_expression(stripped, display=True)
+            if safely_wrapped != stripped:
+                indent = re.match(r"^\s*", line).group(0)
+                normalized_lines.append(f"{indent}{safely_wrapped}")
                 continue
             prose_word_count = len(re.findall(r"\b[A-Za-z]{3,}\b", stripped))
             looks_like_math = (
@@ -26734,6 +26775,9 @@ def study_guide_needs_quality_repair(markdown: str) -> bool:
         return True
     if re.search(r"(?:\$\$[^$]{1,240}\$\$\s*){2,}", text):
         return True
+    for equation in re.findall(r"\$\$([\s\S]*?)\$\$", text):
+        if len(equation) > 35 and equation.count("=") >= 3 and not re.search(r"\\begin\{(?:aligned|gathered|array)\}|\\\\", equation):
+            return True
 
     artifact_count = 0
     for line in text.splitlines():
@@ -26775,6 +26819,10 @@ Rules:
 - Keep topics and subtopics separate.
 - Use Markdown headings, short paragraphs, bullets, tables only when helpful, callouts, and worked examples.
 - For mathematical content, use valid LaTeX with $...$ inline and $$...$$ for display equations.
+- Put one algebraic transformation per display line. Use `\\begin{aligned}...\\end{aligned}` for multi-step derivations.
+- Never concatenate alternative formulas, repeated substitutions, or partial-fraction stages into one equation.
+- Check that fractions retain their numerators, denominators, brackets, operators, and equality signs after rewriting.
+- Wrap every mathematical expression inside table cells with $...$.
 - Never output placeholder text such as [Suggested Visual].
 - Never expose AI explanation, image prompt, diagram prompt, linked section, or other generation metadata.
 - Keep exactly one representation of each equation. Never repeat a formula as Unicode, LaTeX, and plain text.
@@ -30874,6 +30922,9 @@ async def generate_study_guide(
 "- Use numbered steps for procedures, experiments, calculations, algorithms, and workflows.\n"
 "- Present formulas together with variable definitions, units where appropriate, interpretation, and worked examples.\n"
 "- Write formulas and derivations in valid LaTeX using $...$ for inline math and $$...$$ for displayed equations. Never convert formulas to decorative Unicode text.\n"
+"- Put one algebraic transformation on each display line. Use \\begin{aligned}...\\end{aligned} for multi-step derivations and never concatenate competing formula versions.\n"
+"- Verify every fraction, bracket, exponent, subscript, denominator, operator, and equality sign before returning mathematical content.\n"
+"- Wrap mathematics inside Markdown table cells with $...$ so it remains renderable.\n"
 "- Generate realistic labelled diagrams, process flows, hierarchy diagrams, timelines, architecture diagrams, or concept visuals whenever they improve understanding.\n"
 "- Do not insert decorative visuals; every visual must directly teach the surrounding concept.\n"
 "- Place figures immediately after the paragraph that introduces them.\n"

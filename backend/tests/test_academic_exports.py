@@ -77,6 +77,21 @@ class AcademicExportThemeTests(unittest.TestCase):
         self.assertIn("_{0}", cleaned)
         self.assertIn("\\pi", cleaned)
 
+    def test_formula_normalizer_wraps_bare_study_math_and_table_cells(self):
+        source = (
+            "5s+7(s+1)(s+3)=As+1+B(s+3)\\frac{5s+7}{(s+1)(s+3)}\n\n"
+            "| Expression | Readable Result |\n"
+            "| --- | --- |\n"
+            "| L^{-1}[1/(s+a)] | e^{-at} |\n"
+            "| sum_{k}[A_k/(s+p_k)] | for distinct real poles |"
+        )
+        cleaned = main.make_formulas_human_readable(source)
+        self.assertIn("$$5s+7", cleaned)
+        self.assertIn(r"\frac{5s+7}", cleaned)
+        self.assertIn("$L^{-1}[1/(s+a)]$", cleaned)
+        self.assertIn("$e^{-at}$", cleaned)
+        self.assertIn(r"$\sum_{k}[A_{k}/(s+p_{k})]$", cleaned)
+
     def test_study_guide_quality_gate_rejects_source_dumps_and_placeholders(self):
         draft = (
             "LECTURER NOTES\nControl systems regulate process variables.\n\n"
@@ -105,6 +120,13 @@ class AcademicExportThemeTests(unittest.TestCase):
         draft = "# Formula\n\n$$x(t)=a_0+\\sum_{n=1}^{\\infty}a_n$$\n\n$$x(t)=a_0+\\sum_{n=1}^{\\infty}a_n$$"
         cleaned = main.prepare_generated_study_guide_output(draft)
         self.assertEqual(cleaned.count("\\sum"), 1)
+
+    def test_quality_gate_rejects_collapsed_multi_step_equations(self):
+        draft = (
+            "# Worked Example\n\n"
+            "$$5s+7=A(s+3)+B(s+1)=As+3A+Bs+B=5s+(3A+B)$$"
+        )
+        self.assertTrue(main.study_guide_needs_quality_repair(draft))
 
     def test_figure_caption_hides_ai_metadata(self):
         lines = main.build_study_image_caption_lines({
