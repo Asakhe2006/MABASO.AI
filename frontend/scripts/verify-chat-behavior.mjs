@@ -28,5 +28,15 @@ assert.equal(
 );
 assert.match(cssSource, /\.ai-streaming-dots > span[\s\S]*width:\s*5px[\s\S]*height:\s*5px/, "Chat loading dots must remain compact.");
 assert.match(cssSource, /@media \(prefers-reduced-motion: reduce\)/, "Chat motion must respect reduced-motion preferences.");
+assert.match(
+  appSource,
+  /queueStudySourceFiles[\s\S]*Press Generate Study Guide to read and process/,
+  "Capture uploads must queue sources until the user presses Generate Study Guide.",
+);
+assert.match(
+  appSource,
+  /shouldTranscribeSelectedLecture[\s\S]*transcribeLectureFile\(file/,
+  "Generate Study Guide must process a queued lecture media file on demand.",
+);
 
 console.log("Chat scroll, streaming, and composer safeguards passed.");

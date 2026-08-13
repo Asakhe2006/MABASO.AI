@@ -34561,21 +34561,7 @@ def create_lecture_assistant_stream(
     )
 
     started_at = utc_now()
-    persisted_conversation, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
-        current_user,
-        payload,
-    )
-    if bool(payload.regenerate_last_assistant) and persisted_recent_messages:
-        trimmed_recent_messages = list(persisted_recent_messages)
-        if compact_text(trimmed_recent_messages[-1].get("role")).lower() == "assistant":
-            trimmed_recent_messages = trimmed_recent_messages[:-1]
-        persisted_recent_messages = trimmed_recent_messages
     system_prompt = build_lecture_assistant_system_prompt(payload)
-    messages = build_lecture_assistant_messages(
-        payload,
-        persisted_recent_messages=persisted_recent_messages,
-        memory_summary=persisted_memory_summary,
-    )
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
@@ -34622,6 +34608,31 @@ def create_lecture_assistant_stream(
                     "conversation_id": compact_text(payload.conversation_id),
                     "session_id": compact_text(payload.session_id),
                     "provider_order": [attempt["provider"] for attempt in attempts],
+                },
+            )
+
+            # Open the stream before database/context retrieval. This gives the
+            # browser an immediate response while slower history stores wake up.
+            context_started_at = utc_now()
+            _, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
+                current_user,
+                payload,
+            )
+            if bool(payload.regenerate_last_assistant) and persisted_recent_messages:
+                trimmed_recent_messages = list(persisted_recent_messages)
+                if compact_text(trimmed_recent_messages[-1].get("role")).lower() == "assistant":
+                    trimmed_recent_messages = trimmed_recent_messages[:-1]
+                persisted_recent_messages = trimmed_recent_messages
+            messages = build_lecture_assistant_messages(
+                payload,
+                persisted_recent_messages=persisted_recent_messages,
+                memory_summary=persisted_memory_summary,
+            )
+            yield build_sse_event(
+                "context_ready",
+                {
+                    "duration_ms": int((utc_now() - context_started_at).total_seconds() * 1000),
+                    "history_messages": len(persisted_recent_messages),
                 },
             )
 

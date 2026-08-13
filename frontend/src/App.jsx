@@ -6795,7 +6795,9 @@ export default function App() {
   const [studyGuidePromptSource, setStudyGuidePromptSource] = useState(null);
   const [lectureNoteSources, setLectureNoteSources] = useState([]);
   const [lectureSlideSources, setLectureSlideSources] = useState([]);
+  const [pendingLectureNoteFiles, setPendingLectureNoteFiles] = useState([]);
   const [pendingLectureSlideFiles, setPendingLectureSlideFiles] = useState([]);
+  const [pendingPastQuestionPaperFiles, setPendingPastQuestionPaperFiles] = useState([]);
   const [pastQuestionPaperSources, setPastQuestionPaperSources] = useState([]);
   const [pastQuestionMemo, setPastQuestionMemo] = useState("");
   const [presentationData, setPresentationData] = useState(createEmptyPresentationData);
@@ -8223,7 +8225,14 @@ export default function App() {
 
   const studyGuidePromptText = normalizeStudySourceText(studyGuidePromptSource?.text || "");
   const lectureNotes = studySourceEntriesToText(lectureNoteSources, "LECTURE NOTE");
-  const lectureNoteFileNames = lectureNoteSources.map((item) => item.name);
+  const pendingLectureNoteDisplaySources = pendingLectureNoteFiles.map((item) => ({
+    id: item.id,
+    name: item.name || item.file?.name || "Lecture note",
+    prefix: "WAITING TO READ",
+    pending: true,
+  }));
+  const visibleLectureNoteSources = [...lectureNoteSources, ...pendingLectureNoteDisplaySources];
+  const lectureNoteFileNames = visibleLectureNoteSources.map((item) => item.name);
   const lectureNotesFileName = formatGroupedSourceLabel(lectureNoteFileNames, "note file", "note files");
   const lectureSlides = studySourceEntriesToText(lectureSlideSources, "SLIDE SOURCE");
   const pendingLectureSlideDisplaySources = pendingLectureSlideFiles.map((item) => ({
@@ -8235,7 +8244,14 @@ export default function App() {
   const visibleLectureSlideSources = [...lectureSlideSources, ...pendingLectureSlideDisplaySources];
   const lectureSlideFileNames = visibleLectureSlideSources.map((item) => item.name);
   const pastQuestionPapers = [studySourceEntriesToText(pastQuestionPaperSources, "PAST QUESTION PAPER"), pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : ""].filter(Boolean).join("\n\n");
-  const pastQuestionPaperFileNames = pastQuestionPaperSources.map((item) => item.name);
+  const pendingPastQuestionPaperDisplaySources = pendingPastQuestionPaperFiles.map((item) => ({
+    id: item.id,
+    name: item.name || item.file?.name || "Past question paper",
+    prefix: "WAITING TO READ",
+    pending: true,
+  }));
+  const visiblePastQuestionPaperSources = [...pastQuestionPaperSources, ...pendingPastQuestionPaperDisplaySources];
+  const pastQuestionPaperFileNames = visiblePastQuestionPaperSources.map((item) => item.name);
   const activeHistoryItem = historyItems.find((item) => item.id === activeHistoryId) || null;
   const uploadedVisualReferences = buildUploadedVisualReferences(lectureNoteSources, lectureSlideSources);
   const visualReferences = uploadedVisualReferences;
@@ -8243,8 +8259,13 @@ export default function App() {
   const canMonitorSharedAudio = typeof window !== "undefined" && Boolean(window.AudioContext || window.webkitAudioContext);
   const loading = isTranscribing || isTranscribingVideo || isGeneratingSummary || isGeneratingQuiz || isGeneratingPresentation || isGeneratingPodcast || isGeneratingTeacherLesson || isLoadingPodcastAudio || isExtractingNotes || isExtractingSlides || isExtractingPastPapers || isProcessingLectureBundle;
   const canCancelTranscription = (isTranscribing || isTranscribingVideo) && ["transcription", "video"].includes(currentJobType) && !isGeneratingSummary && !isProcessingLectureBundle;
+  const hasQueuedStudySources = Boolean(
+    pendingLectureNoteFiles.length
+    || pendingLectureSlideFiles.length
+    || pendingPastQuestionPaperFiles.length,
+  );
   const hasQueuedLectureSlides = pendingLectureSlideFiles.length > 0;
-  const hasStudyInputs = Boolean(transcript.trim() || studyGuidePromptText.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim() || hasQueuedLectureSlides);
+  const hasStudyInputs = Boolean(file || transcript.trim() || studyGuidePromptText.trim() || lectureNotes.trim() || lectureSlides.trim() || pastQuestionPapers.trim() || hasQueuedStudySources);
   const slidesReadyForGuide = Boolean(lectureSlideSources.length && lectureSlides.trim()) && !isExtractingSlides;
   const slideGuideStatusLine = isExtractingSlides
     ? "Reading slide sources..."
@@ -8858,7 +8879,9 @@ export default function App() {
       setStudyGuidePromptSource(null);
       setLectureNoteSources(normalizeStudySourceEntries(snapshot.lectureNoteSources, "", [], "LECTURE NOTE"));
       setLectureSlideSources(normalizeStudySourceEntries(snapshot.lectureSlideSources, "", [], "SLIDE SOURCE"));
+      setPendingLectureNoteFiles([]);
       setPendingLectureSlideFiles([]);
+      setPendingPastQuestionPaperFiles([]);
       setPastQuestionPaperSources(normalizeStudySourceEntries(snapshot.pastQuestionPaperSources, "", [], "PAST QUESTION PAPER"));
       setPastQuestionMemo(snapshot.pastQuestionMemo || "");
       setPresentationData(restoredPresentationData);
@@ -20954,7 +20977,9 @@ export default function App() {
       );
       setPastQuestionMemo(resolvedItem.pastQuestionMemo || "");
       setLectureSlideSources(normalizeStudySourceEntries(resolvedItem.lectureSlideSources, resolvedItem.lectureSlides, resolvedItem.lectureSlideFileNames, "SLIDE SOURCE"));
+      setPendingLectureNoteFiles([]);
       setPendingLectureSlideFiles([]);
+      setPendingPastQuestionPaperFiles([]);
       setPastQuestionPaperSources(
         normalizeStudySourceEntries(
           resolvedItem.pastQuestionPaperSources,
@@ -21047,7 +21072,9 @@ export default function App() {
     setVideoUrl("");
     setLectureNoteSources([]);
     setLectureSlideSources([]);
+    setPendingLectureNoteFiles([]);
     setPendingLectureSlideFiles([]);
+    setPendingPastQuestionPaperFiles([]);
     setPastQuestionPaperSources([]);
     setPastQuestionMemo("");
     setStudyGuidePromptDraft("");
@@ -21588,59 +21615,62 @@ export default function App() {
     }
   };
 
-  const handleLectureNotesFileChange = async (selectedFiles) => {
-    await extractAndApplyStudySourceFiles(selectedFiles, {
-      sourceName: "lecture note",
-      sourcePrefix: "LECTURE NOTE",
-      currentSources: lectureNoteSources,
-      setSources: setLectureNoteSources,
-      setBusy: setIsExtractingNotes,
-      jobType: "notes",
-      startStatus: "Reading lecture notes...",
-      successMessage: ({ addedNames, skippedNames }) => (
-        `${addedNames.length} lecture note source${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""}`
-      ),
-      failureStatus: "Lecture note reading failed.",
-    });
+  const queueStudySourceFiles = (selectedFiles, { kind, label, setPendingFiles }) => {
+    const files = Array.from(selectedFiles || []);
+    if (!files.length) return [];
+    files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, `${label} sources`));
+    const queuedFiles = files.map((selectedFile, index) => ({
+      id: `pending-${kind}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      name: selectedFile.name || `${label} ${index + 1}`,
+      file: selectedFile,
+    }));
+    setPendingFiles((current) => [...current, ...queuedFiles]);
+    setError("");
+    setStatus(`${queuedFiles.length} ${label.toLowerCase()}${queuedFiles.length === 1 ? "" : "s"} queued. Press Generate Study Guide to read and process ${queuedFiles.length === 1 ? "it" : "them"}.`);
+    scrollGenerateStudyGuideButtonIntoView();
+    return queuedFiles;
+  };
+
+  const handleLectureNotesFileChange = (selectedFiles) => {
+    try {
+      queueStudySourceFiles(selectedFiles, {
+        kind: "note",
+        label: "Lecture note",
+        setPendingFiles: setPendingLectureNoteFiles,
+      });
+    } catch (err) {
+      setError(err.message || "Could not add lecture notes.");
+      setStatus("Lecture note upload failed.");
+    }
   };
 
   const handleLectureSlidesFilesChange = (selectedFiles) => {
-    const files = Array.from(selectedFiles || []);
-    if (!files.length) return;
     try {
-      files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, "slide sources"));
-      const queuedFiles = files.map((selectedFile, index) => ({
-        id: `pending-slide-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-        name: selectedFile.name || `Slide source ${index + 1}`,
-        file: selectedFile,
-      }));
-      setPendingLectureSlideFiles((current) => [...current, ...queuedFiles]);
-      setError("");
-      setStatus(`${queuedFiles.length} slide source${queuedFiles.length === 1 ? "" : "s"} queued. Press Generate Study Guide to read slides and generate the material.`);
-      scrollGenerateStudyGuideButtonIntoView();
+      queueStudySourceFiles(selectedFiles, {
+        kind: "slide",
+        label: "Slide source",
+        setPendingFiles: setPendingLectureSlideFiles,
+      });
     } catch (err) {
       setError(err.message || "Could not add slide sources.");
       setStatus("Slide upload failed.");
     }
   };
 
-  const handlePastQuestionPapersFilesChange = async (selectedFiles) => {
-    await extractAndApplyStudySourceFiles(selectedFiles, {
-      sourceName: "past question paper",
-      sourcePrefix: "PAST QUESTION PAPER",
-      currentSources: pastQuestionPaperSources,
-      setSources: setPastQuestionPaperSources,
-      setBusy: setIsExtractingPastPapers,
-      jobType: "past_papers",
-      startStatus: "Reading past question papers...",
-      successMessage: ({ addedNames, skippedNames }) => (
-        `${addedNames.length} past question paper${addedNames.length === 1 ? "" : "s"} added.${skippedNames.length ? ` Skipped ${skippedNames.length} unreadable file${skippedNames.length === 1 ? "" : "s"}.` : ""} Generate the study guide again to refresh notes and test questions with this reference.`
-      ),
-      failureStatus: "Past question paper reading failed.",
-    });
+  const handlePastQuestionPapersFilesChange = (selectedFiles) => {
+    try {
+      queueStudySourceFiles(selectedFiles, {
+        kind: "past-paper",
+        label: "Past question paper",
+        setPendingFiles: setPendingPastQuestionPaperFiles,
+      });
+    } catch (err) {
+      setError(err.message || "Could not add past question papers.");
+      setStatus("Past question paper upload failed.");
+    }
   };
 
-  const handleLectureBundleFilesChange = async (selectedFiles) => {
+  const handleLectureBundleFilesChange = (selectedFiles) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return;
 
@@ -21663,141 +21693,29 @@ export default function App() {
     }
 
     const activeLectureMediaFile = lectureMediaFiles[0] || null;
-    const noteBaseSources = lectureNoteSources;
-    const slideBaseSources = lectureSlideSources;
-    const pastPaperBaseSources = pastQuestionPaperSources;
-    const warningMessages = [];
-
     setError("");
-    setStatus(`Sorting ${files.length} lecture file${files.length === 1 ? "" : "s"} into the right sections...`);
-    setProgress(4);
-    setIsProcessingLectureBundle(true);
-    scrollGenerateStudyGuideButtonIntoView();
-
     if (activeLectureMediaFile) {
       startTransition(() => {
         setFile(activeLectureMediaFile);
         setVideoUrl("");
       });
-    } else {
-      resetGeneratedOutputs();
-      startTransition(() => {
-        setFile(null);
-        setVideoUrl("");
-      });
     }
-
-    const notePromise = extractAndApplyStudySourceFiles(noteFiles, {
-      sourceName: "lecture note",
-      sourcePrefix: "LECTURE NOTE",
-      currentSources: noteBaseSources,
-      setSources: setLectureNoteSources,
-      setBusy: setIsExtractingNotes,
-      jobType: "notes",
-      startStatus: "Reading lecture notes...",
-      successMessage: () => "",
-      failureStatus: "Lecture note reading failed.",
-      interactive: false,
-    });
-    const slidePromise = extractAndApplyStudySourceFiles(slideFiles, {
-      sourceName: "slide source",
-      sourcePrefix: "SLIDE SOURCE",
-      currentSources: slideBaseSources,
-      setSources: setLectureSlideSources,
-      setBusy: setIsExtractingSlides,
-      jobType: "slides",
-      startStatus: "Reading slide sources...",
-      successMessage: () => "",
-      failureStatus: "Slide reading failed.",
-      interactive: false,
-    });
-    const pastPaperPromise = extractAndApplyStudySourceFiles(pastPaperFiles, {
-      sourceName: "past question paper",
-      sourcePrefix: "PAST QUESTION PAPER",
-      currentSources: pastPaperBaseSources,
-      setSources: setPastQuestionPaperSources,
-      setBusy: setIsExtractingPastPapers,
-      jobType: "past_papers",
-      startStatus: "Reading past question papers...",
-      successMessage: () => "",
-      failureStatus: "Past question paper reading failed.",
-      interactive: false,
-    });
-    const transcriptPromise = activeLectureMediaFile
-      ? transcribeLectureFile(activeLectureMediaFile, {
-        autoGenerateGuide: false,
-        initialStatus: noteFiles.length || slideFiles.length || pastPaperFiles.length
-          ? "Reading notes and slides, then transcribing the lecture automatically..."
-          : "Submitting lecture for transcription...",
-        surfaceError: false,
-      })
-      : Promise.resolve("");
-
     try {
-      const [noteOutcome, slideOutcome, pastPaperOutcome, transcriptOutcome] = await Promise.allSettled([
-        notePromise,
-        slidePromise,
-        pastPaperPromise,
-        transcriptPromise,
-      ]);
-
-      const noteResult = noteOutcome.status === "fulfilled"
-        ? noteOutcome.value
-        : createStudySourceBatchSnapshot(noteBaseSources, "LECTURE NOTE");
-      const slideResult = slideOutcome.status === "fulfilled"
-        ? slideOutcome.value
-        : createStudySourceBatchSnapshot(slideBaseSources, "SLIDE SOURCE");
-      const pastPaperResult = pastPaperOutcome.status === "fulfilled"
-        ? pastPaperOutcome.value
-        : createStudySourceBatchSnapshot(pastPaperBaseSources, "PAST QUESTION PAPER");
-      const transcriptText = transcriptOutcome.status === "fulfilled" ? transcriptOutcome.value : "";
-
-      if (noteOutcome.status === "rejected") warningMessages.push(noteOutcome.reason?.message || "Lecture notes could not be read automatically.");
-      if (slideOutcome.status === "rejected") warningMessages.push(slideOutcome.reason?.message || "Slides could not be read automatically.");
-      if (pastPaperOutcome.status === "rejected") warningMessages.push(pastPaperOutcome.reason?.message || "Past papers could not be read automatically.");
-      if (transcriptOutcome.status === "rejected") warningMessages.push(transcriptOutcome.reason?.message || "Lecture transcription failed.");
-
-      const resolvedPastQuestionPapers = [
-        pastPaperResult.text,
-        pastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${pastQuestionMemo.trim()}` : "",
-      ].filter(Boolean).join("\n\n");
-
-      if (!(transcriptText.trim() || noteResult.text.trim() || slideResult.text.trim() || resolvedPastQuestionPapers.trim())) {
-        throw new Error(warningMessages[0] || "No lecture files were ready to process.");
-      }
-
-      setError("");
-      setStatus("Lecture sources are ready. Generating the study guide...");
-      await generateStudyGuide(transcriptText, {
-        lectureNotesText: noteResult.text,
-        lectureSlidesText: slideResult.text,
-        pastQuestionPapersText: resolvedPastQuestionPapers,
-        lectureNoteSources: noteResult.nextSources,
-        lectureSlideSources: slideResult.nextSources,
-        pastQuestionPaperSources: pastPaperResult.nextSources,
-        pastQuestionMemo,
-      });
-
-      const summaryParts = [];
-      if (activeLectureMediaFile) summaryParts.push("1 lecture file");
-      if (noteResult.addedNames.length) summaryParts.push(`${noteResult.addedNames.length} note source${noteResult.addedNames.length === 1 ? "" : "s"}`);
-      if (slideResult.addedNames.length) summaryParts.push(`${slideResult.addedNames.length} slide source${slideResult.addedNames.length === 1 ? "" : "s"}`);
-      if (pastPaperResult.addedNames.length) summaryParts.push(`${pastPaperResult.addedNames.length} past paper source${pastPaperResult.addedNames.length === 1 ? "" : "s"}`);
-      const extraMediaNote = lectureMediaFiles.length > 1 ? " The first lecture media file was kept as the active lecture file." : "";
-      const warningNote = warningMessages.length ? ` ${warningMessages[0]}` : "";
-      setStatus(`Lecture files processed: ${summaryParts.length ? summaryParts.join(", ") : "readable study sources"} ready.${extraMediaNote}${warningNote}`);
+      if (noteFiles.length) queueStudySourceFiles(noteFiles, { kind: "note", label: "Lecture note", setPendingFiles: setPendingLectureNoteFiles });
+      if (slideFiles.length) queueStudySourceFiles(slideFiles, { kind: "slide", label: "Slide source", setPendingFiles: setPendingLectureSlideFiles });
+      if (pastPaperFiles.length) queueStudySourceFiles(pastPaperFiles, { kind: "past-paper", label: "Past question paper", setPendingFiles: setPendingPastQuestionPaperFiles });
+      const extraMediaNote = lectureMediaFiles.length > 1 ? " The first lecture media file was selected." : "";
+      setStatus(`${files.length} lecture file${files.length === 1 ? "" : "s"} queued.${extraMediaNote} Press Generate Study Guide to read and process the bundle.`);
+      scrollGenerateStudyGuideButtonIntoView();
     } catch (err) {
-      setError(err.message || "Lecture bundle processing failed.");
-      setStatus("Lecture bundle processing failed.");
-    } finally {
-      setIsProcessingLectureBundle(false);
-      setCurrentJobType("");
-      setProgress(0);
+      setError(err.message || "Lecture bundle could not be queued.");
+      setStatus("Lecture bundle upload failed.");
     }
   };
 
   const removeLectureNoteSource = (sourceId) => {
     setLectureNoteSources((current) => current.filter((item) => item.id !== sourceId));
+    setPendingLectureNoteFiles((current) => current.filter((item) => item.id !== sourceId));
     setStatus("Lecture note source removed.");
   };
 
@@ -21809,6 +21727,7 @@ export default function App() {
 
   const removePastQuestionPaperSource = (sourceId) => {
     setPastQuestionPaperSources((current) => current.filter((item) => item.id !== sourceId));
+    setPendingPastQuestionPaperFiles((current) => current.filter((item) => item.id !== sourceId));
     setStatus("Past question paper removed.");
   };
 
@@ -22079,7 +21998,7 @@ export default function App() {
   };
 
   const generateStudyGuide = async (transcriptText = transcript, sourceOverrides = {}) => {
-    const resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
+    let resolvedTranscript = typeof transcriptText === "string" ? transcriptText : transcript;
     let resolvedLectureNoteSources = Array.isArray(sourceOverrides.lectureNoteSources) ? sourceOverrides.lectureNoteSources : lectureNoteSources;
     let resolvedLectureSlideSources = Array.isArray(sourceOverrides.lectureSlideSources) ? sourceOverrides.lectureSlideSources : lectureSlideSources;
     let resolvedPastQuestionPaperSources = Array.isArray(sourceOverrides.pastQuestionPaperSources) ? sourceOverrides.pastQuestionPaperSources : pastQuestionPaperSources;
@@ -22112,10 +22031,17 @@ export default function App() {
         ].filter(Boolean).join("\n\n");
       }
     }
+    const shouldReadQueuedNotesForGuide = pendingLectureNoteFiles.length > 0
+      && !Array.isArray(sourceOverrides.lectureNoteSources)
+      && typeof sourceOverrides.lectureNotesText !== "string";
     const shouldReadQueuedSlidesForGuide = pendingLectureSlideFiles.length > 0
       && !Array.isArray(sourceOverrides.lectureSlideSources)
       && typeof sourceOverrides.lectureSlidesText !== "string";
-    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim() || shouldReadQueuedSlidesForGuide)) {
+    const shouldReadQueuedPastPapersForGuide = pendingPastQuestionPaperFiles.length > 0
+      && !Array.isArray(sourceOverrides.pastQuestionPaperSources)
+      && typeof sourceOverrides.pastQuestionPapersText !== "string";
+    const shouldTranscribeSelectedLecture = Boolean(file && !resolvedTranscript.trim() && transcriptText === transcript);
+    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim() || shouldReadQueuedNotesForGuide || shouldReadQueuedSlidesForGuide || shouldReadQueuedPastPapersForGuide || shouldTranscribeSelectedLecture)) {
       return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
@@ -22128,6 +22054,37 @@ export default function App() {
     setProgress(0);
     setChatMessages([]);
     try {
+      if (shouldTranscribeSelectedLecture) {
+        setStatus("Reading the selected lecture file...");
+        resolvedTranscript = await transcribeLectureFile(file, {
+          autoGenerateGuide: false,
+          initialStatus: "Reading the selected lecture file...",
+          resetOutputsBeforeTranscribe: false,
+        });
+        setCurrentJobType("study_guide");
+      }
+      if (shouldReadQueuedNotesForGuide) {
+        const pendingNoteSnapshot = [...pendingLectureNoteFiles];
+        const pendingNoteIds = new Set(pendingNoteSnapshot.map((item) => item.id));
+        const noteResult = await extractAndApplyStudySourceFiles(
+          pendingNoteSnapshot.map((item) => item.file).filter(Boolean),
+          {
+            sourceName: "lecture note",
+            sourcePrefix: "LECTURE NOTE",
+            currentSources: resolvedLectureNoteSources,
+            setSources: setLectureNoteSources,
+            setBusy: setIsExtractingNotes,
+            jobType: "notes",
+            startStatus: "Reading lecture notes...",
+            successMessage: () => "Lecture notes read. Generating the study guide now.",
+            failureStatus: "Lecture note reading failed.",
+          },
+        );
+        resolvedLectureNoteSources = noteResult.nextSources;
+        resolvedLectureNotes = noteResult.text;
+        setPendingLectureNoteFiles((current) => current.filter((item) => !pendingNoteIds.has(item.id)));
+        setCurrentJobType("study_guide");
+      }
       if (shouldReadQueuedSlidesForGuide) {
         const pendingSlideSnapshot = [...pendingLectureSlideFiles];
         const pendingSlideFiles = pendingSlideSnapshot.map((item) => item.file).filter(Boolean);
@@ -22153,6 +22110,31 @@ export default function App() {
         setCurrentJobType("study_guide");
         setStatus("Slides read. Submitting study guide request...");
         setProgress(0);
+      }
+      if (shouldReadQueuedPastPapersForGuide) {
+        const pendingPastPaperSnapshot = [...pendingPastQuestionPaperFiles];
+        const pendingPastPaperIds = new Set(pendingPastPaperSnapshot.map((item) => item.id));
+        const pastPaperResult = await extractAndApplyStudySourceFiles(
+          pendingPastPaperSnapshot.map((item) => item.file).filter(Boolean),
+          {
+            sourceName: "past question paper",
+            sourcePrefix: "PAST QUESTION PAPER",
+            currentSources: resolvedPastQuestionPaperSources,
+            setSources: setPastQuestionPaperSources,
+            setBusy: setIsExtractingPastPapers,
+            jobType: "past_papers",
+            startStatus: "Reading past question papers...",
+            successMessage: () => "Past question papers read. Generating the study guide now.",
+            failureStatus: "Past question paper reading failed.",
+          },
+        );
+        resolvedPastQuestionPaperSources = pastPaperResult.nextSources;
+        resolvedPastQuestionPapers = [
+          pastPaperResult.text,
+          resolvedPastQuestionMemo.trim() ? `PAST QUESTION PAPER MEMO\n${resolvedPastQuestionMemo.trim()}` : "",
+        ].filter(Boolean).join("\n\n");
+        setPendingPastQuestionPaperFiles((current) => current.filter((item) => !pendingPastPaperIds.has(item.id)));
+        setCurrentJobType("study_guide");
       }
       let submitAttempt = 0;
       let jobRequest = null;
@@ -28060,7 +28042,7 @@ export default function App() {
               </div>
 
               <div className="mt-5 grid gap-4 xl:grid-cols-3">
-                <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNoteFileNames.length ? `${lectureNoteFileNames.length} source${lectureNoteFileNames.length === 1 ? "" : "s"} added` : "No notes added yet"}</p></div><button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-base font-bold text-white">+</span><span>Add More</span></button></div>{lectureNoteSources.length ? <div className="mt-4 grid gap-3">{lectureNoteSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removeLectureNoteSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-emerald-200/70">{source.prefix || "LECTURE NOTE"}</p></div>)}</div> : <p className="mt-3 text-xs leading-6 text-slate-300">Accepted here: TXT, MD, PDF, DOCX, and clear note images.</p>}</div>
+                <div className="rounded-2xl border border-white/10 bg-slate-950/75 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Notes</p><p className="mt-3 text-sm font-semibold text-white">{lectureNoteFileNames.length ? `${lectureNoteFileNames.length} source${lectureNoteFileNames.length === 1 ? "" : "s"} added` : "No notes added yet"}</p></div><button type="button" onClick={() => lectureNotesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-base font-bold text-white">+</span><span>Add More</span></button></div>{visibleLectureNoteSources.length ? <div className="mt-4 grid gap-3">{visibleLectureNoteSources.map((source) => <div key={source.id} className={`relative rounded-2xl border px-4 py-3 pr-11 text-sm text-slate-200 ${source.pending ? "border-amber-300/20 bg-amber-400/10" : "border-white/10 bg-slate-950/75"}`}><button type="button" onClick={() => removeLectureNoteSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className={`mt-2 text-xs uppercase tracking-[0.22em] ${source.pending ? "text-amber-100/80" : "text-emerald-200/70"}`}>{source.prefix || "LECTURE NOTE"}</p></div>)}</div> : <p className="mt-3 text-xs leading-6 text-slate-300">Accepted here: TXT, MD, PDF, DOCX, and clear note images.</p>}</div>
                 <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/8 p-4"><div className="force-mobile-stack flex items-center justify-between gap-3"><div className="min-w-0"><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Lecture Slides</p><p className="mt-3 text-sm font-semibold text-white">{lectureSlideFileNames.length ? `${lectureSlideFileNames.length} source${lectureSlideFileNames.length === 1 ? "" : "s"} added` : "No slides added yet"}</p></div><button type="button" onClick={() => lectureSlidesFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-emerald-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-400/20 text-base font-bold text-emerald-100">+</span><span>Add More</span></button></div>{visibleLectureSlideSources.length ? <div className="mt-4 grid gap-3">{visibleLectureSlideSources.map((source) => <div key={source.id} className={`relative rounded-2xl border px-4 py-3 pr-11 text-sm text-slate-200 ${source.pending ? "border-amber-300/20 bg-amber-400/10" : "border-white/10 bg-slate-950/75"}`}><button type="button" onClick={() => removeLectureSlideSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className={`mt-2 text-xs uppercase tracking-[0.22em] ${source.pending ? "text-amber-100/80" : "text-emerald-200/70"}`}>{source.prefix || "SLIDE SOURCE"}</p></div>)}</div> : null}</div>
                 <div className="rounded-2xl border border-amber-300/15 bg-amber-400/10 p-4">
                   <div className="force-mobile-stack flex items-center justify-between gap-3">
@@ -28070,7 +28052,7 @@ export default function App() {
                     </div>
                     <button type="button" onClick={() => pastQuestionPaperFileInputRef.current?.click()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-full border border-amber-300/20 bg-slate-950/75 px-3 py-2 text-xs font-semibold text-amber-50 disabled:opacity-50"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-400/20 text-base font-bold text-amber-100">+</span><span>Add Paper</span></button>
                   </div>
-                  {pastQuestionPaperSources.length ? <div className="mt-4 grid gap-3">{pastQuestionPaperSources.map((source) => <div key={source.id} className="relative rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 pr-11 text-sm text-slate-200"><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-amber-100/80">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : null}
+                  {visiblePastQuestionPaperSources.length ? <div className="mt-4 grid gap-3">{visiblePastQuestionPaperSources.map((source) => <div key={source.id} className={`relative rounded-2xl border px-4 py-3 pr-11 text-sm text-slate-200 ${source.pending ? "border-amber-300/20 bg-amber-400/10" : "border-white/10 bg-slate-950/75"}`}><button type="button" onClick={() => removePastQuestionPaperSource(source.id)} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm text-white transition hover:bg-white/10" aria-label={`Remove ${source.name}`}>&times;</button><p className="phone-safe-copy font-semibold text-white">{source.name}</p><p className="mt-2 text-xs uppercase tracking-[0.22em] text-amber-100/80">{source.prefix || "PAST QUESTION PAPER"}</p></div>)}</div> : null}
                   <div className="mt-4">
                     <label className="block text-xs uppercase tracking-[0.22em] text-amber-100/80">Memo / Marking Guide</label>
                     <textarea value={pastQuestionMemo} onChange={(event) => setPastQuestionMemo(event.target.value)} rows={7} className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Paste the memo, model answers, or marking guide here. It will be used as an extra reference for study-guide and test generation." />
