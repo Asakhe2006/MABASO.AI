@@ -16998,16 +16998,16 @@ def get_payfast_signature(fields: dict[str, Any]) -> str:
     return hashlib.md5(signature_payload.encode("utf-8")).hexdigest()
 
 
-def require_payfast_configured():
+def require_payfast_configured(*, require_subscription: bool = False):
     if not PAYFAST_MERCHANT_ID or not PAYFAST_MERCHANT_KEY:
         raise HTTPException(
             status_code=503,
             detail="PayFast checkout is not configured yet. Add PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY on the backend.",
         )
-    if PAYFAST_SUBSCRIPTION_ENABLED and not PAYFAST_PASSPHRASE:
+    if (PAYFAST_SUBSCRIPTION_ENABLED or require_subscription) and not PAYFAST_PASSPHRASE:
         raise HTTPException(
             status_code=503,
-            detail="PayFast recurring subscriptions require PAYFAST_PASSPHRASE. Disable PAYFAST_SUBSCRIPTION_ENABLED for PayShap-compatible once-off plan payments.",
+            detail="PayFast recurring subscriptions and seven-day free trials require PAYFAST_PASSPHRASE.",
         )
 
 
@@ -17052,7 +17052,7 @@ def build_payfast_checkout_fields(
         "custom_str3": checkout_id[:255],
         "custom_str4": "trial" if trial else "standard",
     }
-    if PAYFAST_SUBSCRIPTION_ENABLED:
+    if PAYFAST_SUBSCRIPTION_ENABLED or trial:
         fields.update(
             {
                 "subscription_type": "1",
@@ -17117,8 +17117,6 @@ def ensure_payfast_trial_eligible(email: str, plan_id: str) -> None:
     normalized_email = validate_email_address(email)
     if normalize_billing_plan_id(plan_id) != "pro_student":
         raise HTTPException(status_code=400, detail="The seven-day free trial is available only on the monthly Pro Student plan.")
-    if not PAYFAST_SUBSCRIPTION_ENABLED:
-        raise HTTPException(status_code=503, detail="The free trial requires PayFast recurring subscriptions to be enabled.")
     subscription = get_user_subscription(normalized_email)
     if subscription.get("active"):
         raise HTTPException(status_code=409, detail="The free trial is available only before a paid subscription has been activated.")
@@ -21928,16 +21926,11 @@ async def create_billing_checkout(
     current_user: str = Depends(require_authenticated_user),
 ):
     started_at = utc_now()
-    require_payfast_configured()
     email = normalize_email(current_user)
     plan = get_billing_plan(payload.plan_id)
     is_trial = bool(payload.trial)
+    require_payfast_configured(require_subscription=is_trial)
     if is_trial:
-        if not PAYFAST_SUBSCRIPTION_ENABLED:
-            raise HTTPException(
-                status_code=503,
-                detail="The seven-day trial requires PayFast recurring subscriptions to be enabled.",
-            )
         ensure_payfast_trial_eligible(email, plan["id"])
     checkout_id = f"mabaso-{uuid4().hex[:24]}"
     fields = build_payfast_checkout_fields(
@@ -21980,14 +21973,14 @@ async def create_billing_checkout(
             "provider": "payfast",
             "checkout_id": checkout_id,
             "amount_zar": plan["amount_zar"],
-            "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+            "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED or is_trial else "once_off",
             "trial": is_trial,
         },
     )
     return {
         "provider": "payfast",
         "sandbox": PAYFAST_SANDBOX,
-        "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED else "once_off",
+        "checkout_mode": "subscription" if PAYFAST_SUBSCRIPTION_ENABLED or is_trial else "once_off",
         "trial": is_trial,
         "trial_days": 7 if is_trial else 0,
         "checkout_id": checkout_id,

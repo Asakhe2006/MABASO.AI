@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, Pause, Pencil, Play, Plus, RefreshCw, Search, SlidersHorizontal, Square, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, SlidersHorizontal, Square, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -3935,7 +3935,11 @@ function loadHistoryItems(email = "") {
       return normalizeHistoryItems(JSON.parse(scopedValue))
         .filter((item) => historyItemBelongsToOwner(item, normalizedEmail));
     }
-    if (normalizedEmail) return [];
+    if (normalizedEmail) {
+      const legacyValue = window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]";
+      return normalizeHistoryItems(JSON.parse(legacyValue))
+        .filter((item) => historyItemBelongsToOwner(item, normalizedEmail));
+    }
 
     const legacyValue = window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]";
     return normalizeHistoryItems(JSON.parse(legacyValue));
@@ -6866,6 +6870,7 @@ export default function App() {
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isWorkspaceMobileSidebarOpen, setIsWorkspaceMobileSidebarOpen] = useState(false);
+  const [isWorkspaceDesktopSidebarOpen, setIsWorkspaceDesktopSidebarOpen] = useState(true);
   const [isMobileVoiceSetupOpen, setIsMobileVoiceSetupOpen] = useState(false);
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
   const [copiedActiveContent, setCopiedActiveContent] = useState(false);
@@ -7082,6 +7087,7 @@ export default function App() {
   const pastQuestionPaperFileInputRef = useRef(null);
   const bulkLectureFileInputRef = useRef(null);
   const generateStudyGuideButtonRef = useRef(null);
+  const generateGuideScrollTimerRef = useRef(0);
   const chatImageInputRef = useRef(null);
   const activeStudySessionImageInputRef = useRef(null);
   const activeStudySessionVoiceRecognitionRef = useRef(null);
@@ -7148,6 +7154,7 @@ export default function App() {
   const historyItemLoadPromisesRef = useRef(new Map());
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
+  const historyDestructiveSyncRequestedRef = useRef(false);
   const hasLoadedAdminDashboardRef = useRef(false);
   const hasLoadedTimetableRef = useRef(false);
   const hasLoadedLectureTimetableRef = useRef(false);
@@ -7598,22 +7605,54 @@ export default function App() {
     );
   };
 
+  const upgradeProfileDisplayName = authEmail
+    ? titleCaseWords(String(authEmail).split("@")[0].replace(/[._-]+/g, " "))
+    : "Mabaso Learner";
+
+  const renderUpgradeModalProfileControl = () => (
+    <details className="upgrade-modal-profile profile-menu-anchor">
+      <summary className="profile-menu-button" aria-label="Profile">
+        <UserRound className="h-4 w-4" aria-hidden="true" />
+        <span>Profile</span>
+      </summary>
+      <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
+        <div className="profile-menu-user">
+          <span className="profile-menu-avatar">{upgradeProfileDisplayName.slice(0, 2).toUpperCase()}</span>
+          <span className="min-w-0">
+            <span className="phone-safe-copy block text-sm font-semibold text-slate-950">{upgradeProfileDisplayName}</span>
+            <span className="phone-safe-copy mt-0.5 block text-xs text-slate-500">{authEmail || "Signed in"}</span>
+          </span>
+        </div>
+        <label className="profile-menu-row">
+          <span>Language</span>
+          <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="profile-menu-select">
+            {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setIsLogoutConfirmOpen(true); }} className="profile-menu-row profile-menu-logout" role="menuitem">
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          <span>Log out</span>
+        </button>
+      </div>
+    </details>
+  );
+
   const renderUpgradeModal = () => (
     <div
       ref={upgradeModalScrollRef}
       className="upgrade-modal-backdrop fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget && !billingCheckoutPlanId) setIsUpgradeModalOpen(false);
-      }}
     >
       <div className="upgrade-modal-panel relative w-full max-w-5xl rounded-[30px] border border-emerald-300/20 bg-[radial-gradient(circle_at_top,rgba(34,197,94,0.16),transparent_34%),linear-gradient(180deg,#0f172a,#020617)] p-5 text-white shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:p-6">
+        <div className="upgrade-modal-sticky-bar">
+          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="upgrade-modal-close" aria-label="Close upgrade plans"><X className="h-4 w-4" aria-hidden="true" /></button>
+          {renderUpgradeModalProfileControl()}
+        </div>
         <div className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.3em] text-emerald-200/80">Upgrade</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">Subscribe with PayFast or PayShap</h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Choose a transparent plan, then continue with PayFast for automatic activation after payment confirmation or PayShap for manually verified bank payment.</p>
           </div>
-          <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setBillingCheckoutMessage(""); setUpgradeLimitMessage(""); setBillingCheckoutPlanId(""); setSelectedBillingPlan(null); }} className="upgrade-modal-close" aria-label="Close upgrade plans"><X className="h-4 w-4" aria-hidden="true" /></button>
         </div>
         {upgradeLimitMessage ? (
           <div className="mt-4 rounded-2xl border border-rose-300/25 bg-rose-500/10 px-4 py-3 text-sm font-semibold leading-7 text-rose-50">
@@ -7970,10 +8009,21 @@ export default function App() {
     const globalConversationId = loadOrCreatePrivateContextId(getStudyChatContextIdStorageKey(authEmail, "global"), "chat");
     setActiveStudyChatId(globalConversationId);
     setStudyChatResponseMode(mode === "voice" ? "voice" : "text");
-    setIsStudyChatSidebarOpen(false);
+    setIsStudyChatSidebarOpen(typeof window !== "undefined" && window.innerWidth >= 1024);
     currentPageRef.current = "voice";
     setCurrentPage("voice");
     navigateToPath(resolveAppRouteForPage("voice", authSessionMode, globalConversationId), { replace });
+  };
+
+  const closeStudyChatSidebarAfterNavigation = () => {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setIsStudyChatSidebarOpen(false);
+    }
+  };
+
+  const openUpgradeFromStudyChat = () => {
+    closeStudyChatSidebarAfterNavigation();
+    openUpgradeModal();
   };
 
   const openModeSelection = ({ replace = false } = {}) => {
@@ -9371,6 +9421,7 @@ export default function App() {
 
   const clearHistory = () => {
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    historyDestructiveSyncRequestedRef.current = true;
     setHistoryItems([]);
     setActiveHistoryId("");
     setStatus("History cleared for this email.");
@@ -9379,6 +9430,7 @@ export default function App() {
 
   const removeHistoryItem = (itemId) => {
     historyOwnerEmailRef.current = normalizeHistoryOwnerEmail(authEmail);
+    historyDestructiveSyncRequestedRef.current = true;
     setHistoryItems((current) => current.filter((entry) => entry.id !== itemId));
     if (activeHistoryId === itemId) setActiveHistoryId("");
   };
@@ -15260,6 +15312,7 @@ export default function App() {
 
   useEffect(() => {
     try {
+      if (historyHydratingRef.current) return;
       const ownerEmail = historyOwnerEmailRef.current;
       if (!ownerEmail) return;
       const historyKey = getHistoryStorageKey(ownerEmail);
@@ -15578,14 +15631,18 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authEmail) return;
     const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
+    const ownerChanged = historyOwnerEmailRef.current !== normalizedEmail;
+    historyHydratingRef.current = true;
     historyOwnerEmailRef.current = normalizedEmail;
     hasLoadedTimetableRef.current = false;
     hasLoadedLectureTimetableRef.current = false;
     loadedTimetableModeRef.current = "";
     skipNextHistorySyncRef.current = true;
     const cachedHistoryItems = loadHistoryItems(normalizedEmail);
-    setHistoryItems(cachedHistoryItems);
-    setActiveHistoryId((current) => (cachedHistoryItems.some((item) => item.id === current) ? current : ""));
+    if (cachedHistoryItems.length || ownerChanged) {
+      setHistoryItems(cachedHistoryItems);
+      setActiveHistoryId((current) => (cachedHistoryItems.some((item) => item.id === current) ? current : ""));
+    }
     const cachedBillingStatus = loadBillingStatusCache(normalizedEmail);
     if (cachedBillingStatus?.usage || cachedBillingStatus?.subscription) {
       setBillingUsage(cachedBillingStatus.usage || null);
@@ -16800,7 +16857,8 @@ export default function App() {
     const form = document.createElement("form");
     form.method = "POST";
     form.action = checkoutUrl;
-    if (targetWindowName) form.target = targetWindowName;
+    form.target = targetWindowName || "_self";
+    form.acceptCharset = "UTF-8";
     form.style.display = "none";
     Object.entries(fields).forEach(([name, value]) => {
       const input = document.createElement("input");
@@ -16879,9 +16937,10 @@ export default function App() {
   };
   const scrollGenerateStudyGuideButtonIntoView = (delayMs = 120) => {
     if (typeof window === "undefined") return;
-    window.setTimeout(() => {
+    if (generateGuideScrollTimerRef.current) window.clearTimeout(generateGuideScrollTimerRef.current);
+    generateGuideScrollTimerRef.current = window.setTimeout(() => {
+      generateGuideScrollTimerRef.current = 0;
       generateStudyGuideButtonRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      generateStudyGuideButtonRef.current?.focus?.({ preventScroll: true });
     }, delayMs);
   };
   const resizeStudyGuidePromptInput = (element) => {
@@ -20700,9 +20759,11 @@ export default function App() {
       skipNextHistorySyncRef.current = false;
       return undefined;
     }
+    if (!historyItems.length && !historyDestructiveSyncRequestedRef.current) return undefined;
 
     const timeoutId = window.setTimeout(() => {
       pushHistoryToServer(historyItems).then((serverItems) => {
+        historyDestructiveSyncRequestedRef.current = false;
         skipNextHistorySyncRef.current = true;
         setHistoryItems(serverItems);
       }).catch(() => {
@@ -21758,7 +21819,7 @@ export default function App() {
     }
   };
 
-  const queueStudySourceFiles = (selectedFiles, { kind, label, setPendingFiles }) => {
+  const queueStudySourceFiles = (selectedFiles, { kind, label, setPendingFiles, scrollToGenerate = true }) => {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return [];
     files.forEach((selectedFile) => assertSourceMaterialFileSizeAllowed(selectedFile, `${label} sources`));
@@ -21770,7 +21831,7 @@ export default function App() {
     setPendingFiles((current) => [...current, ...queuedFiles]);
     setError("");
     setStatus(`${queuedFiles.length} ${label.toLowerCase()}${queuedFiles.length === 1 ? "" : "s"} queued. Press Generate Study Guide to read and process ${queuedFiles.length === 1 ? "it" : "them"}.`);
-    scrollGenerateStudyGuideButtonIntoView();
+    if (scrollToGenerate) scrollGenerateStudyGuideButtonIntoView();
     return queuedFiles;
   };
 
@@ -21844,9 +21905,9 @@ export default function App() {
       });
     }
     try {
-      if (noteFiles.length) queueStudySourceFiles(noteFiles, { kind: "note", label: "Lecture note", setPendingFiles: setPendingLectureNoteFiles });
-      if (slideFiles.length) queueStudySourceFiles(slideFiles, { kind: "slide", label: "Slide source", setPendingFiles: setPendingLectureSlideFiles });
-      if (pastPaperFiles.length) queueStudySourceFiles(pastPaperFiles, { kind: "past-paper", label: "Past question paper", setPendingFiles: setPendingPastQuestionPaperFiles });
+      if (noteFiles.length) queueStudySourceFiles(noteFiles, { kind: "note", label: "Lecture note", setPendingFiles: setPendingLectureNoteFiles, scrollToGenerate: false });
+      if (slideFiles.length) queueStudySourceFiles(slideFiles, { kind: "slide", label: "Slide source", setPendingFiles: setPendingLectureSlideFiles, scrollToGenerate: false });
+      if (pastPaperFiles.length) queueStudySourceFiles(pastPaperFiles, { kind: "past-paper", label: "Past question paper", setPendingFiles: setPendingPastQuestionPaperFiles, scrollToGenerate: false });
       const extraMediaNote = lectureMediaFiles.length > 1 ? " The first lecture media file was selected." : "";
       setStatus(`${files.length} lecture file${files.length === 1 ? "" : "s"} queued.${extraMediaNote} Press Generate Study Guide to read and process the bundle.`);
       scrollGenerateStudyGuideButtonIntoView();
@@ -25446,7 +25507,7 @@ export default function App() {
             ))}
           </div>
           <div className="study-chat-sidebar-footer">
-            <button type="button" onClick={openUpgradeModal} className="study-chat-sidebar-upgrade">Upgrade to Pro</button>
+            <button type="button" onClick={openUpgradeFromStudyChat} className="study-chat-sidebar-upgrade">Upgrade to Pro</button>
             <div className="study-chat-sidebar-profile">{renderCompactProfileMenu()}</div>
           </div>
         </aside>
@@ -25454,10 +25515,10 @@ export default function App() {
           <header className="study-chat-page-topbar">
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(true)} className={`study-chat-top-button ${isStudyChatSidebarOpen ? "is-hidden" : ""}`} aria-label="Open chat history"><Menu className="h-5 w-5" aria-hidden="true" /></button>
             <span className="study-chat-mobile-title">Study Chat</span>
-            <button type="button" onClick={() => openChatShareDialog()} className="study-chat-exit-button" aria-label="Share this conversation"><Link className="h-4 w-4" aria-hidden="true" /></button>
-            <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="study-chat-exit-button" aria-label="Close AI Chat">
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <span className="study-chat-topbar-end-actions">
+              <button type="button" onClick={() => openChatShareDialog()} className="study-chat-exit-button" aria-label="Share this conversation"><Link className="h-4 w-4" aria-hidden="true" /></button>
+              <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="study-chat-exit-button" aria-label="Close AI Chat"><X className="h-4 w-4" aria-hidden="true" /></button>
+            </span>
           </header>
           <main ref={studyChatScrollRef} onScroll={handleStudyChatScroll} className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
             {chatMessages.length ? null : <h1>Ready when you are.</h1>}
@@ -26703,7 +26764,7 @@ export default function App() {
     studyChatAttachmentRunRef.current += 1;
     setIsUploadingChatReferences(false);
     setStudyChatVoiceStatus("");
-    setIsStudyChatSidebarOpen(false);
+    closeStudyChatSidebarAfterNavigation();
     if (currentPageRef.current === "voice") {
       navigateToPath(resolveAppRouteForPage("voice", authSessionMode, nextConversationId));
     }
@@ -26730,7 +26791,7 @@ export default function App() {
       setIsOpeningStudyChat(true);
     }
     setActiveStudyChatId(normalizedConversationId);
-    setIsStudyChatSidebarOpen(false);
+    closeStudyChatSidebarAfterNavigation();
     currentPageRef.current = "voice";
     setCurrentPage("voice");
     navigateToPath(resolveAppRouteForPage("voice", authSessionMode, normalizedConversationId));
@@ -28114,9 +28175,7 @@ export default function App() {
     );
   };
 
-  const profileDisplayName = authEmail
-    ? titleCaseWords(String(authEmail).split("@")[0].replace(/[._-]+/g, " "))
-    : "Mabaso Learner";
+  const profileDisplayName = upgradeProfileDisplayName;
   const renderCompactProfileMenu = () => (
     <div className="profile-menu-anchor">
       <button
@@ -28173,7 +28232,7 @@ export default function App() {
             {renderCompactProfileMenu()}
           </div>
         ) : null}
-        {currentPage === "capture" ? <header className="capture-app-header mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        {currentPage === "capture" ? <header className="capture-app-header mb-6 flex flex-col gap-4 rounded-[28px] border border-white/10 bg-slate-950/65 px-5 py-4 shadow-[0_24px_70px_rgba(2,8,23,0.35)] backdrop-blur sm:flex-row sm:items-start sm:justify-between">
           <div className="capture-mobile-header-row">
             <div className="capture-brand-cluster">
               <p className="brand-mark text-2xl font-black sm:text-4xl">MABASO</p>
@@ -28196,17 +28255,15 @@ export default function App() {
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Protected Dashboard" : "Choose Mode"}</button> : null}
             </div>
-            <div className="force-mobile-stack flex flex-wrap items-center gap-3">
-              <label className="rounded-2xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-slate-200">
-                <span className="mr-2 text-xs uppercase tracking-[0.18em] text-slate-400">Language</span>
-                <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)} className="bg-transparent text-sm text-white outline-none">
-                  {outputLanguageOptions.map((option) => <option key={option.value} value={option.value} className="bg-slate-950 text-white">{option.label}</option>)}
-                </select>
-              </label>
-              <button type="button" onClick={() => navigateToPath("/company/about")} className="capture-header-link"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
-              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="capture-header-link"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
-              <div className="phone-safe-copy rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">Signed in as {authEmail}</div>
-              <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
+            <div className="capture-desktop-account hidden sm:flex">
+              <div className="capture-account-row">
+                {renderCompactProfileMenu()}
+                <button type="button" onClick={logout} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">Sign Out</button>
+              </div>
+              <div className="capture-support-row">
+                <button type="button" onClick={() => navigateToPath("/company/about")} className="capture-header-link"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
+                <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="capture-header-link"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
+              </div>
             </div>
           </div>
         </header> : null}
@@ -28389,8 +28446,12 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "report" ? "Generating report" : currentJobType === "mind_map" ? "Generating mind map" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }, { label: "Signed In", value: authEmail || "Not signed in" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
+              <div className="mt-5 grid gap-3 sm:grid-cols-3">{[{ label: "Selected File", value: workspaceFileLabel }, { label: "Size", value: file ? formatBytes(file.size) : videoUrl.trim() ? "Video link" : lectureNotes.trim() || lectureSlideFileNames.length || pastQuestionPaperFileNames.length ? "Study source" : activeHistoryItem ? "Saved workspace" : "Waiting" }, { label: "Status", value: isMarkingQuiz ? "Marking test" : isAskingChat ? "Answering" : loading ? currentJobType === "study_guide" ? "Generating notes" : currentJobType === "presentation" ? "Generating presentation" : currentJobType === "podcast" ? "Generating podcast" : currentJobType === "report" ? "Generating report" : currentJobType === "mind_map" ? "Generating mind map" : currentJobType === "teacher_lesson" ? "Preparing audio session" : currentJobType === "notes" ? "Reading notes" : currentJobType === "slides" ? "Reading slides" : currentJobType === "past_papers" ? "Reading past papers" : currentJobType === "video" ? "Reading video link" : isProcessingLectureBundle ? "Processing lecture files" : "Transcribing" : hasResults ? "Ready" : "Waiting" }].map((item) => <div key={item.label} className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-4"><p className="text-xs uppercase tracking-[0.24em] text-slate-400">{item.label}</p><p className="mt-3 break-words text-sm font-semibold text-white">{item.value}</p></div>)}</div>
             </aside>
+            <div className="capture-mobile-support-links sm:hidden">
+              <button type="button" onClick={() => navigateToPath("/company/about")} className="capture-header-link"><Info className="h-4 w-4" aria-hidden="true" />Help and About</button>
+              <button type="button" onClick={() => { setSupportFeedback(""); navigateToPath("/support/contact-support"); }} className="capture-header-link"><Headphones className="h-4 w-4" aria-hidden="true" />Support and Contact</button>
+            </div>
         </section> : null}
 
         {currentPage === "workspace" ? <section className="workspace-shell overflow-hidden p-2 sm:p-4">
@@ -28399,6 +28460,9 @@ export default function App() {
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(true)} className="workspace-mobile-sidebar-button lg:hidden" aria-label="Open Study Workspace sidebar">
                 <Menu className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <button type="button" onClick={() => setIsWorkspaceDesktopSidebarOpen((current) => !current)} className="workspace-desktop-sidebar-button hidden lg:inline-flex" aria-label={isWorkspaceDesktopSidebarOpen ? "Close Study Workspace sidebar" : "Open Study Workspace sidebar"} aria-pressed={isWorkspaceDesktopSidebarOpen}>
+                {isWorkspaceDesktopSidebarOpen ? <PanelLeftClose className="h-5 w-5" aria-hidden="true" /> : <PanelLeftOpen className="h-5 w-5" aria-hidden="true" />}
               </button>
               <div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study Workspace</p><h2 className="mt-2 text-3xl font-semibold text-white">{currentTabLabel}</h2></div>
             </div>
@@ -28564,8 +28628,8 @@ export default function App() {
               </section>
             </div>
           ) : null}
-          <div className="workspace-layout mt-6 grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <aside className="workspace-sidebar hidden lg:block">
+          <div className={`workspace-layout mt-6 grid gap-5 ${isWorkspaceDesktopSidebarOpen ? "is-desktop-sidebar-open" : "is-desktop-sidebar-closed"}`}>
+            {isWorkspaceDesktopSidebarOpen ? <aside className="workspace-sidebar hidden lg:block">
               <div className="sticky top-5 p-2">
                 {WORKSPACE_TOOL_GROUPS.map((group) => (
                   <div key={group.id} className="border-b border-white/10 py-4 first:pt-0 last:border-b-0 last:pb-0">
@@ -28588,7 +28652,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-            </aside>
+            </aside> : null}
             <div className="min-w-0 space-y-5">
             <div className="hidden">
               <div className="force-mobile-stack flex items-start justify-between gap-3">
