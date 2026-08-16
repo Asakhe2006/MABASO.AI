@@ -205,7 +205,7 @@ function ContactSupportForm({
   isAuthenticated = false,
 }) {
   const supportEmail = "mabasoasakhe10@gmail.com";
-  const supportPhone = "0717020081";
+  const supportPhone = "+27632089201";
 
   return (
     <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">

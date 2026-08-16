@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CalendarDays, Check, ChevronDown, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, GraduationCap, Headphones, Highlighter, Image, Info, Link, LoaderCircle, LogOut, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, SlidersHorizontal, Square, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -7104,6 +7104,8 @@ export default function App() {
   const [activeStudyMotivationPopup, setActiveStudyMotivationPopup] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
+  const [isAdminSidebarOpen, setIsAdminSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
+  const [resolvedAdminAlertIds, setResolvedAdminAlertIds] = useState([]);
   const fileInputRef = useRef(null);
   const lectureNotesFileInputRef = useRef(null);
   const lectureSlidesFileInputRef = useRef(null);
@@ -10281,8 +10283,8 @@ export default function App() {
         </div>
         {[
           ["Email Support", "All users", "mabasoasakhe10@gmail.com"],
-          ["In-App Messaging", "Signed-in users", "0717020081"],
-          ["Phone Call", "Direct contact", "0717020081"],
+          ["In-App Messaging", "Signed-in users", "+27632089201"],
+          ["Phone Call", "Direct contact", "+27632089201"],
         ].map(([channel, availability, detail]) => (
           <div key={channel} className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 text-sm text-slate-200 last:border-b-0">
             <div className="px-4 py-4 font-semibold text-white">{channel}</div>
@@ -10305,15 +10307,15 @@ export default function App() {
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">In-App Messaging</p>
           <div className="mt-3 space-y-3 text-sm leading-7 text-slate-300">
             <p>Signed-in users can ask for help while using Mabaso AI.</p>
-            <p>Use <span className="font-semibold text-white">0717020081</span> for in-app messaging support guidance.</p>
+            <p>Use <span className="font-semibold text-white">+27632089201</span> for in-app messaging support guidance.</p>
           </div>
         </article>
 
         <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Phone Support</p>
           <p className="mt-3 text-sm leading-7 text-slate-300">For direct phone calls, use the Mabaso AI contact number below.</p>
-          <a href="tel:0717020081" className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
-            0717020081
+          <a href="tel:+27632089201" className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
+            +27632089201
           </a>
         </article>
       </div>
@@ -10322,7 +10324,7 @@ export default function App() {
         <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Best Way To Reach Us</p>
         <div className="mt-4 space-y-3 text-sm text-slate-300">
           <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use email for formal enquiries and longer explanations.</div>
-          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use 0717020081 for in-app messaging support guidance and direct phone calls.</div>
+          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use +27632089201 for in-app messaging support guidance and direct phone calls.</div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">For faster help, mention the page you were using and what you expected Mabaso AI to do.</div>
         </div>
       </div>
@@ -11344,7 +11346,25 @@ export default function App() {
   };
 
   const renderPaymentRequestsTable = (items = [], { emptyMessage = "No payment requests yet.", compact = false } = {}) => (
-    <div className="overflow-x-auto">
+    <>
+      <div className="payment-history-mobile sm:hidden">
+        {items.length ? items.map((payment) => (
+          <article key={payment.id || payment.payment_reference} className="payment-history-mobile-card">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="phone-safe-copy break-all text-sm font-semibold text-white">{payment.payment_reference || "Pending"}</p>
+                <p className="mt-1 text-xs text-slate-400">{payment.plan_name || payment.plan || payment.plan_id || "Plan"}</p>
+              </div>
+              {renderPaymentStatusBadge(payment.status)}
+            </div>
+            <div className="mt-3 flex items-end justify-between gap-3">
+              <p className="text-base font-semibold text-white">{formatPaymentAmount(payment)}</p>
+              <p className="text-right text-xs text-slate-400">{payment.created_at ? formatAdminDateTime(payment.created_at) : "--"}</p>
+            </div>
+          </article>
+        )) : <p className="payment-history-mobile-empty">{emptyMessage}</p>}
+      </div>
+      <div className="hidden overflow-x-auto sm:block">
       <table className="min-w-full text-left text-sm">
         <thead className="text-xs uppercase tracking-[0.16em] text-slate-400">
           <tr>
@@ -11367,17 +11387,22 @@ export default function App() {
           )}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 
   const renderPaymentsPage = () => {
     const latestPendingPayment = paymentRequests.find((payment) => normalizePaymentStatus(payment.status) === "pending") || manualPaymentRequest;
     if (isAdminAccount) {
       return (
-        <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <section className="payment-page-shell overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/65 p-4 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur sm:p-5 xl:p-6">
+          <div className="payment-page-sticky-controls">
+            <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="payment-page-back-button" aria-label="Back to capture page"><ArrowLeft className="h-5 w-5" aria-hidden="true" /></button>
+            <span className="payment-page-sticky-title">{isAdminAccount ? "Payments" : "My Payments"}</span>
+            {renderCompactProfileMenu()}
+          </div>
+          <div className="payment-page-content-head flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex items-start gap-4">
-              {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <div className="min-w-0">
                 <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Payments</p>
                 <h2 className="mt-2 text-3xl font-semibold text-white">Open protected payment verification.</h2>
@@ -11390,10 +11415,14 @@ export default function App() {
       );
     }
     return (
-      <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-        <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
+      <section className="payment-page-shell overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/65 p-4 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur sm:p-5 xl:p-6">
+          <div className="payment-page-sticky-controls">
+            <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="payment-page-back-button" aria-label="Back to capture page"><ArrowLeft className="h-5 w-5" aria-hidden="true" /></button>
+            <span className="payment-page-sticky-title">{isAdminAccount ? "Payments" : "My Payments"}</span>
+            {renderCompactProfileMenu()}
+          </div>
+        <div className="payment-page-content-head flex min-w-0 flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
-            {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
             <div className="min-w-0">
               <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">My Payments</p>
               <h2 className="mt-2 text-3xl font-semibold text-white">Track payments and plan access.</h2>
@@ -11430,7 +11459,7 @@ export default function App() {
                 <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
                 <p>Verified means the bank payment reference was matched and the subscription was activated. PayFast subscriptions activate automatically after PayFast confirms payment.</p>
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
-                <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:0717020081" className="font-semibold text-white underline decoration-white/30 underline-offset-4">0717020081</a> with your payment reference and bank proof of payment.</p>
+                <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:+27632089201" className="font-semibold text-white underline decoration-white/30 underline-offset-4">+27632089201</a> with your payment reference and bank proof of payment.</p>
               </div>
             </div>
           </div>
@@ -13000,7 +13029,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "activity") {
+      if (adminSidebarTab === "activity" || adminSidebarTab === "audit") {
         return (
           <article className={sectionCardClass}>
             <div>
@@ -13147,7 +13176,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "analytics") {
+      if (adminSidebarTab === "analytics" || adminSidebarTab === "learning") {
         return (
           <div className="space-y-6">
             <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
@@ -13343,7 +13372,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "billing") {
+      if (["billing", "subscriptions", "ai-costs"].includes(adminSidebarTab)) {
         return (
           <article className={sectionCardClass}>
             <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing</p>
@@ -13504,21 +13533,23 @@ export default function App() {
 
   const renderAdminDashboardPage = () => {
     const sidebarItems = [
-      { id: "overview", label: "Dashboard", group: "Overview" },
-      { id: "users", label: "Users", group: "Users" },
-      { id: "activity", label: "User Activity", group: "Users" },
-      { id: "ratings", label: "Ratings", group: "Users" },
-      { id: "sessions", label: "Sessions", group: "Users" },
-      { id: "content", label: "Study Materials", group: "Content & Tools" },
-      { id: "ai", label: "AI Generation", group: "Content & Tools" },
-      { id: "analytics", label: "Usage Analytics", group: "Analytics" },
-      { id: "health", label: "System Health", group: "System" },
-      { id: "security", label: "Security", group: "System" },
-      { id: "billing", label: "Billing", group: "System" },
-      { id: "settings", label: "Settings", group: "System" },
+      { id: "overview", label: "Overview", group: "Control centre", icon: LayoutDashboard },
+      { id: "users", label: "Users", group: "People", icon: UsersRound },
+      { id: "activity", label: "Activity", group: "People", icon: Activity },
+      { id: "learning", label: "Learning Analytics", group: "Product", icon: GraduationCap },
+      { id: "ai-costs", label: "AI Usage & Costs", group: "Product", icon: Bot },
+      { id: "subscriptions", label: "Subscriptions", group: "Revenue", icon: CircleDollarSign },
+      { id: "payments", label: "Payments", group: "Revenue", icon: CreditCard },
+      { id: "errors", label: "Errors", group: "Operations", icon: Bug },
+      { id: "security", label: "Security", group: "Operations", icon: ShieldCheck },
+      { id: "feedback", label: "Feedback", group: "Operations", icon: MessageCircle },
+      { id: "health", label: "System Health", group: "Operations", icon: Gauge },
+      { id: "audit", label: "Admin Audit Log", group: "Administration", icon: History },
+      { id: "settings", label: "Settings", group: "Administration", icon: Settings },
     ];
-    const sectionCardClass = "rounded-[30px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]";
+    const sectionCardClass = "admin-control-card rounded-[18px] border border-slate-200/90 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)]";
     const dashboard = adminDashboard || {};
+    const diagnostics = dashboard.diagnostics || {};
     const overview = dashboard.overview || {};
     const overviewKpis = overview.kpis || {};
     const overviewCharts = overview.charts || {};
@@ -13542,6 +13573,8 @@ export default function App() {
     const studyGuideCostRows = Array.isArray(billingAiCosts.study_guide_by_user) ? billingAiCosts.study_guide_by_user : [];
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
+    const support = dashboard.support || {};
+    const supportMessages = Array.isArray(support.messages) ? support.messages : [];
     const ratings = dashboard.ratings || {};
     const ratingItems = Array.isArray(ratings.items) ? ratings.items : [];
     const subscriptionAbuseMonitor = billing.subscription_abuse_monitor || security.subscription_abuse_monitor || {};
@@ -13563,6 +13596,77 @@ export default function App() {
     const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
     const pendingManualPaymentRequests = filteredManualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "pending");
     const filteredBillingSubscriptions = billingSubscriptions.filter((subscription) => matchesSearch(`${subscription.user} ${subscription.status} ${subscription.plan} ${subscription.plan_id} ${subscription.payment_reference}`));
+    const filteredSupportMessages = supportMessages.filter((message) => matchesSearch(`${message.email} ${message.category} ${message.message} ${message.page}`));
+    const groupedErrors = Object.values(
+      [...failedJobs, ...(systemHealth.recent_failures || [])].reduce((groups, item) => {
+        const signature = `${item.action || "application.error"}:${String(item.message || "Unknown error").slice(0, 140)}`;
+        const occurredAt = item.timestamp || item.created_at || dashboard.generated_at || "";
+        if (!groups[signature]) {
+          groups[signature] = {
+            id: signature,
+            action: item.action || "application.error",
+            message: item.message || "Unknown error",
+            firstSeen: occurredAt,
+            lastSeen: occurredAt,
+            occurrences: 0,
+            users: new Set(),
+          };
+        }
+        groups[signature].occurrences += 1;
+        if (item.email) groups[signature].users.add(item.email);
+        if (new Date(occurredAt).getTime() < new Date(groups[signature].firstSeen).getTime()) groups[signature].firstSeen = occurredAt;
+        if (new Date(occurredAt).getTime() > new Date(groups[signature].lastSeen).getTime()) groups[signature].lastSeen = occurredAt;
+        return groups;
+      }, {}),
+    ).sort((left, right) => right.occurrences - left.occurrences);
+    const rawAdminAlerts = [
+      diagnostics.errors?.length ? {
+        id: "dashboard-data-partial",
+        severity: "Critical",
+        title: "Admin data sources are partially unavailable",
+        affected: diagnostics.errors.length,
+        startedAt: dashboard.generated_at,
+        status: "Open",
+        target: "health",
+      } : null,
+      String(systemHealth.state || "green").toLowerCase() !== "green" ? {
+        id: "system-health-warning",
+        severity: "Critical",
+        title: "System health requires attention",
+        affected: Number(systemHealth.active_sessions || 0),
+        startedAt: dashboard.generated_at,
+        status: titleCaseWords(systemHealth.state || "warning"),
+        target: "health",
+      } : null,
+      failedJobs.length ? {
+        id: "ai-failures",
+        severity: failedJobs.length >= 10 ? "High" : "Medium",
+        title: `${failedJobs.length} AI request failure${failedJobs.length === 1 ? "" : "s"} need investigation`,
+        affected: new Set(failedJobs.map((item) => item.email).filter(Boolean)).size,
+        startedAt: failedJobs[failedJobs.length - 1]?.timestamp,
+        status: "New",
+        target: "errors",
+      } : null,
+      pendingManualPaymentRequests.length ? {
+        id: "pending-payments",
+        severity: pendingManualPaymentRequests.length >= 12 ? "High" : "Medium",
+        title: `${pendingManualPaymentRequests.length} PayShap payment${pendingManualPaymentRequests.length === 1 ? "" : "s"} awaiting verification`,
+        affected: new Set(pendingManualPaymentRequests.map((item) => item.email).filter(Boolean)).size,
+        startedAt: pendingManualPaymentRequests[pendingManualPaymentRequests.length - 1]?.created_at,
+        status: "Open",
+        target: "payments",
+      } : null,
+      failedLoginCount ? {
+        id: "failed-logins",
+        severity: failedLoginCount >= 10 ? "High" : "Low",
+        title: `${failedLoginCount} authentication warning${failedLoginCount === 1 ? "" : "s"} recorded`,
+        affected: new Set((security.failed_logins || []).map((item) => item.email).filter(Boolean)).size,
+        startedAt: security.failed_logins?.[security.failed_logins.length - 1]?.timestamp,
+        status: "Review recommended",
+        target: "security",
+      } : null,
+    ].filter(Boolean);
+    const urgentAdminAlerts = rawAdminAlerts.filter((alert) => !resolvedAdminAlertIds.includes(alert.id));
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -13624,51 +13728,76 @@ export default function App() {
       { label: "Day 7", value: analytics.retention?.day_7 ?? 0 },
       { label: "Day 30", value: analytics.retention?.day_30 ?? 0 },
     ];
+    const dailyActiveTrend = dailyActivitySeries.map((item) => toFiniteNumber(item.active_users));
+    const dailyNewTrend = dailyActivitySeries.map((item) => toFiniteNumber(item.new_users));
+    const sessionTrend = sessionTimelineSeries.map((item) => toFiniteNumber(item.value));
+    const criticalAlertCount = urgentAdminAlerts.filter((alert) => ["Critical", "High"].includes(alert.severity)).length;
     const overviewCards = [
       {
-        label: "Total Users",
-        value: formatAdminInteger(overviewKpis.total_users ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.new_users_in_range ?? overviewKpis.new_users_7d ?? 0)} new in ${selectedAdminRange.shortLabel}`,
-        icon: "U",
-        accentClass: "bg-blue-50 text-blue-700",
-      },
-      {
-        label: `Active Users (${selectedAdminRange.badgeLabel})`,
+        label: "Active users",
         value: formatAdminInteger(overviewKpis.active_users_in_range ?? overviewKpis.active_users_7d ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.active_users_24h ?? 0)} active in the last 24 hours`,
-        icon: "A",
+        detail: `${formatAdminInteger(overviewKpis.active_users_24h ?? 0)} meaningful users in the last 24 hours`,
+        icon: Activity,
         accentClass: "bg-emerald-50 text-emerald-700",
+        trendValues: dailyActiveTrend,
       },
       {
-        label: "Lectures Transcribed",
-        value: formatAdminInteger(overviewKpis.lectures_transcribed_in_range ?? overviewKpis.lectures_transcribed ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.lectures_uploaded_in_range ?? overviewKpis.lectures_uploaded_week ?? 0)} lecture requests in ${selectedAdminRange.shortLabel}`,
-        icon: "T",
+        label: "New registrations",
+        value: formatAdminInteger(overviewKpis.new_users_in_range ?? overviewKpis.new_users_7d ?? 0),
+        detail: `Accounts created during ${selectedAdminRange.shortLabel}`,
+        icon: UsersRound,
+        accentClass: "bg-blue-50 text-blue-700",
+        trendValues: dailyNewTrend,
+      },
+      {
+        label: "Study sessions",
+        value: formatAdminInteger(sessionTotals.tracked_sessions_in_range ?? sessionTotals.tracked_sessions_30d ?? 0),
+        detail: `${formatAdminSecondsDuration(sessionTotals.avg_session_duration_seconds ?? 0)} average duration`,
+        icon: GraduationCap,
+        accentClass: "bg-cyan-50 text-cyan-700",
+        trendValues: sessionTrend,
+      },
+      {
+        label: "Study guides generated",
+        value: formatAdminInteger(overviewKpis.study_guides_generated ?? 0),
+        detail: `${formatAdminInteger(overviewKpis.study_materials_generated ?? 0)} generated study outputs`,
+        icon: FileText,
         accentClass: "bg-violet-50 text-violet-700",
+        trendValues: dailyActiveTrend,
       },
       {
-        label: "Study Materials Generated",
-        value: formatAdminInteger(overviewKpis.study_materials_generated ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.study_guides_generated ?? 0)} saved guides in ${selectedAdminRange.shortLabel}`,
-        icon: "M",
+        label: "AI success rate",
+        value: formatAdminPercent(aiGeneration.success_rate_percent ?? 0),
+        detail: `${formatAdminInteger(failedJobs.length)} recent failed request${failedJobs.length === 1 ? "" : "s"}`,
+        icon: Bot,
+        accentClass: "bg-purple-50 text-purple-700",
+        trendValues: dailyActiveTrend,
+      },
+      {
+        label: "Estimated AI cost",
+        value: formatAdminCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0),
+        detail: `${formatAdminInteger(billingAiCosts.token_totals?.total_tokens ?? 0)} tracked tokens`,
+        icon: CircleDollarSign,
         accentClass: "bg-amber-50 text-amber-700",
+        trendValues: (billingAiCosts.by_feature || []).map((item) => toFiniteNumber(item.cost)),
       },
       {
-        label: "Tests Generated",
-        value: formatAdminInteger(overviewKpis.tests_generated ?? 0),
-        detail: `${formatAdminInteger(overviewKpis.active_sessions ?? 0)} active sessions now`,
-        icon: "Q",
-        accentClass: "bg-rose-50 text-rose-700",
+        label: "Paying users",
+        value: formatAdminInteger(billingOverview.active_subscribers ?? 0),
+        detail: `${formatAdminInteger(billingOverview.pending_manual_payments ?? 0)} payment${Number(billingOverview.pending_manual_payments || 0) === 1 ? "" : "s"} pending`,
+        icon: CreditCard,
+        accentClass: "bg-teal-50 text-teal-700",
+        trendValues: dailyNewTrend,
       },
       {
-        label: "Storage Used",
-        value: formatAdminBytes(overviewKpis.storage_used_bytes ?? 0),
-        detail: `${formatAdminInteger(storageInsights.tracked_study_packs ?? 0)} tracked study packs`,
-        icon: "S",
-        accentClass: "bg-sky-50 text-sky-700",
+        label: "Open critical errors",
+        value: formatAdminInteger(criticalAlertCount),
+        detail: `${formatAdminInteger(groupedErrors.length)} grouped error signature${groupedErrors.length === 1 ? "" : "s"}`,
+        icon: TriangleAlert,
+        accentClass: criticalAlertCount ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700",
+        trendValues: groupedErrors.slice(0, 12).map((item) => item.occurrences),
       },
     ];
-
     const emptyPanel = (message) => (
       <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500">
         {message}
@@ -13740,6 +13869,33 @@ export default function App() {
 
     const renderOverview = () => (
       <div className="space-y-6">
+        <section className={`admin-alert-centre ${urgentAdminAlerts.length ? "has-alerts" : "is-healthy"}`} aria-label="Urgent system status">
+          <div className="admin-alert-centre-head">
+            <div>
+              <p className="admin-kicker">Urgent system status</p>
+              <h2>{urgentAdminAlerts.length ? `${urgentAdminAlerts.length} issue${urgentAdminAlerts.length === 1 ? "" : "s"} need attention` : "No urgent operational issues"}</h2>
+            </div>
+            <span className="admin-live-indicator"><span aria-hidden="true" /> Live</span>
+          </div>
+          {urgentAdminAlerts.length ? (
+            <div className="admin-alert-list">
+              {urgentAdminAlerts.map((alert) => (
+                <article key={alert.id} className={`admin-alert-row severity-${alert.severity.toLowerCase()}`}>
+                  <span className="admin-alert-severity">{alert.severity}</span>
+                  <div className="min-w-0">
+                    <h3>{alert.title}</h3>
+                    <p>{formatAdminInteger(alert.affected)} affected user{Number(alert.affected) === 1 ? "" : "s"} · Started {alert.startedAt ? formatAdminDateTime(alert.startedAt) : "recently"} · {alert.status}</p>
+                    <p className="admin-alert-owner">Assigned to {authEmail || "current administrator"}</p>
+                  </div>
+                  <div className="admin-alert-actions">
+                    <button type="button" onClick={() => { setAdminSidebarTab(alert.target); setIsAdminSidebarOpen(false); }}>Investigate</button>
+                    <button type="button" onClick={() => setResolvedAdminAlertIds((current) => [...new Set([...current, alert.id])])}>Mark resolved</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : <p className="admin-alert-healthy-copy">Authentication, study generation, payments, and backend health are currently within the tracked thresholds.</p>}
+        </section>
         <div className="grid gap-5 xl:grid-cols-[1.2fr_0.9fr_0.9fr]">
           <article className={sectionCardClass}>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -14019,7 +14175,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "activity") {
+      if (adminSidebarTab === "activity" || adminSidebarTab === "audit") {
         return (
           <article className={sectionCardClass}>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -14058,7 +14214,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "ratings") {
+      if (adminSidebarTab === "ratings" || adminSidebarTab === "feedback") {
         return (
           <div className="space-y-6">
             <div className="grid gap-5 lg:grid-cols-3">
@@ -14099,6 +14255,28 @@ export default function App() {
                   </tr>
                 )),
                 "No ratings match the current search.",
+              )}
+            </article>
+            <article className={sectionCardClass}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-emerald-700">Support and Feedback</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Messages submitted by students</h2>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredSupportMessages.length)} visible</span>
+              </div>
+              {renderSimpleTable(
+                ["User", "Category", "Message", "Page", "Submitted"],
+                filteredSupportMessages.map((message, index) => (
+                  <tr key={message.id || `${message.email}-${message.created_at}-${index}`} className="bg-slate-50 align-top shadow-[inset_0_0_0_1px_rgba(226,232,240,1)]">
+                    <td className="rounded-l-[24px] px-3 py-4 text-sm font-semibold text-slate-900">{message.email || "Unknown"}</td>
+                    <td className="px-3 py-4 text-sm text-slate-700">{message.category || "General feedback"}</td>
+                    <td className="phone-safe-copy min-w-[280px] px-3 py-4 text-sm leading-6 text-slate-700">{message.message || "No message"}</td>
+                    <td className="px-3 py-4 text-sm text-slate-600">{message.page || "Unknown page"}</td>
+                    <td className="rounded-r-[24px] px-3 py-4 text-sm text-slate-600">{message.created_at ? formatAdminDateTime(message.created_at) : "Unknown"}</td>
+                  </tr>
+                )),
+                "No support messages match the current search.",
               )}
             </article>
           </div>
@@ -14290,7 +14468,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "analytics") {
+      if (adminSidebarTab === "analytics" || adminSidebarTab === "learning") {
         return (
           <div className="space-y-6">
             <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
@@ -14367,6 +14545,39 @@ export default function App() {
         );
       }
 
+      if (adminSidebarTab === "errors") {
+        return (
+          <div className="space-y-5">
+            <article className={sectionCardClass}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-rose-600">Error Centre</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Grouped failures affecting students</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">Repeated events are grouped by action and root message so one incident can be investigated without scanning duplicate logs.</p>
+                </div>
+                <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700">{formatAdminInteger(groupedErrors.length)} open groups</span>
+              </div>
+            </article>
+            <div className="grid gap-4">
+              {groupedErrors.length ? groupedErrors.map((error) => (
+                <article key={error.id} className="admin-error-row">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="admin-alert-severity">High</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{formatAdminInteger(error.occurrences)} occurrences</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{formatAdminInteger(error.users.size)} affected users</span>
+                    </div>
+                    <h3 className="mt-3 text-lg font-semibold text-slate-950">{formatAdminActionLabel(error.action)}</h3>
+                    <p className="mt-2 break-words text-sm leading-6 text-slate-700">{error.message}</p>
+                    <p className="mt-3 text-xs text-slate-500">First seen {error.firstSeen ? formatAdminDateTime(error.firstSeen) : "unknown"} / Last seen {error.lastSeen ? formatAdminDateTime(error.lastSeen) : "unknown"}</p>
+                  </div>
+                  <button type="button" onClick={() => setAdminSidebarTab("activity")} className="admin-error-investigate-button">Related logs</button>
+                </article>
+              )) : emptyPanel("No grouped application failures are recorded for this period.")}
+            </div>
+          </div>
+        );
+      }
       if (adminSidebarTab === "health") {
         return (
           <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
@@ -14558,7 +14769,7 @@ export default function App() {
         );
       }
 
-      if (adminSidebarTab === "billing") {
+      if (["billing", "subscriptions", "ai-costs"].includes(adminSidebarTab)) {
         return (
           <div className="space-y-5">
             <article className={sectionCardClass}>
@@ -14898,18 +15109,20 @@ export default function App() {
     };
 
     return (
-      <div className="min-h-screen bg-[linear-gradient(180deg,#edf2ff_0%,#f8fafc_38%,#eef6ff_100%)] text-slate-900">
-        <main className="mx-auto max-w-[1700px] px-3 py-4 sm:px-5 lg:px-7 lg:py-7">
-          <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-            <aside className="overflow-hidden rounded-[34px] bg-[linear-gradient(180deg,#0f172a_0%,#101f43_52%,#162c5b_100%)] text-white shadow-[0_26px_70px_rgba(15,23,42,0.28)]">
-              <div className="border-b border-white/10 px-6 py-6">
-                <div className="flex items-center gap-3">
-                  <div className="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-sm font-semibold text-indigo-100">MA</div>
+      <div className="admin-control-shell min-h-screen text-slate-900">
+        {isAdminSidebarOpen ? <button type="button" className="admin-control-sidebar-scrim" onClick={() => setIsAdminSidebarOpen(false)} aria-label="Close admin navigation" /> : null}
+        <main className="admin-control-main">
+          <div className="admin-control-layout">
+            <aside className={`admin-control-sidebar ${isAdminSidebarOpen ? "is-open" : "is-closed"}`} aria-label="Admin dashboard navigation">
+              <div className="admin-control-sidebar-header">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-sm font-semibold text-emerald-200">MA</div>
                   <div className="min-w-0">
                     <p className="truncate text-base font-semibold text-white">Mabaso AI</p>
-                    <p className="truncate text-xs uppercase tracking-[0.2em] text-slate-300">Protected Dashboard</p>
+                    <p className="truncate text-[11px] uppercase tracking-[0.18em] text-slate-400">Admin Control Centre</p>
                   </div>
                 </div>
+                <button type="button" className="admin-control-sidebar-close" onClick={() => setIsAdminSidebarOpen(false)} aria-label="Close admin navigation"><PanelLeftClose className="h-5 w-5" aria-hidden="true" /></button>
               </div>
 
               <div className="space-y-6 px-4 py-5">
@@ -14917,16 +15130,23 @@ export default function App() {
                   <div key={group}>
                     <p className="px-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">{group}</p>
                     <div className="mt-3 grid gap-2">
-                      {items.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => setAdminSidebarTab(item.id)}
-                          className={`rounded-2xl px-4 py-3 text-left text-sm font-semibold transition ${adminSidebarTab === item.id ? "bg-[linear-gradient(135deg,#5b6bff,#7c8bff)] text-white shadow-[0_12px_30px_rgba(91,107,255,0.35)]" : "text-slate-200 hover:bg-white/10"}`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
+                      {items.map((item) => {
+                        const ItemIcon = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setAdminSidebarTab(item.id);
+                              if (typeof window !== "undefined" && window.innerWidth < 1280) setIsAdminSidebarOpen(false);
+                            }}
+                            className={`admin-control-nav-item ${adminSidebarTab === item.id ? "is-active" : ""}`}
+                          >
+                            <ItemIcon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
+                            <span>{item.label}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -14938,8 +15158,9 @@ export default function App() {
               </div>
             </aside>
 
-            <section className="min-w-0 space-y-6">
-              <header className="rounded-[34px] border border-white/70 bg-white/85 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+            <section className="admin-control-content min-w-0 space-y-5">
+              <header className="admin-control-topbar">
+                <button type="button" className="admin-control-menu-button" onClick={() => setIsAdminSidebarOpen(true)} aria-label="Open admin navigation"><Menu className="h-5 w-5" aria-hidden="true" /></button>
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-3">
@@ -14985,19 +15206,27 @@ export default function App() {
                 </div>
               </header>
 
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-                {overviewCards.map((card) => (
-                  <article key={card.label} className="rounded-[28px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl text-sm font-semibold ${card.accentClass}`}>{card.icon}</div>
-                      <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Live</span>
-                    </div>
-                    <p className="mt-4 text-xs uppercase tracking-[0.24em] text-slate-500">{card.label}</p>
-                    <p className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-slate-950">{card.value}</p>
-                    <p className="mt-3 text-sm text-slate-500">{card.detail}</p>
-                  </article>
-                ))}
-              </div>
+              {adminSidebarTab === "overview" ? (
+                <div className="admin-control-metric-grid">
+                  {overviewCards.map((card) => {
+                    const CardIcon = card.icon;
+                    const trendValues = (card.trendValues || []).slice(-12);
+                    const trendMax = Math.max(1, ...trendValues.map((value) => Number(value) || 0));
+                    return (
+                      <article key={card.label} className="admin-control-metric-card">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className={`admin-control-metric-icon ${card.accentClass}`}><CardIcon className="h-5 w-5" aria-hidden="true" /></div>
+                          <span className="admin-live-indicator"><span aria-hidden="true" /> Live</span>
+                        </div>
+                        <p className="admin-control-metric-label">{card.label}</p>
+                        <p className="admin-control-metric-value">{card.value}</p>
+                        <p className="admin-control-metric-detail">{card.detail}</p>
+                        {trendValues.length ? <span className="admin-control-sparkline" aria-hidden="true">{trendValues.map((value, index) => <i key={`${card.label}-${index}`} style={{ height: `${Math.max(12, ((Number(value) || 0) / trendMax) * 100)}%` }} />)}</span> : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
 
               {renderTabContent()}
             </section>
@@ -15900,20 +16129,6 @@ export default function App() {
     };
   }, [recording]);
 
-  useEffect(() => {
-    const markActiveStudyGuideAsAbandoned = () => {
-      const jobId = activeStudyGuideJobIdRef.current;
-      if (!jobId) return;
-      fetch(`${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/abandon`, {
-        method: "POST",
-        credentials: "include",
-        headers: withAuthHeaders({}, authTokenRef.current || ""),
-        keepalive: true,
-      }).catch(() => {});
-    };
-    window.addEventListener("pagehide", markActiveStudyGuideAsAbandoned);
-    return () => window.removeEventListener("pagehide", markActiveStudyGuideAsAbandoned);
-  }, []);
 
   useEffect(() => {
     if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return undefined;
@@ -22285,8 +22500,11 @@ export default function App() {
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
     if (resolvedTranscript.trim() && !(await ensurePremiumFeatureAvailable("source_upload", "Audio/source processing"))) return false;
+    if (studyGuideAbortControllerRef.current && !studyGuideAbortControllerRef.current.signal.aborted) {
+      setStatus("Study guide generation is already in progress.");
+      return false;
+    }
     const abortController = new AbortController();
-    studyGuideAbortControllerRef.current?.abort();
     studyGuideAbortControllerRef.current = abortController;
     activeStudyGuideJobIdRef.current = "";
     setIsGeneratingSummary(true);

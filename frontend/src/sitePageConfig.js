@@ -1894,7 +1894,7 @@ export const sitePages = [
         tabs: ["Email", "Messaging", "Phone", "Help"],
         rows: [
           { label: "Primary email", value: "mabasoasakhe10@gmail.com" },
-          { label: "Phone and messaging", value: "0717020081" },
+          { label: "Phone and messaging", value: "+27632089201" },
           { label: "Best results", value: "Include the page, action, and expected result" },
         ],
       },

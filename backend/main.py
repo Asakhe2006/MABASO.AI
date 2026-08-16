@@ -12331,30 +12331,6 @@ def cancel_study_guide_job(job_id: str, reason: str = "cancelled_by_user") -> bo
     return True
 
 
-async def cancel_abandoned_study_guide_job(job_id: str, revision: int, delay_seconds: float = 45.0) -> None:
-    await asyncio.sleep(delay_seconds)
-    job = jobs.get(job_id)
-    if not job or int(job.get("_abandon_revision") or 0) != revision:
-        return
-    cancel_study_guide_job(job_id, "study_guide_tab_closed")
-
-
-async def monitor_study_guide_client_lease(
-    job_id: str,
-    timeout_seconds: float = 60.0,
-    check_interval_seconds: float = 5.0,
-) -> None:
-    while True:
-        await asyncio.sleep(check_interval_seconds)
-        job = jobs.get(job_id)
-        if not job or job.get("status") not in {"queued", "processing"}:
-            return
-        last_seen = float(job.get("_last_client_seen_monotonic") or 0.0)
-        if last_seen and time.monotonic() - last_seen > timeout_seconds:
-            cancel_study_guide_job(job_id, "study_guide_client_disconnected")
-            return
-
-
 def stream_job_chat_completion(
     job_id: str,
     *,
@@ -22686,12 +22662,9 @@ async def cancel_job(job_id: str, current_user: str = Depends(require_authentica
 @app.post("/jobs/{job_id}/abandon")
 async def abandon_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
     job = require_owned_job(job_id, current_user)
-    if job.get("job_type") != "study_guide" or job.get("status") not in {"queued", "processing"}:
-        return {"job_id": job_id, "status": job.get("status"), "scheduled": False}
-    revision = int(job.get("_abandon_revision") or 0) + 1
-    job["_abandon_revision"] = revision
-    asyncio.create_task(cancel_abandoned_study_guide_job(job_id, revision))
-    return {"job_id": job_id, "status": job.get("status"), "scheduled": True}
+    # Kept as a compatibility endpoint for older clients. Closing or
+    # backgrounding a page is not an explicit cancellation request.
+    return {"job_id": job_id, "status": job.get("status"), "scheduled": False}
 
 
 @app.post("/jobs/{job_id}/resume")
@@ -31508,7 +31481,18 @@ async def run_summary_job(
     except JobCancelledError:
         cancel_study_guide_job(job_id)
     except asyncio.CancelledError:
-        cancel_study_guide_job(job_id)
+        if job_cancel_requested(job_id):
+            cancel_study_guide_job(job_id)
+        else:
+            logger.warning("Study guide job task was interrupted without an explicit cancel request: %s", job_id)
+            update_job(
+                job_id,
+                status="failed",
+                stage="Study guide interrupted",
+                progress=100,
+                error="Study guide generation was interrupted. Please try again.",
+            )
+            refund_job_usage_if_failed(job_id, "study_guide_interrupted")
         raise
     except Exception as exc:
         logger.exception("Study guide job failed")
@@ -33463,7 +33447,9 @@ async def create_study_guide(
             generation_prompt,
         ),
     )
-    asyncio.create_task(monitor_study_guide_client_lease(job_id))
+    # Keep long Study Guide jobs alive through mobile backgrounding, refreshes,
+    # and temporary network loss. Users can still stop billing work explicitly
+    # through the authenticated /jobs/{job_id}/cancel endpoint.
     record_audit_log(
         action="study_guide.request",
         email=current_user,
