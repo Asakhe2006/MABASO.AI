@@ -3105,8 +3105,12 @@ function StudyToolFormulaPanel({ rows = [], content = "", emptyMessage = "" }) {
           </div>
           {rows.map((row, index) => (
             <div key={`${row.expression}-${index}`} className="grid grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] border-t border-slate-200/80 text-[15px] leading-7 text-slate-700 first:border-t-0">
-              <div className="border-r border-slate-200/80 px-4 py-4 font-semibold text-slate-900">{row.expression}</div>
-              <div className="px-4 py-4 text-slate-700">{row.result}</div>
+              <div className="border-r border-slate-200/80 px-4 py-4 font-semibold text-slate-900">
+                <MathMarkdown content={row.expression} />
+              </div>
+              <div className="px-4 py-4 text-slate-700">
+                <MathMarkdown content={row.result} />
+              </div>
             </div>
           ))}
         </div>
@@ -3346,10 +3350,10 @@ const helpAboutSections = [
     kicker: "How It Works",
     title: "What MABASO is doing in the background",
     description:
-      "MABASO turns one lecture workspace into several study tools. It reads the sources you upload, combines them, and then builds a guide, formulas, worked examples, flashcards, a test, and optional study photos from the same lecture context.",
+      "MABASO turns one lecture workspace into focused study tools. It reads the sources you upload, combines them, and builds the Study Guide first; formulas, worked examples, flashcards, tests, and optional study photos are generated separately when you need them.",
     points: [
       "The capture page is where you add lecture material. This can be a recorded lecture, a video file, live recording, typed notes, slide files, or past papers.",
-      "When you press Transcribe Lecture, MABASO reads the audio or video first, creates a transcript, and then uses that transcript as the foundation for the rest of the pack.",
+      "When you press Transcribe Lecture, MABASO reads the audio or video first and creates a transcript that can support the Study Guide and other tools.",
       "When you use Add Lecture Files, MABASO starts reading notes, slides, and past papers first, then moves into lecture transcription automatically so the guide can use all readable sources together.",
       "When you press Generate Study Guide, MABASO can still work even if you only uploaded notes, slides, or past papers. A transcript helps, but it is not the only valid source.",
       "The study workspace is the revision area. It lets the student move between the guide, transcript, formulas, worked examples, flashcards, the test, PowerPoint presentation, podcast, and study chat without uploading again.",
@@ -3359,7 +3363,7 @@ const helpAboutSections = [
     kicker: "Best Upload Strategy",
     title: "Which files improve the results the most",
     description:
-      "The strongest study packs usually come from combining different kinds of lecture evidence instead of relying on only one source.",
+      "The strongest study guides usually come from combining different kinds of lecture evidence instead of relying on only one source.",
     points: [
       "Use a lecture recording or video file when you want the lecturer's wording, examples, and explanations captured directly.",
       "Add lecture notes when the lecturer gave a handout, typed outline, worksheet, memo, or Word document that already organizes the topic clearly.",
@@ -3386,7 +3390,7 @@ const helpAboutSections = [
       "The large action buttons on the capture page now act like progress stations. The small text above each button tells the student what is happening right now and which stage is next.",
     points: [
       "Transcribe Lecture shows the progress for audio or video reading, transcript creation, and lecture preparation.",
-      "Generate Study Guide shows source-reading stages for notes, slides, and past papers, then the deeper study-building stages such as guide writing, flashcards, and test generation.",
+      "Generate Study Guide shows source-reading stages for notes, slides, and past papers, then the guide-writing stage. Flashcards, worked examples, and tests are generated from their own buttons.",
       "Open Study Workspace stays ready once the pack exists, so students know when they can move from capture into revision tools.",
       "If many files were uploaded together, MABASO sorts them in the background and sends them to the correct lecture section before study generation continues.",
     ],
@@ -3395,7 +3399,7 @@ const helpAboutSections = [
     kicker: "Better Results",
     title: "How to make the generated notes more useful",
     description:
-      "Students usually get the best outcome when they treat the generated pack like a guided revision set, not just a one-time summary.",
+      "Students usually get the best outcome when they treat the generated guide like the start of a guided revision set, not just a one-time summary.",
     points: [
       "Start with the study guide to understand the lesson structure, then jump to formulas and worked examples for difficult parts.",
       "Use flashcards after reading, not before. They work best after the student already understands the core explanation.",
@@ -3695,6 +3699,10 @@ function inlineStudyGuideMarkdownToHtml(value = "") {
     .replace(/\*(.*?)\*/g, "<em>$1</em>");
 }
 
+function countUnescapedDollarPairs(value = "") {
+  return (String(value || "").match(/(?<!\\)\$\$/g) || []).length;
+}
+
 function normalizeStudyGuideContentSpacing(value = "") {
   let text = String(value || "")
     .replace(/\r\n?/g, "\n")
@@ -3751,6 +3759,21 @@ function markdownToEditableStudyGuideHtml(markdown = "") {
     const line = rawLine.trim();
     if (!line) {
       closeList();
+      continue;
+    }
+
+    if (line.startsWith("$$")) {
+      closeList();
+      const mathLines = [rawLine];
+      if (countUnescapedDollarPairs(rawLine) < 2) {
+        index += 1;
+        while (index < lines.length) {
+          mathLines.push(lines[index]);
+          if (countUnescapedDollarPairs(lines[index]) > 0) break;
+          index += 1;
+        }
+      }
+      htmlParts.push(`<div>${escapeStudyGuideHtml(mathLines.join("\n"))}</div>`);
       continue;
     }
 
@@ -7375,7 +7398,7 @@ export default function App() {
     return true;
   };
 
-  const navigateToPath = (path, { replace = false } = {}) => {
+  const navigateToPath = (path, { replace = false, resetScroll = false } = {}) => {
     const normalized = normalizeRoutePath(path);
     const currentPath = typeof window !== "undefined" ? window.location.pathname : browserPath;
     const pathChanged = currentPath !== normalized;
@@ -7387,7 +7410,7 @@ export default function App() {
       const nextPublicPage = normalized === PUBLIC_TERMS_PATH ? "terms" : "auth";
       return current === nextPublicPage ? current : nextPublicPage;
     });
-    if (pathChanged && typeof window !== "undefined") {
+    if (resetScroll && pathChanged && typeof window !== "undefined") {
       window.requestAnimationFrame(() => {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       });
@@ -9806,7 +9829,7 @@ export default function App() {
     if (target === "guide") {
       if (["notes", "slides", "past_papers", "study_guide"].includes(currentJobType)) {
         return {
-          eyebrow: currentJobType === "study_guide" ? "Building study pack" : `Reading ${currentJobType.replace("_", " ")}`,
+          eyebrow: currentJobType === "study_guide" ? "Building study guide" : `Reading ${currentJobType.replace("_", " ")}`,
           badge: progressLabel || "Working",
           detail: status || "Preparing lecture sources for the guide.",
           showProgress: true,
@@ -9849,8 +9872,8 @@ export default function App() {
         eyebrow: "Workspace ready",
         badge: "Open",
         detail: quizQuestions.length
-          ? `${flashcards.length} flashcards and ${quizQuestions.length} test questions are ready in the study workspace.`
-          : `${flashcards.length} flashcards are ready, and the test can be generated later only when you need it.`,
+          ? `${quizQuestions.length} test questions are ready in the study workspace.`
+          : "The study guide is ready. Generate flashcards, worked examples, or a test only when you need them.",
         showProgress: false,
         progressValue: 0,
         statusLine: "",
@@ -15349,13 +15372,13 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !pendingStudyChatAnchorIdRef.current) return undefined;
-    const targetMessageId = pendingStudyChatAnchorIdRef.current;
     const frameId = window.requestAnimationFrame(() => {
       const container = studyChatScrollRef.current;
-      const target = studyChatAssistantStartRef.current;
-      if (!container || !target || target.dataset.messageId !== targetMessageId) return;
-      const targetTop = Math.max(0, target.offsetTop - container.offsetTop - 12);
-      container.scrollTo({ top: targetTop, behavior: "auto" });
+      if (container) {
+        container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
+      } else {
+        studyChatEndRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
+      }
       pendingStudyChatAnchorIdRef.current = "";
       setShowStudyChatJumpToLatest(false);
     });
@@ -16970,6 +16993,21 @@ export default function App() {
       scrollUpgradePaymentOptionsIntoView();
     }
   }, [isUpgradeModalOpen, selectedBillingPlan?.id, selectedBillingPlan?.paymentType]);
+
+  useEffect(() => {
+    if (browserPath !== "/payment-success") return;
+    setBillingCheckoutMessage("Returned from PayFast. Checking your plan status...");
+    if (authToken) {
+      setIsUpgradeModalOpen(false);
+      openProtectedAppPage("payments", { replace: true });
+      refreshBillingStatusInBackground();
+      return;
+    }
+    prepareGoogleRedirect("/app/payments");
+    navigateToPath("/signin", { replace: true });
+    setAuthMessage("Sign in to finish checking your PayFast payment.");
+  }, [authToken, browserPath]);
+
 
   const getUsageFeatureState = (usage, featureId) => {
     const normalizedFeatureId = String(featureId || "").trim().toLowerCase();
@@ -26917,21 +26955,21 @@ export default function App() {
 
   const downloadFullStudyPackPdf = async () => {
     try {
-      const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Pack");
+      const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Guide");
       await exportPdf(title, buildCurrentStudyPackSections());
-      setStatus("Full study pack PDF downloaded.");
+      setStatus("Study Guide PDF downloaded.");
     } catch (err) {
-      setError(err.message || "Could not create the full study pack PDF.");
+      setError(err.message || "Could not create the Study Guide PDF.");
     }
   };
 
   const downloadFullStudyPackDocx = async () => {
     try {
-      const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Pack");
+      const title = extractHistoryTitle(summary, file?.name || workspaceFileLabel || "MABASO Study Guide");
       await exportStudyPackDocx(title, buildCurrentStudyPackSections());
-      setStatus("Full study pack DOCX downloaded.");
+      setStatus("Study Guide DOCX downloaded.");
     } catch (err) {
-      setError(err.message || "Could not create the full study pack DOCX.");
+      setError(err.message || "Could not create the Study Guide DOCX.");
     }
   };
 
@@ -26957,11 +26995,11 @@ export default function App() {
         <span className="text-xs uppercase tracking-[0.2em] text-slate-400">{currentTabLabel}</span>
       </button>
       <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full", downloadFullStudyPackPdf); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
-        <span>Full study pack PDF</span>
+        <span>Study Guide PDF</span>
         <span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span>
       </button>
       <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("full-docx", downloadFullStudyPackDocx); }} disabled={!hasResults} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50">
-        <span>Full study pack DOCX</span>
+        <span>Study Guide DOCX</span>
         <span className="text-xs uppercase tracking-[0.2em] text-slate-400">All tools</span>
       </button>
       {activeTab === "quiz" ? <button type="button" onClick={async () => { setIsDownloadMenuOpen(false); await runDownloadAction("quiz", downloadQuizPdf); }} disabled={!selectedQuizQuestions.length} className="flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm text-white transition hover:bg-white/5 disabled:opacity-50"><span>Test PDF</span><span className="text-xs uppercase tracking-[0.2em] text-slate-400">Quiz</span></button> : null}
@@ -27741,7 +27779,7 @@ export default function App() {
     return recoveredRecordingConfirmModal;
   }
 
-  const shouldBlockForAuthBootstrap = !isAuthReady && !activeSitePage && !activeProtectedWorkspaceRoute && !["/", "/signin", "/register"].includes(browserPath);
+  const shouldBlockForAuthBootstrap = !isAuthReady && !activeSitePage && !activeProtectedWorkspaceRoute && !["/", "/signin", "/register", "/payment-success"].includes(browserPath);
 
   if (shouldBlockForAuthBootstrap) {
     return (

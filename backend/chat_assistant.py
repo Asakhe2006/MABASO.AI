@@ -139,10 +139,17 @@ def _raise_for_response(provider: str, response: requests.Response, default_mess
         detail = f"{label} is rate-limited right now."
     elif status_code in {401, 403}:
         detail = f"{label} rejected the backend API key."
-    elif compact_text(provider).lower() == "openai" and (
+    model_unavailable = compact_text(provider).lower() == "openai" and (
         "model" in detail.lower()
-        and ("does not exist" in detail.lower() or "do not have access" in detail.lower())
-    ):
+        and (
+            "does not exist" in detail.lower()
+            or "do not have access" in detail.lower()
+            or "not have access" in detail.lower()
+            or "not found" in detail.lower()
+            or "unsupported" in detail.lower()
+        )
+    )
+    if model_unavailable:
         detail = "The selected OpenAI model is unavailable. Trying the supported fallback model."
     elif status_code >= 500:
         detail = f"{label} is temporarily unavailable right now."
@@ -150,7 +157,7 @@ def _raise_for_response(provider: str, response: requests.Response, default_mess
         provider,
         detail or default_message,
         status_code=status_code,
-        retryable=status_code >= 500 or status_code == 429,
+        retryable=model_unavailable or status_code >= 500 or status_code == 429,
     )
 
 

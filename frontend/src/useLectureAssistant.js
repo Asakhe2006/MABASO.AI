@@ -4033,10 +4033,13 @@ export function useLectureAssistant({
         }
         if (event === "error") {
           const streamErrorMessage = compactText(data.message, "The lecture assistant could not finish that reply.");
+          const safeStreamErrorMessage = /model.*(?:does not exist|do not have access|not have access|not found|unsupported)/i.test(streamErrorMessage)
+            ? "The selected OpenAI model is unavailable. Please try again after checking model access."
+            : streamErrorMessage;
           throw new Error(
-            /backend logs?|traceback|stack trace|exception|api key|secret|supabase|postgres|database|sql|render|not configured/i.test(streamErrorMessage)
+            /backend logs?|traceback|stack trace|exception|api key|secret|supabase|postgres|database|sql|render|not configured/i.test(safeStreamErrorMessage)
               ? "The lecture assistant could not finish that reply. Please try again."
-              : streamErrorMessage,
+              : safeStreamErrorMessage,
           );
         }
       });

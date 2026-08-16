@@ -400,6 +400,7 @@ PAYFAST_MERCHANT_KEY = os.getenv("PAYFAST_MERCHANT_KEY", "").strip()
 PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
 PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "false").strip().lower() not in {"0", "false", "no", "off"}
 PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR = os.getenv("PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "0.00").strip()
 PAYFAST_PROCESS_URL = (
     "https://sandbox.payfast.co.za/eng/process"
     if PAYFAST_SANDBOX
@@ -4130,11 +4131,11 @@ For another language, translate the visible heading naturally while preserving t
 
 IMPORTANT FORMULAS is mandatory only when formulas exist or are academically relevant.
 
-WORKED EXAMPLES is mandatory when calculations, procedures, applications, derivations, or structured problem solving exist.
+WORKED EXAMPLES must not be generated inside the Study Guide. When calculations, procedures, applications, derivations, or structured problem solving exist, explain the concept and formula clearly, then leave full solved examples for the separate Worked Examples tool.
 
 STEP-BY-STEP EXPLANATIONS should teach the central method, process, mechanism, or reasoning sequence.
 
-PRACTICE QUESTIONS AND ANSWERS must be included.
+PRACTICE QUESTIONS AND ANSWERS must not be generated inside the Study Guide. End topics with concise revision questions only when useful, without full answer keys.
 
 Do not include a FLASHCARDS section.
 
@@ -6341,11 +6342,11 @@ For another language, translate the visible heading naturally while preserving t
 
 IMPORTANT FORMULAS is mandatory only when formulas exist or are academically relevant.
 
-WORKED EXAMPLES is mandatory when calculations, procedures, applications, derivations, or structured problem solving exist.
+WORKED EXAMPLES must not be generated inside the Study Guide. When calculations, procedures, applications, derivations, or structured problem solving exist, explain the concept and formula clearly, then leave full solved examples for the separate Worked Examples tool.
 
 STEP-BY-STEP EXPLANATIONS should teach the central method, process, mechanism, or reasoning sequence.
 
-PRACTICE QUESTIONS AND ANSWERS must be included.
+PRACTICE QUESTIONS AND ANSWERS must not be generated inside the Study Guide. End topics with concise revision questions only when useful, without full answer keys.
 
 Do not include a FLASHCARDS section.
 
@@ -6660,6 +6661,25 @@ Do not paste source labels, OCR labels, file names, transcript headers, or outpu
 Generate the most educationally appropriate structure for the supplied material.
 
 """
+
+STUDY_GUIDE_PROMPT += """
+
+STRICT STUDY GUIDE CONTRACT
+===========================
+
+This request generates the Study Guide only.
+
+Do not generate a WORKED EXAMPLES section, solved multi-step examples, flashcards, quizzes, practice-answer sections, or a standalone VISUAL AIDS / VISUAL LEARNING / SUGGESTED VISUALS section.
+
+Worked Examples, Flashcards, and Tests are separate Mabaso AI tools and must stay empty until the student presses those tool buttons.
+
+For mathematics, output valid KaTeX-ready LaTeX: use $...$ for inline math and $$...$$ for display equations. Do not convert formulas to Unicode-only notation, OCR-like plain text, or concatenated raw formula strings.
+
+Use diagrams, tables, and source images only when they are integrated beside the exact concept being taught; never create a generic visual-learning section.
+
+Return only polished Study Guide Markdown.
+"""
+
 
 WORKED_EXAMPLE_ASSET_PROMPT = """
 WORKED EXAMPLE ENGINE RULES
@@ -11616,7 +11636,7 @@ def build_pdf_document(title: str, sections: list[PdfSection]) -> bytes:
         bottomMargin=36,
     )
 
-    story: list = [Paragraph(title or "MABASO Study Pack", title_style), Spacer(1, 8)]
+    story: list = [Paragraph(title or "MABASO Study Guide", title_style), Spacer(1, 8)]
     max_pdf_image_bytes = 8 * 1024 * 1024
 
     def load_pdf_image_bytes(image_url: str) -> BytesIO | None:
@@ -12001,7 +12021,7 @@ def build_docx_study_pack_document(title: str, sections: list[PdfSection]) -> by
 
     media_parts: list[tuple[str, bytes]] = []
     image_relationships: list[str] = []
-    document_parts: list[str] = [paragraph_xml(title or "MABASO Study Pack", style="title")]
+    document_parts: list[str] = [paragraph_xml(title or "MABASO Study Guide", style="title")]
     image_counter = 0
 
     def append_docx_picture(image_bytes: bytes, mime_type: str, *, name: str = "Figure", max_width_inches: float = 5.8, max_height_inches: float = 3.1) -> None:
@@ -16644,6 +16664,15 @@ def get_billing_quota_plan_id(plan_id: str) -> str:
     return normalized_plan_id if normalized_plan_id in BILLING_PLAN_QUOTAS else "free"
 
 
+def format_payfast_trial_initial_amount() -> str:
+    try:
+        amount = Decimal(compact_text(PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR, "0.00")).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=500, detail="PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR must be a valid ZAR amount.")
+    if amount < 0:
+        raise HTTPException(status_code=500, detail="PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR cannot be negative.")
+    return f"{amount:.2f}"
+
 def get_billing_plan_duration_days(plan_id: str) -> int:
     normalized_plan_id = normalize_billing_plan_id(plan_id)
     if normalized_plan_id.endswith("_weekly"):
@@ -17040,7 +17069,7 @@ def build_payfast_checkout_fields(
         "name_first": email.split("@", 1)[0][:100],
         "email_address": email[:100],
         "m_payment_id": checkout_id,
-        "amount": "0.00" if trial else plan["amount_zar"],
+        "amount": format_payfast_trial_initial_amount() if trial else plan["amount_zar"],
         "item_name": (f"MABASO.AI 7-day free trial - {plan['name']}" if trial else f"MABASO.AI {plan['name']}")[:100],
         "item_description": (
             f"Seven-day free trial. Automatically bills {plan['amount_zar']} monthly after the trial unless cancelled."
@@ -21954,7 +21983,7 @@ async def create_billing_checkout(
                 checkout_id,
                 email,
                 plan["id"],
-                "0.00" if is_trial else plan["amount_zar"],
+                format_payfast_trial_initial_amount() if is_trial else plan["amount_zar"],
                 "payfast",
                 "pending",
                 json.dumps(fields, ensure_ascii=False),
@@ -24503,14 +24532,6 @@ def build_fallback_study_guide(transcript: str) -> str:
 "- Mention common mistakes students make when applying formulas.",
 "",
             "",
-            "**WORKED EXAMPLES**",
-            "- Example problem: Choose one important concept from the lecture and explain how you would solve or apply it step by step.",
-            "- Step 1: Identify the concept, formula, or method being used.",
-            "- Step 2: Write down the known values, assumptions, or definitions.",
-            "- Step 3: Apply the method in a clear sequence and explain each step.",
-            "- Step 4: State the final result and what it means.",
-            
-            "",
             "**STEP-BY-STEP EXPLANATIONS**",
             "- Read the transcript from top to bottom and group the lecture into introduction, core method, and examples.",
             "- Highlight repeated ideas and convert them into short revision bullets.",
@@ -24519,11 +24540,11 @@ def build_fallback_study_guide(transcript: str) -> str:
             "**ADVANTAGES AND DISADVANTAGES**",
             "Advantages:",
             "- Compact notes make the core idea faster to revise before a quiz or exam.",
-            "- Key concepts, flashcards, and questions help students move from reading to active recall.",
+            "- Key concepts and revision questions help students move from reading to active recall.",
             "",
             "Disadvantages / cautions:",
             "- A short summary can hide missing detail if you never return to the transcript or class notes.",
-            "- Students may remember words without understanding how to apply them if they skip worked examples.",
+            "- Students may remember words without understanding how to apply them if they skip application practice.",
             "",
             "**COMMON MISTAKES TO AVOID**",
             "- Do not revise only the headings without checking the lecturer's examples.",
@@ -24532,53 +24553,16 @@ def build_fallback_study_guide(transcript: str) -> str:
             "",
             "**QUICK REVISION PLAN**",
             "- First 5 minutes: scan the summary and list the main ideas from memory.",
-            "- Next 10 minutes: review definitions, formulas, and one worked example.",
+            "- Next 10 minutes: review definitions, formulas, and the method used in class.",
             "- Next 10 minutes: answer two or three practice questions without notes.",
-            "- Final 5 minutes: turn weak points into flashcards for the next study block.",
-            "",
-            "**VISUAL AIDS**",
-            "- Generate a visual aid only when it genuinely helps explain the lecture topic.",
-"- Choose the visual format that best matches the content instead of using a generic visual.",
-"- Use a comparison table only when two or more concepts, methods, systems, advantages, disadvantages, features, or results are naturally being compared.",
-"- Use a flowchart only when the lecture explains a sequence of actions, decisions, stages, or steps.",
-"- Use a timeline only when the lecture contains events, developments, or stages arranged by date or chronological order.",
-"- Use a mind map only when the lecture contains one main topic connected to several related concepts.",
-"- Use a process diagram only when the lecture explains how something changes, operates, moves, or produces a result.",
-"- Use an input-process-output diagram only when the topic clearly contains an input, a transformation or process, and an output.",
-"- Use a hierarchy or tree diagram when the lecture contains categories, levels, classifications, components, or parent-child relationships.",
-"- Use a cycle diagram when the final stage returns to the beginning or the process repeats continuously.",
-"- Use an architecture diagram when the lecture explains how system components connect and communicate.",
-"- Use a labelled text diagram when an educational figure cannot be reproduced as an image but its structure can be explained clearly using text.",
-"- Keep every visual directly related to the lecture content.",
-"- Replace generic labels such as 'Main Topic', 'Concept 1', 'Input', 'Process', and 'Output' with the actual terms from the lecture.",
-"- Do not generate a table listing different types of study tools.",
-"- Do not show example visuals that are unrelated to the lecture.",
-"- Do not create the same visual format for every study guide.",
-"- Do not place ordinary paragraphs inside a table unless a table genuinely improves understanding.",
-"- Keep tables concise and preserve clear row and column relationships.",
-"- Keep ASCII diagrams simple, readable, correctly aligned, and suitable for both desktop and mobile screens.",
-"- Place each visual immediately after the concept, process, comparison, or explanation that it supports.",
-"- Add a short title and one brief explanation showing what the visual teaches.",
-"- If no meaningful visual can be produced from the lecture content, omit the visual content instead of generating a generic placeholder.",
-            "",
-            "ASCII sketch:",
-            "Start -> Key concept -> Example -> Exam point",
+            "- Final 5 minutes: write weak points as short self-test questions for the next study block.",
             "",
             "**REAL-WORLD EXAMPLES**",
             "- Link each key concept to one practical situation from your course or field.",
             "",
-            "**FLASHCARDS**",
-            *[
-                (
-                    f"Q: What is {item}?\n\n"
-                    f"A: It is one of the main ideas highlighted in the lecture and should be revised from the transcript."
-                )
-                for item in concept_bullets[:3]
-            ],
-            "",
             "**EXAM TIPS**",
             "- Start with the summary, then revise the transcript for missing detail.",
-            "- Turn repeated terms into flashcards and test yourself after each revision block.",
+            "- Turn repeated terms into short self-test questions and test yourself after each revision block.",
         ]
     )
 
@@ -26230,7 +26214,7 @@ async def build_ai_study_image_specs(
                     "role": "user",
                     "content": (
                         f"Output language: {output_language}\n\n"
-                        "Create premium visual learning image prompts from this study-guide context:\n\n"
+                        "Create premium educational figure prompts from this study-guide context:\n\n"
                         f"{context}"
                     ),
                 },
@@ -26672,24 +26656,86 @@ def normalize_study_guide_heading_wording(markdown: str) -> str:
 
 
 def remove_separate_study_tool_sections(markdown: str) -> str:
-    """Keep independently generated tools out of the Study Guide response."""
+    """Keep independently generated tools and visual placeholder buckets out of Study Guides."""
     lines = (markdown or "").replace("\r\n", "\n").splitlines()
     kept: list[str] = []
     skipped_heading_level = 0
-    separate_headings = {"worked example", "worked examples", "flashcard", "flashcards"}
+    skip_until_next_heading = False
+    separate_headings = {
+        "worked example",
+        "worked examples",
+        "flashcard",
+        "flashcards",
+        "practice questions",
+        "practice questions and answers",
+        "quiz",
+        "quizzes",
+        "test",
+        "tests",
+        "visual aid",
+        "visual aids",
+        "visual learning",
+        "visual learning suggestions",
+        "suggested visual",
+        "suggested visuals",
+        "suggested diagram",
+        "suggested diagrams",
+    }
+
+    def normalized_standalone_heading(value: str) -> str:
+        cleaned = re.sub(r"^\s*(?:[-*]\s*)?", "", value or "")
+        cleaned = re.sub(r"^\s*\d+[.)]?\s*", "", cleaned)
+        cleaned = re.sub(r"^\*{1,3}|\*{1,3}$", "", cleaned.strip())
+        cleaned = re.sub(r"[:\-]+$", "", cleaned).strip()
+        return normalize_guide_heading(cleaned)
+
     for line in lines:
-        heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line.strip())
+        stripped = line.strip()
+        heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        bold_heading_match = re.match(r"^\*\*(.+?)\*\*\s*:?\s*$", stripped)
         if heading_match:
+            if skip_until_next_heading:
+                skip_until_next_heading = False
             heading_level = len(heading_match.group(1))
-            normalized_heading = normalize_guide_heading(re.sub(r"^\d+[.)]?\s*", "", heading_match.group(2)))
+            normalized_heading = normalized_standalone_heading(heading_match.group(2))
             if skipped_heading_level and heading_level > skipped_heading_level:
                 continue
             if skipped_heading_level and heading_level <= skipped_heading_level:
                 skipped_heading_level = 0
+                skip_until_next_heading = False
             if normalized_heading in separate_headings:
                 skipped_heading_level = heading_level
                 continue
-        elif skipped_heading_level:
+        elif bold_heading_match:
+            normalized_heading = normalized_standalone_heading(bold_heading_match.group(1))
+            if normalized_heading in separate_headings:
+                skip_until_next_heading = True
+                continue
+            if skip_until_next_heading:
+                skip_until_next_heading = False
+        else:
+            normalized_plain_heading = normalized_standalone_heading(stripped)
+            looks_like_plain_heading = bool(
+                stripped
+                and len(stripped) <= 90
+                and not stripped.endswith((".", "?", "!"))
+                and (
+                    stripped.upper() == stripped
+                    or normalized_plain_heading in separate_headings
+                    or normalized_plain_heading in GUIDE_SECTION_ALIASES
+                )
+            )
+            if normalized_plain_heading in separate_headings and looks_like_plain_heading:
+                skip_until_next_heading = True
+                continue
+            if skip_until_next_heading:
+                if not stripped:
+                    continue
+                if looks_like_plain_heading:
+                    skip_until_next_heading = False
+                else:
+                    continue
+        if skipped_heading_level:
             continue
         kept.append(line)
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
@@ -26840,6 +26886,7 @@ def prepare_generated_study_guide_output(markdown: str) -> str:
     cleaned = normalize_study_guide_block_spacing(cleaned)
     cleaned = remove_duplicate_study_guide_equations(cleaned)
     cleaned = normalize_study_guide_heading_wording(cleaned)
+    cleaned = remove_separate_study_tool_sections(cleaned)
     return tidy_study_guide_layout(cleaned)
 
 
@@ -30987,7 +31034,7 @@ async def generate_study_guide(
     user_content_parts.append(
         (
             "OUTPUT INSTRUCTIONS\n"
-            f"- Write the full study pack in {output_language}.\n"
+            f"- Write the full study guide in {output_language}.\n"
             "- Detect when the sources cover multiple distinct topics, chapters, or subtopics.\n"
             "- Keep each topic separate with clear headings and do not mix unrelated notes, formulas, or examples.\n"
             "- If one uploaded source belongs to a different topic, isolate it under its own topic heading instead of blending it into another topic.\n"
@@ -31005,7 +31052,7 @@ async def generate_study_guide(
 "- Put one algebraic transformation on each display line. Use \\begin{aligned}...\\end{aligned} for multi-step derivations and never concatenate competing formula versions.\n"
 "- Verify every fraction, bracket, exponent, subscript, denominator, operator, and equality sign before returning mathematical content.\n"
 "- Wrap mathematics inside Markdown table cells with $...$ so it remains renderable.\n"
-"- Generate realistic labelled diagrams, process flows, hierarchy diagrams, timelines, architecture diagrams, or concept visuals whenever they improve understanding.\n"
+"- Use concise labelled diagrams, process flows, hierarchy diagrams, timelines, architecture diagrams, or concept visuals only when they directly improve understanding.\n"
 "- Do not insert decorative visuals; every visual must directly teach the surrounding concept.\n"
 "- Place figures immediately after the paragraph that introduces them.\n"
 "- Add a concise figure title and explanation beneath every visual.\n"
@@ -31013,7 +31060,7 @@ async def generate_study_guide(
 "- Keep terminology, formatting, and notation consistent throughout the guide.\n"
 "- Rewrite lecture content into clear academic language while preserving factual accuracy.\n"
 "- Remove conversational filler, lecturer repetition, greetings, and transcription artefacts.\n"
-"- Prioritise clarity, readability, and visual learning over copying the original wording.\n"
+"- Prioritise clarity, readability, accurate teaching, and clean structure over copying the original wording.\n"
 "- Ensure the final guide looks modern, polished, professional, and suitable for university-level revision.\n"
             "- Use blockquote callouts such as > **Definition:**, > **Exam Tip:**, > **Common Mistake:**, > **Deep Dive:**, and > **Key Takeaway:** when useful.\n"
             "- End major topics with Quick Summary, Key Points, Common Mistakes, and Quick Revision Questions when the source material supports that depth."
@@ -31126,8 +31173,6 @@ async def generate_study_guide(
             transcript=transcript,
             past_question_papers=past_question_papers,
         ), used_fallback
-    except JobCancelledError:
-        raise
     except JobCancelledError:
         raise
     except Exception as exc:

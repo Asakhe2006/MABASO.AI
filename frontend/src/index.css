@@ -8231,3 +8231,64 @@ iframe {
   .study-guide-shell.study-guide-themed .study-guide-rich-editor th { font-size: 15px !important; line-height: 1.55 !important; }
   .study-guide-shell.study-guide-themed .study-guide-figure-image { max-height: 240px !important; }
 }
+
+/* Final Study Chat behavior override. Keep after older duplicated chat rules. */
+.study-chat-page {
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
+  background: #001a10 !important;
+}
+
+.study-chat-main {
+  min-height: 0 !important;
+  height: 100dvh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: #001a10 !important;
+}
+
+.study-chat-page-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  padding-bottom: 118px !important;
+  background: #001a10 !important;
+}
+
+.study-chat-page-messages {
+  width: min(100%, 760px) !important;
+  margin: 0 auto !important;
+  padding: 18px 18px 4px !important;
+}
+
+.study-chat-page-composer {
+  position: sticky !important;
+  bottom: max(10px, env(safe-area-inset-bottom)) !important;
+  flex: 0 0 auto !important;
+  z-index: 45 !important;
+  width: min(calc(100% - 32px), 760px) !important;
+  margin: 8px auto max(10px, env(safe-area-inset-bottom)) !important;
+  padding: 6px 8px !important;
+  border-color: rgba(74, 222, 128, 0.22) !important;
+  border-radius: 20px !important;
+  background: #06150e !important;
+  box-shadow: 0 -12px 28px rgba(0, 26, 16, 0.72) !important;
+}
+
+@media (max-width: 768px) {
+  .study-chat-page-scroll {
+    padding-bottom: 104px !important;
+  }
+
+  .study-chat-page-messages {
+    padding: 14px 15px 2px !important;
+  }
+
+  .study-chat-page-composer {
+    width: calc(100% - 20px) !important;
+    margin-bottom: max(7px, env(safe-area-inset-bottom)) !important;
+    padding: 5px 7px !important;
+  }
+}
