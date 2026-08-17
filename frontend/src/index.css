@@ -8735,6 +8735,347 @@ iframe {
   .study-guide-shell.study-guide-themed .study-guide-figure-image { max-height: 240px !important; }
 }
 
+/* Slide-based Study Guide reading surface. */
+.study-guide-shell.study-guide-slide-deck {
+  display: grid !important;
+  gap: 16px !important;
+  border-radius: 26px !important;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(34, 197, 94, 0.18), transparent 36%),
+    radial-gradient(circle at 92% 94%, rgba(16, 185, 129, 0.14), transparent 34%),
+    linear-gradient(135deg, #001b10, #03140e 54%, #00160d) !important;
+  padding: 18px !important;
+}
+
+.study-guide-slide-deck .study-guide-title-card,
+.study-guide-slide-deck .study-guide-section-card,
+.study-guide-slide-deck .study-guide-fallback {
+  min-height: clamp(430px, 52vw, 620px) !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(16, 185, 129, 0.18) !important;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,0.98), rgba(247,253,250,0.98)),
+    var(--sg-surface) !important;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.24) !important;
+}
+
+.study-guide-slide-deck .study-guide-title-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(28px, 4vw, 56px) !important;
+}
+
+.study-guide-slide-deck .study-guide-section-card {
+  padding: clamp(24px, 3.4vw, 46px) !important;
+}
+
+.study-guide-slide-deck .study-guide-slide-hidden {
+  display: none !important;
+}
+
+.study-guide-slide-deck .study-guide-slide-active {
+  display: flex !important;
+  flex-direction: column;
+}
+
+.study-guide-slide-deck .study-guide-rich-editor,
+.study-guide-slide-deck .study-guide-markdown,
+.study-guide-slide-deck .notes-markdown {
+  max-width: none !important;
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+}
+
+.study-guide-slide-deck .study-guide-section-summary-row {
+  align-items: center !important;
+}
+
+.study-guide-slide-deck .study-guide-section-actions {
+  gap: 4px !important;
+}
+
+.study-guide-slide-deck .study-guide-section-copy-button,
+.study-guide-slide-deck .study-guide-section-regenerate-button {
+  width: 30px !important;
+  height: 30px !important;
+}
+
+.study-guide-slide-nav {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(160px, 1fr) minmax(120px, 180px);
+  align-items: center;
+  gap: 16px;
+  color: #fff;
+}
+
+.study-guide-slide-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid rgba(74, 222, 128, 0.2);
+  border-radius: 999px;
+  background: rgba(12, 45, 30, 0.78);
+  padding: 0 18px;
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.study-guide-slide-step:disabled {
+  opacity: 0.42;
+}
+
+.study-guide-slide-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.study-guide-slide-progress::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.24);
+}
+
+.study-guide-slide-progress > span {
+  grid-column: 1;
+  grid-row: 1;
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.study-guide-slide-progress strong {
+  color: #fff;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.study-guide-slide-thumbnails {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 1fr);
+  gap: 10px;
+  overflow-x: auto;
+  padding: 3px 2px 6px;
+  scrollbar-width: thin;
+}
+
+.study-guide-slide-thumb {
+  position: relative;
+  min-height: 82px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 12px;
+  color: #062116;
+  text-align: left;
+}
+
+.study-guide-slide-thumb span {
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  transform: translateX(-50%);
+  place-items: center;
+  border-radius: 999px;
+  background: #0f8a4c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.study-guide-slide-thumb strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #064e3b;
+  font-size: 12px;
+  line-height: 1.25;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.study-guide-slide-thumb.is-active {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
+}
+
+.study-guide-focus-stage {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 180 !important;
+  overflow: auto !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  background:
+    radial-gradient(circle at 50% 100%, rgba(34, 197, 94, 0.22), transparent 36%),
+    linear-gradient(135deg, #00190f, #020f0b) !important;
+  padding: 18px !important;
+}
+
+.study-guide-focus-stage .study-guide-slide-deck {
+  width: min(100%, 1360px) !important;
+  margin: 0 auto !important;
+  background: transparent !important;
+}
+
+.study-guide-focus-stage .study-guide-title-card,
+.study-guide-focus-stage .study-guide-section-card,
+.study-guide-focus-stage .study-guide-fallback {
+  min-height: min(68vh, 720px) !important;
+}
+
+.study-guide-focus-toolbar {
+  display: grid;
+  grid-template-columns: 190px 1fr 46px;
+  align-items: center;
+  gap: 14px;
+  color: #fff;
+}
+
+.study-guide-focus-exit,
+.study-guide-focus-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.study-guide-focus-title {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  color: #86efac;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.study-guide-focus-title small {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.study-chat-sidebar-model select {
+  border-color: rgba(74, 222, 128, 0.22) !important;
+}
+
+@media (max-width: 768px) {
+  .study-guide-shell.study-guide-slide-deck {
+    gap: 12px !important;
+    border-radius: 22px !important;
+    padding: 9px !important;
+  }
+
+  .study-guide-slide-deck .study-guide-title-card,
+  .study-guide-slide-deck .study-guide-section-card,
+  .study-guide-slide-deck .study-guide-fallback {
+    min-height: calc(100dvh - 310px) !important;
+    border-radius: 18px !important;
+  }
+
+  .study-guide-slide-deck .study-guide-title-card,
+  .study-guide-slide-deck .study-guide-section-card {
+    padding: 18px !important;
+  }
+
+  .study-guide-slide-deck .study-guide-topic {
+    font-size: 25px !important;
+  }
+
+  .study-guide-slide-deck .study-guide-rich-editor,
+  .study-guide-slide-deck .study-guide-markdown,
+  .study-guide-slide-deck .notes-markdown {
+    font-size: 14.75px !important;
+    line-height: 1.52 !important;
+  }
+
+  .study-guide-slide-nav {
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+  }
+
+  .study-guide-slide-step {
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .study-guide-slide-progress {
+    display: block;
+    min-width: 52px;
+    text-align: center;
+  }
+
+  .study-guide-slide-progress::before,
+  .study-guide-slide-progress > span {
+    display: none;
+  }
+
+  .study-guide-slide-progress strong {
+    font-size: 15px;
+  }
+
+  .study-guide-slide-thumbnails {
+    grid-auto-columns: minmax(86px, 112px);
+    gap: 8px;
+  }
+
+  .study-guide-slide-thumb {
+    min-height: 88px;
+    padding: 14px 8px 8px;
+  }
+
+  .study-guide-slide-thumb strong {
+    font-size: 10.5px;
+  }
+
+  .study-guide-focus-stage {
+    padding: 8px !important;
+  }
+
+  .study-guide-focus-toolbar {
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+  }
+
+  .study-guide-focus-exit {
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .study-guide-focus-title {
+    letter-spacing: 0.16em;
+    font-size: 12px;
+  }
+
+  .study-guide-focus-title small {
+    font-size: 12px;
+  }
+}
+
 /* Final Study Chat behavior override. Keep after older duplicated chat rules. */
 .study-chat-page {
   position: fixed !important;

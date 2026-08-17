@@ -145,6 +145,20 @@ const PUBLIC_TERMS_PATH = "/terms-and-conditions";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_ATTACHMENTS = 15;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
+const AI_CHAT_MODEL_OPTIONS = [
+  {
+    id: "gpt-4.1",
+    label: "GPT-4.1",
+    description: "Standard Mabaso AI chat model",
+    plan: "All plans",
+  },
+  {
+    id: "gpt-5.6-terra",
+    label: "GPT Terra 5.6",
+    description: "Premium AI Chat model",
+    plan: "Premium",
+  },
+];
 const MAX_QUIZ_ANSWER_IMAGES = 6;
 const MAX_STORAGE_TRANSCRIPT_CHARS = 120000;
 const MAX_STORAGE_SUMMARY_CHARS = 90000;
@@ -6815,6 +6829,7 @@ export default function App() {
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [modelAccessBlock, setModelAccessBlock] = useState(null);
+  const [selectedAiChatModel, setSelectedAiChatModel] = useState("gpt-4.1");
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
   const [upgradeLimitMessage, setUpgradeLimitMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
@@ -6891,6 +6906,8 @@ export default function App() {
   const [isRecordingCaptureOpen, setIsRecordingCaptureOpen] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
+  const [studyGuideSlideIndex, setStudyGuideSlideIndex] = useState(0);
+  const [isStudyGuideFocusMode, setIsStudyGuideFocusMode] = useState(false);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
@@ -8614,6 +8631,25 @@ export default function App() {
   const studyGuideTheme = selectStudyGuideTheme(`${guideTopic}\n${formattedGuide || summary}`);
   const studyGuideThemeStyle = getStudyGuideThemeStyle(studyGuideTheme);
   const studyGuideReadingMeta = getStudyGuideReadingMeta(formattedGuide || summary);
+  const studyGuideSlides = [
+    { type: "intro", title: guideTopic, section: null },
+    ...visibleGuideSections.map((section, index) => ({ type: "section", title: section.displayHeading || section.heading, section, sectionIndex: index })),
+  ];
+  const activeStudyGuideSlideIndex = Math.min(Math.max(studyGuideSlideIndex, 0), Math.max(studyGuideSlides.length - 1, 0));
+  const activeStudyGuideSlide = studyGuideSlides[activeStudyGuideSlideIndex] || studyGuideSlides[0] || { type: "intro", title: guideTopic, section: null };
+  const goToStudyGuideSlide = (index) => setStudyGuideSlideIndex(Math.min(Math.max(index, 0), Math.max(studyGuideSlides.length - 1, 0)));
+  const goToPreviousStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.max(0, current - 1));
+  const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
+  useEffect(() => {
+    if (!isStudyGuideFocusMode || typeof window === "undefined") return undefined;
+    const handleStudyGuideFocusKeyDown = (event) => {
+      if (event.key === "Escape") setIsStudyGuideFocusMode(false);
+      if (event.key === "ArrowLeft") goToPreviousStudyGuideSlide();
+      if (event.key === "ArrowRight") goToNextStudyGuideSlide();
+    };
+    window.addEventListener("keydown", handleStudyGuideFocusKeyDown);
+    return () => window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
+  }, [isStudyGuideFocusMode, studyGuideSlides.length]);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
     || "Shared Study Guide";
@@ -13776,8 +13812,8 @@ export default function App() {
         trendValues: dailyActiveTrend,
       },
       {
-        label: "Estimated AI cost",
-        value: formatAdminCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0),
+        label: "OpenAI cost",
+        value: billingAiCosts.has_actual_cost ? formatAdminCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0) : "Cost unavailable",
         detail: `${formatAdminInteger(billingAiCosts.token_totals?.total_tokens ?? 0)} tracked tokens`,
         icon: CircleDollarSign,
         accentClass: "bg-amber-50 text-amber-700",
@@ -14977,7 +15013,7 @@ export default function App() {
             <div className="grid gap-5 xl:grid-cols-2">
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">AI Cost Dashboard</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-950">Estimated OpenAI spend by feature</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported cost by feature</h3>
                 <div className="mt-5 space-y-3">
                   {(billingAiCosts.by_feature || []).length ? (billingAiCosts.by_feature || []).map((item) => (
                     <div key={item.feature} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
@@ -14986,7 +15022,7 @@ export default function App() {
                         <span className="text-sm font-bold text-slate-950">{formatAdminCurrency(item.cost)}</span>
                       </div>
                     </div>
-                  )) : emptyPanel("AI cost estimates appear after usage events are recorded.")}
+                  )) : emptyPanel("OpenAI-reported costs appear only when the OpenAI Usage or Costs API returns cost. Otherwise tokens remain visible and cost is unavailable.")}
                 </div>
                 <div className="mt-5 grid gap-3 sm:grid-cols-3">
                   {[
@@ -15004,7 +15040,7 @@ export default function App() {
 
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Profitability</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-950">Revenue minus estimated AI cost</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Revenue minus OpenAI-reported cost</h3>
                 <div className="mt-5 space-y-3">
                   {billingProfitability.length ? billingProfitability.slice(0, 12).map((item) => (
                     <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
@@ -15016,7 +15052,7 @@ export default function App() {
                       </div>
                       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
                         <span>Revenue: <strong className="text-slate-900">{formatAdminCurrency(item.revenue)}</strong></span>
-                        <span>AI Cost: <strong className="text-slate-900">{formatAdminCurrency(item.ai_cost)}</strong></span>
+                        <span>OpenAI Cost: <strong className="text-slate-900">{item.ai_cost_available === false ? "Unavailable" : formatAdminCurrency(item.ai_cost)}</strong></span>
                         <span>Profit: <strong className={toFiniteNumber(item.profit) < 0 ? "text-rose-700" : "text-emerald-700"}>{formatAdminCurrency(item.profit)}</strong></span>
                       </div>
                     </div>
@@ -15060,7 +15096,7 @@ export default function App() {
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.input_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.output_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.total_tokens)}</td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{formatAdminCurrency(record.estimated_cost)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{record.cost_status === "available" ? formatAdminCurrency(record.cost) : "Unavailable"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.timestamp ? formatAdminDateTime(record.timestamp) : "Unknown"}</td>
                       </tr>
                     )) : (
@@ -17307,9 +17343,10 @@ export default function App() {
   };
 
   const handleBlockedAccessChangeModel = () => {
+    setSelectedAiChatModel("gpt-4.1");
     setModelAccessBlock(null);
     setInlineVoicePicker("");
-    setStatus("Choose a model your current plan can use.");
+    setStatus("Model changed to GPT-4.1.");
   };
 
   function getResolvedCurrentPlanId() {
@@ -19665,6 +19702,7 @@ export default function App() {
     pastQuestionPapers,
     draft: chatQuestion,
     setDraft: setChatQuestion,
+    selectedModel: selectedAiChatModel,
     onBlockedAccess: showModelAccessBlock,
   });
   const lectureAssistantMessages = lectureAssistant.messages;
@@ -24459,6 +24497,7 @@ export default function App() {
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
         interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
         preferred_provider: "openai",
+        requested_model: shouldUseLectureContext ? "gpt-4.1" : selectedAiChatModel,
         conversation_id: conversationId,
         session_id: conversationId,
         context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
@@ -25781,6 +25820,12 @@ export default function App() {
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(false)} className="study-chat-sidebar-close" aria-label="Close chat history"><X className="h-4 w-4" aria-hidden="true" /></button>
           </div>
           <button type="button" onClick={startNewStudyChat} className="study-chat-new-button"><Pencil className="h-4 w-4" aria-hidden="true" /><span>New chat</span></button>
+          <label className="study-chat-sidebar-voice study-chat-sidebar-model">
+            <span><Bot className="h-4 w-4" aria-hidden="true" /> Model</span>
+            <select value={selectedAiChatModel} onChange={(event) => setSelectedAiChatModel(event.target.value)} aria-label="Choose AI chat model">
+              {AI_CHAT_MODEL_OPTIONS.map((model) => <option key={model.id} value={model.id}>{model.label} - {model.plan}</option>)}
+            </select>
+          </label>
           <label className="study-chat-sidebar-voice">
             <span><Mic className="h-4 w-4" aria-hidden="true" /> Voice</span>
             <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} aria-label="Choose study chat voice">
@@ -29051,6 +29096,9 @@ export default function App() {
                       </div>
                     ) : null}
                   </div>
+                  <button type="button" onClick={() => setIsStudyGuideFocusMode(true)} disabled={activeTab !== "guide" || !studyGuideSlides.length} className="workspace-icon-action" title="Focus mode" aria-label="Open Study Guide focus mode" data-mobile-label="Focus">
+                    <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+                  </button>
                   <div className="workspace-more-anchor">
                     <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen((current) => !current)} className={`workspace-icon-action workspace-mobile-more-button ${isWorkspaceMobileMoreOpen ? "is-active" : ""}`} title="More" aria-label="More Study Workspace actions" aria-expanded={isWorkspaceMobileMoreOpen} data-mobile-label="More">
                       <Ellipsis className="h-4 w-4" aria-hidden="true" />
@@ -29068,9 +29116,16 @@ export default function App() {
                 </div>
               </>
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
+              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
-                  <div className={`study-guide-shell study-guide-themed academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
+                  <div className={`study-guide-shell study-guide-themed study-guide-slide-deck academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
+                    {isStudyGuideFocusMode ? (
+                      <div className="study-guide-focus-toolbar">
+                        <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
+                        <div className="study-guide-focus-title"><PanelLeftOpen className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
+                        <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-icon" aria-label="Close focus mode"><X className="h-4 w-4" aria-hidden="true" /></button>
+                      </div>
+                    ) : null}
                     <div
                       ref={(node) => {
                         if (node && guideTitleSection) teacherSectionRefs.current[guideTitleSection.normalizedHeading] = node;
@@ -29078,7 +29133,7 @@ export default function App() {
                         if (node && guideSummarySection) teacherSectionRefs.current[guideSummarySection.normalizedHeading] = node;
                         else if (guideSummarySection) delete teacherSectionRefs.current[guideSummarySection.normalizedHeading];
                       }}
-                      className={`study-guide-title-card rounded-[16px] p-4 transition ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
+                      className={`study-guide-title-card rounded-[16px] p-4 transition ${activeStudyGuideSlide.type === "intro" ? "study-guide-slide-active" : "study-guide-slide-hidden"} ${isTeacherOnGuideIntro ? "study-guide-section-active" : ""}`}
                     >
                       <div className="study-guide-topic-header">
                         <span className="study-guide-topic-icon" aria-hidden="true"><GraduationCap /></span>
@@ -29108,11 +29163,12 @@ export default function App() {
                           return (
                             <details
                               key={`${section.heading}-${index}`}
+                              open={activeStudyGuideSlide.type === "section" && activeStudyGuideSlide.section?.normalizedHeading === section.normalizedHeading}
                               ref={(node) => {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
                               }}
-                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[16px] p-4 transition ${isActiveSection ? "study-guide-section-active" : ""}`}
+                              className={`study-guide-section-card study-guide-section-${getGuideSectionTone(section.displayHeading || section.heading)} rounded-[16px] p-4 transition ${activeStudyGuideSlide.type === "section" && activeStudyGuideSlide.section?.normalizedHeading === section.normalizedHeading ? "study-guide-slide-active" : "study-guide-slide-hidden"} ${isActiveSection ? "study-guide-section-active" : ""}`}
                               style={getStudyGuideSectionThemeStyle(studyGuideTheme, index, section.displayHeading || section.heading)}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
@@ -29215,6 +29271,19 @@ export default function App() {
                         <StudyGuideImageCards images={getVisibleStudyImages(studyImages)} />
                       </div>
                     )}
+                    <div className="study-guide-slide-nav" aria-label="Study Guide slide navigation">
+                      <button type="button" onClick={goToPreviousStudyGuideSlide} disabled={activeStudyGuideSlideIndex <= 0} className="study-guide-slide-step"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Previous</button>
+                      <div className="study-guide-slide-progress"><span style={{ width: `${studyGuideSlides.length ? ((activeStudyGuideSlideIndex + 1) / studyGuideSlides.length) * 100 : 0}%` }} /><strong>{activeStudyGuideSlideIndex + 1} / {studyGuideSlides.length}</strong></div>
+                      <button type="button" onClick={goToNextStudyGuideSlide} disabled={activeStudyGuideSlideIndex >= studyGuideSlides.length - 1} className="study-guide-slide-step">Next<ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" /></button>
+                    </div>
+                    <div className="study-guide-slide-thumbnails" aria-label="Study Guide slide thumbnails">
+                      {studyGuideSlides.map((slide, index) => (
+                        <button key={`${slide.type}-${slide.title}-${index}`} type="button" onClick={() => goToStudyGuideSlide(index)} className={`study-guide-slide-thumb ${index === activeStudyGuideSlideIndex ? "is-active" : ""}`} aria-label={`Open slide ${index + 1}: ${slide.title}`}>
+                          <span>{index + 1}</span>
+                          <strong>{slide.title}</strong>
+                        </button>
+                      ))}
+                    </div>
 
                   </div>
                 ) : null}
@@ -29242,7 +29311,7 @@ export default function App() {
                       return (
                         <article
                           key={`${section.heading}-${index}`}
-                          ref={(node) => {
+                              ref={(node) => {
                             if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                             else delete teacherSectionRefs.current[section.normalizedHeading];
                           }}

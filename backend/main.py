@@ -157,7 +157,10 @@ def normalize_standard_text_model(value: Any = "", fallback: str = STANDARD_TEXT
     return model or STANDARD_TEXT_MODEL
 
 
-AI_CHAT_MODEL = normalize_openai_model_name(os.getenv("AI_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL)
+AI_CHAT_MODEL = normalize_openai_model_name(
+    os.getenv("AI_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL"),
+    DEFAULT_OPENAI_CHAT_MODEL,
+)
 BASE_TEXT_MODEL = normalize_standard_text_model(os.getenv("BASE_TEXT_MODEL"), STANDARD_TEXT_MODEL)
 ADVANCED_ACADEMIC_MODEL = normalize_standard_text_model(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
 STUDY_GUIDE_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
@@ -559,23 +562,6 @@ BILLING_PLAN_QUOTAS = {
         "source_upload": -1,
         "study_chat_upload": -1,
     },
-}
-AI_FEATURE_COST_ESTIMATE_ZAR = {
-    "ai_chat": get_float_env("AI_COST_ESTIMATE_CHAT_ZAR", 0.05),
-    "study_chat": get_float_env("AI_COST_ESTIMATE_STUDY_CHAT_ZAR", 0.06),
-    "study_guide": get_float_env("AI_COST_ESTIMATE_STUDY_GUIDE_ZAR", 0.45),
-    "worked_examples": get_float_env("AI_COST_ESTIMATE_WORKED_EXAMPLES_ZAR", 0.22),
-    "formula_solver": get_float_env("AI_COST_ESTIMATE_FORMULA_SOLVER_ZAR", 0.18),
-    "flashcards": get_float_env("AI_COST_ESTIMATE_FLASHCARDS_ZAR", 0.12),
-    "quiz": get_float_env("AI_COST_ESTIMATE_QUIZ_ZAR", 0.20),
-    "report": get_float_env("AI_COST_ESTIMATE_REPORT_ZAR", 0.85),
-    "mind_map": get_float_env("AI_COST_ESTIMATE_MIND_MAP_ZAR", 0.16),
-    "presentation": get_float_env("AI_COST_ESTIMATE_PRESENTATION_ZAR", 0.55),
-    "podcast": get_float_env("AI_COST_ESTIMATE_PODCAST_ZAR", 0.42),
-    "ai_notes": get_float_env("AI_COST_ESTIMATE_AI_NOTES_ZAR", 0.18),
-    "teacher_lesson": get_float_env("AI_COST_ESTIMATE_TEACHER_LESSON_ZAR", 0.35),
-    "voice_transcription": get_float_env("AI_COST_ESTIMATE_VOICE_TRANSCRIPTION_ZAR", 0.04),
-    "source_upload": get_float_env("AI_COST_ESTIMATE_SOURCE_UPLOAD_ZAR", 0.10),
 }
 HOSTING_COST_ESTIMATE_ZAR_PER_MONTH = get_float_env("HOSTING_COST_ESTIMATE_ZAR_PER_MONTH", 500)
 PLAN_ENTITLEMENTS = {
@@ -3734,7 +3720,7 @@ PRACTICE QUESTIONS AND ANSWERS
 Include:
 
 ## PRACTICE QUESTIONS AND ANSWERS
-
+questions and answers should be well structured and separated 
 Generate 4–8 useful revision questions unless source scope strongly justifies a different amount.
 
 Vary question style according to the discipline.
@@ -3747,7 +3733,7 @@ explanation,
 
 comparison,
 
-calculation,
+calculation,can be complexed if it high level mathematics or any subject,
 
 application,
 
@@ -7047,6 +7033,7 @@ class LectureAssistantRequest(BaseModel):
     voice_profile_label: str = ""
     voice_style_prompt: str = ""
     chat_scope: str = "study"
+    requested_model: str = ""
 
 
 class AssistantConversationUpdateRequest(BaseModel):
@@ -16500,6 +16487,20 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
         return vision_attempts
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
+    requested_model = normalize_openai_model_name(payload.requested_model, "")
+    if requested_model and compact_text(payload.chat_scope, "study").lower() == "global" and not bool(payload.voice_mode):
+        next_attempts: list[dict[str, str]] = []
+        seen_requested: set[tuple[str, str]] = set()
+        for attempt in attempts:
+            adjusted = dict(attempt)
+            if adjusted.get("provider") == "openai":
+                adjusted["model"] = requested_model
+            fingerprint = (compact_text(adjusted.get("provider")), compact_text(adjusted.get("model")))
+            if fingerprint in seen_requested:
+                continue
+            seen_requested.add(fingerprint)
+            next_attempts.append(adjusted)
+        attempts = next_attempts
     if compact_text(payload.chat_scope, "study").lower() != "global":
         study_attempts: list[dict[str, str]] = []
         seen_attempts: set[tuple[str, str]] = set()
@@ -19348,6 +19349,13 @@ def parse_int_amount(value: Any) -> int:
         return 0
 
 
+def parse_openai_actual_cost(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    amount = parse_zar_amount(value)
+    return amount if amount > 0 else None
+
+
 def is_paid_payment_status(status: str) -> bool:
     normalized = compact_text(status).upper()
     return normalized in {"COMPLETE", "COMPLETE_PAYMENT", "PAID", "SUCCESS", "ACTIVE"}
@@ -19486,20 +19494,28 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         input_tokens = parse_int_amount(metadata.get("input_tokens") or metadata.get("prompt_tokens"))
         output_tokens = parse_int_amount(metadata.get("output_tokens") or metadata.get("completion_tokens"))
         total_tokens = parse_int_amount(metadata.get("total_tokens")) or input_tokens + output_tokens
-        estimated_cost = parse_zar_amount(metadata.get("estimated_cost_zar") or metadata.get("estimated_cost") or 0)
-        if estimated_cost <= 0:
-            estimated_cost = round(quantity * AI_FEATURE_COST_ESTIMATE_ZAR.get(feature, 0.10), 2)
+        openai_cost = parse_openai_actual_cost(
+            metadata.get("openai_cost_zar")
+            or metadata.get("openai_cost")
+            or metadata.get("cost_zar")
+            or metadata.get("cost")
+        )
+        internal_estimated_cost = parse_zar_amount(metadata.get("estimated_cost_zar") or metadata.get("estimated_cost") or 0)
         email = normalize_email(row["email"])
         label = BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title())
-        cost_by_feature[label] = round(cost_by_feature.get(label, 0.0) + estimated_cost, 2)
-        cost_by_user[email] = round(cost_by_user.get(email, 0.0) + estimated_cost, 2)
+        if openai_cost is not None:
+            cost_by_feature[label] = round(cost_by_feature.get(label, 0.0) + openai_cost, 2)
+            cost_by_user[email] = round(cost_by_user.get(email, 0.0) + openai_cost, 2)
         if feature == "study_guide":
             current_study_guide_usage = study_guide_usage_by_user.setdefault(
                 email,
-                {"count": 0, "cost": 0.0},
+                {"count": 0, "cost": 0.0, "unavailable": 0},
             )
             current_study_guide_usage["count"] = int(current_study_guide_usage.get("count", 0)) + quantity
-            current_study_guide_usage["cost"] = round(float(current_study_guide_usage.get("cost", 0.0)) + estimated_cost, 2)
+            if openai_cost is not None:
+                current_study_guide_usage["cost"] = round(float(current_study_guide_usage.get("cost", 0.0)) + openai_cost, 2)
+            else:
+                current_study_guide_usage["unavailable"] = int(current_study_guide_usage.get("unavailable", 0)) + quantity
         token_totals["input_tokens"] += input_tokens
         token_totals["output_tokens"] += output_tokens
         token_totals["total_tokens"] += total_tokens
@@ -19509,11 +19525,15 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "tool": label,
                 "feature": feature,
                 "model": compact_text(metadata.get("model"), "tracked-by-feature"),
+                "request_id": compact_text(metadata.get("request_id") or metadata.get("openai_request_id") or metadata.get("trace_id")),
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
-                "estimated_cost": estimated_cost,
-                "estimated_cost_label": f"R{estimated_cost:,.2f}",
+                "cost": openai_cost,
+                "cost_status": "available" if openai_cost is not None else "unavailable",
+                "cost_label": f"R{openai_cost:,.2f}" if openai_cost is not None else "cost unavailable",
+                "estimated_cost": internal_estimated_cost,
+                "estimated_cost_label": f"R{internal_estimated_cost:,.2f}" if internal_estimated_cost > 0 else "",
                 "quantity": quantity,
                 "timestamp": row["created_at"],
             }
@@ -19531,6 +19551,7 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "user": email,
                 "revenue": revenue,
                 "ai_cost": ai_cost,
+                "ai_cost_available": email in cost_by_user,
                 "profit": round(revenue - ai_cost, 2),
                 "study_guide_count": int(study_guide_usage_by_user.get(email, {}).get("count", 0)),
                 "study_guide_cost": round(float(study_guide_usage_by_user.get(email, {}).get("cost", 0.0)), 2),
@@ -19544,9 +19565,9 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
     alerts: list[dict[str, str]] = []
     for email, cost in sorted(cost_by_user.items(), key=lambda item: item[1], reverse=True)[:8]:
         if cost >= 50:
-            alerts.append({"level": "warning", "message": f"{email} generated more than R50 in estimated AI costs for this period."})
+            alerts.append({"level": "warning", "message": f"{email} generated more than R50 in OpenAI-reported costs for this period."})
     if monthly_revenue and total_ai_cost / max(monthly_revenue, 1) >= 0.5:
-        alerts.append({"level": "warning", "message": "Estimated AI spend is above 50% of monthly revenue."})
+        alerts.append({"level": "warning", "message": "OpenAI-reported spend is above 50% of monthly revenue."})
     if failed_payments:
         alerts.append({"level": "info", "message": f"{failed_payments} failed or pending payment record(s) need review."})
     if pending_manual_payments:
@@ -19582,12 +19603,15 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             ],
             "token_totals": token_totals,
             "total_cost": total_ai_cost,
+            "has_actual_cost": bool(cost_by_feature),
+            "cost_source": "OpenAI Usage API / Costs API",
             "study_guide_by_user": [
                 {
                     "user": email,
                     "count": int(values.get("count", 0)),
                     "cost": round(float(values.get("cost", 0.0)), 2),
                     "cost_label": f"R{float(values.get('cost', 0.0)):,.2f}",
+                    "cost_unavailable_count": int(values.get("unavailable", 0)),
                 }
                 for email, values in sorted(
                     study_guide_usage_by_user.items(),
@@ -22698,8 +22722,8 @@ async def cancel_job(job_id: str, current_user: str = Depends(require_authentica
 @app.post("/jobs/{job_id}/abandon")
 async def abandon_job(job_id: str, current_user: str = Depends(require_authenticated_user)):
     job = require_owned_job(job_id, current_user)
-    # Kept as a compatibility endpoint for older clients. Closing or
-    # backgrounding a page is not an explicit cancellation request.
+    # Closing, refreshing, or backgrounding a page is not a reliable signal that
+    # the student wants to spend-billable generation work cancelled.
     return {"job_id": job_id, "status": job.get("status"), "scheduled": False}
 
 
@@ -33483,9 +33507,8 @@ async def create_study_guide(
             generation_prompt,
         ),
     )
-    # Keep long Study Guide jobs alive through mobile backgrounding, refreshes,
-    # and temporary network loss. Users can still stop billing work explicitly
-    # through the authenticated /jobs/{job_id}/cancel endpoint.
+    # The frontend may refresh, sleep, or temporarily lose focus while a guide
+    # is running. Only the explicit cancel endpoint should stop this job.
     record_audit_log(
         action="study_guide.request",
         email=current_user,
@@ -35253,7 +35276,14 @@ def create_lecture_assistant_stream(
         raise HTTPException(status_code=400, detail="A question is required.")
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     plan_id = get_effective_plan_id(current_user)
-    blocked_attempt = next((attempt for attempt in attempts if not can_use_model(plan_id, attempt.get("model", ""), payload.chat_scope)), None)
+    blocked_attempt = next(
+        (
+            attempt
+            for attempt in attempts
+            if not can_use_model(plan_id, compact_text(attempt.get("model")), payload.chat_scope)
+        ),
+        None,
+    )
     if blocked_attempt:
         def blocked_event_stream():
             yield build_sse_event(
