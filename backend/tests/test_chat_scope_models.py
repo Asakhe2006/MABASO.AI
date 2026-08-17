@@ -19,6 +19,12 @@ class ChatScopeModelTests(unittest.TestCase):
         attempts = main.resolve_lecture_assistant_attempts(payload, "openai")
         self.assertEqual(attempts[0]["model"], "gpt-5.6-terra")
 
+    def test_premium_chat_model_is_blocked_for_free_and_pro_plans(self):
+        self.assertFalse(main.can_use_model("free", "gpt-5.6-terra", "global"))
+        self.assertFalse(main.can_use_model("pro_student", "gpt-5.6-terra", "global"))
+        self.assertTrue(main.can_use_model("premium_student", "gpt-5.6-terra", "global"))
+        self.assertTrue(main.can_use_model("free", "gpt-4.1", "global"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8832,3 +8832,113 @@ iframe {
     padding: 5px 7px !important;
   }
 }
+
+.model-access-blocker {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: rgba(0, 10, 6, 0.74);
+  backdrop-filter: blur(12px);
+}
+
+.model-access-blocker__panel {
+  position: relative;
+  width: min(420px, 92vw);
+  border: 1px solid rgba(74, 222, 128, 0.22);
+  border-radius: 16px;
+  background: #07130f;
+  padding: 24px;
+  color: #f8fafc;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+}
+
+.model-access-blocker__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.model-access-blocker__eyebrow {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #86efac;
+}
+
+.model-access-blocker h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.22;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.model-access-blocker p {
+  margin: 14px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #cbd5e1;
+}
+
+.model-access-blocker small {
+  display: block;
+  margin-top: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.model-access-blocker__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 22px;
+}
+
+.model-access-blocker__actions button {
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0 16px;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.model-access-blocker__actions button.is-primary {
+  border-color: rgba(74, 222, 128, 0.4);
+  background: #10b981;
+  color: #04120c;
+}
+
+@media (max-width: 640px) {
+  .model-access-blocker {
+    padding: 14px;
+  }
+
+  .model-access-blocker__panel {
+    padding: 22px 18px 18px;
+  }
+
+  .model-access-blocker__actions {
+    flex-direction: column;
+  }
+
+  .model-access-blocker__actions button {
+    width: 100%;
+  }
+}

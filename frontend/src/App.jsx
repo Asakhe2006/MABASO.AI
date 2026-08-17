@@ -91,6 +91,7 @@ const ADMIN_DASHBOARD_REFRESH_MS = 10000;
 const ADMIN_DASHBOARD_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 20 * 60 * 1000;
 const AI_GENERATION_REQUEST_TIMEOUT_MS = 120000;
+const STUDY_GUIDE_JOB_REQUEST_TIMEOUT_MS = 12 * 60 * 1000;
 const AI_EXPORT_REQUEST_TIMEOUT_MS = 120000;
 const SESSION_DURATION_LABEL = "1 hour 30 minutes";
 const TEACHER_REALTIME_CONNECT_TIMEOUT_MS = 18000;
@@ -6813,6 +6814,7 @@ export default function App() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [modelAccessBlock, setModelAccessBlock] = useState(null);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
   const [upgradeLimitMessage, setUpgradeLimitMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
@@ -17280,6 +17282,36 @@ export default function App() {
     return error;
   };
 
+  const showModelAccessBlock = (payload = {}) => {
+    setModelAccessBlock({
+      status: "BLOCKED_ACCESS",
+      reason: payload.reason || "PLAN_RESTRICTION",
+      requiredAction: payload.required_action || payload.requiredAction || "UPGRADE_OR_CHANGE_MODEL",
+      model: payload.model || "Selected AI mode",
+      provider: payload.provider || "OpenAI",
+    });
+  };
+
+  const createModelAccessBlockedError = (payload = {}) => {
+    const error = new Error("This AI mode is not available on your current plan.");
+    error.blockedAccess = true;
+    error.blockedPayload = payload;
+    return error;
+  };
+
+  const closeModelAccessBlock = () => setModelAccessBlock(null);
+
+  const handleBlockedAccessUpgrade = () => {
+    setModelAccessBlock(null);
+    openUpgradeModal();
+  };
+
+  const handleBlockedAccessChangeModel = () => {
+    setModelAccessBlock(null);
+    setInlineVoicePicker("");
+    setStatus("Choose a model your current plan can use.");
+  };
+
   function getResolvedCurrentPlanId() {
     const planId = String(
       billingUsage?.plan_id
@@ -19633,6 +19665,7 @@ export default function App() {
     pastQuestionPapers,
     draft: chatQuestion,
     setDraft: setChatQuestion,
+    onBlockedAccess: showModelAccessBlock,
   });
   const lectureAssistantMessages = lectureAssistant.messages;
   const latestLectureAssistantReply = [...lectureAssistantMessages].reverse().find((message) => message.role === "assistant") || null;
@@ -22431,7 +22464,7 @@ export default function App() {
     while (true) {
       try {
         throwIfSignalAborted(signal, "Transcription cancelled.");
-        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, signal });
+        const response = await authFetch(`/jobs/${jobId}`, { timeoutMs: jobType === "study_guide" ? STUDY_GUIDE_JOB_REQUEST_TIMEOUT_MS : AI_GENERATION_REQUEST_TIMEOUT_MS, signal });
         const data = await parseJsonSafe(response);
         if (!response.ok) {
           const requestError = new Error(data.detail || "Could not read job status.");
@@ -22618,7 +22651,7 @@ export default function App() {
               reference_images: getSafeAiReferenceImageUrls(visualReferences),
               generation_prompt: resolvedGenerationPrompt,
             }),
-            timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+            timeoutMs: STUDY_GUIDE_JOB_REQUEST_TIMEOUT_MS,
             signal: abortController.signal,
           });
           const data = await parseJsonSafe(response);
@@ -24462,6 +24495,9 @@ export default function App() {
         applyStreamedChatUsage(data);
         return;
       }
+      if (event === "blocked_access" || data?.status === "BLOCKED_ACCESS") {
+        throw createModelAccessBlockedError(data || {});
+      }
       if (event === "error") {
         throw new Error(String(data?.message || "Study chat could not finish the answer."));
       }
@@ -25091,6 +25127,12 @@ export default function App() {
       });
     } catch (err) {
       if (studyChatRequestRunRef.current !== requestRunId) return;
+      if (err?.blockedAccess) {
+        setChatMessages((current) => current.filter((message) => ![userMessage.id, pendingAssistantMessage.id].includes(message.id)));
+        showModelAccessBlock(err.blockedPayload || {});
+        setStatus("AI mode access restricted.");
+        return;
+      }
       const chatFailedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
       console.warn("[MABASO timing] study chat failed", {
         totalMs: Math.round(chatFailedAt - chatStartedAt),
@@ -26782,7 +26824,7 @@ export default function App() {
           language: outputLanguage,
           reference_images: getSafeAiReferenceImageUrls(roomSnapshot.study_images || []),
         }),
-        timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
+        timeoutMs: STUDY_GUIDE_JOB_REQUEST_TIMEOUT_MS,
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Room study guide generation failed.");
@@ -28468,8 +28510,24 @@ export default function App() {
     </div>
   );
 
+  const modelAccessBlockOverlay = modelAccessBlock ? (
+    <div className="model-access-blocker" role="dialog" aria-modal="true" aria-label="Access restricted">
+      <div className="model-access-blocker__panel">
+        <button type="button" className="model-access-blocker__close" onClick={closeModelAccessBlock} aria-label="Close access restriction"><X className="h-4 w-4" aria-hidden="true" /></button>
+        <p className="model-access-blocker__eyebrow">Access restricted</p>
+        <h2>This AI mode is not available on your current plan.</h2>
+        <p>Please upgrade your subscription or select a different model before sending this request.</p>
+        {modelAccessBlock?.model ? <small>Requested model: {modelAccessBlock.model}</small> : null}
+        <div className="model-access-blocker__actions">
+          <button type="button" onClick={handleBlockedAccessChangeModel}>Change Model</button>
+          <button type="button" onClick={handleBlockedAccessUpgrade} className="is-primary">Upgrade Plan</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (authToken && currentPage === "voice") {
-    return renderStudyChatFullPage();
+    return <>{renderStudyChatFullPage()}{modelAccessBlockOverlay}</>;
   }
 
   return (
@@ -28480,6 +28538,7 @@ export default function App() {
         <div className="hero-grid" />
       </div>
       {isUpgradeModalOpen ? renderUpgradeModal() : null}
+      {modelAccessBlockOverlay}
       {renderPublicShareDialog()}
       {siteRatingModal}
       <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>

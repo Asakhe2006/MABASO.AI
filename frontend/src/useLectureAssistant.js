@@ -1070,6 +1070,7 @@ export function useLectureAssistant({
   draft = "",
   setDraft,
   onLegacyMessagesChange,
+  onBlockedAccess,
   enabled = true,
 }) {
   const storageKey = useMemo(() => buildConversationStorageKey(authEmail), [authEmail]);
@@ -4031,6 +4032,12 @@ export function useLectureAssistant({
           }));
           return;
         }
+        if (event === "blocked_access" || data?.status === "BLOCKED_ACCESS") {
+          const blockedError = new Error("This AI mode is not available on your current plan.");
+          blockedError.blockedAccess = true;
+          blockedError.blockedPayload = data || {};
+          throw blockedError;
+        }
         if (event === "error") {
           const streamErrorMessage = compactText(data.message, "The lecture assistant could not finish that reply.");
           const safeStreamErrorMessage = /model.*(?:does not exist|do not have access|not have access|not found|unsupported)/i.test(streamErrorMessage)
@@ -4080,6 +4087,13 @@ export function useLectureAssistant({
         ...nextAssistantMessage,
         content: streamedText,
       });
+      if (error?.blockedAccess) {
+        if (nextUserMessage?.id) removeMessageById(targetConversationId, nextUserMessage.id);
+        onBlockedAccess?.(error.blockedPayload || {});
+        setStatusText("AI mode access restricted.");
+        pushPerformanceMetric(traceMetrics);
+        return false;
+      }
       stopSpeaking();
       setIsSyncingConversation(false);
       if (useVoiceInteraction && voiceModeEnabledRef.current) {

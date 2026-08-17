@@ -43,6 +43,7 @@ import requests
 from chat_assistant import (
     DEFAULT_OPENAI_CHAT_MODEL,
     FALLBACK_OPENAI_CHAT_MODEL,
+    PREMIUM_OPENAI_CHAT_MODEL,
     ProviderStreamError,
     format_provider_name,
     iter_provider_stream,
@@ -146,25 +147,36 @@ def get_early_int_env(name: str, default: int) -> int:
 
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 FALLBACK_TRANSCRIPTION_MODEL = os.getenv("FALLBACK_TRANSCRIPTION_MODEL", "whisper-1")
-BASE_TEXT_MODEL = normalize_openai_model_name(os.getenv("BASE_TEXT_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
-ADVANCED_ACADEMIC_MODEL = normalize_openai_model_name(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
-STUDY_GUIDE_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
-STUDY_GUIDE_FALLBACK_MODEL = normalize_openai_model_name(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
-VISION_MODEL = normalize_openai_model_name(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
-STUDY_CHAT_MODEL = normalize_openai_model_name(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
+STANDARD_TEXT_MODEL = "gpt-4.1"
+
+
+def normalize_standard_text_model(value: Any = "", fallback: str = STANDARD_TEXT_MODEL) -> str:
+    model = normalize_openai_model_name(value, fallback)
+    if re.search(r"(terra|5\.6)", model, flags=re.IGNORECASE):
+        return STANDARD_TEXT_MODEL
+    return model or STANDARD_TEXT_MODEL
+
+
+AI_CHAT_MODEL = normalize_openai_model_name(os.getenv("AI_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL)
+BASE_TEXT_MODEL = normalize_standard_text_model(os.getenv("BASE_TEXT_MODEL"), STANDARD_TEXT_MODEL)
+ADVANCED_ACADEMIC_MODEL = normalize_standard_text_model(os.getenv("ADVANCED_ACADEMIC_MODEL"), BASE_TEXT_MODEL)
+STUDY_GUIDE_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_MODEL"), ADVANCED_ACADEMIC_MODEL)
+STUDY_GUIDE_FALLBACK_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
+VISION_MODEL = normalize_standard_text_model(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
+STUDY_CHAT_MODEL = normalize_standard_text_model(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
 GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
 GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
 MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES = int(os.getenv("MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES", str(12 * 1024 * 1024)))
-ASSET_GENERATION_MODEL = normalize_openai_model_name(os.getenv("ASSET_GENERATION_MODEL"), BASE_TEXT_MODEL)
-PODCAST_SCRIPT_MODEL = normalize_openai_model_name(os.getenv("PODCAST_SCRIPT_MODEL"), BASE_TEXT_MODEL)
+ASSET_GENERATION_MODEL = normalize_standard_text_model(os.getenv("ASSET_GENERATION_MODEL"), BASE_TEXT_MODEL)
+PODCAST_SCRIPT_MODEL = normalize_standard_text_model(os.getenv("PODCAST_SCRIPT_MODEL"), BASE_TEXT_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
-TEACHER_SCRIPT_MODEL = normalize_openai_model_name(os.getenv("TEACHER_SCRIPT_MODEL"), ADVANCED_ACADEMIC_MODEL)
-PRESENTATION_MODEL = normalize_openai_model_name(os.getenv("PRESENTATION_MODEL"), ADVANCED_ACADEMIC_MODEL)
-REPORT_MODEL = normalize_openai_model_name(os.getenv("REPORT_MODEL"), ADVANCED_ACADEMIC_MODEL)
-MIND_MAP_MODEL = normalize_openai_model_name(os.getenv("MIND_MAP_MODEL"), BASE_TEXT_MODEL)
+TEACHER_SCRIPT_MODEL = normalize_standard_text_model(os.getenv("TEACHER_SCRIPT_MODEL"), ADVANCED_ACADEMIC_MODEL)
+PRESENTATION_MODEL = normalize_standard_text_model(os.getenv("PRESENTATION_MODEL"), ADVANCED_ACADEMIC_MODEL)
+REPORT_MODEL = normalize_standard_text_model(os.getenv("REPORT_MODEL"), ADVANCED_ACADEMIC_MODEL)
+MIND_MAP_MODEL = normalize_standard_text_model(os.getenv("MIND_MAP_MODEL"), BASE_TEXT_MODEL)
 REALTIME_TUTOR_DEFAULT_MODEL = (
     os.getenv("REALTIME_TUTOR_DEFAULT_MODEL", os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"))
     or "gpt-realtime-mini"
@@ -16508,6 +16520,30 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
         return []
     locked_attempt = attempts[0]
     return [dict(locked_attempt) for _ in range(LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES + 1)]
+
+
+def is_premium_ai_chat_model(model_name: str = "") -> bool:
+    normalized = compact_text(model_name).lower()
+    premium = compact_text(PREMIUM_OPENAI_CHAT_MODEL).lower()
+    return bool(normalized) and (
+        normalized == premium
+        or "terra" in normalized
+        or "5.6" in normalized
+    )
+
+
+def can_use_model(plan_id: str, requested_model: str = "", requested_mode: str = "chat") -> bool:
+    if not is_premium_ai_chat_model(requested_model):
+        return True
+    return get_billing_quota_plan_id(plan_id) == "premium_student"
+
+
+def build_blocked_access_payload(reason: str = "PLAN_RESTRICTION") -> dict[str, str]:
+    return {
+        "status": "BLOCKED_ACCESS",
+        "reason": reason,
+        "required_action": "UPGRADE_OR_CHANGE_MODEL",
+    }
 
 
 def build_sse_event(event: str, data: dict[str, Any]) -> str:
@@ -35215,6 +35251,43 @@ def create_lecture_assistant_stream(
         payload = payload.model_copy(update={"reference_images": reference_images})
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
+    attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
+    plan_id = get_effective_plan_id(current_user)
+    blocked_attempt = next((attempt for attempt in attempts if not can_use_model(plan_id, attempt.get("model", ""), payload.chat_scope)), None)
+    if blocked_attempt:
+        def blocked_event_stream():
+            yield build_sse_event(
+                "blocked_access",
+                {
+                    **build_blocked_access_payload(),
+                    "provider": compact_text(blocked_attempt.get("provider")),
+                    "model": compact_text(blocked_attempt.get("model")),
+                    "plan_id": plan_id,
+                },
+            )
+
+        record_audit_log(
+            action="lecture_assistant.model_blocked",
+            status="blocked",
+            email=current_user,
+            request=request,
+            resource_type="lecture_assistant",
+            resource_name=compact_text(blocked_attempt.get("model"), "restricted-model"),
+            metadata={
+                "provider": compact_text(blocked_attempt.get("provider")),
+                "plan_id": plan_id,
+                "reason": "PLAN_RESTRICTION",
+            },
+        )
+        return StreamingResponse(
+            blocked_event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
     quota_usage = consume_plan_quota(
         email=current_user,
         feature="study_chat",
@@ -35228,7 +35301,6 @@ def create_lecture_assistant_stream(
 
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)
-    attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 

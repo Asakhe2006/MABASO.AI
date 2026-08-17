@@ -10,8 +10,9 @@ import requests
 TEXT_CHAT_PROVIDER_ORDER = ("openai",)
 VOICE_CHAT_PROVIDER_ORDER = ("gemini", "groq")
 SUPPORTED_CHAT_PROVIDERS = ("openai", "gemini", "groq", "openrouter")
-DEFAULT_OPENAI_CHAT_MODEL = "gpt-5.6-terra"
+DEFAULT_OPENAI_CHAT_MODEL = "gpt-4.1"
 FALLBACK_OPENAI_CHAT_MODEL = "gpt-4.1"
+PREMIUM_OPENAI_CHAT_MODEL = "gpt-5.6-terra"
 UNAVAILABLE_OPENAI_MODEL_ALIASES = frozenset({"gpt-terra-5.6"})
 
 
@@ -49,7 +50,7 @@ def format_provider_name(provider: str) -> str:
 def normalize_openai_model_name(value: Any, fallback: str = DEFAULT_OPENAI_CHAT_MODEL) -> str:
     model = compact_text(value, fallback)
     if model.lower() in UNAVAILABLE_OPENAI_MODEL_ALIASES:
-        return DEFAULT_OPENAI_CHAT_MODEL
+        return PREMIUM_OPENAI_CHAT_MODEL
     return model
 
 
@@ -83,7 +84,7 @@ def resolve_provider_model(provider: str, *, voice_mode: bool = False) -> str:
     if normalized == "openai":
         return normalize_openai_model_name(
             os.getenv("OPENAI_CHAT_MODEL"),
-            normalize_openai_model_name(os.getenv("STUDY_CHAT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
+            normalize_openai_model_name(os.getenv("AI_CHAT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
         )
     if normalized == "gemini":
         if voice_mode:
