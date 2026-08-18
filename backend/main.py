@@ -167,6 +167,18 @@ STUDY_GUIDE_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_MODEL")
 STUDY_GUIDE_FALLBACK_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
 VISION_MODEL = normalize_standard_text_model(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
 STUDY_CHAT_MODEL = normalize_standard_text_model(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
+AI_CHAT_MODE_MODELS = {
+    "quick": normalize_openai_model_name(os.getenv("AI_CHAT_QUICK_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
+    "study": normalize_openai_model_name(os.getenv("AI_CHAT_STUDY_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
+    "think_deeper": normalize_openai_model_name(os.getenv("AI_CHAT_THINK_DEEPER_MODEL"), AI_CHAT_MODEL),
+    "expert": normalize_openai_model_name(os.getenv("AI_CHAT_EXPERT_MODEL"), AI_CHAT_MODEL),
+    "maximum": normalize_openai_model_name(os.getenv("AI_CHAT_MAXIMUM_MODEL"), PREMIUM_OPENAI_CHAT_MODEL),
+}
+AI_CHAT_MODE_ACCESS = {
+    "free": {"auto", "quick"},
+    "pro_student": {"auto", "quick", "study", "think_deeper", "expert"},
+    "premium_student": {"auto", "quick", "study", "think_deeper", "expert", "maximum"},
+}
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
 GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
@@ -7033,7 +7045,8 @@ class LectureAssistantRequest(BaseModel):
     voice_profile_label: str = ""
     voice_style_prompt: str = ""
     chat_scope: str = "study"
-    requested_model: str = ""
+    requested_model: str = ""  # Legacy clients only. Do not expose raw model IDs in the student UI.
+    requested_mode: str = "auto"
 
 
 class AssistantConversationUpdateRequest(BaseModel):
@@ -16487,20 +16500,6 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
         return vision_attempts
     provider_hint = compact_text(forced_provider, compact_text(payload.preferred_provider))
     attempts = resolve_provider_attempts(provider_hint, voice_mode=bool(payload.voice_mode))
-    requested_model = normalize_openai_model_name(payload.requested_model, "")
-    if requested_model and compact_text(payload.chat_scope, "study").lower() == "global" and not bool(payload.voice_mode):
-        next_attempts: list[dict[str, str]] = []
-        seen_requested: set[tuple[str, str]] = set()
-        for attempt in attempts:
-            adjusted = dict(attempt)
-            if adjusted.get("provider") == "openai":
-                adjusted["model"] = requested_model
-            fingerprint = (compact_text(adjusted.get("provider")), compact_text(adjusted.get("model")))
-            if fingerprint in seen_requested:
-                continue
-            seen_requested.add(fingerprint)
-            next_attempts.append(adjusted)
-        attempts = next_attempts
     if compact_text(payload.chat_scope, "study").lower() != "global":
         study_attempts: list[dict[str, str]] = []
         seen_attempts: set[tuple[str, str]] = set()
@@ -16523,27 +16522,94 @@ def resolve_lecture_assistant_attempts(payload: LectureAssistantRequest, forced_
     return [dict(locked_attempt) for _ in range(LECTURE_ASSISTANT_VOICE_PROVIDER_RETRIES + 1)]
 
 
-def is_premium_ai_chat_model(model_name: str = "") -> bool:
-    normalized = compact_text(model_name).lower()
-    premium = compact_text(PREMIUM_OPENAI_CHAT_MODEL).lower()
-    return bool(normalized) and (
-        normalized == premium
-        or "terra" in normalized
-        or "5.6" in normalized
-    )
+def normalize_ai_chat_mode(value: Any = "auto") -> str:
+    normalized = compact_text(value, "auto").lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "mabaso_auto": "auto",
+        "auto": "auto",
+        "quick": "quick",
+        "fast": "quick",
+        "study": "study",
+        "think": "think_deeper",
+        "think_deeper": "think_deeper",
+        "deeper": "think_deeper",
+        "expert": "expert",
+        "maximum": "maximum",
+        "max": "maximum",
+    }
+    return aliases.get(normalized, "auto")
 
 
-def can_use_model(plan_id: str, requested_model: str = "", requested_mode: str = "chat") -> bool:
-    if not is_premium_ai_chat_model(requested_model):
-        return True
-    return get_billing_quota_plan_id(plan_id) == "premium_student"
+def get_ai_chat_plan_tier(plan_id: str = "") -> str:
+    quota_plan = get_billing_quota_plan_id(plan_id)
+    if quota_plan == "premium_student":
+        return "premium_student"
+    if quota_plan == "pro_student":
+        return "pro_student"
+    return "free"
 
 
-def build_blocked_access_payload(reason: str = "PLAN_RESTRICTION") -> dict[str, str]:
+def can_use_ai_chat_mode(plan_id: str, requested_mode: str = "auto") -> bool:
+    plan_tier = get_ai_chat_plan_tier(plan_id)
+    mode = normalize_ai_chat_mode(requested_mode)
+    return mode in AI_CHAT_MODE_ACCESS.get(plan_tier, AI_CHAT_MODE_ACCESS["free"])
+
+
+def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
+    mode = normalize_ai_chat_mode(requested_mode)
+    if mode == "maximum":
+        return "Premium"
+    if mode in {"study", "think_deeper", "expert"}:
+        return "Pro"
+    return "Free"
+
+
+def route_auto_ai_chat_mode(question: str, plan_id: str) -> str:
+    plan_tier = get_ai_chat_plan_tier(plan_id)
+    cleaned = compact_text(question).lower()
+    difficult = bool(re.search(r"\b(fourier|laplace|derive|proof|matrix|eigen|integral|differential|circuit|control system|transfer function|z[- ]?transform|statistics|probability|multi[- ]?step)\b", cleaned))
+    if plan_tier == "free":
+        return "quick"
+    if plan_tier == "pro_student":
+        return "think_deeper" if difficult else "study"
+    if plan_tier == "premium_student":
+        return "maximum" if difficult else "expert"
+    return "quick"
+
+
+def resolve_ai_chat_mode_and_model(requested_mode: str, question: str, plan_id: str) -> tuple[str, str]:
+    mode = normalize_ai_chat_mode(requested_mode)
+    resolved_mode = route_auto_ai_chat_mode(question, plan_id) if mode == "auto" else mode
+    if not can_use_ai_chat_mode(plan_id, resolved_mode):
+        return resolved_mode, ""
+    return resolved_mode, AI_CHAT_MODE_MODELS.get(resolved_mode) or DEFAULT_OPENAI_CHAT_MODEL
+
+
+def apply_ai_chat_mode_model(attempts: list[dict[str, str]], model_name: str, mode: str) -> list[dict[str, str]]:
+    model = normalize_openai_model_name(model_name, DEFAULT_OPENAI_CHAT_MODEL)
+    next_attempts: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for attempt in attempts:
+        adjusted = dict(attempt)
+        if adjusted.get("provider") == "openai":
+            adjusted["model"] = model
+            adjusted["label"] = "Mabaso AI"
+            adjusted["mode"] = mode
+        fingerprint = (compact_text(adjusted.get("provider")), compact_text(adjusted.get("model")))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        next_attempts.append(adjusted)
+    return next_attempts
+
+
+def build_blocked_access_payload(reason: str = "PLAN_RESTRICTION", requested_mode: str = "auto") -> dict[str, str]:
     return {
         "status": "BLOCKED_ACCESS",
         "reason": reason,
         "required_action": "UPGRADE_OR_CHANGE_MODEL",
+        "requested_mode": normalize_ai_chat_mode(requested_mode),
+        "required_plan": get_required_plan_for_ai_chat_mode(requested_mode),
     }
 
 
@@ -35276,48 +35342,45 @@ def create_lecture_assistant_stream(
         raise HTTPException(status_code=400, detail="A question is required.")
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     plan_id = get_effective_plan_id(current_user)
-    blocked_attempt = next(
-        (
-            attempt
-            for attempt in attempts
-            if not can_use_model(plan_id, compact_text(attempt.get("model")), payload.chat_scope)
-        ),
-        None,
-    )
-    if blocked_attempt:
-        def blocked_event_stream():
-            yield build_sse_event(
-                "blocked_access",
-                {
-                    **build_blocked_access_payload(),
-                    "provider": compact_text(blocked_attempt.get("provider")),
-                    "model": compact_text(blocked_attempt.get("model")),
+    requested_mode = normalize_ai_chat_mode(payload.requested_mode)
+    resolved_mode = "study"
+    if compact_text(payload.chat_scope, "study").lower() == "global" and not bool(payload.voice_mode):
+        resolved_mode, resolved_model = resolve_ai_chat_mode_and_model(requested_mode, payload.question, plan_id)
+        if not can_use_ai_chat_mode(plan_id, resolved_mode):
+            def blocked_event_stream():
+                yield build_sse_event(
+                    "blocked_access",
+                    {
+                        **build_blocked_access_payload("PLAN_RESTRICTION", resolved_mode),
+                        "provider": "mabaso",
+                        "plan_id": plan_id,
+                    },
+                )
+
+            record_audit_log(
+                action="lecture_assistant.mode_blocked",
+                status="blocked",
+                email=current_user,
+                request=request,
+                resource_type="lecture_assistant",
+                resource_name=resolved_mode,
+                metadata={
+                    "requested_mode": requested_mode,
+                    "resolved_mode": resolved_mode,
                     "plan_id": plan_id,
+                    "reason": "PLAN_RESTRICTION",
                 },
             )
-
-        record_audit_log(
-            action="lecture_assistant.model_blocked",
-            status="blocked",
-            email=current_user,
-            request=request,
-            resource_type="lecture_assistant",
-            resource_name=compact_text(blocked_attempt.get("model"), "restricted-model"),
-            metadata={
-                "provider": compact_text(blocked_attempt.get("provider")),
-                "plan_id": plan_id,
-                "reason": "PLAN_RESTRICTION",
-            },
-        )
-        return StreamingResponse(
-            blocked_event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+            return StreamingResponse(
+                blocked_event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        attempts = apply_ai_chat_mode_model(attempts, resolved_model, resolved_mode)
     quota_usage = consume_plan_quota(
         email=current_user,
         feature="study_chat",
@@ -35326,6 +35389,8 @@ def create_lecture_assistant_stream(
             "route": "lecture_assistant_stream",
             "voice_mode": bool(payload.voice_mode),
             "reference_images": len(reference_images),
+            "requested_mode": requested_mode,
+            "resolved_mode": resolved_mode,
         },
     )
 

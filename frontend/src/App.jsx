@@ -145,18 +145,54 @@ const PUBLIC_TERMS_PATH = "/terms-and-conditions";
 const MAX_HISTORY_ITEMS = 24;
 const MAX_CHAT_REFERENCE_ATTACHMENTS = 15;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
-const AI_CHAT_MODEL_OPTIONS = [
+const AI_CHAT_MODE_OPTIONS = [
   {
-    id: "gpt-4.1",
-    label: "GPT-4.1",
-    description: "Standard Mabaso AI chat model",
-    plan: "All plans",
+    id: "auto",
+    shortLabel: "Auto",
+    label: "Mabaso Auto",
+    description: "Chooses the best available mode for your question",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
-    id: "gpt-5.6-terra",
-    label: "GPT Terra 5.6",
-    description: "Premium AI Chat model",
-    plan: "Premium",
+    id: "quick",
+    shortLabel: "Quick",
+    label: "Quick",
+    description: "Fast answers for simple questions",
+    minimumPlan: "free",
+    planLabel: "",
+  },
+  {
+    id: "study",
+    shortLabel: "Study",
+    label: "Study",
+    description: "Detailed explanations and academic help",
+    minimumPlan: "pro",
+    planLabel: "Pro",
+  },
+  {
+    id: "think_deeper",
+    shortLabel: "Think",
+    label: "Think Deeper",
+    description: "More reasoning for difficult maths, engineering and multi-step problems",
+    minimumPlan: "pro",
+    planLabel: "Pro",
+  },
+  {
+    id: "expert",
+    shortLabel: "Expert",
+    label: "Expert",
+    description: "Advanced reasoning for challenging work",
+    minimumPlan: "pro",
+    planLabel: "Pro",
+  },
+  {
+    id: "maximum",
+    shortLabel: "Max",
+    label: "Maximum",
+    description: "Highest available reasoning capability",
+    minimumPlan: "premium",
+    planLabel: "Premium",
   },
 ];
 const MAX_QUIZ_ANSWER_IMAGES = 6;
@@ -6829,7 +6865,9 @@ export default function App() {
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [modelAccessBlock, setModelAccessBlock] = useState(null);
-  const [selectedAiChatModel, setSelectedAiChatModel] = useState("gpt-4.1");
+  const [selectedAiChatMode, setSelectedAiChatMode] = useState("auto");
+  const [isAiChatModeMenuOpen, setIsAiChatModeMenuOpen] = useState(false);
+  const [lockedAiChatModeInfo, setLockedAiChatModeInfo] = useState(null);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
   const [upgradeLimitMessage, setUpgradeLimitMessage] = useState("");
   const [billingCheckoutPlanId, setBillingCheckoutPlanId] = useState("");
@@ -15636,6 +15674,25 @@ export default function App() {
     if (authToken) return;
     authTokenRef.current = "";
   }, [authToken]);
+  useEffect(() => {
+    if (typeof document === "undefined" || !isAiChatModeMenuOpen) return undefined;
+    const closeModePicker = (event) => {
+      if (event?.target?.closest?.(".ai-chat-mode-picker")) return;
+      setIsAiChatModeMenuOpen(false);
+      setLockedAiChatModeInfo(null);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      setIsAiChatModeMenuOpen(false);
+      setLockedAiChatModeInfo(null);
+    };
+    document.addEventListener("pointerdown", closeModePicker);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", closeModePicker);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAiChatModeMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !pendingStudyChatAnchorIdRef.current) return undefined;
@@ -17318,13 +17375,45 @@ export default function App() {
     return error;
   };
 
+  const normalizeAiChatPlanTier = (planId = "") => {
+    const normalized = String(planId || "").toLowerCase();
+    if (normalized.includes("premium")) return "premium";
+    if (normalized.includes("pro") || normalized.includes("plus")) return "pro";
+    return "free";
+  };
+
+  const getAiChatModeOption = (modeId = selectedAiChatMode) => (
+    AI_CHAT_MODE_OPTIONS.find((option) => option.id === modeId) || AI_CHAT_MODE_OPTIONS[0]
+  );
+
+  const canPlanUseAiChatMode = (planTier, modeId) => {
+    const option = getAiChatModeOption(modeId);
+    if (!option || option.minimumPlan === "free") return true;
+    if (option.minimumPlan === "pro") return planTier === "pro" || planTier === "premium";
+    if (option.minimumPlan === "premium") return planTier === "premium";
+    return false;
+  };
+
+  const canCurrentPlanUseAiChatMode = (modeId = selectedAiChatMode) => (
+    canPlanUseAiChatMode(normalizeAiChatPlanTier(getResolvedCurrentPlanId()), modeId)
+  );
+
+  const getAiChatModeRequiredLabel = (modeId = selectedAiChatMode) => {
+    const option = getAiChatModeOption(modeId);
+    if (option.minimumPlan === "premium") return "Premium";
+    if (option.minimumPlan === "pro") return "Pro";
+    return "Free";
+  };
+
   const showModelAccessBlock = (payload = {}) => {
+    const modeOption = getAiChatModeOption(payload.requested_mode || payload.requestedMode || payload.mode || selectedAiChatMode);
     setModelAccessBlock({
       status: "BLOCKED_ACCESS",
       reason: payload.reason || "PLAN_RESTRICTION",
       requiredAction: payload.required_action || payload.requiredAction || "UPGRADE_OR_CHANGE_MODEL",
-      model: payload.model || "Selected AI mode",
-      provider: payload.provider || "OpenAI",
+      model: modeOption?.label || "Selected AI mode",
+      provider: "Mabaso AI",
+      requiredPlan: payload.required_plan || payload.requiredPlan || getAiChatModeRequiredLabel(modeOption?.id),
     });
   };
 
@@ -17343,10 +17432,12 @@ export default function App() {
   };
 
   const handleBlockedAccessChangeModel = () => {
-    setSelectedAiChatModel("gpt-4.1");
+    setSelectedAiChatMode("auto");
+    setIsAiChatModeMenuOpen(false);
+    setLockedAiChatModeInfo(null);
     setModelAccessBlock(null);
     setInlineVoicePicker("");
-    setStatus("Model changed to GPT-4.1.");
+    setStatus("Mode changed to Mabaso Auto.");
   };
 
   function getResolvedCurrentPlanId() {
@@ -19702,7 +19793,7 @@ export default function App() {
     pastQuestionPapers,
     draft: chatQuestion,
     setDraft: setChatQuestion,
-    selectedModel: selectedAiChatModel,
+    selectedMode: selectedAiChatMode,
     onBlockedAccess: showModelAccessBlock,
   });
   const lectureAssistantMessages = lectureAssistant.messages;
@@ -24497,7 +24588,7 @@ export default function App() {
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
         interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
         preferred_provider: "openai",
-        requested_model: shouldUseLectureContext ? "gpt-4.1" : selectedAiChatModel,
+        requested_mode: shouldUseLectureContext ? "study" : selectedAiChatMode,
         conversation_id: conversationId,
         session_id: conversationId,
         context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
@@ -25693,10 +25784,85 @@ export default function App() {
     );
   };
 
+  const renderAiChatModePicker = ({ compact = false } = {}) => {
+    const selectedOption = getAiChatModeOption(selectedAiChatMode);
+    const planTier = normalizeAiChatPlanTier(getResolvedCurrentPlanId());
+    const activateMode = (option) => {
+      if (!canPlanUseAiChatMode(planTier, option.id)) {
+        setLockedAiChatModeInfo(option);
+        setIsAiChatModeMenuOpen(true);
+        return;
+      }
+      setSelectedAiChatMode(option.id);
+      setLockedAiChatModeInfo(null);
+      setIsAiChatModeMenuOpen(false);
+    };
+
+    return (
+      <div className="ai-chat-mode-picker" onPointerDown={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className="ai-chat-mode-trigger"
+          aria-haspopup="menu"
+          aria-expanded={isAiChatModeMenuOpen}
+          onClick={() => {
+            setLockedAiChatModeInfo(null);
+            setIsAiChatModeMenuOpen((current) => !current);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setIsAiChatModeMenuOpen(false);
+              setLockedAiChatModeInfo(null);
+            }
+          }}
+        >
+          <span className="ai-chat-mode-trigger-label"><span className="ai-chat-mode-full-label">{selectedOption.label}</span><span className="ai-chat-mode-short-label">{selectedOption.shortLabel || selectedOption.label}</span></span>
+          <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        {isAiChatModeMenuOpen ? (
+          <div className="ai-chat-mode-menu" role="menu" aria-label="Choose Mabaso AI mode">
+            <p className="ai-chat-mode-menu-kicker">Choose mode</p>
+            {AI_CHAT_MODE_OPTIONS.map((option) => {
+              const isSelected = option.id === selectedAiChatMode;
+              const isLocked = !canPlanUseAiChatMode(planTier, option.id);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  className={`ai-chat-mode-row ${isSelected ? "is-selected" : ""} ${isLocked ? "is-locked" : ""}`}
+                  onClick={() => activateMode(option)}
+                >
+                  <span className="ai-chat-mode-check">{isSelected ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : null}</span>
+                  <span className="ai-chat-mode-copy">
+                    <span className="ai-chat-mode-name">{option.label}</span>
+                    <span className="ai-chat-mode-description">{option.description}</span>
+                  </span>
+                  {isLocked ? <span className="ai-chat-mode-lock"><LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />{option.planLabel}</span> : null}
+                </button>
+              );
+            })}
+            {lockedAiChatModeInfo ? (
+              <div className="ai-chat-mode-upgrade" role="note">
+                <strong>{lockedAiChatModeInfo.label}</strong>
+                <span>{lockedAiChatModeInfo.description}</span>
+                <small>Available with {lockedAiChatModeInfo.planLabel || "a higher plan"}.</small>
+                <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); openUpgradeModal(); }}>
+                  Upgrade to {lockedAiChatModeInfo.planLabel || "Pro"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
       <div className="study-chat-composer-row">
-        <button type="button" onClick={() => chatImageInputRef.current?.click()} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
+        <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); chatImageInputRef.current?.click(); }} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
+        {fullPage ? renderAiChatModePicker({ compact }) : null}
         <textarea
           ref={studyChatComposerInputRef}
           value={chatQuestion}
@@ -25726,7 +25892,7 @@ export default function App() {
         ) : (
           <button
             type="button"
-            onClick={askStudyAssistant}
+            onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); askStudyAssistant(); }}
             disabled={isStudyChatVoiceListening || isUploadingChatReferences || !chatQuestion.trim()}
             className="study-chat-send-button"
             aria-label="Send study chat question"
@@ -25820,12 +25986,7 @@ export default function App() {
             <button type="button" onClick={() => setIsStudyChatSidebarOpen(false)} className="study-chat-sidebar-close" aria-label="Close chat history"><X className="h-4 w-4" aria-hidden="true" /></button>
           </div>
           <button type="button" onClick={startNewStudyChat} className="study-chat-new-button"><Pencil className="h-4 w-4" aria-hidden="true" /><span>New chat</span></button>
-          <label className="study-chat-sidebar-voice study-chat-sidebar-model">
-            <span><Bot className="h-4 w-4" aria-hidden="true" /> Model</span>
-            <select value={selectedAiChatModel} onChange={(event) => setSelectedAiChatModel(event.target.value)} aria-label="Choose AI chat model">
-              {AI_CHAT_MODEL_OPTIONS.map((model) => <option key={model.id} value={model.id}>{model.label} - {model.plan}</option>)}
-            </select>
-          </label>
+
           <label className="study-chat-sidebar-voice">
             <span><Mic className="h-4 w-4" aria-hidden="true" /> Voice</span>
             <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} aria-label="Choose study chat voice">

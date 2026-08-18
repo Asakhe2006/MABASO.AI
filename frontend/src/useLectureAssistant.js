@@ -1071,7 +1071,7 @@ export function useLectureAssistant({
   setDraft,
   onLegacyMessagesChange,
   onBlockedAccess,
-  selectedModel = "gpt-4.1",
+  selectedMode = "auto",
   enabled = true,
 }) {
   const storageKey = useMemo(() => buildConversationStorageKey(authEmail), [authEmail]);
@@ -3918,7 +3918,7 @@ export function useLectureAssistant({
         user_message_id: nextUserMessage?.id || "",
         assistant_message_id: nextAssistantMessage.id,
         preferred_provider: useVoiceInteraction ? compactText(voiceSessionProviderRef.current) : "openai",
-        requested_model: useVoiceInteraction ? "" : compactText(selectedModel, "gpt-4.1"),
+        requested_mode: useVoiceInteraction ? "" : compactText(selectedMode, "auto"),
         voice_profile_id: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.id, "wave") : "",
         voice_profile_label: useVoiceInteraction ? compactText(selectedVoiceProfileRef.current?.name) : "",
         voice_style_prompt: useVoiceInteraction ? buildVoicePersonalityPrompt(selectedVoiceProfileRef.current) : "",
