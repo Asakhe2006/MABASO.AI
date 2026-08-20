@@ -430,6 +430,7 @@ PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "false").strip().lower() not in {
 PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR = os.getenv("PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "0.00").strip()
 OPENAI_ADMIN_KEY = os.getenv("OPENAI_ADMIN_KEY", "").strip()
+OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "").strip()
 OPENAI_COST_CACHE_SECONDS = max(60, get_early_int_env("OPENAI_COST_CACHE_SECONDS", 300))
 PAYFAST_PROCESS_URL = (
     "https://sandbox.payfast.co.za/eng/process"
@@ -19777,19 +19778,25 @@ def parse_int_amount(value: Any) -> int:
 
 _openai_cost_cache_lock = threading.Lock()
 _openai_cost_cache: dict[str, Any] = {"cache_key": "", "expires_at": 0.0, "value": None}
+_openai_usage_cache_lock = threading.Lock()
+_openai_usage_cache: dict[str, Any] = {"cache_key": "", "expires_at": 0.0, "value": None}
 
 
 def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]:
     totals_by_currency: dict[str, Decimal] = {}
     totals_by_line_item: dict[tuple[str, str], Decimal] = {}
+    totals_by_project: dict[tuple[str, str], Decimal] = {}
+    daily_totals: dict[tuple[int, str], Decimal] = {}
     for page in pages:
         for bucket in page.get("data") or []:
+            bucket_start = parse_int_amount(bucket.get("start_time"))
             for result in bucket.get("results") or []:
                 amount = result.get("amount") if isinstance(result, dict) else None
                 if not isinstance(amount, dict):
                     continue
                 currency = compact_text(amount.get("currency")).lower()
                 line_item = compact_text(result.get("line_item"), "OpenAI API usage")
+                project_id = compact_text(result.get("project_id"), "Unattributed")
                 try:
                     value = Decimal(str(amount.get("value"))).quantize(Decimal("0.000001"))
                 except (InvalidOperation, TypeError, ValueError):
@@ -19799,6 +19806,11 @@ def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]
                 totals_by_currency[currency] = totals_by_currency.get(currency, Decimal("0")) + value
                 key = (line_item, currency)
                 totals_by_line_item[key] = totals_by_line_item.get(key, Decimal("0")) + value
+                project_key = (project_id, currency)
+                totals_by_project[project_key] = totals_by_project.get(project_key, Decimal("0")) + value
+                if bucket_start > 0:
+                    daily_key = (bucket_start, currency)
+                    daily_totals[daily_key] = daily_totals.get(daily_key, Decimal("0")) + value
     currencies = sorted(totals_by_currency)
     single_currency = currencies[0] if len(currencies) == 1 else ""
     return {
@@ -19810,7 +19822,117 @@ def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]
             {"feature": line_item, "cost": float(value), "currency": currency}
             for (line_item, currency), value in sorted(totals_by_line_item.items(), key=lambda item: item[1], reverse=True)
         ],
+        "by_project": [
+            {"project_id": project_id, "cost": float(value), "currency": currency}
+            for (project_id, currency), value in sorted(totals_by_project.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "daily": [
+            {
+                "start_time": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat(),
+                "label": datetime.fromtimestamp(start_time, tz=timezone.utc).strftime("%d %b"),
+                "cost": float(value),
+                "currency": currency,
+            }
+            for (start_time, currency), value in sorted(daily_totals.items())
+        ],
     }
+
+
+def summarize_openai_completion_usage(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    totals = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0}
+    by_model: dict[str, dict[str, int]] = {}
+    daily: dict[int, dict[str, int]] = {}
+    for page in pages:
+        for bucket in page.get("data") or []:
+            bucket_start = parse_int_amount(bucket.get("start_time"))
+            day = daily.setdefault(bucket_start, {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0})
+            for result in bucket.get("results") or []:
+                if not isinstance(result, dict):
+                    continue
+                model = compact_text(result.get("model"), "Unspecified model")
+                model_totals = by_model.setdefault(model, {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0})
+                values = {
+                    "input_tokens": parse_int_amount(result.get("input_tokens")),
+                    "output_tokens": parse_int_amount(result.get("output_tokens")),
+                    "cached_tokens": parse_int_amount(result.get("input_cached_tokens")),
+                    "requests": parse_int_amount(result.get("num_model_requests")),
+                }
+                for key, amount in values.items():
+                    totals[key] += amount
+                    model_totals[key] += amount
+                    day[key] += amount
+    return {
+        "totals": totals,
+        "by_model": [
+            {"model": model, **values}
+            for model, values in sorted(by_model.items(), key=lambda item: item[1]["requests"], reverse=True)
+        ],
+        "daily": [
+            {
+                "start_time": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat(),
+                "label": datetime.fromtimestamp(start_time, tz=timezone.utc).strftime("%d %b"),
+                **values,
+            }
+            for start_time, values in sorted(daily.items())
+            if start_time > 0
+        ],
+    }
+
+
+def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) -> dict[str, Any]:
+    if not OPENAI_ADMIN_KEY:
+        return {"available": False, "status": "unconfigured", "message": "OPENAI_ADMIN_KEY is not configured.", "totals": {}, "by_model": [], "daily": []}
+    start_time = int(range_start.timestamp())
+    end_time = max(start_time + 1, int(range_end.timestamp()))
+    cache_key = f"{start_time}:{end_time}:{OPENAI_PROJECT_ID or 'organization'}"
+    now_monotonic = time.monotonic()
+    with _openai_usage_cache_lock:
+        if _openai_usage_cache.get("cache_key") == cache_key and float(_openai_usage_cache.get("expires_at") or 0) > now_monotonic:
+            return dict(_openai_usage_cache["value"])
+    pages: list[dict[str, Any]] = []
+    next_page = ""
+    try:
+        for _ in range(24):
+            params: list[tuple[str, Any]] = [
+                ("start_time", start_time),
+                ("end_time", end_time),
+                ("bucket_width", "1d"),
+                ("limit", 31),
+                ("group_by", "project_id"),
+                ("group_by", "model"),
+            ]
+            if OPENAI_PROJECT_ID:
+                params.append(("project_ids", OPENAI_PROJECT_ID))
+            if next_page:
+                params.append(("page", next_page))
+            response = requests.get(
+                "https://api.openai.com/v1/organization/usage/completions",
+                params=params,
+                headers={"Authorization": f"Bearer {OPENAI_ADMIN_KEY}", "Accept": "application/json"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("OpenAI Usage API returned an invalid response.")
+            pages.append(payload)
+            next_page = compact_text(payload.get("next_page"))
+            if not payload.get("has_more") or not next_page:
+                break
+        value = {
+            "available": True,
+            "status": "available",
+            "message": "",
+            "source": "OpenAI Usage API",
+            "project_id": OPENAI_PROJECT_ID,
+            **summarize_openai_completion_usage(pages),
+        }
+        with _openai_usage_cache_lock:
+            _openai_usage_cache.update({"cache_key": cache_key, "expires_at": now_monotonic + OPENAI_COST_CACHE_SECONDS, "value": dict(value)})
+        return value
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        logger.warning("OpenAI Usage API request failed: %s", exc)
+        return {"available": False, "status": "unavailable", "message": "OpenAI usage is temporarily unavailable.", "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
 
 
 def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) -> dict[str, Any]:
@@ -19820,12 +19942,16 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
             "currency": "",
             "total_cost": None,
             "by_line_item": [],
+            "by_project": [],
+            "daily": [],
             "status": "unconfigured",
             "message": "OPENAI_ADMIN_KEY is not configured.",
+            "project_id": OPENAI_PROJECT_ID,
+            "scope": "project" if OPENAI_PROJECT_ID else "organization",
         }
     start_time = int(range_start.timestamp())
     end_time = max(start_time + 1, int(range_end.timestamp()))
-    cache_key = f"{start_time}:{end_time}"
+    cache_key = f"{start_time}:{end_time}:{OPENAI_PROJECT_ID or 'organization'}"
     now_monotonic = time.monotonic()
     with _openai_cost_cache_lock:
         if _openai_cost_cache.get("cache_key") == cache_key and float(_openai_cost_cache.get("expires_at") or 0) > now_monotonic:
@@ -19839,8 +19965,11 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
                 ("end_time", end_time),
                 ("bucket_width", "1d"),
                 ("limit", 180),
+                ("group_by", "project_id"),
                 ("group_by", "line_item"),
             ]
+            if OPENAI_PROJECT_ID:
+                params.append(("project_ids", OPENAI_PROJECT_ID))
             if next_page:
                 params.append(("page", next_page))
             response = requests.get(
@@ -19862,6 +19991,11 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
             "status": "available",
             "message": "",
             "source": "OpenAI Costs API",
+            "project_id": OPENAI_PROJECT_ID,
+            "scope": "project" if OPENAI_PROJECT_ID else "organization",
+            "period_start": range_start.isoformat(),
+            "period_end": range_end.isoformat(),
+            "synced_at": utc_now().isoformat(),
         }
         with _openai_cost_cache_lock:
             _openai_cost_cache.update({
@@ -19877,8 +20011,12 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
             "currency": "",
             "total_cost": None,
             "by_line_item": [],
+            "by_project": [],
+            "daily": [],
             "status": "unavailable",
             "message": "OpenAI cost is temporarily unavailable.",
+            "project_id": OPENAI_PROJECT_ID,
+            "scope": "project" if OPENAI_PROJECT_ID else "organization",
         }
 
 
@@ -20048,13 +20186,14 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "total_tokens": total_tokens,
                 "cost": openai_cost,
                 "cost_status": "available" if openai_cost is not None else "unavailable",
-                "cost_label": f"R{openai_cost:,.2f}" if openai_cost is not None else "cost unavailable",
+                "cost_label": f"${openai_cost:,.6f}" if openai_cost is not None else "cost unavailable",
                 "quantity": quantity,
                 "timestamp": row["created_at"],
             }
         )
 
     openai_organization_costs = fetch_openai_organization_costs(range_start, now)
+    openai_completion_usage = fetch_openai_completion_usage(range_start, now)
     organization_cost_available = bool(openai_organization_costs.get("available"))
     organization_cost_currency = compact_text(openai_organization_costs.get("currency")).lower()
     total_ai_cost = (
@@ -20132,6 +20271,14 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             "cost_source": "OpenAI Costs API",
             "cost_source_status": openai_organization_costs.get("status"),
             "cost_source_message": openai_organization_costs.get("message"),
+            "scope": openai_organization_costs.get("scope"),
+            "project_id": openai_organization_costs.get("project_id"),
+            "period_start": openai_organization_costs.get("period_start"),
+            "period_end": openai_organization_costs.get("period_end"),
+            "synced_at": openai_organization_costs.get("synced_at"),
+            "by_project": list(openai_organization_costs.get("by_project") or []),
+            "daily": list(openai_organization_costs.get("daily") or []),
+            "openai_usage": openai_completion_usage,
             "study_guide_by_user": [
                 {
                     "user": email,

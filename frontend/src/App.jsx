@@ -11238,7 +11238,7 @@ export default function App() {
               const slotLabel = `${slot.start} - ${slot.end}`;
               return (
               <div key={`${slot.start}-${slot.end}`} className="grid grid-cols-[120px_repeat(7,minmax(120px,1fr))] border-b border-white/5 last:border-b-0">
-                <div className={`flex min-h-[70px] items-center justify-center px-3 py-3 text-center text-sm font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
+                <div className={`timetable-slot-time flex min-h-[58px] items-center justify-center px-2 py-2 text-center text-xs font-semibold text-white ${currentSlotActive ? "border border-sky-300/55 bg-sky-500/30 text-sky-50 shadow-[0_0_22px_rgba(56,189,248,0.24)]" : ""}`}>{slotLabel}</div>
                 {TIMETABLE_DAY_KEYS.map((day, dayIndex) => {
                   const rawSession = sessionsByCell[`${day.id}-${slot.start}-${slot.end}`];
                   const fallback = { dayId: day.id, date: addDays(timetableWeekStartIso, dayIndex).toISOString(), start: slot.start, end: slot.end };
@@ -11282,7 +11282,7 @@ export default function App() {
                               : "border-emerald-400/30 border-l-4 border-l-emerald-400 bg-white/[0.04] text-white";
                   const tone = isTodayCell ? `${baseTone} ring-2 ring-sky-300/80 shadow-[0_0_22px_rgba(56,189,248,0.22)]` : baseTone;
                   return (
-                    <div key={`${day.id}-${slot.start}-${slot.end}`} className="relative border-l border-white/5 p-1.5">
+                    <div key={`${day.id}-${slot.start}-${slot.end}`} className="timetable-session-cell relative border-l border-white/5 p-1">
                       <button type="button" disabled={isReadOnlyCell || (!isTimetableEditing && isEmptyCell)} onClick={() => {
                         if (isTimetableEditing || !session?.id || isReadOnlyCell) return;
                         if (session.status === "completed" || isTimetableSessionActiveNow(session, timetableNow)) {
@@ -11294,7 +11294,7 @@ export default function App() {
                           title: normalizeTimetableSubjectName(session.title, "This session"),
                           windowLabel: formatTimetableSessionWindow(session),
                         });
-                      }} className={`flex min-h-[58px] w-full items-center justify-center rounded-lg border px-2 py-2 text-center text-sm transition disabled:cursor-default ${tone}`}>
+                      }} className={`timetable-session-button flex min-h-[48px] w-full items-center justify-center rounded-lg border px-2 py-1.5 text-center text-xs transition disabled:cursor-default ${tone}`}>
                         {isTimetableEditing && !isBreakCell && !isExamCell ? (
                           <select value={isEmptyCell ? "" : session.title} onClick={(event) => event.stopPropagation()} onChange={(event) => updateTimetableSessionTitle(rawSession?.id || session?.id, event.target.value, fallback, session)} className="w-full bg-transparent text-center text-sm text-white outline-none">
                             <option value="" className="bg-slate-950 text-white">Empty</option>
@@ -12789,6 +12789,14 @@ export default function App() {
     const content = dashboard.content || {};
     const systemHealth = dashboard.system_health || {};
     const security = dashboard.security || {};
+    const billing = dashboard.billing || {};
+    const billingAiCosts = billing.ai_costs || {};
+    const openAiUsage = billingAiCosts.openai_usage || {};
+    const openAiUsageTotals = openAiUsage.totals || {};
+    const openAiDailyCosts = Array.isArray(billingAiCosts.daily) ? billingAiCosts.daily : [];
+    const openAiCostByProject = Array.isArray(billingAiCosts.by_project) ? billingAiCosts.by_project : [];
+    const openAiCostByLineItem = Array.isArray(billingAiCosts.by_feature) ? billingAiCosts.by_feature : [];
+    const openAiUsageByModel = Array.isArray(openAiUsage.by_model) ? openAiUsage.by_model : [];
     const users = dashboard.users || [];
     const activityLogs = dashboard.activity_logs || [];
     const failedJobs = aiGeneration.failed_jobs || [];
@@ -13471,7 +13479,143 @@ export default function App() {
         );
       }
 
-      if (["billing", "subscriptions", "ai-costs"].includes(adminSidebarTab)) {
+      if (adminSidebarTab === "ai-costs") {
+        const openAiCurrency = billingAiCosts.currency || "USD";
+        const openAiStatusAvailable = Boolean(billingAiCosts.has_actual_cost);
+        const usageStatusAvailable = Boolean(openAiUsage.available);
+        const projectScopeLabel = billingAiCosts.project_id
+          ? billingAiCosts.project_id
+          : "Organization-wide";
+        return (
+          <div className="space-y-5">
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-3xl">
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-700">OpenAI Data</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Mabaso AI project costs and usage</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">Financial totals come directly from the OpenAI Costs API. Request and token activity comes from the OpenAI Usage API for the selected dashboard period.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-3 py-2 text-xs font-bold ${openAiStatusAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+                    {openAiStatusAvailable ? "OpenAI costs connected" : titleCaseWords(billingAiCosts.cost_source_status || "unavailable")}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{projectScopeLabel}</span>
+                </div>
+              </div>
+
+              {!openAiStatusAvailable ? (
+                <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                  {billingAiCosts.cost_source_message || "OpenAI cost data is unavailable. Configure an OpenAI organization Admin API key on the backend."}
+                </div>
+              ) : null}
+              {!usageStatusAvailable ? (
+                <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">
+                  {openAiUsage.message || "OpenAI request and token usage is temporarily unavailable."}
+                </div>
+              ) : null}
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ["Actual Cost", openAiStatusAvailable ? formatAdminProviderCurrency(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
+                  ["Requests", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.requests) : "Unavailable"],
+                  ["Input Tokens", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.input_tokens) : "Unavailable"],
+                  ["Output Tokens", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.output_tokens) : "Unavailable"],
+                  ["Cached Tokens", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.cached_tokens) : "Unavailable"],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                    <p className="mt-2 break-words text-xl font-semibold text-slate-950">{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                <p><span className="font-semibold text-slate-900">Scope:</span> {billingAiCosts.scope === "project" ? "Mabaso AI project" : "OpenAI organization"}</p>
+                <p><span className="font-semibold text-slate-900">Currency:</span> {String(openAiCurrency).toUpperCase()}</p>
+                <p><span className="font-semibold text-slate-900">Period start:</span> {billingAiCosts.period_start ? formatAdminDateTime(billingAiCosts.period_start) : "Unavailable"}</p>
+                <p><span className="font-semibold text-slate-900">Last synced:</span> {billingAiCosts.synced_at ? formatAdminDateTime(billingAiCosts.synced_at) : "Unavailable"}</p>
+              </div>
+            </article>
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
+              <article className={sectionCardClass}>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Daily Costs</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported spend</h3>
+                </div>
+                <div className="mt-5">
+                  <AdminLineChart
+                    items={openAiDailyCosts}
+                    valueKey="cost"
+                    labelKey="label"
+                    stroke="#10b981"
+                    formatter={(value) => formatAdminProviderCurrency(value, openAiCurrency)}
+                  />
+                </div>
+              </article>
+
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Cost Categories</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI line items</h3>
+                <div className="mt-5 divide-y divide-slate-200">
+                  {openAiCostByLineItem.length ? openAiCostByLineItem.map((item) => (
+                    <div key={`${item.feature}-${item.currency}`} className="flex items-start justify-between gap-4 py-3 first:pt-0">
+                      <span className="min-w-0 break-words text-sm font-medium text-slate-700">{item.feature || "OpenAI API usage"}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                    </div>
+                  )) : <p className="py-5 text-sm text-slate-500">No OpenAI cost line items were returned for this period.</p>}
+                </div>
+              </article>
+            </div>
+
+            <article className={sectionCardClass}>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Model Activity</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Requests and tokens reported by OpenAI</h3>
+              </div>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
+                    <tr>
+                      {['Model', 'Requests', 'Input tokens', 'Output tokens', 'Cached tokens'].map((heading) => (
+                        <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openAiUsageByModel.length ? openAiUsageByModel.map((item) => (
+                      <tr key={item.model} className="border-b border-slate-100">
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{item.model || "Unspecified model"}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(item.requests)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(item.input_tokens)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(item.output_tokens)}</td>
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">{formatAdminInteger(item.cached_tokens)}</td>
+                      </tr>
+                    )) : <tr><td colSpan={5} className="px-3 py-8 text-center text-slate-500">No OpenAI completion usage was returned for this period.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            {openAiCostByProject.length ? (
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Project Attribution</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Costs grouped by OpenAI project</h3>
+                <div className="mt-5 divide-y divide-slate-200">
+                  {openAiCostByProject.map((item) => (
+                    <div key={`${item.project_id}-${item.currency}`} className="flex items-center justify-between gap-4 py-3 first:pt-0">
+                      <span className="phone-safe-copy min-w-0 break-all text-sm font-semibold text-slate-700">{item.project_id || "Unattributed"}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ) : null}
+          </div>
+        );
+      }
+
+      if (["billing", "subscriptions"].includes(adminSidebarTab)) {
         return (
           <article className={sectionCardClass}>
             <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Billing</p>
@@ -13636,7 +13780,7 @@ export default function App() {
       { id: "users", label: "Users", group: "People", icon: UsersRound },
       { id: "activity", label: "Activity", group: "People", icon: Activity },
       { id: "learning", label: "Learning Analytics", group: "Product", icon: GraduationCap },
-      { id: "ai-costs", label: "AI Usage & Costs", group: "Product", icon: Bot },
+      { id: "ai-costs", label: "OpenAI Data", group: "Product", icon: Bot },
       { id: "subscriptions", label: "Subscriptions", group: "Revenue", icon: CircleDollarSign },
       { id: "payments", label: "Payments", group: "Revenue", icon: CreditCard },
       { id: "errors", label: "Errors", group: "Operations", icon: Bug },
@@ -13669,6 +13813,12 @@ export default function App() {
     const manualPaymentRequests = billing.manual_payment_requests || [];
     const billingSubscriptions = billing.subscriptions || [];
     const billingAiCosts = billing.ai_costs || {};
+    const openAiUsage = billingAiCosts.openai_usage || {};
+    const openAiUsageTotals = openAiUsage.totals || {};
+    const openAiDailyCosts = Array.isArray(billingAiCosts.daily) ? billingAiCosts.daily : [];
+    const openAiCostByProject = Array.isArray(billingAiCosts.by_project) ? billingAiCosts.by_project : [];
+    const openAiCostByLineItem = Array.isArray(billingAiCosts.by_feature) ? billingAiCosts.by_feature : [];
+    const openAiUsageByModel = Array.isArray(openAiUsage.by_model) ? openAiUsage.by_model : [];
     const studyGuideCostRows = Array.isArray(billingAiCosts.study_guide_by_user) ? billingAiCosts.study_guide_by_user : [];
     const billingProfitability = billing.profitability || [];
     const billingAlerts = billing.alerts || [];
@@ -14868,7 +15018,85 @@ export default function App() {
         );
       }
 
-      if (["billing", "subscriptions", "ai-costs"].includes(adminSidebarTab)) {
+      if (adminSidebarTab === "ai-costs") {
+        const openAiCurrency = billingAiCosts.currency || "USD";
+        const costsAvailable = Boolean(billingAiCosts.has_actual_cost);
+        const usageAvailable = Boolean(openAiUsage.available);
+        return (
+          <div className="space-y-5">
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="max-w-3xl">
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-700">OpenAI Data</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-950">Mabaso AI project costs and usage</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">Actual cost values come from OpenAI's Costs API. Request and token totals come from OpenAI's Usage API for the selected date range.</p>
+                </div>
+                <span className={`rounded-full px-3 py-2 text-xs font-bold ${costsAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+                  {costsAvailable ? "OpenAI connected" : titleCaseWords(billingAiCosts.cost_source_status || "unavailable")}
+                </span>
+              </div>
+              {!costsAvailable ? <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{billingAiCosts.cost_source_message || "Configure OPENAI_ADMIN_KEY to load actual OpenAI costs."}</p> : null}
+              {!usageAvailable ? <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">{openAiUsage.message || "OpenAI usage data is temporarily unavailable."}</p> : null}
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                {[
+                  ["Actual cost", costsAvailable ? formatAdminProviderCurrency(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
+                  ["Requests", usageAvailable ? formatAdminInteger(openAiUsageTotals.requests) : "Unavailable"],
+                  ["Input tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.input_tokens) : "Unavailable"],
+                  ["Output tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.output_tokens) : "Unavailable"],
+                  ["Cached tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.cached_tokens) : "Unavailable"],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                    <p className="mt-2 break-words text-xl font-semibold text-slate-950">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 grid gap-3 border-t border-slate-200 pt-4 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                <p><span className="font-semibold text-slate-900">Project:</span> {billingAiCosts.project_id || "Organization-wide"}</p>
+                <p><span className="font-semibold text-slate-900">Currency:</span> {String(openAiCurrency).toUpperCase()}</p>
+                <p><span className="font-semibold text-slate-900">Period:</span> {billingAiCosts.period_start ? formatAdminDateTime(billingAiCosts.period_start) : "Unavailable"}</p>
+                <p><span className="font-semibold text-slate-900">Synced:</span> {billingAiCosts.synced_at ? formatAdminDateTime(billingAiCosts.synced_at) : "Unavailable"}</p>
+              </div>
+            </article>
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.8fr)]">
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Daily costs</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported spend</h3>
+                <div className="mt-5"><AdminLineChart items={openAiDailyCosts} valueKey="cost" labelKey="label" stroke="#10b981" formatter={(value) => formatAdminProviderCurrency(value, openAiCurrency)} /></div>
+              </article>
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Cost categories</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI line items</h3>
+                <div className="mt-5 divide-y divide-slate-200">
+                  {openAiCostByLineItem.length ? openAiCostByLineItem.map((item) => (
+                    <div key={`${item.feature}-${item.currency}`} className="flex items-start justify-between gap-4 py-3 first:pt-0">
+                      <span className="min-w-0 break-words text-sm font-medium text-slate-700">{item.feature || "OpenAI API usage"}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                    </div>
+                  )) : <p className="py-5 text-sm text-slate-500">No cost line items were returned for this period.</p>}
+                </div>
+              </article>
+            </div>
+
+            <article className={sectionCardClass}>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">OpenAI model activity</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">Requests and tokens</h3>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-[11px] uppercase tracking-[0.14em] text-slate-500"><tr>{["Model", "Requests", "Input", "Output", "Cached"].map((heading) => <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>)}</tr></thead>
+                  <tbody>
+                    {openAiUsageByModel.length ? openAiUsageByModel.map((item) => <tr key={item.model} className="border-b border-slate-100"><td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{item.model || "Unspecified"}</td><td className="px-3 py-3 text-slate-700">{formatAdminInteger(item.requests)}</td><td className="px-3 py-3 text-slate-700">{formatAdminInteger(item.input_tokens)}</td><td className="px-3 py-3 text-slate-700">{formatAdminInteger(item.output_tokens)}</td><td className="px-3 py-3 text-slate-700">{formatAdminInteger(item.cached_tokens)}</td></tr>) : <tr><td colSpan={5} className="px-3 py-8 text-center text-slate-500">No model usage was returned for this period.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              {openAiCostByProject.length ? <div className="mt-5 border-t border-slate-200 pt-4 text-sm text-slate-600">{openAiCostByProject.map((item) => <p key={`${item.project_id}-${item.currency}`} className="flex justify-between gap-4 py-2"><span className="break-all font-semibold text-slate-800">{item.project_id || "Unattributed"}</span><span>{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span></p>)}</div> : null}
+            </article>
+          </div>
+        );
+      }
+
+      if (["billing", "subscriptions"].includes(adminSidebarTab)) {
         return (
           <div className="space-y-5">
             <article className={sectionCardClass}>

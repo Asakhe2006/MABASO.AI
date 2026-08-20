@@ -17,6 +17,44 @@
   --study-purple: #7c3aed;
 }
 
+/* Keep timetable rows dense enough to scan without large gaps. */
+.study-timetable-grid .timetable-slot-time {
+  min-height: 52px;
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
+.study-timetable-grid .timetable-session-cell {
+  padding: 0.2rem;
+}
+
+.study-timetable-grid .timetable-session-button {
+  min-height: 44px;
+  padding: 0.35rem 0.4rem;
+  font-size: 0.75rem;
+  line-height: 1.25;
+}
+
+@media (max-width: 768px) {
+  .study-timetable-grid .timetable-slot-time {
+    min-height: 44px !important;
+    padding: 0.2rem !important;
+    font-size: 0.625rem !important;
+    line-height: 1.2 !important;
+  }
+
+  .study-timetable-grid .timetable-session-cell {
+    padding: 2px !important;
+  }
+
+  .study-timetable-grid .timetable-session-button {
+    min-height: 38px !important;
+    padding: 0.25rem 0.2rem !important;
+    font-size: 0.65rem !important;
+    line-height: 1.18 !important;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -4822,7 +4860,7 @@ iframe {
   }
 
   .timetable-compact-surface.is-focus-mode .timetable-focus-button:first-of-type::before {
-    content: "X ";
+    content: none !important;
   }
 
   .study-timetable-scroll,

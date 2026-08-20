@@ -13,6 +13,8 @@ services:
         sync: false
       - key: OPENAI_ADMIN_KEY
         sync: false
+      - key: OPENAI_PROJECT_ID
+        sync: false
       - key: OPENAI_COST_CACHE_SECONDS
         value: "300"
       - key: BASE_TEXT_MODEL
