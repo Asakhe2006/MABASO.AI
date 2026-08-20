@@ -9873,3 +9873,82 @@ body.study-guide-focus-open .mobile-app-nav {
     font-size: 11.5px !important;
   }
 }
+
+/* Static Study Guide chapters replace the old native details dropdowns. */
+.study-guide-section-static-header {
+  display: block;
+  margin: 0 0 8px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--guide-accent, #16a34a) 20%, transparent);
+}
+
+.workspace-focus-action {
+  width: auto !important;
+  min-width: 82px !important;
+  padding-inline: 11px !important;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workspace-focus-action > span {
+  display: inline;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .page-workspace .workspace-focus-action {
+    width: auto !important;
+    min-width: 70px !important;
+    padding-inline: 8px !important;
+    gap: 4px !important;
+    font-size: 10.5px !important;
+  }
+
+  .ai-chat-mode-menu {
+    left: max(8px, env(safe-area-inset-left)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    width: auto !important;
+    max-width: none !important;
+    padding: 6px !important;
+    overflow-x: hidden !important;
+  }
+
+  .ai-chat-mode-row {
+    grid-template-columns: 18px minmax(0, 1fr) !important;
+    align-items: start !important;
+    min-height: 52px !important;
+    gap: 3px 7px !important;
+    padding: 8px !important;
+  }
+
+  .ai-chat-mode-copy {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ai-chat-mode-name {
+    font-size: 12.5px !important;
+    line-height: 1.25 !important;
+  }
+
+  .ai-chat-mode-description {
+    display: block !important;
+    margin-top: 2px;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+    white-space: normal !important;
+  }
+
+  .ai-chat-mode-lock {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 1px;
+    font-size: 9.5px !important;
+  }
+
+  .ai-chat-mode-upgrade {
+    padding: 9px !important;
+    font-size: 11px !important;
+  }
+}

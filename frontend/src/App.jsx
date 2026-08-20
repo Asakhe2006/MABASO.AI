@@ -1,6 +1,6 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -9088,20 +9088,21 @@ export default function App() {
       currentPageOverride || snapshot.currentPage || "workspace",
       "workspace",
     );
+    const restoringCapturePage = restoredCurrentPage === "capture";
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
     stopTeacherPlayback({ resetIndex: true });
     startTransition(() => {
       setFile(null);
       setTranscript("");
-      setSummary(normalizeStudyGuideContentSpacing(snapshot.summary || ""));
-      setStudyGuideDocumentHtml(snapshot.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object" ? snapshot.studyGuideDocumentHtml : {});
-      setFormula(snapshot.formula || "");
-      setExample(snapshot.example || "");
-      setFlashcards(Array.isArray(snapshot.flashcards) ? snapshot.flashcards : []);
-      setQuizQuestions(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
-      resetQuizSessionState(Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
-      setStudyImages(Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
+      setSummary(restoringCapturePage ? "" : normalizeStudyGuideContentSpacing(snapshot.summary || ""));
+      setStudyGuideDocumentHtml(!restoringCapturePage && snapshot.studyGuideDocumentHtml && typeof snapshot.studyGuideDocumentHtml === "object" ? snapshot.studyGuideDocumentHtml : {});
+      setFormula(restoringCapturePage ? "" : (snapshot.formula || ""));
+      setExample(restoringCapturePage ? "" : (snapshot.example || ""));
+      setFlashcards(!restoringCapturePage && Array.isArray(snapshot.flashcards) ? snapshot.flashcards : []);
+      setQuizQuestions(!restoringCapturePage && Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
+      resetQuizSessionState(!restoringCapturePage && Array.isArray(snapshot.quizQuestions) ? snapshot.quizQuestions : []);
+      setStudyImages(!restoringCapturePage && Array.isArray(snapshot.studyImages) ? snapshot.studyImages : []);
       setStudyGuidePromptDraft("");
       setStudyGuidePromptSource(null);
       setLectureNoteSources([]);
@@ -9128,7 +9129,7 @@ export default function App() {
       setMindMapTopic(snapshot.mindMapTopic || "");
       setOutputLanguage(snapshot.outputLanguage || outputLanguage);
       setVideoUrl(snapshot.videoUrl || "");
-      setActiveHistoryId(snapshot.activeHistoryId || "");
+      setActiveHistoryId(restoringCapturePage ? "" : (snapshot.activeHistoryId || ""));
       setActiveTab(restoredActiveTab);
       const shouldKeepCurrentUtilityPage = ["voice", "timetable"].includes(currentPageRef.current)
         || timetablePlanningStateRef.current.isEditing
@@ -22685,8 +22686,8 @@ export default function App() {
       && !Array.isArray(sourceOverrides.pastQuestionPaperSources)
       && typeof sourceOverrides.pastQuestionPapersText !== "string";
     const shouldTranscribeSelectedLecture = Boolean(file && !resolvedTranscript.trim() && transcriptText === transcript);
-    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim() || shouldReadQueuedNotesForGuide || shouldReadQueuedSlidesForGuide || shouldReadQueuedPastPapersForGuide || shouldTranscribeSelectedLecture)) {
-      return setError("Upload a transcript, notes, slides, or past question paper before generating a study guide.");
+    if (!(resolvedTranscript.trim() || resolvedLectureNotes.trim() || resolvedLectureSlides.trim() || resolvedPastQuestionPapers.trim() || resolvedGenerationPrompt.trim() || shouldReadQueuedNotesForGuide || shouldReadQueuedSlidesForGuide || shouldReadQueuedPastPapersForGuide || shouldTranscribeSelectedLecture)) {
+      return setError("Upload lecture material or add a clear Study Guide topic request before generating.");
     }
     if (!(await ensurePremiumFeatureAvailable("study_guide", "Study guides"))) return false;
     if (resolvedTranscript.trim() && !(await ensurePremiumFeatureAvailable("source_upload", "Audio/source processing"))) return false;
@@ -26454,7 +26455,10 @@ export default function App() {
       setError("Save or open this material before creating a public link.");
       return;
     }
-    await createMaterialPublicShare(activeHistoryItem || historyItems.find((item) => item.id === activeHistoryId));
+    const shareItem = activeHistoryItem
+      || historyItems.find((item) => item.id === activeHistoryId)
+      || { id: activeHistoryId, title: guideTopic || "Study Guide" };
+    await createMaterialPublicShare(shareItem);
   };
 
   const toggleMaterialMoreMenu = async (item) => {
@@ -26473,7 +26477,11 @@ export default function App() {
   };
 
   const createMaterialPublicShare = async (item, expiryDays = 0) => {
-    if (!item?.id || isUpdatingPublicShare) return;
+    if (isUpdatingPublicShare) return;
+    if (!item?.id) {
+      setError("Save or open this material before creating a public link.");
+      return;
+    }
     setIsUpdatingPublicShare(true);
     try {
       const { data } = await authJsonWithTransientRetries(`/api/shares/material/${encodeURIComponent(item.id)}`, {
@@ -26484,14 +26492,20 @@ export default function App() {
       const share = data?.share;
       if (!share?.token) throw new Error("The share link was not returned.");
       const url = new URL(`/share/material/${share.token}`, window.location.origin).toString();
-      await navigator.clipboard.writeText(url);
-      setCopiedPublicShareUrl(url);
-      window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+        setCopiedPublicShareUrl(url);
+        window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
+      } catch {
+        // The link remains valid when clipboard permission is unavailable.
+      }
       const shareRecord = { open: true, type: "material", itemId: item.id, shareId: share.id, title: share.title || item.title, url, warnings: share.warnings || [] };
       setPublicShareRecords((current) => ({ ...current, [item.id]: shareRecord }));
       setPublicShareDialog(shareRecord);
       setMaterialMenuItemId("");
-      setStatus("Read-only share link copied.");
+      setStatus(copied ? "Read-only share link copied." : "Read-only share link created. Use Copy link to copy it.");
     } catch (error) {
       setError(error?.message || "The material share link could not be created.");
     } finally {
@@ -26520,11 +26534,17 @@ export default function App() {
       const share = data?.share;
       if (!share?.token) throw new Error("The share link was not returned.");
       const url = new URL(`/share/chat/${share.token}`, window.location.origin).toString();
-      await navigator.clipboard.writeText(url);
-      setCopiedPublicShareUrl(url);
-      window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+        setCopiedPublicShareUrl(url);
+        window.setTimeout(() => setCopiedPublicShareUrl((current) => (current === url ? "" : current)), 1800);
+      } catch {
+        // Keep the generated link available in the dialog for manual copying.
+      }
       setPublicShareDialog((current) => ({ ...current, shareId: share.id, url, warnings: share.warnings || [] }));
-      setStatus("Read-only conversation link copied.");
+      setStatus(copied ? "Read-only conversation link copied." : "Read-only conversation link created. Use Copy link to copy it.");
     } catch (error) {
       setError(error?.message || "The conversation share link could not be created.");
     } finally {
@@ -28678,6 +28698,10 @@ export default function App() {
         openCollaborationPage();
         return;
       }
+      if (item.id === "capture") {
+        startNewLectureWorkspace();
+        return;
+      }
       if (item.id === "workspace") {
         setActiveTab("guide");
         openProtectedAppPage("workspace");
@@ -28828,7 +28852,7 @@ export default function App() {
           </div>
           <div className="capture-header-actions flex w-full flex-col gap-3 sm:w-auto sm:items-end">
             <div className="hidden flex-wrap items-center gap-3 sm:flex">
-              <button type="button" onClick={() => openProtectedAppPage("capture")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
+              <button type="button" onClick={startNewLectureWorkspace} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "capture" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Capture Lecture</button>
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
@@ -29318,8 +29342,8 @@ export default function App() {
                       </div>
                     ) : null}
                   </div>
-                  <button type="button" onClick={() => setIsStudyGuideFocusMode(true)} disabled={activeTab !== "guide" || !studyGuideSlides.length} className="workspace-icon-action" title="Focus mode" aria-label="Open Study Guide focus mode" data-mobile-label="Focus">
-                    <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+                  <button type="button" onClick={() => setIsStudyGuideFocusMode(true)} disabled={activeTab !== "guide" || !studyGuideSlides.length} className="workspace-icon-action workspace-focus-action" title="Focus mode" aria-label="Open Study Guide focus mode">
+                    <Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus</span>
                   </button>
                   <div className="workspace-more-anchor">
                     <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen((current) => !current)} className={`workspace-icon-action workspace-mobile-more-button ${isWorkspaceMobileMoreOpen ? "is-active" : ""}`} title="More" aria-label="More Study Workspace actions" aria-expanded={isWorkspaceMobileMoreOpen} data-mobile-label="More">
@@ -29344,7 +29368,7 @@ export default function App() {
                     {isStudyGuideFocusMode ? (
                       <div className="study-guide-focus-toolbar">
                         <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
-                        <div className="study-guide-focus-title"><PanelLeftOpen className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
+                        <div className="study-guide-focus-title"><Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
                         <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-icon" aria-label="Close focus mode"><X className="h-4 w-4" aria-hidden="true" /></button>
                       </div>
                     ) : null}
@@ -29383,9 +29407,8 @@ export default function App() {
                             : false;
                           const sectionStudyImages = getStudyImagesForSection(getVisibleStudyImages(studyImages), section, index, visibleGuideSections);
                           return (
-                            <details
+                            <section
                               key={`${section.heading}-${index}`}
-                              open={activeStudyGuideSlide.type === "section" && activeStudyGuideSlide.section?.normalizedHeading === section.normalizedHeading}
                               ref={(node) => {
                                 if (node) teacherSectionRefs.current[section.normalizedHeading] = node;
                                 else delete teacherSectionRefs.current[section.normalizedHeading];
@@ -29394,7 +29417,7 @@ export default function App() {
                               style={getStudyGuideSectionThemeStyle(studyGuideTheme, index, section.displayHeading || section.heading)}
                             >
                               {isActiveSection ? <p className="study-guide-focus-badge mb-3">Audio focus on this section</p> : null}
-                              <summary className="cursor-pointer list-none">
+                              <div className="study-guide-section-static-header">
                                 <div className="study-guide-section-summary-row">
                                   <span className="study-guide-section-number">{index + 1}</span>
                                   <p className="study-guide-section-heading">{section.displayHeading || section.heading}</p>
@@ -29402,9 +29425,8 @@ export default function App() {
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); copyGuideSection(section); }} className="study-guide-section-copy-button" title="Copy" aria-label="Copy this subtopic">{copiedGuideSectionKey === section.normalizedHeading ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}</button>
                                     <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); if (canUseSubtopicExplainMore) regenerateGuideSection(section); else openUpgradeModal(); }} disabled={loading || isGeneratingSummary || Boolean(regeneratingGuideSectionKey)} className="study-guide-section-regenerate-button" title={canUseSubtopicExplainMore ? "Regenerate" : "Upgrade to regenerate this subtopic"} aria-label={canUseSubtopicExplainMore ? "Regenerate this subtopic" : "Upgrade to regenerate this subtopic"}>{regeneratingGuideSectionKey === section.normalizedHeading ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" aria-hidden="true" />}</button>
                                   </div>
-                                  <ChevronDown className="study-guide-section-chevron h-4 w-4" aria-hidden="true" />
                                 </div>
-                              </summary>
+                              </div>
                               <div className="phone-safe-copy mt-2 max-w-none">
                                 <div
                                   ref={(node) => {
@@ -29483,7 +29505,7 @@ export default function App() {
                                 />
                               </div>
                               <StudyGuideImageCards images={sectionStudyImages} />
-                            </details>
+                            </section>
                           );
                         })}
                       </div>
