@@ -11,6 +11,10 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_ADMIN_KEY
+        sync: false
+      - key: OPENAI_COST_CACHE_SECONDS
+        value: "300"
       - key: BASE_TEXT_MODEL
         value: "gpt-4.1"
       - key: ADVANCED_ACADEMIC_MODEL
@@ -51,6 +55,8 @@ services:
         sync: false
       - key: PAYFAST_PASSPHRASE
         sync: false
+      - key: PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR
+        value: "0.00"
       - key: FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY
         value: "3"
       - key: PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY

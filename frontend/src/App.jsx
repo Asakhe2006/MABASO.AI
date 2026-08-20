@@ -4935,6 +4935,19 @@ function formatAdminCurrency(value) {
   return adminCurrencyFormatter.format(toFiniteNumber(value));
 }
 
+function formatAdminProviderCurrency(value, currency = "USD") {
+  const normalizedCurrency = String(currency || "USD").trim().toUpperCase();
+  try {
+    return new Intl.NumberFormat("en-ZA", {
+      style: "currency",
+      currency: normalizedCurrency,
+      maximumFractionDigits: 6,
+    }).format(toFiniteNumber(value));
+  } catch {
+    return `${normalizedCurrency} ${formatAdminDecimal(value)}`;
+  }
+}
+
 function formatAdminPercent(value) {
   const amount = toFiniteNumber(value);
   const hasFraction = Math.abs(amount % 1) > 0.001;
@@ -6945,6 +6958,7 @@ export default function App() {
   const [dragActive, setDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [studyGuideSlideIndex, setStudyGuideSlideIndex] = useState(0);
+  const studyGuideThumbnailRailRef = useRef(null);
   const [isStudyGuideFocusMode, setIsStudyGuideFocusMode] = useState(false);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
@@ -8678,6 +8692,10 @@ export default function App() {
   const goToStudyGuideSlide = (index) => setStudyGuideSlideIndex(Math.min(Math.max(index, 0), Math.max(studyGuideSlides.length - 1, 0)));
   const goToPreviousStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.max(0, current - 1));
   const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
+  useEffect(() => {
+    const activeThumbnail = studyGuideThumbnailRailRef.current?.querySelector(".study-guide-slide-thumb.is-active");
+    activeThumbnail?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [activeStudyGuideSlideIndex, studyGuideSlides.length]);
   useEffect(() => {
     if (!isStudyGuideFocusMode || typeof window === "undefined") return undefined;
     document.body.classList.add("study-guide-focus-open");
@@ -13855,7 +13873,7 @@ export default function App() {
       },
       {
         label: "OpenAI cost",
-        value: billingAiCosts.has_actual_cost ? formatAdminCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0) : "Cost unavailable",
+        value: billingAiCosts.has_actual_cost ? formatAdminProviderCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Cost unavailable",
         detail: `${formatAdminInteger(billingAiCosts.token_totals?.total_tokens ?? 0)} tracked tokens`,
         icon: CircleDollarSign,
         accentClass: "bg-amber-50 text-amber-700",
@@ -14868,9 +14886,9 @@ export default function App() {
                   ["Failed Payments", formatAdminInteger(billingOverview.failed_payments)],
                   ["Pending PayShap", formatAdminInteger(billingOverview.pending_manual_payments)],
                   ["Rejected PayShap", formatAdminInteger(billingOverview.rejected_manual_payments)],
-                  ["AI Cost", formatAdminCurrency(billingOverview.openai_cost)],
+                  ["AI Cost", billingAiCosts.has_actual_cost ? formatAdminProviderCurrency(billingOverview.openai_cost, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Unavailable"],
                   ["Hosting Cost", formatAdminCurrency(billingOverview.hosting_cost)],
-                  ["Profit This Range", formatAdminCurrency(billingOverview.profit)],
+                  ["Profit This Range", billingOverview.profit == null ? "Unavailable across mixed currencies" : formatAdminCurrency(billingOverview.profit)],
                   ["Cancelled Subscribers", formatAdminInteger(billingOverview.cancelled_subscribers)],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4">
@@ -15055,16 +15073,16 @@ export default function App() {
             <div className="grid gap-5 xl:grid-cols-2">
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">AI Cost Dashboard</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported cost by feature</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported cost by line item</h3>
                 <div className="mt-5 space-y-3">
                   {(billingAiCosts.by_feature || []).length ? (billingAiCosts.by_feature || []).map((item) => (
                     <div key={item.feature} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-semibold text-slate-900">{item.feature}</span>
-                        <span className="text-sm font-bold text-slate-950">{formatAdminCurrency(item.cost)}</span>
+                        <span className="text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || billingAiCosts.currency)}</span>
                       </div>
                     </div>
-                  )) : emptyPanel("OpenAI-reported costs appear only when the OpenAI Usage or Costs API returns cost. Otherwise tokens remain visible and cost is unavailable.")}
+                  )) : emptyPanel("OpenAI-reported costs appear only when the OpenAI Costs API returns them. Otherwise tokens remain visible and cost is unavailable.")}
                 </div>
                 <div className="mt-5 grid gap-3 sm:grid-cols-3">
                   {[
@@ -15082,23 +15100,23 @@ export default function App() {
 
               <article className={sectionCardClass}>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">User Profitability</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-950">Revenue minus OpenAI-reported cost</h3>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Per-user revenue and cost attribution status</h3>
                 <div className="mt-5 space-y-3">
                   {billingProfitability.length ? billingProfitability.slice(0, 12).map((item) => (
                     <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.user}</p>
                         <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
-                          {formatAdminInteger(item.study_guide_count || 0)}x Study Guide - {formatAdminCurrency(item.study_guide_cost || 0)}
+                          {formatAdminInteger(item.study_guide_count || 0)}x Study Guide - cost unavailable
                         </span>
                       </div>
                       <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
                         <span>Revenue: <strong className="text-slate-900">{formatAdminCurrency(item.revenue)}</strong></span>
                         <span>OpenAI Cost: <strong className="text-slate-900">{item.ai_cost_available === false ? "Unavailable" : formatAdminCurrency(item.ai_cost)}</strong></span>
-                        <span>Profit: <strong className={toFiniteNumber(item.profit) < 0 ? "text-rose-700" : "text-emerald-700"}>{formatAdminCurrency(item.profit)}</strong></span>
+                        <span>Profit: <strong className="text-slate-900">{item.profit == null ? "Unavailable" : formatAdminCurrency(item.profit)}</strong></span>
                       </div>
                     </div>
-                  )) : emptyPanel("User profitability appears once both payments and usage events exist.")}
+                  )) : emptyPanel("Per-user revenue appears after payments. OpenAI organization costs remain separate unless OpenAI supplies reliable user attribution.")}
                 </div>
               </article>
             </div>
@@ -15111,7 +15129,7 @@ export default function App() {
                   <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
                     <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.user}</p>
                     <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">{formatAdminInteger(item.count || 0)}x generated</p>
-                    <p className="mt-2 text-lg font-semibold text-slate-950">{formatAdminCurrency(item.cost || 0)}</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-700">{item.cost == null ? "OpenAI cost unavailable" : formatAdminProviderCurrency(item.cost, item.currency || billingAiCosts.currency)}</p>
                   </div>
                 )) : emptyPanel("Study Guide user costs appear after guide generation usage is recorded.")}
               </div>
@@ -15124,7 +15142,7 @@ export default function App() {
                 <table className="min-w-full text-left text-sm">
                   <thead className="text-xs uppercase tracking-[0.16em] text-slate-500">
                     <tr>
-                      {["User", "Tool", "Model", "Input", "Output", "Total", "Cost", "Time"].map((heading) => (
+                      {["User", "Tool", "Model", "Request ID", "Input", "Output", "Total", "Cost", "Time"].map((heading) => (
                         <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>
                       ))}
                     </tr>
@@ -15135,14 +15153,15 @@ export default function App() {
                         <td className="whitespace-nowrap px-3 py-3 text-slate-700">{record.user || "Unknown"}</td>
                         <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{record.tool}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.model}</td>
+                        <td className="max-w-48 truncate px-3 py-3 font-mono text-xs text-slate-600" title={record.request_id || "Unavailable"}>{record.request_id || "Unavailable"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.input_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.output_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.total_tokens)}</td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{record.cost_status === "available" ? formatAdminCurrency(record.cost) : "Unavailable"}</td>
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{record.cost_status === "available" ? formatAdminProviderCurrency(record.cost, record.currency || billingAiCosts.currency) : "Unavailable"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.timestamp ? formatAdminDateTime(record.timestamp) : "Unknown"}</td>
                       </tr>
                     )) : (
-                      <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-500">No AI usage records are available yet.</td></tr>
+                      <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500">No AI usage records are available yet.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -29479,7 +29498,7 @@ export default function App() {
                       <div className="study-guide-slide-progress"><span style={{ width: `${studyGuideSlides.length ? ((activeStudyGuideSlideIndex + 1) / studyGuideSlides.length) * 100 : 0}%` }} /><strong>{activeStudyGuideSlideIndex + 1} / {studyGuideSlides.length}</strong></div>
                       <button type="button" onClick={goToNextStudyGuideSlide} disabled={activeStudyGuideSlideIndex >= studyGuideSlides.length - 1} className="study-guide-slide-step">Next<ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" /></button>
                     </div>
-                    <div className="study-guide-slide-thumbnails" aria-label="Study Guide slide thumbnails">
+                    <div ref={studyGuideThumbnailRailRef} className="study-guide-slide-thumbnails" aria-label="Study Guide slide thumbnails">
                       {studyGuideSlides.map((slide, index) => (
                         <button key={`${slide.type}-${slide.title}-${index}`} type="button" onClick={() => goToStudyGuideSlide(index)} className={`study-guide-slide-thumb ${index === activeStudyGuideSlideIndex ? "is-active" : ""}`} aria-label={`Open slide ${index + 1}: ${slide.title}`}>
                           <span>{index + 1}</span>

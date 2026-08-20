@@ -9763,3 +9763,113 @@ body.study-guide-focus-open {
     min-height: 34px !important;
   }
 }
+
+/* Authoritative focus-mode control rail. Only the active slide scrolls. */
+body.study-guide-focus-open .workspace-topbar,
+body.study-guide-focus-open .workspace-sidebar,
+body.study-guide-focus-open .workspace-mobile-sidebar-layer,
+body.study-guide-focus-open .mobile-app-nav {
+  display: none !important;
+}
+
+.study-guide-focus-stage {
+  z-index: 2147483000 !important;
+  display: block !important;
+  width: 100svw !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: hidden !important;
+  background:
+    radial-gradient(circle at 50% 110%, rgba(34, 197, 94, 0.17), transparent 38%),
+    linear-gradient(135deg, #00190f, #020f0b) !important;
+}
+
+.study-guide-focus-stage .study-guide-slide-deck {
+  display: grid !important;
+  grid-template-areas:
+    "toolbar"
+    "slide"
+    "navigation"
+    "thumbnails" !important;
+  grid-template-rows: 50px minmax(0, 1fr) 42px 92px !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.study-guide-slide-deck .study-guide-slide-active {
+  grid-area: slide;
+  min-height: 0 !important;
+  height: 100% !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.study-guide-slide-deck .study-guide-slide-active .study-guide-rich-editor,
+.study-guide-slide-deck .study-guide-slide-active .study-guide-markdown,
+.study-guide-slide-deck .study-guide-slide-active .notes-markdown {
+  overflow: visible !important;
+}
+
+.study-guide-slide-nav,
+.study-guide-slide-thumbnails {
+  position: relative !important;
+  z-index: 20 !important;
+  align-self: end;
+  background: #002317;
+}
+
+.study-guide-slide-nav { grid-area: navigation; }
+.study-guide-slide-thumbnails { grid-area: thumbnails; }
+
+.study-guide-slide-thumb.is-active {
+  border: 3px solid #22c55e !important;
+  background: #ecfdf5 !important;
+  box-shadow: 0 0 0 2px #064e3b, 0 8px 22px rgba(34, 197, 94, 0.26) !important;
+}
+
+.study-guide-slide-thumb.is-active span {
+  background: #16a34a !important;
+  box-shadow: 0 0 0 2px #bbf7d0;
+}
+
+@media (max-width: 768px) {
+  .study-guide-shell.study-guide-slide-deck {
+    grid-template-areas:
+      "slide"
+      "navigation" !important;
+    grid-template-rows: minmax(0, 1fr) 42px !important;
+  }
+
+  .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar"
+      "slide"
+      "navigation" !important;
+    grid-template-rows: 42px minmax(0, 1fr) 42px !important;
+    height: 100% !important;
+  }
+
+  .study-guide-slide-thumbnails { display: none !important; }
+
+  .study-guide-slide-nav {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    gap: 8px !important;
+    min-height: 42px;
+    padding: 4px 0 max(4px, env(safe-area-inset-bottom));
+  }
+
+  .study-guide-slide-progress { display: none !important; }
+
+  .study-guide-slide-step {
+    min-height: 36px !important;
+    justify-content: center !important;
+    font-size: 11.5px !important;
+  }
+}

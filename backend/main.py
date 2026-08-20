@@ -428,6 +428,8 @@ PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
 PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "false").strip().lower() not in {"0", "false", "no", "off"}
 PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR = os.getenv("PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "0.00").strip()
+OPENAI_ADMIN_KEY = os.getenv("OPENAI_ADMIN_KEY", "").strip()
+OPENAI_COST_CACHE_SECONDS = max(60, get_early_int_env("OPENAI_COST_CACHE_SECONDS", 300))
 PAYFAST_PROCESS_URL = (
     "https://sandbox.payfast.co.za/eng/process"
     if PAYFAST_SANDBOX
@@ -16759,6 +16761,8 @@ def format_payfast_trial_initial_amount() -> str:
         raise HTTPException(status_code=500, detail="PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR must be a valid ZAR amount.")
     if amount < 0:
         raise HTTPException(status_code=500, detail="PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR cannot be negative.")
+    if amount != Decimal("0.00"):
+        raise HTTPException(status_code=500, detail="A seven-day free trial must use PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR=0.00.")
     return f"{amount:.2f}"
 
 def get_billing_plan_duration_days(plan_id: str) -> int:
@@ -17170,9 +17174,16 @@ def build_payfast_checkout_fields(
         "custom_str4": "trial" if trial else "standard",
     }
     if PAYFAST_SUBSCRIPTION_ENABLED or trial:
-        fields.update(
+        subscription_fields = {
+            "payment_method": "cc",
+            "subscription_type": "1",
+        }
+        if trial:
+            johannesburg_tz = timezone(timedelta(hours=2))
+            first_billing_date = datetime.now(johannesburg_tz) + timedelta(days=7)
+            subscription_fields["billing_date"] = first_billing_date.strftime("%Y-%m-%d")
+        subscription_fields.update(
             {
-                "subscription_type": "1",
                 "recurring_amount": plan["amount_zar"],
                 "frequency": plan["frequency"],
                 "cycles": plan["cycles"],
@@ -17181,10 +17192,7 @@ def build_payfast_checkout_fields(
                 "subscription_notify_buyer": "true",
             }
         )
-        if trial:
-            johannesburg_tz = timezone(timedelta(hours=2))
-            first_billing_date = datetime.now(johannesburg_tz) + timedelta(days=7)
-            fields["billing_date"] = first_billing_date.strftime("%Y-%m-%d")
+        fields.update(subscription_fields)
     fields["signature"] = get_payfast_signature(fields)
     return fields
 
@@ -19424,11 +19432,111 @@ def parse_int_amount(value: Any) -> int:
         return 0
 
 
-def parse_openai_actual_cost(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    amount = parse_zar_amount(value)
-    return amount if amount > 0 else None
+_openai_cost_cache_lock = threading.Lock()
+_openai_cost_cache: dict[str, Any] = {"cache_key": "", "expires_at": 0.0, "value": None}
+
+
+def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    totals_by_currency: dict[str, Decimal] = {}
+    totals_by_line_item: dict[tuple[str, str], Decimal] = {}
+    for page in pages:
+        for bucket in page.get("data") or []:
+            for result in bucket.get("results") or []:
+                amount = result.get("amount") if isinstance(result, dict) else None
+                if not isinstance(amount, dict):
+                    continue
+                currency = compact_text(amount.get("currency")).lower()
+                line_item = compact_text(result.get("line_item"), "OpenAI API usage")
+                try:
+                    value = Decimal(str(amount.get("value"))).quantize(Decimal("0.000001"))
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+                if not currency or value < 0:
+                    continue
+                totals_by_currency[currency] = totals_by_currency.get(currency, Decimal("0")) + value
+                key = (line_item, currency)
+                totals_by_line_item[key] = totals_by_line_item.get(key, Decimal("0")) + value
+    currencies = sorted(totals_by_currency)
+    single_currency = currencies[0] if len(currencies) == 1 else ""
+    return {
+        "available": bool(totals_by_currency),
+        "currency": single_currency,
+        "total_cost": float(totals_by_currency[single_currency]) if single_currency else None,
+        "totals_by_currency": {currency: float(value) for currency, value in totals_by_currency.items()},
+        "by_line_item": [
+            {"feature": line_item, "cost": float(value), "currency": currency}
+            for (line_item, currency), value in sorted(totals_by_line_item.items(), key=lambda item: item[1], reverse=True)
+        ],
+    }
+
+
+def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) -> dict[str, Any]:
+    if not OPENAI_ADMIN_KEY:
+        return {
+            "available": False,
+            "currency": "",
+            "total_cost": None,
+            "by_line_item": [],
+            "status": "unconfigured",
+            "message": "OPENAI_ADMIN_KEY is not configured.",
+        }
+    start_time = int(range_start.timestamp())
+    end_time = max(start_time + 1, int(range_end.timestamp()))
+    cache_key = f"{start_time}:{end_time}"
+    now_monotonic = time.monotonic()
+    with _openai_cost_cache_lock:
+        if _openai_cost_cache.get("cache_key") == cache_key and float(_openai_cost_cache.get("expires_at") or 0) > now_monotonic:
+            return dict(_openai_cost_cache["value"])
+    pages: list[dict[str, Any]] = []
+    next_page = ""
+    try:
+        for _ in range(12):
+            params: list[tuple[str, Any]] = [
+                ("start_time", start_time),
+                ("end_time", end_time),
+                ("bucket_width", "1d"),
+                ("limit", 180),
+                ("group_by", "line_item"),
+            ]
+            if next_page:
+                params.append(("page", next_page))
+            response = requests.get(
+                "https://api.openai.com/v1/organization/costs",
+                params=params,
+                headers={"Authorization": f"Bearer {OPENAI_ADMIN_KEY}", "Accept": "application/json"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("OpenAI Costs API returned an invalid response.")
+            pages.append(payload)
+            next_page = compact_text(payload.get("next_page"))
+            if not payload.get("has_more") or not next_page:
+                break
+        value = {
+            **summarize_openai_cost_buckets(pages),
+            "status": "available",
+            "message": "",
+            "source": "OpenAI Costs API",
+        }
+        with _openai_cost_cache_lock:
+            _openai_cost_cache.update({
+                "cache_key": cache_key,
+                "expires_at": now_monotonic + OPENAI_COST_CACHE_SECONDS,
+                "value": dict(value),
+            })
+        return value
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        logger.warning("OpenAI Costs API request failed: %s", exc)
+        return {
+            "available": False,
+            "currency": "",
+            "total_cost": None,
+            "by_line_item": [],
+            "status": "unavailable",
+            "message": "OpenAI cost is temporarily unavailable.",
+        }
 
 
 def is_paid_payment_status(status: str) -> bool:
@@ -19553,8 +19661,6 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         )
 
     ai_usage_records: list[dict[str, Any]] = []
-    cost_by_feature: dict[str, float] = {}
-    cost_by_user: dict[str, float] = {}
     study_guide_usage_by_user: dict[str, dict[str, Any]] = {}
     token_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     for row in usage_rows:
@@ -19569,18 +19675,11 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         input_tokens = parse_int_amount(metadata.get("input_tokens") or metadata.get("prompt_tokens"))
         output_tokens = parse_int_amount(metadata.get("output_tokens") or metadata.get("completion_tokens"))
         total_tokens = parse_int_amount(metadata.get("total_tokens")) or input_tokens + output_tokens
-        openai_cost = parse_openai_actual_cost(
-            metadata.get("openai_cost_zar")
-            or metadata.get("openai_cost")
-            or metadata.get("cost_zar")
-            or metadata.get("cost")
-        )
-        internal_estimated_cost = parse_zar_amount(metadata.get("estimated_cost_zar") or metadata.get("estimated_cost") or 0)
+        # OpenAI response usage supplies tokens, model and request IDs, but not
+        # invoice-grade cost. Per-request cost therefore remains unavailable.
+        openai_cost = None
         email = normalize_email(row["email"])
         label = BILLING_FEATURE_LABELS.get(feature, feature.replace("_", " ").title())
-        if openai_cost is not None:
-            cost_by_feature[label] = round(cost_by_feature.get(label, 0.0) + openai_cost, 2)
-            cost_by_user[email] = round(cost_by_user.get(email, 0.0) + openai_cost, 2)
         if feature == "study_guide":
             current_study_guide_usage = study_guide_usage_by_user.setdefault(
                 email,
@@ -19607,41 +19706,50 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "cost": openai_cost,
                 "cost_status": "available" if openai_cost is not None else "unavailable",
                 "cost_label": f"R{openai_cost:,.2f}" if openai_cost is not None else "cost unavailable",
-                "estimated_cost": internal_estimated_cost,
-                "estimated_cost_label": f"R{internal_estimated_cost:,.2f}" if internal_estimated_cost > 0 else "",
                 "quantity": quantity,
                 "timestamp": row["created_at"],
             }
         )
 
-    total_ai_cost = round(sum(cost_by_feature.values()), 2)
+    openai_organization_costs = fetch_openai_organization_costs(range_start, now)
+    organization_cost_available = bool(openai_organization_costs.get("available"))
+    organization_cost_currency = compact_text(openai_organization_costs.get("currency")).lower()
+    total_ai_cost = (
+        float(openai_organization_costs.get("total_cost") or 0)
+        if organization_cost_available
+        else 0.0
+    )
+    reported_cost_breakdown = (
+        list(openai_organization_costs.get("by_line_item") or [])
+        if organization_cost_available
+        else []
+    )
+    reported_cost_currency = organization_cost_currency
     prorated_hosting_cost = round(HOSTING_COST_ESTIMATE_ZAR_PER_MONTH * max(1, (now - range_start).days) / 30, 2)
     profitability_records = []
-    all_profit_emails = sorted(set(revenue_by_user) | set(cost_by_user))
+    all_profit_emails = sorted(set(revenue_by_user) | set(study_guide_usage_by_user))
     for email in all_profit_emails:
         revenue = round(revenue_by_user.get(email, 0.0), 2)
-        ai_cost = round(cost_by_user.get(email, 0.0), 2)
         profitability_records.append(
             {
                 "user": email,
                 "revenue": revenue,
-                "ai_cost": ai_cost,
-                "ai_cost_available": email in cost_by_user,
-                "profit": round(revenue - ai_cost, 2),
+                # The organization Costs API does not provide Mabaso user-email
+                # attribution. Do not present a fabricated per-user cost/profit.
+                "ai_cost": None,
+                "ai_cost_available": False,
+                "profit": None,
                 "study_guide_count": int(study_guide_usage_by_user.get(email, {}).get("count", 0)),
-                "study_guide_cost": round(float(study_guide_usage_by_user.get(email, {}).get("cost", 0.0)), 2),
+                "study_guide_cost": None,
                 "revenue_label": f"R{revenue:,.2f}",
-                "ai_cost_label": f"R{ai_cost:,.2f}",
-                "profit_label": f"R{revenue - ai_cost:,.2f}",
+                "ai_cost_label": "cost unavailable",
+                "profit_label": "unavailable",
             }
         )
-    profitability_records.sort(key=lambda item: item["profit"])
+    profitability_records.sort(key=lambda item: item["revenue"], reverse=True)
 
     alerts: list[dict[str, str]] = []
-    for email, cost in sorted(cost_by_user.items(), key=lambda item: item[1], reverse=True)[:8]:
-        if cost >= 50:
-            alerts.append({"level": "warning", "message": f"{email} generated more than R50 in OpenAI-reported costs for this period."})
-    if monthly_revenue and total_ai_cost / max(monthly_revenue, 1) >= 0.5:
+    if reported_cost_currency == "zar" and monthly_revenue and total_ai_cost / max(monthly_revenue, 1) >= 0.5:
         alerts.append({"level": "warning", "message": "OpenAI-reported spend is above 50% of monthly revenue."})
     if failed_payments:
         alerts.append({"level": "info", "message": f"{failed_payments} failed or pending payment record(s) need review."})
@@ -19660,8 +19768,9 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             "rejected_manual_payments": rejected_manual_payments,
             "openai_cost": total_ai_cost,
             "hosting_cost": prorated_hosting_cost,
-            "profit": round(revenue_in_range - total_ai_cost - prorated_hosting_cost, 2),
+            "profit": round(revenue_in_range - total_ai_cost - prorated_hosting_cost, 2) if reported_cost_currency == "zar" else None,
             "currency": "ZAR",
+            "openai_cost_currency": reported_cost_currency.upper(),
         },
         "payments": payment_records[:120],
         "manual_payment_requests": manual_payment_requests,
@@ -19672,25 +19781,25 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         ],
         "ai_costs": {
             "records": ai_usage_records[:200],
-            "by_feature": [
-                {"feature": feature, "cost": round(cost, 2)}
-                for feature, cost in sorted(cost_by_feature.items(), key=lambda item: item[1], reverse=True)
-            ],
+            "by_feature": reported_cost_breakdown,
             "token_totals": token_totals,
             "total_cost": total_ai_cost,
-            "has_actual_cost": bool(cost_by_feature),
-            "cost_source": "OpenAI Usage API / Costs API",
+            "currency": reported_cost_currency,
+            "has_actual_cost": organization_cost_available,
+            "cost_source": "OpenAI Costs API",
+            "cost_source_status": openai_organization_costs.get("status"),
+            "cost_source_message": openai_organization_costs.get("message"),
             "study_guide_by_user": [
                 {
                     "user": email,
                     "count": int(values.get("count", 0)),
-                    "cost": round(float(values.get("cost", 0.0)), 2),
-                    "cost_label": f"R{float(values.get('cost', 0.0)):,.2f}",
+                    "cost": None,
+                    "cost_label": "cost unavailable",
                     "cost_unavailable_count": int(values.get("unavailable", 0)),
                 }
                 for email, values in sorted(
                     study_guide_usage_by_user.items(),
-                    key=lambda item: (float(item[1].get("cost", 0.0)), int(item[1].get("count", 0))),
+                    key=lambda item: int(item[1].get("count", 0)),
                     reverse=True,
                 )
             ],
