@@ -9952,3 +9952,153 @@ body.study-guide-focus-open .mobile-app-nav {
     font-size: 11px !important;
   }
 }
+
+/* Mobile Study Guide controls: keep the compact action row and slide rail reachable. */
+@media (max-width: 768px) {
+  .page-workspace .workspace-shell {
+    padding-top: calc(5.8rem + env(safe-area-inset-top)) !important;
+  }
+
+  .page-workspace .workspace-tool-actions {
+    margin: 0 0 0.35rem !important;
+  }
+
+  .page-workspace .workspace-tool-actions > div:last-child {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 3px !important;
+    overflow-x: visible !important;
+    padding: 0 !important;
+  }
+
+  .page-workspace .workspace-icon-action {
+    width: 32px !important;
+    min-width: 32px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    flex: 0 0 32px !important;
+    flex-direction: row !important;
+    gap: 0 !important;
+    padding: 0 !important;
+  }
+
+  .page-workspace .workspace-icon-action::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  .page-workspace .workspace-focus-action {
+    width: auto !important;
+    min-width: 62px !important;
+    flex-basis: 62px !important;
+    gap: 4px !important;
+    padding-inline: 7px !important;
+  }
+
+  .page-workspace .study-guide-slide-active {
+    padding-bottom: 50px !important;
+  }
+
+  .page-workspace .study-guide-slide-nav {
+    position: fixed !important;
+    left: max(8px, env(safe-area-inset-left)) !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    bottom: calc(76px + env(safe-area-inset-bottom)) !important;
+    z-index: 175 !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    width: auto !important;
+    min-height: 44px !important;
+    margin: 0 !important;
+    padding: 4px !important;
+    border: 1px solid rgba(74, 222, 128, 0.2) !important;
+    border-radius: 14px !important;
+    background: rgba(0, 23, 14, 0.97) !important;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.32) !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  .page-workspace .study-guide-slide-step {
+    display: inline-flex !important;
+    min-width: 0 !important;
+    min-height: 36px !important;
+    justify-content: center !important;
+    border-color: rgba(74, 222, 128, 0.28) !important;
+    background: rgba(12, 45, 30, 0.94) !important;
+    color: #f8fafc !important;
+    font-size: 11px !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  .page-workspace .study-guide-slide-step:disabled {
+    opacity: 0.5 !important;
+  }
+
+  .page-workspace .study-guide-focus-stage .study-guide-slide-nav {
+    bottom: max(6px, env(safe-area-inset-bottom)) !important;
+    z-index: 2147483002 !important;
+  }
+}
+
+/* Upgrade modal must sit above protected-page sticky headers. */
+.upgrade-modal-backdrop {
+  z-index: 2147482000 !important;
+  isolation: isolate;
+}
+
+.upgrade-modal-panel {
+  isolation: isolate;
+}
+
+.upgrade-modal-sticky-bar {
+  z-index: 30 !important;
+  min-height: 48px;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.upgrade-modal-close,
+.upgrade-modal-profile {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  pointer-events: auto;
+}
+
+@media (max-width: 768px) {
+  .upgrade-modal-sticky-bar {
+    display: grid !important;
+    grid-template-columns: 42px minmax(0, 1fr) 42px !important;
+    align-items: center !important;
+    width: calc(100% + 0.7rem) !important;
+  }
+
+  .upgrade-modal-close {
+    grid-column: 1 !important;
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+  }
+
+  .upgrade-modal-profile {
+    grid-column: 3 !important;
+    justify-self: end !important;
+  }
+
+  .upgrade-modal-profile .profile-menu-button {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    justify-content: center !important;
+    padding: 0 !important;
+  }
+
+  .upgrade-modal-profile .profile-menu-button span {
+    display: none !important;
+  }
+}
