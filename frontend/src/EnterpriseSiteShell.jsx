@@ -511,14 +511,15 @@ export function EnterpriseSiteShell({
   const [activeDocumentSection, setActiveDocumentSection] = useState("overview");
 
   const isLocked = !isAuthenticated && page.access !== "public";
+  const isStudyWorkflowPage = page.route === "/resources/study-workflow";
   const filteredFaq = useMemo(() => {
     if (!page.faq?.length) return [];
     const normalizedQuery = faqQuery.trim().toLowerCase();
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
-  const visibleContains = (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
-  const visibleModules = (page.modules || [])
+  const visibleContains = isStudyWorkflowPage ? [] : (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const visibleModules = (isStudyWorkflowPage ? [] : (page.modules || []))
     .filter((module) => isUsefulPublicCopy(module.title))
     .map((module) => ({ ...module, items: (module.items || []).filter(isUsefulPublicCopy) }))
     .filter((module) => module.items.length);
@@ -682,17 +683,15 @@ export function EnterpriseSiteShell({
             {visibleWorkflow.length ? (
               <section id="workflow" className="enterprise-document-section">
                 <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Workflow</p>
-                <h2 className="mt-3 text-2xl font-semibold text-white">Step-by-step platform flow</h2>
-                <div className="mt-6 grid gap-4 xl:grid-cols-3">
+                <h2 className="mt-3 text-2xl font-semibold text-white">How Mabaso AI works</h2>
+                <ol className="enterprise-workflow-prose">
                   {visibleWorkflow.map((item, index) => (
-                    <Motion.div key={`${page.route}-workflow-${item}`} {...cardMotion} className="enterprise-workflow-step">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-400/12 text-sm font-semibold text-cyan-100">{index + 1}</div>
-                        <p className="text-sm leading-7 text-slate-100">{item}</p>
-                      </div>
-                    </Motion.div>
+                    <li key={`${page.route}-workflow-${item}`}>
+                      <span>{index + 1}</span>
+                      <p>{item}</p>
+                    </li>
                   ))}
-                </div>
+                </ol>
               </section>
             ) : null}
 

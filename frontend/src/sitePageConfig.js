@@ -1634,8 +1634,8 @@ export const sitePages = [
     },
     hero: {
       eyebrow: "Resources / Study Workflow",
-      headline: "See the entire Mabaso AI learning flow from upload to export.",
-      description: "Study Workflow visualizes how the platform operates: capture lecture material, transcribe, generate study tools, revise, collaborate, and export the final outputs.",
+      headline: "Move from lecture material to focused revision.",
+      description: "Mabaso AI keeps each stage in one workspace. Add your material, choose the study tool you need, review the result, and return to it later from My Materials.",
       ctas: [
         primaryCta("Start the Workflow", "open-app", "capture"),
         secondaryCta("View Supported File Types", "route", "/resources/supported-file-types"),
@@ -1663,12 +1663,12 @@ export const sitePages = [
       { icon: "download-cloud", title: "Revision and export outcomes", description: "Shows where flashcards, tests, podcasts, PowerPoints, and PDFs fit." },
     ],
     workflow: [
-      "Upload lecture files or record live",
-      "Transcribe and extract lecture context",
-      "Generate study guide, formulas, examples, flashcards, and test",
-      "Use Study Chat, podcast, and presentation tools",
-      "Collaborate in shared rooms",
-      "Download study outputs and reopen history later",
+      "Add lecture notes, slides, a past paper, a supported recording, or a clear topic request on the Capture page.",
+      "Choose Generate Study Guide when the correct sources are ready. Mabaso AI reads those current sources and creates a structured guide without mixing in older workspaces.",
+      "Open the Study Workspace to read the guide, review formulas, or generate worked examples and other study tools separately when you need them.",
+      "Use AI Chat for general academic questions or Study Chat when you want the current learning material to be the primary context.",
+      "Your completed work is saved to your account in My Materials, where you can reopen the correct workspace and continue studying.",
+      "Download supported outputs or create a controlled read-only share link when you want another person to view selected work.",
     ],
     layout: [
       { title: "Animated process hero", description: "The workflow itself is the hero visual, not a static text block." },

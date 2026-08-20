@@ -3664,12 +3664,12 @@ function deriveStudyChatTopicTitle(question = "") {
   const stopWords = new Set([
     "a", "an", "and", "are", "can", "could", "do", "does", "explain", "for", "give", "help", "how", "i", "in", "is", "it", "me", "of", "on", "please", "tell", "the", "to", "what", "when", "where", "which", "who", "why", "with", "you",
   ]);
-  const topicWords = cleaned.split(" ").filter((word) => !stopWords.has(word.toLowerCase())).slice(0, 7);
-  const selected = topicWords.length ? topicWords : cleaned.split(" ").slice(0, 7);
+  const topicWords = cleaned.split(" ").filter((word) => !stopWords.has(word.toLowerCase())).slice(0, 4);
+  const selected = topicWords.length ? topicWords : cleaned.split(" ").slice(0, 4);
   return selected
     .map((word) => (/^[A-Z0-9]{2,}$/.test(word) ? word : `${word.charAt(0).toUpperCase()}${word.slice(1)}`))
     .join(" ")
-    .slice(0, 64) || "New Study Chat";
+    .slice(0, 48) || "New Study Chat";
 }
 
 function getSafeAiReferenceImageUrls(references = [], { allowInlineDataUrl = false, maxItems = MAX_AI_REFERENCE_IMAGES } = {}) {
@@ -9128,7 +9128,7 @@ export default function App() {
       setMindMapDepth(snapshot.mindMapDepth || restoredMindMapData.depth || "Advanced");
       setMindMapTopic(snapshot.mindMapTopic || "");
       setOutputLanguage(snapshot.outputLanguage || outputLanguage);
-      setVideoUrl(snapshot.videoUrl || "");
+      setVideoUrl(restoringCapturePage ? "" : (snapshot.videoUrl || ""));
       setActiveHistoryId(restoringCapturePage ? "" : (snapshot.activeHistoryId || ""));
       setActiveTab(restoredActiveTab);
       const shouldKeepCurrentUtilityPage = ["voice", "timetable"].includes(currentPageRef.current)

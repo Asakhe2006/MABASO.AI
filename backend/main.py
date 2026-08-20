@@ -278,7 +278,7 @@ LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS = int(
 )
 LECTURE_ASSISTANT_TITLE_MODEL = (os.getenv("LECTURE_ASSISTANT_TITLE_MODEL", BASE_TEXT_MODEL) or BASE_TEXT_MODEL).strip()
 LECTURE_ASSISTANT_TITLE_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_TITLE_TIMEOUT", "20"))
-LECTURE_ASSISTANT_TITLE_MAX_WORDS = max(3, int(os.getenv("LECTURE_ASSISTANT_TITLE_MAX_WORDS", "6")))
+LECTURE_ASSISTANT_TITLE_MAX_WORDS = min(4, max(2, int(os.getenv("LECTURE_ASSISTANT_TITLE_MAX_WORDS", "4"))))
 LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_VOICE_MAX_OUTPUT_TOKENS", "220"))
 LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS = int(
     os.getenv("LECTURE_ASSISTANT_VOICE_DETAILED_MAX_OUTPUT_TOKENS", "520")
@@ -18851,6 +18851,10 @@ def cleanup_generated_conversation_title(title: str, fallback: str) -> str:
     words = [word for word in cleaned.split() if compact_text(word)]
     if not words:
         return fallback
+    if len(words) == 1:
+        fallback_words = [word for word in compact_text(fallback).split() if compact_text(word)]
+        companion = next((word for word in fallback_words if word.lower() != words[0].lower()), "Discussion")
+        words.append(companion)
     cleaned = " ".join(words[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]).strip()
     return cleaned[:80].strip() or fallback
 
@@ -18868,6 +18872,8 @@ def build_fallback_conversation_title(question: str, lecture_label: str = "") ->
             break
     if not selected:
         selected = [part.capitalize() for part in compact_text(lecture_label, "Study Chat").split()[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]]
+    if len(selected) == 1:
+        selected.append("Discussion")
     return " ".join(selected[:LECTURE_ASSISTANT_TITLE_MAX_WORDS]).strip() or "Study Chat"
 
 
@@ -18902,7 +18908,7 @@ def generate_conversation_title(
                     "content": (
                         "Create a concise professional chat title for a student AI conversation. "
                         "Return only the title, with no quotes, no markdown, and no punctuation-heavy phrasing. "
-                        f"Use {max(3, LECTURE_ASSISTANT_TITLE_MAX_WORDS - 2)} to {LECTURE_ASSISTANT_TITLE_MAX_WORDS} words."
+                        f"Use 2 to {LECTURE_ASSISTANT_TITLE_MAX_WORDS} words."
                     ),
                 },
                 {

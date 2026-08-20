@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -70,7 +71,9 @@ export default function PublicLandingPage({
   authMessageIsError = false,
   isGoogleSigningIn = false,
 }) {
+  const [activeMobileNavGroup, setActiveMobileNavGroup] = useState("");
   const navigate = (route) => {
+    setActiveMobileNavGroup("");
     onNavigate(route);
   };
   const startGoogle = () => {
@@ -161,10 +164,29 @@ export default function PublicLandingPage({
           <strong className="provider-mark provider-gemini"><Sparkles aria-hidden="true" /> Google Gemini</strong>
         </footer>
       </main>
+      {activeMobileNavGroup ? (
+        <>
+          <button type="button" className="public-mobile-nav-backdrop" onClick={() => setActiveMobileNavGroup("")} aria-label="Close navigation menu" />
+          <div className="public-mobile-nav-popover" role="menu" aria-label={`${activeMobileNavGroup} pages`}>
+            {(NAV_GROUPS.find((group) => group.label === activeMobileNavGroup)?.items || []).map(([label, route]) => (
+              <button key={route} type="button" role="menuitem" onClick={() => navigate(route)}>{label}</button>
+            ))}
+          </div>
+        </>
+      ) : null}
       <nav className="public-mobile-bottom-nav" aria-label="Mobile public navigation">
-        <button type="button" onClick={() => navigate("/product/study-workspace")}>Platform</button>
-        <button type="button" onClick={() => navigate("/product/ai-study-guide")}>Features</button>
-        <button type="button" onClick={() => navigate("/resources/study-workflow")}>Resources</button>
+        {NAV_GROUPS.map((group) => (
+          <button
+            key={group.label}
+            type="button"
+            className={activeMobileNavGroup === group.label ? "is-open" : ""}
+            aria-haspopup="menu"
+            aria-expanded={activeMobileNavGroup === group.label}
+            onClick={() => setActiveMobileNavGroup((current) => current === group.label ? "" : group.label)}
+          >
+            {group.label}<ChevronDown aria-hidden="true" />
+          </button>
+        ))}
         <button type="button" onClick={() => navigate("/pricing")}>Pricing</button>
       </nav>
     </div>
