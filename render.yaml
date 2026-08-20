@@ -188,7 +188,7 @@ services:
     name: mabaso-ai-web
     runtime: static
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     staticPublishPath: dist
     headers:
       - path: /*
@@ -219,6 +219,8 @@ services:
         name: Cache-Control
         value: public, max-age=300
     envVars:
+      - key: NODE_VERSION
+        value: "22.22.0"
       - key: VITE_API_BASE_URL
         value: "https://mabaso-ai-api.onrender.com"
       - key: VITE_GOOGLE_CLIENT_ID

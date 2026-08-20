@@ -6959,6 +6959,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(loadStoredWorkspaceTabId);
   const [studyGuideSlideIndex, setStudyGuideSlideIndex] = useState(0);
   const studyGuideThumbnailRailRef = useRef(null);
+  const studyGuideFocusStageRef = useRef(null);
   const [isStudyGuideFocusMode, setIsStudyGuideFocusMode] = useState(false);
   const [workspaceToolGroup, setWorkspaceToolGroup] = useState(() => WORKSPACE_TOOL_GROUP_BY_TAB[loadStoredWorkspaceTabId()] || "study");
   const [isMobileMoreMenuOpen, setIsMobileMoreMenuOpen] = useState(false);
@@ -8692,6 +8693,25 @@ export default function App() {
   const goToStudyGuideSlide = (index) => setStudyGuideSlideIndex(Math.min(Math.max(index, 0), Math.max(studyGuideSlides.length - 1, 0)));
   const goToPreviousStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.max(0, current - 1));
   const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
+  const openStudyGuideFocusMode = () => {
+    const focusStage = studyGuideFocusStageRef.current;
+    setIsStudyGuideFocusMode(true);
+    if (!focusStage || document.fullscreenElement) return;
+    const requestFullscreen = focusStage.requestFullscreen || focusStage.webkitRequestFullscreen;
+    if (typeof requestFullscreen === "function") {
+      Promise.resolve(requestFullscreen.call(focusStage)).catch(() => {
+        // The fixed viewport layout remains available when browser fullscreen is denied.
+      });
+    }
+  };
+  const closeStudyGuideFocusMode = () => {
+    setIsStudyGuideFocusMode(false);
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      Promise.resolve(document.exitFullscreen()).catch(() => {});
+    } else if (document.webkitFullscreenElement && typeof document.webkitExitFullscreen === "function") {
+      Promise.resolve(document.webkitExitFullscreen()).catch(() => {});
+    }
+  };
   useEffect(() => {
     const activeThumbnail = studyGuideThumbnailRailRef.current?.querySelector(".study-guide-slide-thumb.is-active");
     activeThumbnail?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
@@ -8700,14 +8720,23 @@ export default function App() {
     if (!isStudyGuideFocusMode || typeof window === "undefined") return undefined;
     document.body.classList.add("study-guide-focus-open");
     const handleStudyGuideFocusKeyDown = (event) => {
-      if (event.key === "Escape") setIsStudyGuideFocusMode(false);
+      if (event.key === "Escape") closeStudyGuideFocusMode();
       if (event.key === "ArrowLeft") goToPreviousStudyGuideSlide();
       if (event.key === "ArrowRight") goToNextStudyGuideSlide();
     };
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        setIsStudyGuideFocusMode(false);
+      }
+    };
     window.addEventListener("keydown", handleStudyGuideFocusKeyDown);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
     return () => {
       document.body.classList.remove("study-guide-focus-open");
       window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
     };
   }, [isStudyGuideFocusMode, studyGuideSlides.length]);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
@@ -16655,9 +16684,16 @@ export default function App() {
       }, 25000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
-      applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
+      const verifiedSession = await checkSharedSession({ force: true, background: true });
+      if (verifiedSession.status === "unauthenticated") {
+        throw new Error("Google sign-in completed, but the secure session cookie was not accepted. Allow cookies for Mabaso AI and try again.");
+      }
+      const verifiedData = verifiedSession.status === "authenticated"
+        ? { ...data, ...verifiedSession.session, email: verifiedSession.session?.email || data.email }
+        : data;
+      applyAuthResponse(verifiedData, verifiedData.email || previewEmail || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
+      setAuthMessage(verifiedData?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
@@ -29535,7 +29571,7 @@ export default function App() {
             </div>
             <div className="workspace-content-surface min-w-0 p-1 sm:p-3">
               {!isStudyGuideFocusMode ? <>
-                <div className="workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className={`workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3 ${activeTab === "guide" ? "is-guide-actions" : ""}`}>
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                   <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy current section" data-mobile-label="Copy">
@@ -29570,7 +29606,7 @@ export default function App() {
                       </div>
                     ) : null}
                   </div>
-                  <button type="button" onClick={() => setIsStudyGuideFocusMode(true)} disabled={activeTab !== "guide" || !studyGuideSlides.length} className="workspace-icon-action workspace-focus-action" title="Focus mode" aria-label="Open Study Guide focus mode">
+                  <button type="button" onClick={openStudyGuideFocusMode} disabled={activeTab !== "guide" || !studyGuideSlides.length} className="workspace-icon-action workspace-focus-action" title="Focus mode" aria-label="Open Study Guide focus mode">
                     <Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus</span>
                   </button>
                   <div className="workspace-more-anchor">
@@ -29590,14 +29626,14 @@ export default function App() {
                 </div>
               </> : null}
 
-              <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
+              <div ref={studyGuideFocusStageRef} className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
                   <div className={`study-guide-shell study-guide-themed study-guide-slide-deck academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
                     {isStudyGuideFocusMode ? (
                       <div className="study-guide-focus-toolbar">
-                        <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
+                        <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
                         <div className="study-guide-focus-title"><Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
-                        <button type="button" onClick={() => setIsStudyGuideFocusMode(false)} className="study-guide-focus-icon" aria-label="Close focus mode"><X className="h-4 w-4" aria-hidden="true" /></button>
+                        <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-icon" aria-label="Close focus mode"><X className="h-4 w-4" aria-hidden="true" /></button>
                       </div>
                     ) : null}
                     <div
