@@ -121,6 +121,20 @@ class AcademicExportThemeTests(unittest.TestCase):
         cleaned = main.prepare_generated_study_guide_output(draft)
         self.assertEqual(cleaned.count("\\sum"), 1)
 
+    def test_source_grounded_fallback_has_no_generic_failure_placeholders(self):
+        source = (
+            "HARMONIC SIGNALS AND SPECTRA. "
+            "A harmonic signal is periodic and can be represented using sine and cosine components. "
+            "Frequency measures cycles per second. Amplitude is the peak magnitude. "
+            "x(t) = A cos(2 pi f t + phi). The spectrum shows frequency components."
+        )
+        guide = main.build_source_grounded_fallback_study_guide(source)
+        self.assertIn("# HARMONIC SIGNALS AND SPECTRA", guide)
+        self.assertIn("## Core Concepts", guide)
+        self.assertIn("## Quick Revision Questions", guide)
+        self.assertNotIn("not clearly detected", guide.lower())
+        self.assertNotIn("check the transcript", guide.lower())
+
     def test_quality_gate_rejects_collapsed_multi_step_equations(self):
         draft = (
             "# Worked Example\n\n"

@@ -8680,13 +8680,17 @@ export default function App() {
   const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
   useEffect(() => {
     if (!isStudyGuideFocusMode || typeof window === "undefined") return undefined;
+    document.body.classList.add("study-guide-focus-open");
     const handleStudyGuideFocusKeyDown = (event) => {
       if (event.key === "Escape") setIsStudyGuideFocusMode(false);
       if (event.key === "ArrowLeft") goToPreviousStudyGuideSlide();
       if (event.key === "ArrowRight") goToNextStudyGuideSlide();
     };
     window.addEventListener("keydown", handleStudyGuideFocusKeyDown);
-    return () => window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
+    return () => {
+      document.body.classList.remove("study-guide-focus-open");
+      window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
+    };
   }, [isStudyGuideFocusMode, studyGuideSlides.length]);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
@@ -17411,7 +17415,7 @@ export default function App() {
       status: "BLOCKED_ACCESS",
       reason: payload.reason || "PLAN_RESTRICTION",
       requiredAction: payload.required_action || payload.requiredAction || "UPGRADE_OR_CHANGE_MODEL",
-      model: modeOption?.label || "Selected AI mode",
+      mode: modeOption?.label || "Selected AI mode",
       provider: "Mabaso AI",
       requiredPlan: payload.required_plan || payload.requiredPlan || getAiChatModeRequiredLabel(modeOption?.id),
     });
@@ -22605,8 +22609,13 @@ export default function App() {
         setStatus(data.stage || "Processing...");
         setProgress(Number(data.progress || 0));
         if (data.status === "cancelled") {
-          const cancelledError = new Error("Study guide generation cancelled.");
-          cancelledError.cancelled = true;
+          const wasExplicitlyCancelled = Boolean(signal?.aborted);
+          const cancelledError = new Error(
+            wasExplicitlyCancelled
+              ? "Study guide generation cancelled."
+              : "Study guide generation stopped before completion. Please try again.",
+          );
+          cancelledError.cancelled = wasExplicitlyCancelled;
           throw cancelledError;
         }
         if (data.status === "failed") throw new Error(data.error || `${jobType} failed.`);
@@ -25175,6 +25184,16 @@ export default function App() {
       return;
     }
     if (isAskingChat) return;
+    if (currentPage === "voice" && !canCurrentPlanUseAiChatMode(selectedAiChatMode)) {
+      const requestedOption = getAiChatModeOption(selectedAiChatMode);
+      setLockedAiChatModeInfo(requestedOption);
+      setIsAiChatModeMenuOpen(true);
+      showModelAccessBlock({
+        requested_mode: requestedOption.id,
+        required_plan: getAiChatModeRequiredLabel(requestedOption.id),
+      });
+      return;
+    }
     if (studyChatResponseMode === "voice") {
       await submitStudyChatVoiceQuestion(question);
       return;
@@ -25820,7 +25839,28 @@ export default function App() {
           <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
         {isAiChatModeMenuOpen ? (
-          <div className="ai-chat-mode-menu" role="menu" aria-label="Choose Mabaso AI mode">
+          <div
+            className="ai-chat-mode-menu"
+            role="menu"
+            aria-label="Choose Mabaso AI mode"
+            onKeyDown={(event) => {
+              const rows = Array.from(event.currentTarget.querySelectorAll(".ai-chat-mode-row"));
+              const currentIndex = rows.indexOf(document.activeElement);
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setIsAiChatModeMenuOpen(false);
+                setLockedAiChatModeInfo(null);
+                return;
+              }
+              if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+              event.preventDefault();
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              const nextIndex = currentIndex < 0
+                ? (direction > 0 ? 0 : rows.length - 1)
+                : (currentIndex + direction + rows.length) % rows.length;
+              rows[nextIndex]?.focus();
+            }}
+          >
             <p className="ai-chat-mode-menu-kicker">Choose mode</p>
             {AI_CHAT_MODE_OPTIONS.map((option) => {
               const isSelected = option.id === selectedAiChatMode;
@@ -28595,7 +28635,7 @@ export default function App() {
       ? `${activeTimetableNavItem.title} - ${activeTimetableNavItem.remainingLabel}`
       : "";
   const renderMobileAppNavigation = () => {
-    if (isUpgradeModalOpen || isLogoutConfirmOpen || siteRatingPrompt) return null;
+    if (isUpgradeModalOpen || isLogoutConfirmOpen || siteRatingPrompt || isStudyGuideFocusMode) return null;
 
     const handleMobileNavClick = (item) => {
       if (item.id === "more") {
@@ -28621,6 +28661,8 @@ export default function App() {
       }
       if (item.id === "workspace") {
         setActiveTab("guide");
+        openProtectedAppPage("workspace");
+        return;
       }
       openProtectedAppPage(item.id);
     };
@@ -28722,10 +28764,10 @@ export default function App() {
         <button type="button" className="model-access-blocker__close" onClick={closeModelAccessBlock} aria-label="Close access restriction"><X className="h-4 w-4" aria-hidden="true" /></button>
         <p className="model-access-blocker__eyebrow">Access restricted</p>
         <h2>This AI mode is not available on your current plan.</h2>
-        <p>Please upgrade your subscription or select a different model before sending this request.</p>
-        {modelAccessBlock?.model ? <small>Requested model: {modelAccessBlock.model}</small> : null}
+        <p>Please upgrade your subscription or select a different mode before sending this request.</p>
+        {modelAccessBlock?.mode ? <small>Requested mode: {modelAccessBlock.mode}</small> : null}
         <div className="model-access-blocker__actions">
-          <button type="button" onClick={handleBlockedAccessChangeModel}>Change Model</button>
+          <button type="button" onClick={handleBlockedAccessChangeModel}>Change Mode</button>
           <button type="button" onClick={handleBlockedAccessUpgrade} className="is-primary">Upgrade Plan</button>
         </div>
       </div>
@@ -28975,8 +29017,8 @@ export default function App() {
             </div>
         </section> : null}
 
-        {currentPage === "workspace" ? <section className="workspace-shell overflow-hidden p-2 sm:p-4">
-          <div className="workspace-topbar flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
+        {currentPage === "workspace" ? <section className={"workspace-shell overflow-hidden p-2 sm:p-4 " + (isStudyGuideFocusMode ? "is-focus-mode" : "")}>
+          {!isStudyGuideFocusMode ? <div className="workspace-topbar flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-start gap-4">
               {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
               <button type="button" onClick={() => setIsWorkspaceMobileSidebarOpen(true)} className="workspace-mobile-sidebar-button lg:hidden" aria-label="Open Study Workspace sidebar">
@@ -29038,9 +29080,9 @@ export default function App() {
               </button>
               {renderCompactProfileMenu()}
             </div>
-          </div>
+          </div> : null}
 
-          {isWorkspaceMobileSidebarOpen ? (
+          {!isStudyGuideFocusMode && isWorkspaceMobileSidebarOpen ? (
             <div className="workspace-mobile-sidebar-layer lg:hidden">
               <button type="button" className="workspace-mobile-sidebar-scrim" aria-label="Close Study Workspace sidebar" onClick={closeWorkspaceMobileSidebar} />
               <aside
@@ -29149,8 +29191,8 @@ export default function App() {
               </section>
             </div>
           ) : null}
-          <div className={`workspace-layout mt-6 grid gap-5 ${isWorkspaceDesktopSidebarOpen ? "is-desktop-sidebar-open" : "is-desktop-sidebar-closed"}`}>
-            {isWorkspaceDesktopSidebarOpen ? <aside className="workspace-sidebar hidden lg:block">
+          <div className={`workspace-layout mt-6 grid gap-5 ${isStudyGuideFocusMode ? "is-study-guide-focus" : isWorkspaceDesktopSidebarOpen ? "is-desktop-sidebar-open" : "is-desktop-sidebar-closed"}`}>
+            {isWorkspaceDesktopSidebarOpen && !isStudyGuideFocusMode ? <aside className="workspace-sidebar hidden lg:block">
               <div className="sticky top-5 p-2">
                 {WORKSPACE_TOOL_GROUPS.map((group) => (
                   <div key={group.id} className="border-b border-white/10 py-4 first:pt-0 last:border-b-0 last:pb-0">
@@ -29221,7 +29263,7 @@ export default function App() {
               </div>
             </div>
             <div className="workspace-content-surface min-w-0 p-1 sm:p-3">
-              <>
+              {!isStudyGuideFocusMode ? <>
                 <div className="workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
@@ -29275,7 +29317,7 @@ export default function App() {
                   {workspaceSaveStatus ? <span className="workspace-save-status workspace-secondary-action">{workspaceSaveStatus}</span> : null}
                   </div>
                 </div>
-              </>
+              </> : null}
 
               <div className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
@@ -29313,7 +29355,7 @@ export default function App() {
                     </div>
 
                     {visibleGuideSections.length ? (
-                      <div className="space-y-2.5">
+                      <div className="study-guide-section-slides space-y-2.5">
                         {visibleGuideSections.map((section, index) => {
                           const isActiveSection = activeTeacherSectionKey
                             ? activeTeacherSectionKey === section.normalizedHeading

@@ -23,6 +23,18 @@ class ChatScopeModelTests(unittest.TestCase):
         self.assertFalse(main.can_use_model("free", "gpt-5.6-terra", "global"))
         self.assertFalse(main.can_use_model("pro_student", "gpt-5.6-terra", "global"))
         self.assertTrue(main.can_use_model("premium_student", "gpt-5.6-terra", "global"))
+
+    def test_student_facing_mode_matrix_is_enforced(self):
+        self.assertTrue(main.can_use_ai_chat_mode("free", "quick"))
+        self.assertFalse(main.can_use_ai_chat_mode("free", "study"))
+        self.assertTrue(main.can_use_ai_chat_mode("pro_student", "think_deeper"))
+        self.assertFalse(main.can_use_ai_chat_mode("pro_student", "maximum"))
+        self.assertTrue(main.can_use_ai_chat_mode("premium_student", "maximum"))
+
+    def test_auto_router_never_exceeds_the_current_plan(self):
+        self.assertEqual(main.route_auto_ai_chat_mode("Solve a Fourier series", "free"), "quick")
+        self.assertEqual(main.route_auto_ai_chat_mode("Explain resistance", "pro_student"), "study")
+        self.assertEqual(main.route_auto_ai_chat_mode("Solve a Fourier series", "pro_student"), "think_deeper")
         self.assertTrue(main.can_use_model("free", "gpt-4.1", "global"))
 
 

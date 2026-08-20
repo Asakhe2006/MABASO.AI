@@ -170,8 +170,8 @@ STUDY_CHAT_MODEL = normalize_standard_text_model(os.getenv("STUDY_CHAT_MODEL"), 
 AI_CHAT_MODE_MODELS = {
     "quick": normalize_openai_model_name(os.getenv("AI_CHAT_QUICK_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
     "study": normalize_openai_model_name(os.getenv("AI_CHAT_STUDY_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
-    "think_deeper": normalize_openai_model_name(os.getenv("AI_CHAT_THINK_DEEPER_MODEL"), AI_CHAT_MODEL),
-    "expert": normalize_openai_model_name(os.getenv("AI_CHAT_EXPERT_MODEL"), AI_CHAT_MODEL),
+    "think_deeper": normalize_openai_model_name(os.getenv("AI_CHAT_THINK_DEEPER_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
+    "expert": normalize_openai_model_name(os.getenv("AI_CHAT_EXPERT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
     "maximum": normalize_openai_model_name(os.getenv("AI_CHAT_MAXIMUM_MODEL"), PREMIUM_OPENAI_CHAT_MODEL),
 }
 AI_CHAT_MODE_ACCESS = {
@@ -16555,6 +16555,15 @@ def can_use_ai_chat_mode(plan_id: str, requested_mode: str = "auto") -> bool:
     return mode in AI_CHAT_MODE_ACCESS.get(plan_tier, AI_CHAT_MODE_ACCESS["free"])
 
 
+def can_use_model(plan_id: str, requested_model: str = "", chat_scope: str = "global") -> bool:
+    """Compatibility guard for legacy clients that still submit provider model IDs."""
+    if compact_text(chat_scope, "global").lower() != "global":
+        return True
+    normalized_model = compact_text(requested_model).lower()
+    premium_only = bool(re.search(r"(?:terra|5[._-]?6|maximum)", normalized_model))
+    return can_use_ai_chat_mode(plan_id, "maximum" if premium_only else "quick")
+
+
 def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
     mode = normalize_ai_chat_mode(requested_mode)
     if mode == "maximum":
@@ -24666,6 +24675,112 @@ def build_fallback_study_guide(transcript: str) -> str:
     )
 
 
+def build_source_grounded_fallback_study_guide(source: str) -> str:
+    """Build a readable emergency guide from source facts without generic filler."""
+    raw_source = str(source or "").strip()
+    compact_source = re.sub(r"\s+", " ", raw_source).strip()
+    if not compact_source:
+        return ""
+
+    raw_lines = [re.sub(r"\s+", " ", line).strip(" -\t") for line in raw_source.splitlines()]
+    source_lines = [line for line in raw_lines if len(line) >= 8]
+    sentence_candidates = re.split(r"(?<=[.!?])\s+", compact_source)
+    sentences = [sentence.strip() for sentence in sentence_candidates if len(sentence.strip()) >= 24]
+    if not sentences:
+        sentences = [compact_source]
+
+    heading_candidates = [
+        line.rstrip(":")
+        for line in source_lines
+        if len(line) <= 88
+        and not re.search(r"[.!?]$", line)
+        and (line.isupper() or line.istitle() or line.endswith(":"))
+    ]
+    first_sentence_title = sentences[0].rstrip(".:") if sentences and len(sentences[0]) <= 88 and sentences[0].isupper() else ""
+    title = first_sentence_title or next((heading for heading in heading_candidates if len(heading.split()) >= 2), "")
+
+    stopwords = {
+        "about", "after", "again", "also", "because", "before", "between", "could", "during",
+        "example", "from", "have", "into", "lecture", "material", "notes", "other", "should",
+        "slides", "source", "student", "that", "their", "these", "they", "this", "those", "through",
+        "using", "very", "what", "when", "where", "which", "while", "with", "would", "your",
+    }
+    frequency: dict[str, int] = {}
+    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9-]{4,}\b", compact_source):
+        normalized = token.lower()
+        if normalized in stopwords:
+            continue
+        frequency[normalized] = frequency.get(normalized, 0) + 1
+    key_terms = [term for term, _ in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:8]]
+    if not title:
+        title = " ".join(term.title() for term in key_terms[:4]) or "Lecture Study Guide"
+
+    overview = sentences[:2]
+    detail_sentences = sentences[2:14] or sentences[:10]
+    concept_rows: list[str] = []
+    for term in key_terms[:6]:
+        supporting_sentence = next(
+            (sentence for sentence in sentences if re.search(rf"\b{re.escape(term)}\b", sentence, re.IGNORECASE)),
+            "",
+        )
+        if supporting_sentence:
+            concept_rows.append(f"- **{term.title()}:** {supporting_sentence}")
+
+    formula_candidates: list[str] = []
+    for line in source_lines:
+        if len(line) <= 260 and re.search(r"(?:=|\\frac|\\sum|\\int|\\sqrt|\b(?:sin|cos|tan|log|ln)\s*\()", line):
+            formula_candidates.append(line)
+        if len(formula_candidates) >= 5:
+            break
+
+    guide: list[str] = [
+        "# " + title,
+        "",
+        "## What You Will Learn",
+        "",
+        "- Explain the central ideas and terminology in this lecture.",
+        "- Connect the main concepts instead of memorising isolated statements.",
+        "- Identify the details most likely to matter in assessment questions.",
+        "",
+        "## Topic Overview",
+        "",
+        *overview,
+        "",
+    ]
+
+    if concept_rows:
+        guide.extend(["## Core Concepts", "", *concept_rows, ""])
+
+    guide.extend(["## Detailed Explanation", ""])
+    for index in range(0, len(detail_sentences), 3):
+        guide.append(" ".join(detail_sentences[index:index + 3]))
+        guide.append("")
+
+    if formula_candidates:
+        guide.extend(["## Formulas and Relationships", ""])
+        for formula in formula_candidates:
+            if "$" in formula:
+                guide.append(formula)
+            else:
+                guide.extend(["$$", formula, "$$"])
+            guide.append("")
+
+    guide.extend([
+        "> **Exam Tip:** Explain the relationship between the key ideas, then support the explanation with precise terminology from the lecture.",
+        "",
+        "> **Common Mistake:** Listing terms without explaining how they connect or when they apply.",
+        "",
+        "## Quick Summary",
+        "",
+        *[f"- {sentence}" for sentence in sentences[:5]],
+        "",
+        "## Quick Revision Questions",
+        "",
+        *[f"{index + 1}. Explain {term.replace('-', ' ')} in your own words and relate it to the main topic." for index, term in enumerate(key_terms[:5])],
+    ])
+    return "\n".join(line for line in guide if line is not None).strip()
+
+
 def make_formulas_human_readable(text: str) -> str:
     superscript_map = str.maketrans({
         "0": "⁰",
@@ -26981,7 +27096,6 @@ def prepare_generated_study_guide_output(markdown: str) -> str:
     cleaned = strip_study_guide_generation_artifacts(markdown)
     cleaned = remove_separate_study_tool_sections(cleaned)
     cleaned = remove_duplicate_study_guide_equations(cleaned)
-    cleaned = make_formulas_human_readable(cleaned)
     cleaned = normalize_study_guide_block_spacing(cleaned)
     cleaned = remove_duplicate_study_guide_equations(cleaned)
     cleaned = normalize_study_guide_heading_wording(cleaned)
@@ -31263,7 +31377,7 @@ async def generate_study_guide(
                     for part in [lecture_notes.strip(), lecture_slides.strip(), past_question_papers.strip(), transcript.strip()]
                     if part
                 )
-                cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
+                cleaned_summary = prepare_generated_study_guide_output(build_source_grounded_fallback_study_guide(fallback_source))
                 used_fallback = True
         return add_student_support_sections(
             prepare_generated_study_guide_output(cleaned_summary),
@@ -31282,7 +31396,7 @@ async def generate_study_guide(
             for part in [lecture_notes.strip(), lecture_slides.strip(), past_question_papers.strip(), transcript.strip()]
             if part
         )
-        cleaned_summary = prepare_generated_study_guide_output(build_fallback_study_guide(fallback_source))
+        cleaned_summary = prepare_generated_study_guide_output(build_source_grounded_fallback_study_guide(fallback_source))
         return add_student_support_sections(
             prepare_generated_study_guide_output(cleaned_summary),
             lecture_notes=lecture_notes,
@@ -31605,7 +31719,18 @@ async def run_summary_job(
             metadata={"job_id": job_id, "used_fallback": used_fallback},
         )
     except JobCancelledError:
-        cancel_study_guide_job(job_id)
+        if job_cancel_requested(job_id):
+            cancel_study_guide_job(job_id)
+        else:
+            logger.warning("Study guide job raised cancellation without an explicit user request: %s", job_id)
+            update_job(
+                job_id,
+                status="failed",
+                stage="Study guide interrupted",
+                progress=100,
+                error="Study guide generation was interrupted. Please try again.",
+            )
+            refund_job_usage_if_failed(job_id, "study_guide_interrupted")
     except asyncio.CancelledError:
         if job_cancel_requested(job_id):
             cancel_study_guide_job(job_id)
