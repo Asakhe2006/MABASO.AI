@@ -1,5 +1,6 @@
-import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { createPortal } from "react-dom";
 import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
@@ -20,6 +21,11 @@ import PublicLandingPage from "./PublicLandingPage";
 import { useAuth } from "./auth/AuthContext";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
+
+function BodyPortal({ active, children }) {
+  if (!active || typeof document === "undefined") return children;
+  return createPortal(children, document.body);
+}
 const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
 const EnterpriseFooter = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseFooter })));
 const EnterpriseSiteShell = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseSiteShell })));
@@ -8716,23 +8722,7 @@ export default function App() {
       window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
     };
   }, [isStudyGuideFocusMode, studyGuideSlides.length]);
-  useLayoutEffect(() => {
-    if (!isStudyGuideFocusMode || typeof document === "undefined") return undefined;
-    const focusStage = studyGuideFocusStageRef.current;
-    const originalParent = focusStage?.parentNode;
-    if (!focusStage || !originalParent) return undefined;
 
-    const positionMarker = document.createComment("study-guide-focus-stage");
-    originalParent.insertBefore(positionMarker, focusStage);
-    document.body.appendChild(focusStage);
-
-    return () => {
-      if (positionMarker.parentNode) {
-        positionMarker.parentNode.insertBefore(focusStage, positionMarker);
-        positionMarker.remove();
-      }
-    };
-  }, [isStudyGuideFocusMode]);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
     || "Shared Study Guide";
@@ -10945,8 +10935,8 @@ export default function App() {
     }));
 
     return (
-      <section className={`timetable-compact-surface ${isTimetableFocusMode ? "is-focus-mode" : ""} min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6`}>
-        <div className="flex flex-col gap-5 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
+      <section className={`timetable-compact-surface timetable-view-${timetableViewMode} ${isTimetableFocusMode ? "is-focus-mode" : ""} min-h-[78vh] overflow-hidden rounded-[32px] border border-emerald-300/20 bg-black/82 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.48)] backdrop-blur sm:p-5 xl:p-6`}>
+        <div className="timetable-mobile-header flex flex-col gap-5 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-4">
             {renderBackButton(() => openProtectedAppPage("capture"), "Back to dashboard")}
             <div className="min-w-0">
@@ -10957,7 +10947,7 @@ export default function App() {
           </div>
           <div className="timetable-header-actions flex flex-wrap gap-2">
             <button type="button" onClick={() => setIsTimetableFocusMode((current) => !current)} className="timetable-icon-button timetable-focus-button" title={isTimetableFocusMode ? "Close focus view" : "Open timetable focus view"} aria-label={isTimetableFocusMode ? "Close timetable focus view" : "Open timetable focus view"}>
-              {isTimetableFocusMode ? <X className="h-4 w-4" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />}
+              {isTimetableFocusMode ? <X className="h-4 w-4" aria-hidden="true" /> : <Maximize2 className="h-4 w-4" aria-hidden="true" />}
             </button>
             {!isTimetableLoaderVisible && shouldShowTimetableGrid && timetableRows.length ? (
               <button type="button" onClick={downloadTimetableWeekImage} disabled={isDownloadingTimetableImage} className="timetable-icon-button" title="Download timetable image" aria-label="Download timetable image">
@@ -10970,13 +10960,13 @@ export default function App() {
           </div>
         </div>
 
-        {!isTimetableFocusMode ? <div className="mt-5 grid gap-3 md:grid-cols-2">
-          <button type="button" onClick={() => setTimetableViewMode("study")} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "study" ? "border-emerald-300/45 bg-emerald-400/15 text-white shadow-[0_0_28px_rgba(16,185,129,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
+        {!isTimetableFocusMode ? <div className="timetable-view-tabs mt-5 grid gap-3 md:grid-cols-2">
+          <button type="button" onClick={() => setTimetableViewMode("study")} className={`timetable-view-tab ${timetableViewMode === "study" ? "is-active" : ""} rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "study" ? "border-emerald-300/45 bg-emerald-400/15 text-white shadow-[0_0_28px_rgba(16,185,129,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-100/80">Current system</p>
             <h3 className="mt-2 text-2xl font-semibold">My Timetable</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">Study planner, current subject countdown, missed-work recovery, and weekly study blocks.</p>
           </button>
-          <button type="button" onClick={() => setTimetableViewMode("lecture")} className={`rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "lecture" ? "border-sky-300/45 bg-sky-400/15 text-white shadow-[0_0_28px_rgba(14,165,233,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
+          <button type="button" onClick={() => setTimetableViewMode("lecture")} className={`timetable-view-tab ${timetableViewMode === "lecture" ? "is-active" : ""} rounded-[22px] border px-5 py-5 text-left transition ${timetableViewMode === "lecture" ? "border-sky-300/45 bg-sky-400/15 text-white shadow-[0_0_28px_rgba(14,165,233,0.18)]" : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.07]"}`}>
             <p className="text-xs uppercase tracking-[0.24em] text-sky-100/80">Class schedule</p>
             <h3 className="mt-2 text-2xl font-semibold">Lecture Timetable</h3>
             <p className="mt-2 text-sm leading-6 text-slate-300">Manually save modules, lecturers, days, times, and venues.</p>
@@ -11067,8 +11057,8 @@ export default function App() {
           previewItems: timetableLoadingPreviewItems,
         }) : (
           <>
-        {timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
-        {timetableTransitionPrompt ? (
+        {!isTimetableFocusMode && timetableMessage ? <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm text-emerald-50">{timetableMessage}</div> : null}
+        {!isTimetableFocusMode && timetableTransitionPrompt ? (
           <div className="mt-5 rounded-2xl border border-sky-300/30 bg-sky-400/12 px-4 py-3 text-sm text-sky-50">
             <div className="force-mobile-stack flex items-start justify-between gap-3">
               <div>
@@ -11079,7 +11069,7 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        {examCountdowns.length ? (
+        {!isTimetableFocusMode && examCountdowns.length ? (
           <div className="mt-5 grid gap-3 lg:grid-cols-3">
             {examCountdowns.slice(0, 3).map((exam) => (
               <div key={exam.id || `${exam.subject}-${exam.date}`} className="rounded-2xl border border-amber-300/25 bg-amber-400/10 p-4">
@@ -29682,6 +29672,7 @@ export default function App() {
                 </div>
               </> : null}
 
+              <BodyPortal active={activeTab === "guide" && isStudyGuideFocusMode}>
               <div ref={studyGuideFocusStageRef} className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
                 {activeTab === "guide" ? (
                   <div className={`study-guide-shell study-guide-themed study-guide-slide-deck academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
@@ -29979,6 +29970,7 @@ export default function App() {
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
                 {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
+              </BodyPortal>
             </div>
 
           </div>
@@ -29988,7 +29980,7 @@ export default function App() {
         {currentPage === "about" ? renderHelpAboutPage() : null}
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
-        {currentPage === "timetable" ? renderStudyTimetablePage() : null}
+        {currentPage === "timetable" ? <BodyPortal active={isTimetableFocusMode}>{renderStudyTimetablePage()}</BodyPortal> : null}
         {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}
