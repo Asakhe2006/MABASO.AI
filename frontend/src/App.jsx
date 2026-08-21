@@ -4999,6 +4999,21 @@ function formatAdminDashboardCost(value, sourceCurrency = "USD", targetCurrency 
   return formatAdminProviderCurrency(converted.value, converted.currency);
 }
 
+function getAdminOverviewCardTarget(label = "") {
+  const normalizedLabel = String(label || "").trim().toLowerCase();
+  const targets = {
+    "active users": "users",
+    "new registrations": "users",
+    "study sessions": "analytics",
+    "study guides generated": "content",
+    "ai success rate": "ai",
+    "openai cost": "ai-costs",
+    "paying users": "billing",
+    "open critical errors": "errors",
+  };
+  return targets[normalizedLabel] || "analytics";
+}
+
 function formatAdminPercent(value) {
   const amount = toFiniteNumber(value);
   const hasFraction = Math.abs(amount % 1) > 0.001;
@@ -13565,7 +13580,7 @@ export default function App() {
                 <div className="max-w-3xl">
                   <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-700">OpenAI Data</p>
                   <h2 className="mt-2 text-2xl font-semibold text-slate-950">Mabaso AI project costs and usage</h2>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">Financial totals come directly from the OpenAI Costs API. Request and token activity comes from the OpenAI Usage API for the selected dashboard period.</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">Financial totals come directly from the OpenAI Costs API. Request and token activity comes from the OpenAI Usage API for the selected dashboard period.</p><p className="mt-2 text-xs font-semibold text-emerald-700">{exchangeRateCaption}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full px-3 py-2 text-xs font-bold ${openAiStatusAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
@@ -13802,7 +13817,18 @@ export default function App() {
                           </button>
                         ))}
                       </div>
-                      <input
+                      <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-emerald-100 bg-emerald-50 p-2" aria-label="Admin dashboard currency">
+                        {["USD", "ZAR"].map((currency) => (
+                          <button
+                            key={currency}
+                            type="button"
+                            onClick={() => setAdminDashboardCurrency(currency)}
+                            className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${adminDashboardCurrency === currency ? "bg-emerald-600 text-white shadow-[0_12px_24px_rgba(5,150,105,0.18)]" : "text-emerald-800 hover:bg-white"}`}
+                          >
+                            {currency === "ZAR" ? "Currency in Rands" : "Currency in USD"}
+                          </button>
+                        ))}
+                      </div>                      <input
                         value={adminSearchQuery}
                         onChange={(event) => setAdminSearchQuery(event.target.value)}
                         className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
@@ -13824,7 +13850,7 @@ export default function App() {
 
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
                 {overviewCards.map((card) => (
-                  <article key={card.label} className="rounded-[28px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)]">
+                  <article key={card.label} role="button" tabIndex={0} onClick={() => setAdminSidebarTab(getAdminOverviewCardTarget(card.label))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setAdminSidebarTab(getAdminOverviewCardTarget(card.label)); } }} className="rounded-[28px] border border-slate-200/90 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] cursor-pointer transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-[0_22px_60px_rgba(15,23,42,0.12)] focus:outline-none focus:ring-2 focus:ring-emerald-400">
                     <div className="flex items-start justify-between gap-3">
                       <div className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl text-sm font-semibold ${card.accentClass}`}>{card.icon}</div>
                       <span className="text-xs uppercase tracking-[0.18em] text-slate-500">Live</span>
@@ -15626,7 +15652,18 @@ export default function App() {
                           </button>
                         ))}
                       </div>
-                      <input
+                      <div className="flex flex-wrap items-center gap-2 rounded-[22px] border border-emerald-100 bg-emerald-50 p-2" aria-label="Admin dashboard currency">
+                        {["USD", "ZAR"].map((currency) => (
+                          <button
+                            key={currency}
+                            type="button"
+                            onClick={() => setAdminDashboardCurrency(currency)}
+                            className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${adminDashboardCurrency === currency ? "bg-emerald-600 text-white shadow-[0_12px_24px_rgba(5,150,105,0.18)]" : "text-emerald-800 hover:bg-white"}`}
+                          >
+                            {currency === "ZAR" ? "Currency in Rands" : "Currency in USD"}
+                          </button>
+                        ))}
+                      </div>                      <input
                         value={adminSearchQuery}
                         onChange={(event) => setAdminSearchQuery(event.target.value)}
                         className="w-full min-w-[240px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none sm:w-[320px]"
@@ -15651,8 +15688,10 @@ export default function App() {
                     const CardIcon = card.icon;
                     const trendValues = (card.trendValues || []).slice(-12);
                     const trendMax = Math.max(1, ...trendValues.map((value) => Number(value) || 0));
+                    const targetTab = getAdminOverviewCardTarget(card.label);
+                    const openMetricDetail = () => setAdminSidebarTab(targetTab);
                     return (
-                      <article key={card.label} className="admin-control-metric-card">
+                      <article key={card.label} role="button" tabIndex={0} onClick={openMetricDetail} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openMetricDetail(); } }} className="admin-control-metric-card admin-control-metric-card-clickable">
                         <div className="flex items-start justify-between gap-3">
                           <div className={`admin-control-metric-icon ${card.accentClass}`}><CardIcon className="h-5 w-5" aria-hidden="true" /></div>
                           <span className="admin-live-indicator"><span aria-hidden="true" /> Live</span>
