@@ -13793,3 +13793,526 @@ body.study-guide-focus-open .study-guide-focus-stage .study-guide-fallback {
     line-height: 1 !important;
   }
 }
+
+/* Restore Study Guide focus mode and readable mobile chat mode picker. */
+body.study-guide-focus-open {
+  overflow: hidden !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage,
+body.study-guide-focus-open .study-guide-focus-stage {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147481200 !important;
+  display: block !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 18px 28px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background:
+    radial-gradient(circle at 0 48%, rgba(23, 129, 72, 0.32), transparent 35%),
+    radial-gradient(circle at 100% 100%, rgba(20, 111, 67, 0.22), transparent 34%),
+    linear-gradient(135deg, #03170f 0%, #020806 64%, #00130b 100%) !important;
+  overflow: hidden !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-deck {
+  display: grid !important;
+  grid-template-areas:
+    "toolbar toolbar"
+    "thumbs slide"
+    "nav nav" !important;
+  grid-template-columns: 260px minmax(0, 1fr) !important;
+  grid-template-rows: 58px minmax(0, 1fr) 68px !important;
+  gap: 14px !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  overflow: hidden !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-toolbar {
+  grid-area: toolbar !important;
+  position: relative !important;
+  z-index: 5 !important;
+  display: grid !important;
+  grid-template-columns: minmax(170px, 240px) minmax(0, 1fr) minmax(170px, 240px) !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  margin: 0 !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-exit {
+  justify-self: start !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  min-height: 42px !important;
+  padding: 0 18px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: #f8fff9 !important;
+  font-size: 14px !important;
+  font-weight: 850 !important;
+  box-shadow: none !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title {
+  justify-self: center !important;
+  display: grid !important;
+  justify-items: center !important;
+  gap: 2px !important;
+  text-align: center !important;
+  color: #f8fff9 !important;
+  letter-spacing: 0.22em !important;
+  text-transform: uppercase !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title svg {
+  color: #6aff9d !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title span {
+  color: #74ffa8 !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  line-height: 1.15 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title small {
+  color: rgba(248, 255, 249, 0.88) !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumbnails {
+  grid-area: thumbs !important;
+  position: relative !important;
+  z-index: 4 !important;
+  display: grid !important;
+  grid-auto-flow: row !important;
+  grid-auto-rows: minmax(64px, auto) !important;
+  align-content: start !important;
+  gap: 10px !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  padding: 14px 10px !important;
+  border: 1px solid rgba(74, 222, 128, 0.18) !important;
+  border-radius: 18px !important;
+  background: rgba(1, 20, 12, 0.76) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumb {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr) !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+  min-height: 58px !important;
+  margin: 0 !important;
+  padding: 10px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(74, 222, 128, 0.22) !important;
+  background: rgba(2, 45, 26, 0.78) !important;
+  color: #f8fff9 !important;
+  text-align: left !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumb span {
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 999px !important;
+  background: #13a866 !important;
+  color: #ffffff !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumb strong {
+  min-width: 0 !important;
+  color: #ffffff !important;
+  font-size: 12.5px !important;
+  line-height: 1.25 !important;
+  font-weight: 850 !important;
+  white-space: normal !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumb.is-active {
+  border-color: #58ff9c !important;
+  background: rgba(16, 118, 67, 0.9) !important;
+  box-shadow: 0 0 0 2px rgba(88, 255, 156, 0.68), 0 0 28px rgba(22, 163, 74, 0.36) !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-title-card,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-section-slides,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-section-card,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-fallback {
+  grid-area: slide !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-title-card,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-section-card,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-fallback {
+  overflow: auto !important;
+  overflow-x: hidden !important;
+  border-radius: 16px !important;
+  background: #f8fbff !important;
+  color: #102033 !important;
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.32) !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-section-slides {
+  display: grid !important;
+  grid-template: 1fr / 1fr !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-hidden {
+  display: none !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-active {
+  display: block !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-nav {
+  grid-area: nav !important;
+  position: relative !important;
+  inset: auto !important;
+  z-index: 6 !important;
+  display: grid !important;
+  grid-template-columns: minmax(140px, 220px) minmax(180px, 1fr) minmax(140px, 220px) !important;
+  align-items: center !important;
+  gap: 16px !important;
+  width: min(100%, 920px) !important;
+  max-width: 920px !important;
+  min-height: 48px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-step {
+  min-height: 46px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(74, 222, 128, 0.26) !important;
+  background: rgba(6, 78, 45, 0.66) !important;
+  color: #f8fff9 !important;
+  font-size: 14px !important;
+  font-weight: 850 !important;
+  pointer-events: auto !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-step:disabled {
+  opacity: 0.42 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress {
+  display: grid !important;
+  grid-template-columns: minmax(90px, 1fr) auto !important;
+  align-items: center !important;
+  gap: 14px !important;
+  width: 100% !important;
+  color: #ffffff !important;
+  font-size: 18px !important;
+  font-weight: 900 !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress::before {
+  content: "" !important;
+  display: block !important;
+  grid-column: 1 !important;
+  height: 6px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress > span {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  height: 6px !important;
+  border-radius: 999px !important;
+  background: #20d17a !important;
+}
+
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress strong {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  color: #ffffff !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 768px) {
+  body.study-guide-focus-open > .study-guide-focus-stage,
+  body.study-guide-focus-open .study-guide-focus-stage {
+    padding: 8px 8px calc(92px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar"
+      "slide"
+      "nav" !important;
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 44px minmax(0, 1fr) 66px !important;
+    gap: 8px !important;
+    height: 100% !important;
+    padding: 0 !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-toolbar {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 44px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-exit {
+    justify-self: start !important;
+    min-height: 38px !important;
+    padding: 0 12px !important;
+    font-size: 12.5px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title {
+    position: absolute !important;
+    left: 50% !important;
+    top: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    width: max-content !important;
+    max-width: 48vw !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title span {
+    font-size: 12px !important;
+    letter-spacing: 0.18em !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-title small {
+    font-size: 11px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumbnails {
+    display: none !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-title-card,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-section-card,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-fallback {
+    padding: 14px !important;
+    border-radius: 16px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-nav {
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 58px !important;
+    grid-template-columns: minmax(104px, 1fr) auto minmax(104px, 1fr) !important;
+    gap: 8px !important;
+    padding: 8px !important;
+    border: 1px solid rgba(74, 222, 128, 0.28) !important;
+    border-radius: 20px !important;
+    background: rgba(1, 20, 12, 0.9) !important;
+    backdrop-filter: blur(14px) !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-step {
+    min-height: 42px !important;
+    padding: 0 12px !important;
+    font-size: 13px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress {
+    grid-template-columns: auto !important;
+    justify-items: center !important;
+    gap: 0 !important;
+    font-size: 16px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress::before,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress > span {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .ai-chat-mode-picker .ai-chat-mode-menu,
+  .ai-chat-page .ai-chat-mode-menu,
+  .ai-chat-mode-menu {
+    position: fixed !important;
+    left: max(14px, env(safe-area-inset-left)) !important;
+    right: max(14px, env(safe-area-inset-right)) !important;
+    bottom: calc(88px + env(safe-area-inset-bottom)) !important;
+    top: auto !important;
+    transform: none !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: min(52dvh, 390px) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 12px !important;
+    border: 1px solid rgba(74, 222, 128, 0.62) !important;
+    border-radius: 18px !important;
+    background: #03190f !important;
+    color: #f8fff9 !important;
+    box-shadow: 0 26px 80px rgba(0, 0, 0, 0.66) !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-menu-kicker,
+  .ai-chat-page .ai-chat-mode-menu-kicker,
+  .ai-chat-mode-menu-kicker {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 0 2px !important;
+    color: #8dffb9 !important;
+    font-size: 11px !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0.18em !important;
+    white-space: nowrap !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-row,
+  .ai-chat-page .ai-chat-mode-row,
+  .ai-chat-mode-row {
+    display: grid !important;
+    grid-template-columns: 24px minmax(0, 1fr) minmax(0, auto) !important;
+    align-items: center !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 56px !important;
+    margin: 0 !important;
+    padding: 9px 10px !important;
+    overflow: hidden !important;
+    border-radius: 14px !important;
+    text-align: left !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-check,
+  .ai-chat-page .ai-chat-mode-check,
+  .ai-chat-mode-check {
+    display: inline-grid !important;
+    grid-column: 1 !important;
+    width: 24px !important;
+    min-width: 24px !important;
+    height: 24px !important;
+    place-items: center !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-copy,
+  .ai-chat-page .ai-chat-mode-copy,
+  .ai-chat-mode-copy {
+    display: block !important;
+    grid-column: 2 !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    color: #f8fff9 !important;
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-name,
+  .ai-chat-page .ai-chat-mode-name,
+  .ai-chat-mode-name {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    color: #f8fff9 !important;
+    font-size: 13px !important;
+    line-height: 1.2 !important;
+    font-weight: 850 !important;
+    white-space: nowrap !important;
+    word-break: normal !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-description,
+  .ai-chat-page .ai-chat-mode-description,
+  .ai-chat-mode-description {
+    display: -webkit-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin-top: 2px !important;
+    overflow: hidden !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    color: #bde8cf !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-picker .ai-chat-mode-lock,
+  .ai-chat-page .ai-chat-mode-lock,
+  .ai-chat-mode-lock {
+    grid-column: 3 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    max-width: 64px !important;
+    min-width: 42px !important;
+    padding: 4px 6px !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+    color: #d9ffe8 !important;
+    background: rgba(6, 78, 45, 0.66) !important;
+    writing-mode: horizontal-tb !important;
+  }
+}
