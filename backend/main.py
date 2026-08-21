@@ -705,6 +705,15 @@ ADMIN_DASHBOARD_RANGE_CONFIGS: dict[str, dict[str, Any]] = {
         "timeline_granularity": "day",
         "timeline_points": 30,
     },
+    "90d": {
+        "key": "90d",
+        "label": "Last 90 days",
+        "short_label": "90 days",
+        "badge_label": "90D",
+        "days": 90,
+        "timeline_granularity": "week",
+        "timeline_points": 13,
+    },
     "365d": {
         "key": "365d",
         "label": "Last 1 year",
@@ -18398,6 +18407,12 @@ def consume_plan_quota(
                 ),
             )
         usage_event_id = uuid4().hex
+        usage_metadata = {
+            "request_id": usage_event_id,
+            "request_id_source": "mabaso_usage_event",
+            "status": "started",
+            **(metadata or {}),
+        }
         connection.execute(
             """
             INSERT INTO billing_usage_events (
@@ -18412,7 +18427,7 @@ def consume_plan_quota(
                 normalized_feature,
                 period_key,
                 safe_quantity,
-                json.dumps(metadata or {}, ensure_ascii=False),
+                json.dumps(usage_metadata, ensure_ascii=False),
                 now_iso,
             ),
         )
@@ -18440,6 +18455,39 @@ def consume_plan_quota(
         "usage_event_id": usage_event_id,
         "account": account_snapshot,
     }
+
+
+def update_usage_event_metadata(usage_event_id: str, **updates: Any) -> bool:
+    normalized_event_id = compact_text(usage_event_id)
+    if not normalized_event_id:
+        return False
+    clean_updates = {
+        key: value
+        for key, value in updates.items()
+        if value is not None and (not isinstance(value, str) or value.strip())
+    }
+    if not clean_updates:
+        return False
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT metadata_json FROM billing_usage_events WHERE id = ?",
+            (normalized_event_id,),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            current = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, ValueError):
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        current.update(clean_updates)
+        current["updated_at"] = utc_now().isoformat()
+        connection.execute(
+            "UPDATE billing_usage_events SET metadata_json = ? WHERE id = ?",
+            (json.dumps(current, ensure_ascii=False), normalized_event_id),
+        )
+    return True
 
 
 def refund_usage_event(
@@ -19891,6 +19939,69 @@ _openai_cost_cache_lock = threading.Lock()
 _openai_cost_cache: dict[str, Any] = {"cache_key": "", "expires_at": 0.0, "value": None}
 _openai_usage_cache_lock = threading.Lock()
 _openai_usage_cache: dict[str, Any] = {"cache_key": "", "expires_at": 0.0, "value": None}
+_currency_rate_cache_lock = threading.Lock()
+_currency_rate_cache: dict[str, Any] = {"expires_at": 0.0, "value": None}
+
+
+def fetch_usd_zar_exchange_rate() -> dict[str, Any]:
+    """Return a real published USD/ZAR rate; never fabricate a fallback rate."""
+    now_monotonic = time.monotonic()
+    with _currency_rate_cache_lock:
+        cached_value = _currency_rate_cache.get("value")
+        if isinstance(cached_value, dict) and float(_currency_rate_cache.get("expires_at") or 0) > now_monotonic:
+            return dict(cached_value)
+
+    try:
+        response = requests.get(
+            "https://api.frankfurter.dev/v2/rate/USD/ZAR",
+            params={"providers": "SARB"},
+            headers={"Accept": "application/json"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rate = Decimal(str(payload.get("rate")))
+        if rate <= 0:
+            raise ValueError("The exchange-rate provider returned a non-positive rate.")
+        value = {
+            "available": True,
+            "status": "available",
+            "base": "USD",
+            "quote": "ZAR",
+            "rate": float(rate),
+            "date": compact_text(payload.get("date")),
+            "source": "South African Reserve Bank via Frankfurter",
+            "provider": "SARB",
+            "synced_at": utc_now().isoformat(),
+            "stale": False,
+        }
+        with _currency_rate_cache_lock:
+            _currency_rate_cache.update({"expires_at": now_monotonic + 60 * 60, "value": dict(value)})
+        return value
+    except (requests.RequestException, ValueError, TypeError, InvalidOperation) as exc:
+        logger.warning("USD/ZAR exchange-rate refresh failed: %s", exc)
+        with _currency_rate_cache_lock:
+            cached_value = _currency_rate_cache.get("value")
+        if isinstance(cached_value, dict):
+            return {
+                **cached_value,
+                "status": "stale",
+                "stale": True,
+                "message": "The latest exchange-rate refresh failed. Showing the last published SARB rate.",
+            }
+        return {
+            "available": False,
+            "status": "unavailable",
+            "base": "USD",
+            "quote": "ZAR",
+            "rate": None,
+            "date": "",
+            "source": "South African Reserve Bank via Frankfurter",
+            "provider": "SARB",
+            "synced_at": "",
+            "stale": False,
+            "message": "A published USD/ZAR exchange rate is temporarily unavailable.",
+        }
 
 
 def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -20186,7 +20297,7 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         ).fetchall()
         usage_rows = connection.execute(
             """
-            SELECT email, plan_id, feature, quantity, metadata_json, created_at
+            SELECT id, email, plan_id, feature, quantity, metadata_json, created_at
             FROM billing_usage_events
             WHERE created_at >= ?
             ORDER BY created_at DESC
@@ -20296,15 +20407,29 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         output_tokens = parse_int_amount(metadata.get("output_tokens") or metadata.get("completion_tokens"))
         total_tokens = parse_int_amount(metadata.get("total_tokens")) or input_tokens + output_tokens
         cached_tokens = parse_int_amount(metadata.get("cached_tokens") or metadata.get("input_cached_tokens"))
-        request_status = compact_text(metadata.get("status") or metadata.get("request_status"), "unknown").lower()
+        has_request_telemetry = any(
+            metadata.get(key) not in (None, "", 0)
+            for key in (
+                "model",
+                "openai_request_id",
+                "latency_ms",
+                "duration_ms",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+            )
+        )
+        request_status = compact_text(metadata.get("status") or metadata.get("request_status"), "legacy").lower()
         if request_status in {"success", "successful", "completed", "complete", "ok"}:
             status_group = "successful"
         elif request_status in {"blocked", "blocked_access", "plan_restriction", "moderated"}:
             status_group = "blocked"
         elif request_status in {"failed", "error", "timeout", "cancelled", "canceled"}:
             status_group = "failed"
-        else:
+        elif request_status in {"started", "processing", "pending"}:
             status_group = "unknown"
+        else:
+            status_group = "legacy"
         latency_ms = parse_int_amount(metadata.get("latency_ms") or metadata.get("duration_ms") or metadata.get("response_time_ms"))
         # OpenAI response usage supplies tokens, model and request IDs, but not
         # invoice-grade cost. Per-request cost therefore remains unavailable.
@@ -20326,7 +20451,10 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         token_totals["total_tokens"] += total_tokens
         token_totals["cached_tokens"] += cached_tokens
         internal_request_totals["tracked"] += quantity
-        internal_request_totals[status_group] += quantity
+        if status_group in internal_request_totals:
+            internal_request_totals[status_group] += quantity
+        else:
+            internal_request_totals["unknown"] += quantity
         if latency_ms > 0:
             internal_latency_total_ms += latency_ms
             internal_latency_samples += 1
@@ -20345,8 +20473,18 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "user": email,
                 "tool": label,
                 "feature": feature,
-                "model": compact_text(metadata.get("model"), "tracked-by-feature"),
-                "request_id": compact_text(metadata.get("request_id") or metadata.get("openai_request_id") or metadata.get("trace_id")),
+                "model": compact_text(metadata.get("model"), "Not recorded"),
+                "request_id": compact_text(
+                    metadata.get("openai_request_id")
+                    or metadata.get("request_id")
+                    or metadata.get("trace_id")
+                    or row["id"]
+                ),
+                "request_id_source": compact_text(
+                    metadata.get("request_id_source"),
+                    "provider" if metadata.get("openai_request_id") else "mabaso_usage_event",
+                ),
+                "telemetry_kind": "request" if has_request_telemetry else "legacy_usage_event",
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
@@ -20363,6 +20501,7 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
 
     openai_organization_costs = fetch_openai_organization_costs(range_start, now)
     openai_completion_usage = fetch_openai_completion_usage(range_start, now)
+    usd_zar_exchange_rate = fetch_usd_zar_exchange_rate()
     organization_cost_available = bool(openai_organization_costs.get("available"))
     organization_cost_currency = compact_text(openai_organization_costs.get("currency")).lower()
     total_ai_cost = (
@@ -20448,6 +20587,7 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             "by_project": list(openai_organization_costs.get("by_project") or []),
             "daily": list(openai_organization_costs.get("daily") or []),
             "openai_usage": openai_completion_usage,
+            "exchange_rate": usd_zar_exchange_rate,
             "integration": {
                 "configured": bool(OPENAI_ADMIN_KEY),
                 "project_configured": bool(OPENAI_PROJECT_ID),
@@ -21455,6 +21595,19 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             "tables": {},
         }
 
+    reliability_requests = (
+        billing_snapshot.get("ai_costs", {})
+        .get("internal_telemetry", {})
+        .get("requests", {})
+    )
+    successful_ai_requests = int(reliability_requests.get("successful") or 0)
+    failed_ai_requests = int(reliability_requests.get("failed") or 0)
+    completed_ai_requests = successful_ai_requests + failed_ai_requests
+    ai_success_rate_percent = round(
+        successful_ai_requests / completed_ai_requests * 100,
+        1,
+    ) if completed_ai_requests else 0.0
+
     return {
         "overview": {
             "kpis": {
@@ -21547,13 +21700,11 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 "reports": usage_feature_totals.get("report", 0),
                 "mind_maps": usage_feature_totals.get("mind_map", 0),
             },
-            "success_rate_percent": round(
-                (
-                    len([log for log in logs if log["action"].endswith(".completed") and log["status"] == "success"])
-                    / max(1, len([log for log in logs if log["action"].endswith(".completed")]))
-                ) * 100,
-                1,
-            ),
+            "success_rate_percent": ai_success_rate_percent,
+            "request_totals": {
+                **reliability_requests,
+                "completed": completed_ai_requests,
+            },
             "avg_generation_time_ms": avg_processing_time,
             "failed_jobs": failed_jobs,
         },
@@ -36512,6 +36663,7 @@ def create_lecture_assistant_stream(
         emitted_characters = 0
         fallback_count = 0
         terminal_error = ""
+        generation_completed = False
         terminal_provider = compact_text(forced_provider, compact_text(payload.preferred_provider)) or (attempts[0]["provider"] if attempts else "")
         streamed_answer_parts: list[str] = []
         generation_started_at = utc_now()
@@ -36634,6 +36786,7 @@ def create_lecture_assistant_stream(
 
                     assistant_text = "".join(streamed_answer_parts).strip()
                     generation_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
+                    generation_completed = True
                     yield build_sse_event(
                         "done",
                         {
@@ -36752,6 +36905,18 @@ def create_lecture_assistant_stream(
                     },
                 )
         finally:
+            total_latency_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
+            update_usage_event_metadata(
+                compact_text(quota_usage.get("usage_event_id")),
+                status="successful" if generation_completed else "failed",
+                model=compact_text((selected_attempt or {}).get("model")),
+                provider=compact_text((selected_attempt or {}).get("provider"), terminal_provider),
+                openai_request_id=compact_text(payload.client_request_id),
+                request_id_source="client_trace" if compact_text(payload.client_request_id) else "mabaso_usage_event",
+                latency_ms=total_latency_ms,
+                duration_ms=total_latency_ms,
+                error=terminal_error if not generation_completed else "",
+            )
             record_audit_log(
                 action="lecture_assistant.chat",
                 email=current_user,

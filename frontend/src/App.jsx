@@ -122,6 +122,7 @@ const PENDING_JOB_STORAGE_KEY = "mabaso-pending-job-v1";
 const ADMIN_DASHBOARD_CACHE_KEY = "mabaso-admin-dashboard-v1";
 const BILLING_STATUS_CACHE_KEY = "mabaso-billing-status-v1";
 const ADMIN_DASHBOARD_RANGE_STORAGE_KEY = "mabaso-admin-dashboard-range-v1";
+const ADMIN_DASHBOARD_CURRENCY_STORAGE_KEY = "mabaso-admin-dashboard-currency-v1";
 const AUTH_TOKEN_KEY = "mabaso-auth-token";
 const AUTH_COOKIE_SESSION_KEY = "mabaso-cookie-session-active";
 const COOKIE_SESSION_AUTH_STATE = "cookie-session";
@@ -368,9 +369,10 @@ const RUNTIME_DB_NAME = "mabaso-runtime";
 const RUNTIME_DB_VERSION = 1;
 const RUNTIME_DB_RECORDING_STORE = "recordings";
 const ADMIN_DASHBOARD_RANGE_OPTIONS = [
-  { key: "1d", label: "1 Day", shortLabel: "1 day", badgeLabel: "1D" },
+  { key: "1d", label: "24 Hours", shortLabel: "24 hours", badgeLabel: "24H" },
   { key: "7d", label: "7 Days", shortLabel: "7 days", badgeLabel: "7D" },
-  { key: "30d", label: "1 Month", shortLabel: "1 month", badgeLabel: "30D" },
+  { key: "30d", label: "30 Days", shortLabel: "30 days", badgeLabel: "30D" },
+  { key: "90d", label: "90 Days", shortLabel: "90 days", badgeLabel: "90D" },
   { key: "365d", label: "1 Year", shortLabel: "1 year", badgeLabel: "1Y" },
 ];
 const outputLanguageOptions = [
@@ -4197,6 +4199,22 @@ function saveAdminDashboardRangePreference(rangeKey = "7d") {
   }
 }
 
+function loadAdminDashboardCurrencyPreference() {
+  try {
+    return window.localStorage.getItem(ADMIN_DASHBOARD_CURRENCY_STORAGE_KEY) === "ZAR" ? "ZAR" : "USD";
+  } catch {
+    return "USD";
+  }
+}
+
+function saveAdminDashboardCurrencyPreference(currency = "USD") {
+  try {
+    window.localStorage.setItem(ADMIN_DASHBOARD_CURRENCY_STORAGE_KEY, currency === "ZAR" ? "ZAR" : "USD");
+  } catch {
+    // Ignore preference write failures.
+  }
+}
+
 function openRuntimeDb() {
   return new Promise((resolve, reject) => {
     if (typeof window === "undefined" || !window.indexedDB) {
@@ -4947,11 +4965,38 @@ function formatAdminProviderCurrency(value, currency = "USD") {
     return new Intl.NumberFormat("en-ZA", {
       style: "currency",
       currency: normalizedCurrency,
-      maximumFractionDigits: 6,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(toFiniteNumber(value));
   } catch {
     return `${normalizedCurrency} ${formatAdminDecimal(value)}`;
   }
+}
+
+function getUsdZarRate(exchangeRate = {}) {
+  const directRate = Number(exchangeRate.usd_to_zar ?? exchangeRate.rate ?? exchangeRate.value);
+  if (Number.isFinite(directRate) && directRate > 0) return directRate;
+  return 0;
+}
+
+function convertAdminCostForDisplay(value, sourceCurrency = "USD", targetCurrency = "USD", exchangeRate = {}) {
+  const numericValue = toFiniteNumber(value);
+  const normalizedSource = String(sourceCurrency || "USD").trim().toUpperCase();
+  const normalizedTarget = String(targetCurrency || "USD").trim().toUpperCase();
+  if (normalizedSource === normalizedTarget) return { value: numericValue, currency: normalizedSource, converted: false };
+  const usdZarRate = getUsdZarRate(exchangeRate);
+  if (normalizedSource === "USD" && normalizedTarget === "ZAR" && usdZarRate > 0) {
+    return { value: numericValue * usdZarRate, currency: "ZAR", converted: true };
+  }
+  if (normalizedSource === "ZAR" && normalizedTarget === "USD" && usdZarRate > 0) {
+    return { value: numericValue / usdZarRate, currency: "USD", converted: true };
+  }
+  return { value: numericValue, currency: normalizedSource, converted: false, unavailable: true };
+}
+
+function formatAdminDashboardCost(value, sourceCurrency = "USD", targetCurrency = "USD", exchangeRate = {}) {
+  const converted = convertAdminCostForDisplay(value, sourceCurrency, targetCurrency, exchangeRate);
+  return formatAdminProviderCurrency(converted.value, converted.currency);
 }
 
 function formatAdminPercent(value) {
@@ -7137,8 +7182,10 @@ export default function App() {
   const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
   const [presentationView, setPresentationView] = useState("setup");
   const [adminDashboardRange, setAdminDashboardRange] = useState(loadAdminDashboardRangePreference);
+  const [adminDashboardCurrency, setAdminDashboardCurrency] = useState(loadAdminDashboardCurrencyPreference);
   const [adminDashboard, setAdminDashboard] = useState(() => loadAdminDashboardCache(loadAdminDashboardRangePreference()));
   const [isLoadingAdminDashboard, setIsLoadingAdminDashboard] = useState(false);
+  const [isOpeningAdminDashboard, setIsOpeningAdminDashboard] = useState(false);
   const [timetableProfile, setTimetableProfile] = useState(createDefaultTimetableProfile);
   const [timetableSubjects, setTimetableSubjects] = useState(createDefaultTimetableSubjects);
   const [timetableAvailability, setTimetableAvailability] = useState(createDefaultTimetableAvailability);
@@ -7181,6 +7228,8 @@ export default function App() {
   const [activeStudySessionMessage, setActiveStudySessionMessage] = useState("");
   const [activeStudyMotivationPopup, setActiveStudyMotivationPopup] = useState(null);
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
+  const [adminAnalyticsCompare, setAdminAnalyticsCompare] = useState(false);
+  const [adminAnalyticsPage, setAdminAnalyticsPage] = useState(1);
   const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
   const [isAdminSidebarOpen, setIsAdminSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [resolvedAdminAlertIds, setResolvedAdminAlertIds] = useState([]);
@@ -8705,6 +8754,9 @@ export default function App() {
   const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
   const openStudyGuideFocusMode = () => setIsStudyGuideFocusMode(true);
   const closeStudyGuideFocusMode = () => setIsStudyGuideFocusMode(false);
+  useEffect(() => {
+    setStudyGuideSlideIndex(0);
+  }, [activeHistoryId, guideTopic]);
   useEffect(() => {
     const activeThumbnail = studyGuideThumbnailRailRef.current?.querySelector(".study-guide-slide-thumb.is-active");
     activeThumbnail?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
@@ -12805,6 +12857,12 @@ export default function App() {
     const security = dashboard.security || {};
     const billing = dashboard.billing || {};
     const billingAiCosts = billing.ai_costs || {};
+    const exchangeRate = billingAiCosts.exchange_rate || {};
+    const adminCostCurrency = adminDashboardCurrency === "ZAR" ? "ZAR" : "USD";
+    const formatDashboardCost = (value, currency = "USD") => formatAdminDashboardCost(value, currency, adminCostCurrency, exchangeRate);
+    const exchangeRateCaption = adminCostCurrency === "ZAR" && getUsdZarRate(exchangeRate) > 0
+      ? `USD to ZAR rate: ${formatAdminDecimal(getUsdZarRate(exchangeRate))} (${exchangeRate.source || "latest provider rate"})`
+      : "OpenAI billing remains the source of truth; conversions are for admin display only.";
     const openAiUsage = billingAiCosts.openai_usage || {};
     const openAiUsageTotals = openAiUsage.totals || {};
     const openAiDailyCosts = Array.isArray(billingAiCosts.daily) ? billingAiCosts.daily : [];
@@ -13530,7 +13588,7 @@ export default function App() {
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[
-                  ["Actual Cost", openAiStatusAvailable ? formatAdminProviderCurrency(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
+                  ["Actual Cost", openAiStatusAvailable ? formatDashboardCost(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
                   ["Requests", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.requests) : "Unavailable"],
                   ["Input Tokens", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.input_tokens) : "Unavailable"],
                   ["Output Tokens", usageStatusAvailable ? formatAdminInteger(openAiUsageTotals.output_tokens) : "Unavailable"],
@@ -13563,7 +13621,7 @@ export default function App() {
                     valueKey="cost"
                     labelKey="label"
                     stroke="#10b981"
-                    formatter={(value) => formatAdminProviderCurrency(value, openAiCurrency)}
+                    formatter={(value) => formatDashboardCost(value, openAiCurrency)}
                   />
                 </div>
               </article>
@@ -13575,7 +13633,7 @@ export default function App() {
                   {openAiCostByLineItem.length ? openAiCostByLineItem.map((item) => (
                     <div key={`${item.feature}-${item.currency}`} className="flex items-start justify-between gap-4 py-3 first:pt-0">
                       <span className="min-w-0 break-words text-sm font-medium text-slate-700">{item.feature || "OpenAI API usage"}</span>
-                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatDashboardCost(item.cost, item.currency || openAiCurrency)}</span>
                     </div>
                   )) : <p className="py-5 text-sm text-slate-500">No OpenAI cost line items were returned for this period.</p>}
                 </div>
@@ -13619,7 +13677,7 @@ export default function App() {
                   {openAiCostByProject.map((item) => (
                     <div key={`${item.project_id}-${item.currency}`} className="flex items-center justify-between gap-4 py-3 first:pt-0">
                       <span className="phone-safe-copy min-w-0 break-all text-sm font-semibold text-slate-700">{item.project_id || "Unattributed"}</span>
-                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatDashboardCost(item.cost, item.currency || openAiCurrency)}</span>
                     </div>
                   ))}
                 </div>
@@ -14043,7 +14101,7 @@ export default function App() {
       },
       {
         label: "OpenAI cost",
-        value: billingAiCosts.has_actual_cost ? formatAdminProviderCurrency(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Cost unavailable",
+        value: billingAiCosts.has_actual_cost ? formatDashboardCost(billingAiCosts.total_cost ?? billingOverview.openai_cost ?? 0, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Cost unavailable",
         detail: `${formatAdminInteger(billingAiCosts.token_totals?.total_tokens ?? 0)} tracked tokens`,
         icon: CircleDollarSign,
         accentClass: "bg-amber-50 text-amber-700",
@@ -15058,7 +15116,7 @@ export default function App() {
               {!usageAvailable ? <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">{openAiUsage.message || "OpenAI usage data is temporarily unavailable."}</p> : null}
               <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                 {[
-                  ["Actual cost", costsAvailable ? formatAdminProviderCurrency(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
+                  ["Actual cost", costsAvailable ? formatDashboardCost(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
                   ["Requests", usageAvailable ? formatAdminInteger(openAiUsageTotals.requests) : "Unavailable"],
                   ["Total tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.total_tokens) : "Unavailable"],
                   ["Input tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.input_tokens) : "Unavailable"],
@@ -15090,7 +15148,7 @@ export default function App() {
               <article className={sectionCardClass}>
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Daily costs</p>
                 <h3 className="mt-2 text-xl font-semibold text-slate-950">OpenAI-reported spend</h3>
-                <div className="mt-5"><AdminLineChart items={openAiDailyCosts} valueKey="cost" labelKey="label" stroke="#10b981" formatter={(value) => formatAdminProviderCurrency(value, openAiCurrency)} /></div>
+                <div className="mt-5"><AdminLineChart items={openAiDailyCosts} valueKey="cost" labelKey="label" stroke="#10b981" formatter={(value) => formatDashboardCost(value, openAiCurrency)} /></div>
               </article>
               <article className={sectionCardClass}>
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Cost categories</p>
@@ -15099,7 +15157,7 @@ export default function App() {
                   {openAiCostByLineItem.length ? openAiCostByLineItem.map((item) => (
                     <div key={`${item.feature}-${item.currency}`} className="flex items-start justify-between gap-4 py-3 first:pt-0">
                       <span className="min-w-0 break-words text-sm font-medium text-slate-700">{item.feature || "OpenAI API usage"}</span>
-                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span>
+                      <span className="shrink-0 text-sm font-bold text-slate-950">{formatDashboardCost(item.cost, item.currency || openAiCurrency)}</span>
                     </div>
                   )) : <p className="py-5 text-sm text-slate-500">No cost line items were returned for this period.</p>}
                 </div>
@@ -15117,7 +15175,7 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              {openAiCostByProject.length ? <div className="mt-5 border-t border-slate-200 pt-4 text-sm text-slate-600">{openAiCostByProject.map((item) => <p key={`${item.project_id}-${item.currency}`} className="flex justify-between gap-4 py-2"><span className="break-all font-semibold text-slate-800">{item.project_id || "Unattributed"}</span><span>{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span></p>)}</div> : null}
+              {openAiCostByProject.length ? <div className="mt-5 border-t border-slate-200 pt-4 text-sm text-slate-600">{openAiCostByProject.map((item) => <p key={`${item.project_id}-${item.currency}`} className="flex justify-between gap-4 py-2"><span className="break-all font-semibold text-slate-800">{item.project_id || "Unattributed"}</span><span>{formatDashboardCost(item.cost, item.currency || openAiCurrency)}</span></p>)}</div> : null}
             </article>
 
             <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
@@ -15168,7 +15226,7 @@ export default function App() {
                   ["Failed Payments", formatAdminInteger(billingOverview.failed_payments)],
                   ["Pending PayShap", formatAdminInteger(billingOverview.pending_manual_payments)],
                   ["Rejected PayShap", formatAdminInteger(billingOverview.rejected_manual_payments)],
-                  ["AI Cost", billingAiCosts.has_actual_cost ? formatAdminProviderCurrency(billingOverview.openai_cost, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Unavailable"],
+                  ["AI Cost", billingAiCosts.has_actual_cost ? formatDashboardCost(billingOverview.openai_cost, billingAiCosts.currency || billingOverview.openai_cost_currency) : "Unavailable"],
                   ["Hosting Cost", formatAdminCurrency(billingOverview.hosting_cost)],
                   ["Profit This Range", billingOverview.profit == null ? "Unavailable across mixed currencies" : formatAdminCurrency(billingOverview.profit)],
                   ["Cancelled Subscribers", formatAdminInteger(billingOverview.cancelled_subscribers)],
@@ -15361,7 +15419,7 @@ export default function App() {
                     <div key={item.feature} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-sm font-semibold text-slate-900">{item.feature}</span>
-                        <span className="text-sm font-bold text-slate-950">{formatAdminProviderCurrency(item.cost, item.currency || billingAiCosts.currency)}</span>
+                        <span className="text-sm font-bold text-slate-950">{formatDashboardCost(item.cost, item.currency || billingAiCosts.currency)}</span>
                       </div>
                     </div>
                   )) : emptyPanel("OpenAI-reported costs appear only when the OpenAI Costs API returns them. Otherwise tokens remain visible and cost is unavailable.")}
@@ -15411,7 +15469,7 @@ export default function App() {
                   <div key={item.user} className="rounded-[22px] border border-slate-200 bg-slate-50 px-4 py-4">
                     <p className="phone-safe-copy text-sm font-semibold text-slate-900">{item.user}</p>
                     <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">{formatAdminInteger(item.count || 0)}x generated</p>
-                    <p className="mt-2 text-sm font-semibold text-slate-700">{item.cost == null ? "OpenAI cost unavailable" : formatAdminProviderCurrency(item.cost, item.currency || billingAiCosts.currency)}</p>
+                    <p className="mt-2 text-sm font-semibold text-slate-700">{item.cost == null ? "OpenAI cost unavailable" : formatDashboardCost(item.cost, item.currency || billingAiCosts.currency)}</p>
                   </div>
                 )) : emptyPanel("Study Guide user costs appear after guide generation usage is recorded.")}
               </div>
@@ -15439,7 +15497,7 @@ export default function App() {
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.input_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.output_tokens)}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{formatAdminInteger(record.total_tokens)}</td>
-                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{record.cost_status === "available" ? formatAdminProviderCurrency(record.cost, record.currency || billingAiCosts.currency) : "Unavailable"}</td>
+                        <td className="whitespace-nowrap px-3 py-3 font-semibold text-slate-950">{record.cost_status === "available" ? formatDashboardCost(record.cost, record.currency || billingAiCosts.currency) : "Unavailable"}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">{record.timestamp ? formatAdminDateTime(record.timestamp) : "Unknown"}</td>
                       </tr>
                     )) : (
@@ -16279,6 +16337,10 @@ export default function App() {
   useEffect(() => {
     saveAdminDashboardRangePreference(adminDashboardRange);
   }, [adminDashboardRange]);
+
+  useEffect(() => {
+    saveAdminDashboardCurrencyPreference(adminDashboardCurrency);
+  }, [adminDashboardCurrency]);
 
   useEffect(() => {
     if (!authChecked || !authEmail) return;
@@ -21184,20 +21246,29 @@ export default function App() {
 
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
+    if (targetMode === "admin") setIsOpeningAdminDashboard(true);
     if (targetMode === authSessionMode) {
-      if (targetMode === "admin") {
-        setCurrentPage("admin");
-        if (!hasLoadedAdminDashboardRef.current) await loadAdminDashboard(true, authToken);
-      } else if (!completePendingPostAuthRedirect("user")) {
-        openProtectedAppPage("capture", { replace: browserPath === "/admin/dashboard" });
+      try {
+        if (targetMode === "admin") {
+          setCurrentPage("admin");
+          if (!hasLoadedAdminDashboardRef.current) await loadAdminDashboard(true, authToken);
+        } else if (!completePendingPostAuthRedirect("user")) {
+          openProtectedAppPage("capture", { replace: browserPath === "/admin/dashboard" });
+        }
+        if (!silent) setStatus(targetMode === "admin" ? "Protected mode opened." : "User mode opened.");
+        return;
+      } finally {
+        if (targetMode === "admin") setIsOpeningAdminDashboard(false);
       }
-      if (!silent) setStatus(targetMode === "admin" ? "Protected mode opened." : "User mode opened.");
-      return;
     }
 
     const activeSwitch = sessionModeSwitchPromiseRef.current;
     if (activeSwitch?.mode === targetMode && activeSwitch.promise) {
-      return activeSwitch.promise;
+      try {
+        return await activeSwitch.promise;
+      } finally {
+        if (targetMode === "admin") setIsOpeningAdminDashboard(false);
+      }
     }
 
     const switchPromise = (async () => {
@@ -21230,6 +21301,7 @@ export default function App() {
       if (!silent) setError(err.message || "Could not switch session mode.");
       return undefined;
     } finally {
+      if (targetMode === "admin") setIsOpeningAdminDashboard(false);
       if (sessionModeSwitchPromiseRef.current?.promise === switchPromise) {
         sessionModeSwitchPromiseRef.current = null;
       }
@@ -26146,7 +26218,7 @@ export default function App() {
     const activateMode = (option) => {
       if (!canPlanUseAiChatMode(planTier, option.id)) {
         setLockedAiChatModeInfo(option);
-        setIsAiChatModeMenuOpen(true);
+        setIsAiChatModeMenuOpen(false);
         return;
       }
       setSelectedAiChatMode(option.id);
@@ -26220,17 +26292,25 @@ export default function App() {
                 </button>
               );
             })}
-            {lockedAiChatModeInfo ? (
-              <div className="ai-chat-mode-upgrade" role="note">
-                <strong>{lockedAiChatModeInfo.label}</strong>
-                <span>{lockedAiChatModeInfo.description}</span>
-                <small>Available with {lockedAiChatModeInfo.planLabel || "a higher plan"}.</small>
-                <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); openUpgradeModal(); }}>
-                  Upgrade to {lockedAiChatModeInfo.planLabel || "Pro"}
-                </button>
-              </div>
-            ) : null}
+
           </div>
+        ) : null}
+        {lockedAiChatModeInfo ? (
+          <BodyPortal active>
+            <div className="ai-chat-mode-blocker" role="presentation" onPointerDown={() => setLockedAiChatModeInfo(null)}>
+              <section className="ai-chat-mode-blocker-panel" role="dialog" aria-modal="true" aria-labelledby="ai-chat-mode-blocker-title" onPointerDown={(event) => event.stopPropagation()}>
+                <button type="button" className="ai-chat-mode-blocker-close" onClick={() => setLockedAiChatModeInfo(null)} aria-label="Close mode notice"><X className="h-4 w-4" aria-hidden="true" /></button>
+                <p className="ai-chat-mode-menu-kicker">Plan access</p>
+                <h2 id="ai-chat-mode-blocker-title">{lockedAiChatModeInfo.label}</h2>
+                <p>{lockedAiChatModeInfo.description}</p>
+                <small>Available with {lockedAiChatModeInfo.planLabel || "a higher plan"}.</small>
+                <div className="ai-chat-mode-blocker-actions">
+                  <button type="button" onClick={() => { setLockedAiChatModeInfo(null); setIsAiChatModeMenuOpen(true); }}>Change mode</button>
+                  <button type="button" className="is-primary" onClick={() => { setLockedAiChatModeInfo(null); openUpgradeModal(); }}>Upgrade to {lockedAiChatModeInfo.planLabel || "Pro"}</button>
+                </div>
+              </section>
+            </div>
+          </BodyPortal>
         ) : null}
       </div>
     );
@@ -28947,6 +29027,18 @@ export default function App() {
     );
   }
 
+  if (authToken && isOpeningAdminDashboard) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#07140f] px-5 text-white" aria-live="polite">
+        <div className="text-center">
+          <LoaderCircle className="mx-auto h-9 w-9 animate-spin text-emerald-400" aria-hidden="true" />
+          <h1 className="mt-5 text-xl font-semibold">Opening dashboard...</h1>
+          <p className="mt-2 text-sm text-slate-300">Loading the latest protected analytics.</p>
+        </div>
+      </main>
+    );
+  }
+
   if (authToken && currentPage === "mode-select" && isAdminAccount) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
@@ -29688,7 +29780,16 @@ export default function App() {
                       <div className="study-guide-focus-toolbar">
                         <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
                         <div className="study-guide-focus-title"><Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
-                        <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-icon" aria-label="Close focus mode"><X className="h-4 w-4" aria-hidden="true" /></button>
+                        <div className="study-guide-focus-actions" aria-label="Study Guide focus actions">
+                          <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy Study Guide">{copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}<span>Copy</span></button>
+                          <div className="relative">
+                            <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download Study Guide"><Download className="h-4 w-4" aria-hidden="true" /><span>Download</span></button>
+                            {isDownloadMenuOpen ? renderDownloadMenu() : null}
+                          </div>
+                          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit Study Guide" aria-pressed={isWorkspaceEditMode}><Pencil className="h-4 w-4" aria-hidden="true" /><span>Edit</span></button>
+                          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Annotate" aria-label="Annotate Study Guide" aria-pressed={isWorkspaceHighlightMode}><Highlighter className="h-4 w-4" aria-hidden="true" /><span>Annotate</span></button>
+                          <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen((current) => !current)} className="workspace-icon-action" title="More" aria-label="More Study Guide actions"><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+                        </div>
                       </div>
                     ) : null}
                     <div

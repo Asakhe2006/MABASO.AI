@@ -91,9 +91,12 @@ export function resolveProtectedResourceIdFromRoute(route = "/") {
 
 export function resolveEnterpriseRoute(path = "/") {
   const normalized = normalizeRoutePath(path);
+  const adminAnalyticsPage = normalized.startsWith("/admin/analytics/")
+    ? findSitePageByRoute("/admin/dashboard")
+    : null;
   return {
     path: normalized,
-    sitePage: findSitePageByRoute(normalized),
+    sitePage: adminAnalyticsPage || findSitePageByRoute(normalized),
     protectedWorkspaceRoute: findProtectedWorkspaceRoute(normalized),
   };
 }
