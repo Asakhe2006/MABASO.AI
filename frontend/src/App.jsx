@@ -87,7 +87,7 @@ const SUPPORT_CONTACT_CATEGORIES = [
 const ROOM_REFRESH_INTERVAL_MS = 5000;
 const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
-const ADMIN_DASHBOARD_REFRESH_MS = 10000;
+const ADMIN_DASHBOARD_REFRESH_MS = 60000;
 const ADMIN_DASHBOARD_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STUDY_SOURCE_EXTRACT_TIMEOUT_MS = 20 * 60 * 1000;
 const AI_GENERATION_REQUEST_TIMEOUT_MS = 120000;
@@ -7261,6 +7261,8 @@ export default function App() {
   const savedTimetableSnapshotRef = useRef(null);
   const adminAutoModeSwitchRef = useRef(false);
   const adminAutoModeSwitchLastAtRef = useRef(0);
+  const sessionModeSwitchPromiseRef = useRef(null);
+  const adminDashboardLoadPromiseRef = useRef(null);
   const hasRestoredWorkspaceDraftRef = useRef("");
   const hasRestoredRecoveredRecordingRef = useRef("");
   const hasResumedPendingJobRef = useRef("");
@@ -13836,6 +13838,11 @@ export default function App() {
     const billingAiCosts = billing.ai_costs || {};
     const openAiUsage = billingAiCosts.openai_usage || {};
     const openAiUsageTotals = openAiUsage.totals || {};
+    const openAiIntegration = billingAiCosts.integration || {};
+    const internalAiTelemetry = billingAiCosts.internal_telemetry || {};
+    const internalAiRequestTotals = internalAiTelemetry.requests || {};
+    const internalAiFeatureRows = Array.isArray(internalAiTelemetry.by_feature) ? internalAiTelemetry.by_feature : [];
+    const internalAiRequestRows = Array.isArray(billingAiCosts.records) ? billingAiCosts.records : [];
     const openAiDailyCosts = Array.isArray(billingAiCosts.daily) ? billingAiCosts.daily : [];
     const openAiCostByProject = Array.isArray(billingAiCosts.by_project) ? billingAiCosts.by_project : [];
     const openAiCostByLineItem = Array.isArray(billingAiCosts.by_feature) ? billingAiCosts.by_feature : [];
@@ -15052,8 +15059,8 @@ export default function App() {
                   <h2 className="mt-2 text-2xl font-semibold text-slate-950">Mabaso AI project costs and usage</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-600">Actual cost values come from OpenAI's Costs API. Request and token totals come from OpenAI's Usage API for the selected date range.</p>
                 </div>
-                <span className={`rounded-full px-3 py-2 text-xs font-bold ${costsAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
-                  {costsAvailable ? "OpenAI connected" : titleCaseWords(billingAiCosts.cost_source_status || "unavailable")}
+                <span className={`rounded-full px-3 py-2 text-xs font-bold ${openAiIntegration.stale ? "bg-amber-50 text-amber-800" : costsAvailable ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+                  {openAiIntegration.stale ? "Showing last successful sync" : costsAvailable ? "OpenAI connected" : titleCaseWords(billingAiCosts.cost_source_status || "unavailable")}
                 </span>
               </div>
               {!costsAvailable ? <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{billingAiCosts.cost_source_message || "Configure OPENAI_ADMIN_KEY to load actual OpenAI costs."}</p> : null}
@@ -15062,9 +15069,14 @@ export default function App() {
                 {[
                   ["Actual cost", costsAvailable ? formatAdminProviderCurrency(billingAiCosts.total_cost, openAiCurrency) : "Unavailable"],
                   ["Requests", usageAvailable ? formatAdminInteger(openAiUsageTotals.requests) : "Unavailable"],
+                  ["Total tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.total_tokens) : "Unavailable"],
                   ["Input tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.input_tokens) : "Unavailable"],
                   ["Output tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.output_tokens) : "Unavailable"],
                   ["Cached tokens", usageAvailable ? formatAdminInteger(openAiUsageTotals.cached_tokens) : "Unavailable"],
+                  ["Mabaso tracked", formatAdminInteger(internalAiRequestTotals.tracked)],
+                  ["Successful", formatAdminInteger(internalAiRequestTotals.successful)],
+                  ["Blocked", formatAdminInteger(internalAiRequestTotals.blocked)],
+                  ["Average latency", internalAiTelemetry.average_latency_ms == null ? "Unavailable" : `${formatAdminInteger(internalAiTelemetry.average_latency_ms)} ms`],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-4">
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</p>
@@ -15077,6 +15089,9 @@ export default function App() {
                 <p><span className="font-semibold text-slate-900">Currency:</span> {String(openAiCurrency).toUpperCase()}</p>
                 <p><span className="font-semibold text-slate-900">Period:</span> {billingAiCosts.period_start ? formatAdminDateTime(billingAiCosts.period_start) : "Unavailable"}</p>
                 <p><span className="font-semibold text-slate-900">Synced:</span> {billingAiCosts.synced_at ? formatAdminDateTime(billingAiCosts.synced_at) : "Unavailable"}</p>
+                <p><span className="font-semibold text-slate-900">Billing source:</span> OpenAI Costs API</p>
+                <p><span className="font-semibold text-slate-900">Usage source:</span> OpenAI Usage API</p>
+                <p><span className="font-semibold text-slate-900">User attribution:</span> Mabaso authenticated telemetry</p>
               </div>
             </article>
 
@@ -15113,6 +15128,32 @@ export default function App() {
               </div>
               {openAiCostByProject.length ? <div className="mt-5 border-t border-slate-200 pt-4 text-sm text-slate-600">{openAiCostByProject.map((item) => <p key={`${item.project_id}-${item.currency}`} className="flex justify-between gap-4 py-2"><span className="break-all font-semibold text-slate-800">{item.project_id || "Unattributed"}</span><span>{formatAdminProviderCurrency(item.cost, item.currency || openAiCurrency)}</span></p>)}</div> : null}
             </article>
+
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Mabaso feature telemetry</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Requests by feature</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">Operational counts are measured by Mabaso AI. They are not OpenAI invoice totals.</p>
+                <div className="mt-5 divide-y divide-slate-200">
+                  {internalAiFeatureRows.length ? internalAiFeatureRows.slice(0, 12).map((item) => (
+                    <div key={item.feature} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 py-3 first:pt-0">
+                      <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-900">{item.label || item.feature}</p><p className="mt-1 text-xs text-slate-500">{formatAdminInteger(item.tokens)} tokens · {formatAdminInteger(item.failed)} failed · {formatAdminInteger(item.blocked)} blocked</p></div>
+                      <span className="text-sm font-bold text-slate-950">{formatAdminInteger(item.requests)}</span>
+                    </div>
+                  )) : <p className="py-5 text-sm text-slate-500">No Mabaso AI request telemetry is available for this period.</p>}
+                </div>
+              </article>
+              <article className={sectionCardClass}>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Request explorer</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">Recent attributed AI requests</h3>
+                <div className="mt-5 overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-[11px] uppercase tracking-[0.14em] text-slate-500"><tr>{["User", "Feature", "Model", "Status", "Tokens", "Latency", "Request ID"].map((heading) => <th key={heading} className="whitespace-nowrap border-b border-slate-200 px-3 py-3">{heading}</th>)}</tr></thead>
+                    <tbody>{internalAiRequestRows.length ? internalAiRequestRows.slice(0, 40).map((item, index) => <tr key={`${item.request_id || item.timestamp}-${index}`} className="border-b border-slate-100"><td className="max-w-48 truncate px-3 py-3 font-medium text-slate-900">{item.user || "Unknown"}</td><td className="whitespace-nowrap px-3 py-3 text-slate-700">{item.tool || item.feature}</td><td className="whitespace-nowrap px-3 py-3 text-slate-700">{item.model || "Unspecified"}</td><td className="whitespace-nowrap px-3 py-3 text-slate-700">{titleCaseWords(item.status || "unknown")}</td><td className="px-3 py-3 text-slate-700">{formatAdminInteger(item.total_tokens)}</td><td className="px-3 py-3 text-slate-700">{item.latency_ms ? `${formatAdminInteger(item.latency_ms)} ms` : "--"}</td><td className="max-w-44 truncate px-3 py-3 font-mono text-xs text-slate-500">{item.request_id || "Unavailable"}</td></tr>) : <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No attributed AI requests are available for this period.</td></tr>}</tbody>
+                  </table>
+                </div>
+              </article>
+            </div>
           </div>
         );
       }
@@ -21152,15 +21193,23 @@ export default function App() {
 
   const chooseSessionMode = async (mode, { silent = false } = {}) => {
     const targetMode = mode === "admin" ? "admin" : "user";
-    if (targetMode === "user" && authSessionMode === "user") {
-      if (!completePendingPostAuthRedirect("user")) {
+    if (targetMode === authSessionMode) {
+      if (targetMode === "admin") {
+        setCurrentPage("admin");
+        if (!hasLoadedAdminDashboardRef.current) await loadAdminDashboard(true, authToken);
+      } else if (!completePendingPostAuthRedirect("user")) {
         openProtectedAppPage("capture", { replace: browserPath === "/admin/dashboard" });
       }
-      if (!silent) setStatus("User mode opened.");
+      if (!silent) setStatus(targetMode === "admin" ? "Protected mode opened." : "User mode opened.");
       return;
     }
 
-    try {
+    const activeSwitch = sessionModeSwitchPromiseRef.current;
+    if (activeSwitch?.mode === targetMode && activeSwitch.promise) {
+      return activeSwitch.promise;
+    }
+
+    const switchPromise = (async () => {
       const response = await authFetch("/auth/select-mode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -21182,8 +21231,17 @@ export default function App() {
         await loadAdminDashboard(true, nextToken);
       }
       if (!silent) setStatus(targetMode === "admin" ? "Protected mode opened." : "User mode opened.");
+    })();
+    sessionModeSwitchPromiseRef.current = { mode: targetMode, promise: switchPromise };
+    try {
+      return await switchPromise;
     } catch (err) {
       if (!silent) setError(err.message || "Could not switch session mode.");
+      return undefined;
+    } finally {
+      if (sessionModeSwitchPromiseRef.current?.promise === switchPromise) {
+        sessionModeSwitchPromiseRef.current = null;
+      }
     }
   };
 
@@ -21268,21 +21326,23 @@ export default function App() {
   const loadAdminDashboard = async (silent = false, tokenOverride = "", rangeOverride = "") => {
     if (!(tokenOverride || authToken)) return;
     const selectedRange = normalizeAdminDashboardRangeKey(rangeOverride || adminDashboardRange);
+    const activeLoad = adminDashboardLoadPromiseRef.current;
+    if (activeLoad?.range === selectedRange && activeLoad.promise) {
+      return activeLoad.promise;
+    }
     const shouldShowLoader = !silent || !hasLoadedAdminDashboardRef.current;
     if (shouldShowLoader) setIsLoadingAdminDashboard(true);
+    const dashboardRequest = authFetch(
+      `/admin/dashboard?time_range=${encodeURIComponent(selectedRange)}`,
+      {
+        tokenOverride,
+        timeoutMs: 60000,
+        cache: "no-store",
+      },
+    );
+    adminDashboardLoadPromiseRef.current = { range: selectedRange, promise: dashboardRequest };
     try {
-      const response = await authFetch(
-        `/admin/dashboard?time_range=${encodeURIComponent(selectedRange)}&_=${Date.now()}`,
-        {
-          tokenOverride,
-          timeoutMs: 60000,
-          cache: "no-store",
-          headers: {
-            "Cache-Control": "no-cache",
-            Pragma: "no-cache",
-          },
-        },
-      );
+      const response = await dashboardRequest;
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load the protected area.");
       hasLoadedAdminDashboardRef.current = true;
@@ -21310,6 +21370,9 @@ export default function App() {
         }
       }
     } finally {
+      if (adminDashboardLoadPromiseRef.current?.promise === dashboardRequest) {
+        adminDashboardLoadPromiseRef.current = null;
+      }
       if (shouldShowLoader) setIsLoadingAdminDashboard(false);
     }
   };

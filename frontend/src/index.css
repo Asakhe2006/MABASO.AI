@@ -11198,3 +11198,128 @@ body > .study-guide-focus-stage {
     color: #f8fafc !important;
   }
 }
+
+/* Mobile Study Guide: reserve the bottom controls instead of covering the
+   final lines of each slide. The slide itself is the only scrolling surface. */
+@media (max-width: 768px) {
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-shell.study-guide-slide-deck {
+    grid-template-areas: "slide" !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    min-height: min(72dvh, 760px) !important;
+    margin-bottom: 128px !important;
+    padding: 6px !important;
+    overflow: hidden !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-active {
+    min-height: 0 !important;
+    padding-bottom: 20px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    scroll-padding-bottom: 24px;
+  }
+
+  .page-workspace .study-guide-slide-nav {
+    position: fixed !important;
+    left: max(12px, env(safe-area-inset-left)) !important;
+    right: max(12px, env(safe-area-inset-right)) !important;
+    bottom: calc(76px + env(safe-area-inset-bottom)) !important;
+    z-index: 175 !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: auto !important;
+    min-height: 58px !important;
+    margin: 0 !important;
+    padding: 7px 8px !important;
+    border: 1px solid rgba(74, 222, 128, 0.2) !important;
+    border-radius: 18px !important;
+    background: rgba(1, 16, 10, 0.97) !important;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36) !important;
+    backdrop-filter: blur(16px);
+  }
+
+  .page-workspace .study-guide-slide-progress {
+    display: grid !important;
+    min-width: 52px;
+    place-items: center;
+  }
+
+  .page-workspace .study-guide-slide-progress::before,
+  .page-workspace .study-guide-slide-progress > span {
+    display: none !important;
+  }
+
+  .page-workspace .study-guide-slide-progress strong {
+    display: block !important;
+    color: #f8fafc !important;
+    font-size: 14px !important;
+    line-height: 1 !important;
+    white-space: nowrap;
+  }
+
+  .page-workspace .study-guide-slide-step {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    padding: 0 12px !important;
+    border-color: rgba(74, 222, 128, 0.3) !important;
+    background: rgba(7, 45, 28, 0.96) !important;
+    color: #ffffff !important;
+    font-size: 12px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-deck,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar"
+      "slide" !important;
+    grid-template-rows: 42px minmax(0, 1fr) !important;
+    padding: 5px 6px 72px !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-nav,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-nav {
+    position: fixed !important;
+    left: max(10px, env(safe-area-inset-left)) !important;
+    right: max(10px, env(safe-area-inset-right)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    z-index: 2147483002 !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: auto !important;
+    min-height: 58px !important;
+    margin: 0 !important;
+    padding: 7px 8px !important;
+    border: 1px solid rgba(74, 222, 128, 0.2) !important;
+    border-radius: 18px !important;
+    background: rgba(1, 16, 10, 0.97) !important;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.36) !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-progress {
+    display: grid !important;
+    min-width: 52px !important;
+    place-items: center !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress::before,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress > span,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-progress::before,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-progress > span {
+    display: none !important;
+  }
+
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress strong,
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-progress strong {
+    display: block !important;
+    color: #f8fafc !important;
+    font-size: 14px !important;
+    line-height: 1 !important;
+  }
+}

@@ -19944,7 +19944,7 @@ def summarize_openai_cost_buckets(pages: list[dict[str, Any]]) -> dict[str, Any]
 
 
 def summarize_openai_completion_usage(pages: list[dict[str, Any]]) -> dict[str, Any]:
-    totals = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "requests": 0}
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0, "requests": 0}
     by_model: dict[str, dict[str, int]] = {}
     daily: dict[int, dict[str, int]] = {}
     for page in pages:
@@ -19966,6 +19966,7 @@ def summarize_openai_completion_usage(pages: list[dict[str, Any]]) -> dict[str, 
                     totals[key] += amount
                     model_totals[key] += amount
                     day[key] += amount
+                totals["total_tokens"] += values["input_tokens"] + values["output_tokens"]
     return {
         "totals": totals,
         "by_model": [
@@ -20027,9 +20028,12 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
         value = {
             "available": True,
             "status": "available",
+            "configured": True,
+            "stale": False,
             "message": "",
             "source": "OpenAI Usage API",
             "project_id": OPENAI_PROJECT_ID,
+            "synced_at": utc_now().isoformat(),
             **summarize_openai_completion_usage(pages),
         }
         with _openai_usage_cache_lock:
@@ -20037,6 +20041,15 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
         return value
     except (requests.RequestException, ValueError, TypeError) as exc:
         logger.warning("OpenAI Usage API request failed: %s", exc)
+        with _openai_usage_cache_lock:
+            cached_value = _openai_usage_cache.get("value") if _openai_usage_cache.get("cache_key") == cache_key else None
+        if isinstance(cached_value, dict):
+            return {
+                **cached_value,
+                "status": "stale",
+                "stale": True,
+                "message": "OpenAI usage refresh failed. Showing the last successful sync.",
+            }
         return {"available": False, "status": "unavailable", "message": "OpenAI usage is temporarily unavailable.", "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
 
 
@@ -20094,6 +20107,8 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
         value = {
             **summarize_openai_cost_buckets(pages),
             "status": "available",
+            "configured": True,
+            "stale": False,
             "message": "",
             "source": "OpenAI Costs API",
             "project_id": OPENAI_PROJECT_ID,
@@ -20111,6 +20126,15 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
         return value
     except (requests.RequestException, ValueError, TypeError) as exc:
         logger.warning("OpenAI Costs API request failed: %s", exc)
+        with _openai_cost_cache_lock:
+            cached_value = _openai_cost_cache.get("value") if _openai_cost_cache.get("cache_key") == cache_key else None
+        if isinstance(cached_value, dict):
+            return {
+                **cached_value,
+                "status": "stale",
+                "stale": True,
+                "message": "OpenAI cost refresh failed. Showing the last successful sync.",
+            }
         return {
             "available": False,
             "currency": "",
@@ -20248,7 +20272,11 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
 
     ai_usage_records: list[dict[str, Any]] = []
     study_guide_usage_by_user: dict[str, dict[str, Any]] = {}
-    token_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    token_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0}
+    internal_request_totals = {"tracked": 0, "successful": 0, "failed": 0, "blocked": 0, "unknown": 0}
+    internal_latency_total_ms = 0
+    internal_latency_samples = 0
+    internal_usage_by_feature: dict[str, dict[str, Any]] = {}
     for row in usage_rows:
         metadata: dict[str, Any] = {}
         try:
@@ -20261,6 +20289,17 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         input_tokens = parse_int_amount(metadata.get("input_tokens") or metadata.get("prompt_tokens"))
         output_tokens = parse_int_amount(metadata.get("output_tokens") or metadata.get("completion_tokens"))
         total_tokens = parse_int_amount(metadata.get("total_tokens")) or input_tokens + output_tokens
+        cached_tokens = parse_int_amount(metadata.get("cached_tokens") or metadata.get("input_cached_tokens"))
+        request_status = compact_text(metadata.get("status") or metadata.get("request_status"), "unknown").lower()
+        if request_status in {"success", "successful", "completed", "complete", "ok"}:
+            status_group = "successful"
+        elif request_status in {"blocked", "blocked_access", "plan_restriction", "moderated"}:
+            status_group = "blocked"
+        elif request_status in {"failed", "error", "timeout", "cancelled", "canceled"}:
+            status_group = "failed"
+        else:
+            status_group = "unknown"
+        latency_ms = parse_int_amount(metadata.get("latency_ms") or metadata.get("duration_ms") or metadata.get("response_time_ms"))
         # OpenAI response usage supplies tokens, model and request IDs, but not
         # invoice-grade cost. Per-request cost therefore remains unavailable.
         openai_cost = None
@@ -20279,6 +20318,22 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
         token_totals["input_tokens"] += input_tokens
         token_totals["output_tokens"] += output_tokens
         token_totals["total_tokens"] += total_tokens
+        token_totals["cached_tokens"] += cached_tokens
+        internal_request_totals["tracked"] += quantity
+        internal_request_totals[status_group] += quantity
+        if latency_ms > 0:
+            internal_latency_total_ms += latency_ms
+            internal_latency_samples += 1
+        feature_totals = internal_usage_by_feature.setdefault(
+            feature,
+            {"feature": feature, "label": label, "requests": 0, "tokens": 0, "failed": 0, "blocked": 0},
+        )
+        feature_totals["requests"] += quantity
+        feature_totals["tokens"] += total_tokens
+        if status_group == "failed":
+            feature_totals["failed"] += quantity
+        if status_group == "blocked":
+            feature_totals["blocked"] += quantity
         ai_usage_records.append(
             {
                 "user": email,
@@ -20289,6 +20344,9 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,
+                "cached_tokens": cached_tokens,
+                "status": status_group,
+                "latency_ms": latency_ms,
                 "cost": openai_cost,
                 "cost_status": "available" if openai_cost is not None else "unavailable",
                 "cost_label": f"${openai_cost:,.6f}" if openai_cost is not None else "cost unavailable",
@@ -20384,6 +20442,23 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             "by_project": list(openai_organization_costs.get("by_project") or []),
             "daily": list(openai_organization_costs.get("daily") or []),
             "openai_usage": openai_completion_usage,
+            "integration": {
+                "configured": bool(OPENAI_ADMIN_KEY),
+                "project_configured": bool(OPENAI_PROJECT_ID),
+                "status": "connected" if organization_cost_available and openai_completion_usage.get("available") else "partial",
+                "cost_source": "OpenAI Costs API",
+                "usage_source": "OpenAI Usage API",
+                "last_cost_sync": openai_organization_costs.get("synced_at"),
+                "last_usage_sync": openai_completion_usage.get("synced_at"),
+                "stale": bool(openai_organization_costs.get("stale") or openai_completion_usage.get("stale")),
+            },
+            "internal_telemetry": {
+                "source": "Mabaso AI authenticated request telemetry",
+                "requests": internal_request_totals,
+                "average_latency_ms": round(internal_latency_total_ms / internal_latency_samples) if internal_latency_samples else None,
+                "latency_samples": internal_latency_samples,
+                "by_feature": sorted(internal_usage_by_feature.values(), key=lambda item: item["requests"], reverse=True),
+            },
             "study_guide_by_user": [
                 {
                     "user": email,
@@ -22608,7 +22683,7 @@ async def apple_login(payload: AppleAuthRequest, request: Request, response: Res
 
 
 @app.get("/auth/me")
-async def auth_me(request: Request, response: Response, authorization: str | None = Header(None)):
+def auth_me(request: Request, response: Response, authorization: str | None = Header(None)):
     started_at = utc_now()
     bearer_token = get_bearer_token_from_authorization(authorization)
     cookie_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
@@ -22622,15 +22697,19 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
         queue_session_maintenance(token, context, request)
     auth_duration_ms = int((utc_now() - started_at).total_seconds() * 1000)
     cache_hit = bool(getattr(request.state, "session_cache_hit", False))
-    record_audit_log(
-        action="auth.session.resume",
-        email=context["email"],
-        request=request,
-        resource_type="auth",
-        resource_name=context["mode"],
-        duration_ms=auth_duration_ms,
-        metadata={"token_refreshed": bool(refreshed_token), "session_cache_hit": cache_hit},
-    )
+    threading.Thread(
+        target=record_audit_log,
+        kwargs={
+            "action": "auth.session.resume",
+            "email": context["email"],
+            "request": request,
+            "resource_type": "auth",
+            "resource_name": context["mode"],
+            "duration_ms": auth_duration_ms,
+            "metadata": {"token_refreshed": bool(refreshed_token), "session_cache_hit": cache_hit},
+        },
+        daemon=True,
+    ).start()
     active_token = refreshed_token or token
     csrf_token = set_auth_cookies(response, active_token)
     payload = build_auth_response(context["email"], active_token)
@@ -22645,7 +22724,7 @@ async def auth_me(request: Request, response: Response, authorization: str | Non
 
 
 @app.get("/auth/csrf")
-async def refresh_auth_csrf(request: Request, response: Response, authorization: str | None = Header(None)):
+def refresh_auth_csrf(request: Request, response: Response, authorization: str | None = Header(None)):
     """Restore the double-submit token for cross-origin browser clients."""
     token = get_request_session_token(request, authorization, require_csrf=False)
     context = get_session_context(token)
@@ -22658,7 +22737,7 @@ async def refresh_auth_csrf(request: Request, response: Response, authorization:
 
 
 @app.post("/auth/select-mode")
-async def select_auth_mode(
+def select_auth_mode(
     payload: SessionModeRequest,
     request: Request,
     response: Response,
@@ -22671,6 +22750,14 @@ async def select_auth_mode(
         raise HTTPException(status_code=401, detail="Your session is invalid or has expired.")
 
     next_mode = normalize_session_mode(payload.mode, context["email"])
+    if next_mode == context["mode"]:
+        response.headers["X-Auth-Mode-Changed"] = "false"
+        return build_cookie_auth_response(
+            response,
+            context["email"],
+            token,
+            include_account_snapshot=False,
+        )
     session_token = create_session(context["email"], session_mode=next_mode, revoke_existing=False)
     register_account_session(context["email"], session_token, request, action="auth.mode.select")
     record_audit_log(
@@ -22681,7 +22768,8 @@ async def select_auth_mode(
         resource_name=next_mode,
         duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
     )
-    return build_cookie_auth_response(response, context["email"], session_token)
+    response.headers["X-Auth-Mode-Changed"] = "true"
+    return build_cookie_auth_response(response, context["email"], session_token, include_account_snapshot=False)
 
 
 @app.post("/auth/logout")
@@ -23409,7 +23497,7 @@ async def save_lecture_timetable(
 
 
 @app.get("/admin/dashboard")
-async def get_admin_dashboard(
+def get_admin_dashboard(
     request: Request,
     time_range: str = Query(default=ADMIN_DASHBOARD_DEFAULT_RANGE),
     current_admin: str = Depends(require_admin_user),

@@ -95,6 +95,7 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertEqual(summary["totals"], {
             "input_tokens": 120,
             "output_tokens": 45,
+            "total_tokens": 165,
             "cached_tokens": 30,
             "requests": 3,
         })
