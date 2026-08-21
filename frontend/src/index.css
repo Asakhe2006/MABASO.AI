@@ -14450,3 +14450,50 @@ body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .
     padding-bottom: 18px !important;
   }
 }
+/* Keep desktop focus-slide labels in normal flow; old thumbnail positioning must not overlap them. */
+@media (min-width: 769px) {
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    min-height: 64px !important;
+    padding: 10px 12px !important;
+    overflow: hidden !important;
+  }
+
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb > span,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb > span {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    flex: 0 0 30px !important;
+    width: 30px !important;
+    height: 30px !important;
+    margin: 0 !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb > strong,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-thumbnails .study-guide-slide-thumb > strong {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    display: block !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    color: #ffffff !important;
+    font-size: 12.5px !important;
+    line-height: 1.25 !important;
+    text-align: left !important;
+    text-overflow: ellipsis !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+  }
+}
