@@ -29819,16 +29819,7 @@ export default function App() {
                       <div className="study-guide-focus-toolbar">
                         <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
                         <div className="study-guide-focus-title"><Maximize2 className="h-4 w-4" aria-hidden="true" /><span>Focus Mode</span><small>Slide {activeStudyGuideSlideIndex + 1} of {studyGuideSlides.length}</small></div>
-                        <div className="study-guide-focus-actions" aria-label="Study Guide focus actions">
-                          <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy Study Guide">{copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}<span>Copy</span></button>
-                          <div className="relative">
-                            <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download Study Guide"><Download className="h-4 w-4" aria-hidden="true" /><span>Download</span></button>
-                            {isDownloadMenuOpen ? renderDownloadMenu() : null}
-                          </div>
-                          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit Study Guide" aria-pressed={isWorkspaceEditMode}><Pencil className="h-4 w-4" aria-hidden="true" /><span>Edit</span></button>
-                          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Annotate" aria-label="Annotate Study Guide" aria-pressed={isWorkspaceHighlightMode}><Highlighter className="h-4 w-4" aria-hidden="true" /><span>Annotate</span></button>
-                          <button type="button" onClick={() => setIsWorkspaceMobileMoreOpen((current) => !current)} className="workspace-icon-action" title="More" aria-label="More Study Guide actions"><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
-                        </div>
+
                       </div>
                     ) : null}
                     <div

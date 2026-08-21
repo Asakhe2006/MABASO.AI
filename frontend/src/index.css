@@ -13663,3 +13663,133 @@ body.study-guide-focus-open .study-guide-focus-stage .study-guide-fallback {
     display: none !important;
   }
 }
+
+/* EOF repair: force readable mobile AI mode picker rows. */
+@media (max-width: 768px) {
+  .ai-chat-mode-menu {
+    position: fixed !important;
+    left: max(12px, env(safe-area-inset-left)) !important;
+    right: max(12px, env(safe-area-inset-right)) !important;
+    bottom: calc(86px + env(safe-area-inset-bottom)) !important;
+    box-sizing: border-box !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    display: block !important;
+    max-height: min(48dvh, 360px) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 12px !important;
+    border-radius: 18px !important;
+    border: 1px solid rgba(74, 222, 128, 0.62) !important;
+    background: #03190f !important;
+    color: #f8fff9 !important;
+    box-shadow: 0 26px 80px rgba(0, 0, 0, 0.66) !important;
+    z-index: 2147483200 !important;
+  }
+
+  .ai-chat-mode-menu-kicker {
+    display: block !important;
+    margin: 2px 4px 9px !important;
+    color: #8dffb9 !important;
+    font-size: 11px !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0.18em !important;
+    white-space: nowrap !important;
+  }
+
+  .ai-chat-mode-row {
+    display: flex !important;
+    grid-template-columns: none !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 0 7px !important;
+    padding: 10px !important;
+    overflow: hidden !important;
+    border-radius: 14px !important;
+    background: rgba(3, 31, 18, 0.94) !important;
+    text-align: left !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+  }
+
+  .ai-chat-mode-check {
+    flex: 0 0 22px !important;
+    display: inline-grid !important;
+    width: 22px !important;
+    min-width: 22px !important;
+    height: 22px !important;
+    place-items: center !important;
+    color: #66f3a2 !important;
+  }
+
+  .ai-chat-mode-copy {
+    flex: 1 1 auto !important;
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+    color: #f8fff9 !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-name {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    color: #f8fff9 !important;
+    font-size: 13px !important;
+    line-height: 1.22 !important;
+    font-weight: 850 !important;
+    white-space: nowrap !important;
+    word-break: normal !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-description {
+    display: -webkit-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin-top: 2px !important;
+    overflow: hidden !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    color: #bde8cf !important;
+    font-size: 11px !important;
+    line-height: 1.28 !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-lock {
+    flex: 0 0 auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 3px !important;
+    min-width: 42px !important;
+    max-width: 62px !important;
+    padding: 4px 6px !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    color: #d9ffe8 !important;
+    background: rgba(6, 78, 45, 0.66) !important;
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+  }
+}
