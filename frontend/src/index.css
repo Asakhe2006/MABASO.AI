@@ -10611,3 +10611,484 @@ body.study-guide-focus-open .mobile-app-nav {
     text-overflow: ellipsis;
   }
 }
+
+/* Desktop Slide View: one viewport, one dominant canvas, no page-level scrolling. */
+.workspace-action-label {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .mobile-app-main.page-workspace {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 10px 14px !important;
+    overflow: hidden !important;
+  }
+
+  .page-workspace .workspace-shell {
+    display: grid;
+    grid-template-rows: 80px minmax(0, 1fr);
+    width: 100% !important;
+    height: calc(100dvh - 20px);
+    min-height: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background: #020b08;
+  }
+
+  .page-workspace .workspace-topbar {
+    display: flex !important;
+    height: 80px;
+    min-height: 76px;
+    max-height: 84px;
+    align-items: center !important;
+    gap: 18px !important;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14) !important;
+    background: rgba(3, 13, 10, 0.98);
+  }
+
+  .page-workspace .workspace-topbar > div:first-child {
+    align-items: center !important;
+    gap: 12px !important;
+  }
+
+  .page-workspace .workspace-topbar > div:first-child > div:last-child > p {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.14em !important;
+  }
+
+  .page-workspace .workspace-topbar h2 {
+    margin-top: 3px !important;
+    font-size: clamp(24px, 2vw, 30px) !important;
+    line-height: 1.1 !important;
+  }
+
+  .page-workspace .workspace-top-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+
+  .page-workspace .workspace-search-box {
+    width: clamp(300px, 34vw, 520px);
+    min-height: 44px;
+    border-radius: 14px;
+  }
+
+  .page-workspace .workspace-layout {
+    height: calc(100dvh - 112px);
+    min-height: 0 !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    margin-top: 12px !important;
+  }
+
+  .page-workspace .workspace-layout.is-desktop-sidebar-open {
+    grid-template-columns: clamp(250px, 18vw, 280px) minmax(0, 1fr) !important;
+  }
+
+  .page-workspace .workspace-sidebar {
+    position: relative !important;
+    top: 0 !important;
+    height: 100%;
+    max-height: none !important;
+    overflow-y: auto;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 16px;
+    background: rgba(4, 17, 13, 0.92);
+    scrollbar-width: thin;
+  }
+
+  .page-workspace .workspace-main-column {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .page-workspace .workspace-main-column > .workspace-content-surface {
+    margin-top: 0 !important;
+  }
+
+  .page-workspace .workspace-content-surface {
+    display: grid;
+    grid-template-rows: 44px minmax(0, 1fr);
+    width: 100%;
+    height: 100%;
+    max-height: none !important;
+    min-height: 0;
+    gap: 6px;
+    padding: 0 0 0 10px !important;
+    overflow: hidden !important;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions {
+    min-height: 44px;
+    height: 44px;
+    align-items: center !important;
+    margin: 0 !important;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions > div:first-child {
+    display: block !important;
+    flex: 0 0 auto;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions > div:first-child h3 {
+    display: none;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions > div:first-child p {
+    color: #4ade80 !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.16em !important;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions > div:last-child {
+    width: auto !important;
+    margin-left: auto;
+    gap: 8px !important;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions .workspace-icon-action {
+    width: auto !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    gap: 7px;
+    padding: 0 13px !important;
+    border-radius: 12px !important;
+    color: #f8fafc;
+    background: rgba(8, 21, 17, 0.9);
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions .workspace-mobile-more-button {
+    width: 40px !important;
+    padding: 0 !important;
+  }
+
+  .page-workspace .workspace-tool-actions.is-guide-actions .workspace-action-label {
+    display: inline;
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .page-workspace .content-panel:has(.study-guide-slide-deck) {
+    width: 100%;
+    height: 100%;
+    min-height: 0 !important;
+    padding: 0 !important;
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.14) !important;
+    border-radius: 16px !important;
+    background: rgba(2, 13, 9, 0.82) !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-shell.study-guide-slide-deck {
+    grid-template-areas:
+      "slide"
+      "navigation"
+      "thumbnails" !important;
+    grid-template-rows: minmax(0, 1fr) 50px 108px !important;
+    width: 100%;
+    height: 100% !important;
+    max-height: none !important;
+    gap: 8px !important;
+    padding: 8px 10px 10px !important;
+    overflow: hidden !important;
+    border-radius: 16px !important;
+    background: #02130d !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-active {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: auto !important;
+    border: 1px solid rgba(34, 197, 94, 0.62) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.07), 0 18px 40px rgba(0, 0, 0, 0.22) !important;
+    scrollbar-width: thin;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-nav {
+    position: relative !important;
+    bottom: auto !important;
+    min-height: 50px;
+    margin: 0 !important;
+    padding: 3px 0 !important;
+    background: #02130d !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-thumbnails {
+    display: grid !important;
+    grid-auto-flow: column;
+    grid-auto-columns: clamp(145px, 13vw, 180px) !important;
+    height: 108px;
+    gap: 10px;
+    margin: 0 !important;
+    padding: 6px 0 0 !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #02130d;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-thumb {
+    height: 94px !important;
+    min-height: 94px !important;
+    border-radius: 12px !important;
+    background: rgba(8, 25, 19, 0.94) !important;
+  }
+}
+
+/* Focus mode is moved directly under body so no workspace ancestor can constrain it. */
+body > .study-guide-focus-stage {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483000 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  min-width: 100vw !important;
+  min-height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #010b07 !important;
+}
+
+@media (min-width: 769px) {
+  body > .study-guide-focus-stage .study-guide-slide-deck {
+    display: grid !important;
+    grid-template-areas:
+      "toolbar toolbar"
+      "thumbnails slide"
+      "thumbnails navigation" !important;
+    grid-template-columns: clamp(230px, 18vw, 300px) minmax(0, 1fr) !important;
+    grid-template-rows: 68px minmax(0, 1fr) 58px !important;
+    width: 100% !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    max-height: none !important;
+    gap: 10px 14px !important;
+    margin: 0 !important;
+    padding: 8px 14px 10px !important;
+    overflow: hidden !important;
+    border-radius: 0 !important;
+    background:
+      linear-gradient(rgba(74, 222, 128, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(74, 222, 128, 0.035) 1px, transparent 1px),
+      radial-gradient(circle at 50% 100%, rgba(34, 197, 94, 0.16), transparent 42%),
+      #010b07 !important;
+    background-size: 48px 48px, 48px 48px, auto, auto !important;
+  }
+
+  body > .study-guide-focus-stage .study-guide-focus-toolbar {
+    grid-area: toolbar;
+    width: 100%;
+    min-height: 60px;
+    padding: 0 !important;
+  }
+
+  body > .study-guide-focus-stage .study-guide-slide-thumbnails {
+    grid-area: thumbnails;
+    display: grid !important;
+    grid-auto-flow: row !important;
+    grid-template-columns: 1fr !important;
+    grid-auto-rows: minmax(62px, auto) !important;
+    width: 100% !important;
+    height: 100% !important;
+    gap: 8px !important;
+    margin: 0 !important;
+    padding: 48px 10px 10px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    border: 1px solid rgba(74, 222, 128, 0.18);
+    border-radius: 14px;
+    background: rgba(2, 27, 18, 0.9) !important;
+  }
+
+  body > .study-guide-focus-stage .study-guide-title-card,
+  body > .study-guide-focus-stage .study-guide-section-card,
+  body > .study-guide-focus-stage .study-guide-fallback {
+    grid-area: slide;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    overflow: auto !important;
+    border: 1px solid rgba(34, 197, 94, 0.64) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.07), 0 22px 60px rgba(0, 0, 0, 0.34) !important;
+    scrollbar-width: thin;
+  }
+
+  body > .study-guide-focus-stage .study-guide-slide-nav {
+    grid-area: navigation;
+    position: relative !important;
+    bottom: auto !important;
+    width: 100% !important;
+    min-height: 58px;
+    margin: 0 !important;
+    padding: 5px 0 0 !important;
+    background: transparent !important;
+  }
+
+  body > .study-guide-focus-stage .study-guide-slide-thumb.is-active {
+    border-color: #4ade80 !important;
+    background: rgba(21, 128, 61, 0.42) !important;
+    color: #f0fdf4 !important;
+    box-shadow: inset 4px 0 #4ade80, 0 0 0 2px rgba(74, 222, 128, 0.3), 0 10px 26px rgba(34, 197, 94, 0.2) !important;
+  }
+}
+
+/* Mobile mode picker: one clear vertical list, never a two-column word queue. */
+@media (max-width: 768px) {
+  .ai-chat-mode-menu {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 3px !important;
+    max-height: min(62dvh, 430px) !important;
+    padding: 7px !important;
+  }
+
+  .ai-chat-mode-menu-kicker,
+  .ai-chat-mode-upgrade {
+    grid-column: 1 !important;
+  }
+
+  .ai-chat-mode-row {
+    position: relative !important;
+    display: grid !important;
+    grid-template-columns: 16px minmax(0, 1fr) auto !important;
+    min-height: 50px !important;
+    align-items: center !important;
+    gap: 7px !important;
+    padding: 7px 9px !important;
+  }
+
+  .ai-chat-mode-copy {
+    min-width: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  .ai-chat-mode-name {
+    padding-right: 0 !important;
+    overflow: hidden;
+    font-size: 12.5px !important;
+    line-height: 1.2 !important;
+    text-overflow: ellipsis;
+    white-space: nowrap !important;
+  }
+
+  .ai-chat-mode-description {
+    display: block !important;
+    margin-top: 2px !important;
+    overflow: hidden !important;
+    font-size: 10px !important;
+    line-height: 1.25 !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .ai-chat-mode-lock {
+    position: static !important;
+    grid-column: 3 !important;
+    justify-self: end !important;
+    max-width: 58px !important;
+    padding: 3px 5px !important;
+    overflow: visible !important;
+    font-size: 8px !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+}
+
+.profile-menu-button-avatar {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #22c55e;
+  border-radius: 50%;
+  background: rgba(22, 101, 52, 0.34);
+  color: #f0fdf4;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.profile-menu-button-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  text-align: left;
+}
+
+.profile-menu-button-copy strong {
+  max-width: 130px;
+  overflow: hidden;
+  color: #f8fafc;
+  font-size: 12px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-menu-button-copy small {
+  color: #4ade80;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+@media (min-width: 1024px) {
+  .page-workspace .profile-menu-button {
+    min-width: 170px;
+    height: 52px;
+    justify-content: flex-start;
+    gap: 9px;
+    padding: 6px 10px;
+    border-radius: 14px;
+  }
+
+  .page-workspace .profile-menu-button-copy {
+    display: grid !important;
+    flex: 1 1 auto;
+  }
+
+  .page-workspace .profile-menu-button-chevron {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .profile-menu-button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 3px;
+  }
+
+  .profile-menu-button-copy,
+  .profile-menu-button-chevron {
+    display: none !important;
+  }
+
+  .profile-menu-button-avatar {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+}

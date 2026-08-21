@@ -1,4 +1,4 @@
-import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
@@ -7709,8 +7709,9 @@ export default function App() {
   const renderUpgradeModalProfileControl = () => (
     <details className="upgrade-modal-profile profile-menu-anchor">
       <summary className="profile-menu-button" aria-label="Profile">
-        <UserRound className="h-4 w-4" aria-hidden="true" />
-        <span>Profile</span>
+        <span className="profile-menu-button-avatar" aria-hidden="true">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
+        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </summary>
       <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
         <div className="profile-menu-user">
@@ -8693,25 +8694,8 @@ export default function App() {
   const goToStudyGuideSlide = (index) => setStudyGuideSlideIndex(Math.min(Math.max(index, 0), Math.max(studyGuideSlides.length - 1, 0)));
   const goToPreviousStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.max(0, current - 1));
   const goToNextStudyGuideSlide = () => setStudyGuideSlideIndex((current) => Math.min(Math.max(studyGuideSlides.length - 1, 0), current + 1));
-  const openStudyGuideFocusMode = () => {
-    const focusStage = studyGuideFocusStageRef.current;
-    setIsStudyGuideFocusMode(true);
-    if (!focusStage || document.fullscreenElement) return;
-    const requestFullscreen = focusStage.requestFullscreen || focusStage.webkitRequestFullscreen;
-    if (typeof requestFullscreen === "function") {
-      Promise.resolve(requestFullscreen.call(focusStage)).catch(() => {
-        // The fixed viewport layout remains available when browser fullscreen is denied.
-      });
-    }
-  };
-  const closeStudyGuideFocusMode = () => {
-    setIsStudyGuideFocusMode(false);
-    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      Promise.resolve(document.exitFullscreen()).catch(() => {});
-    } else if (document.webkitFullscreenElement && typeof document.webkitExitFullscreen === "function") {
-      Promise.resolve(document.webkitExitFullscreen()).catch(() => {});
-    }
-  };
+  const openStudyGuideFocusMode = () => setIsStudyGuideFocusMode(true);
+  const closeStudyGuideFocusMode = () => setIsStudyGuideFocusMode(false);
   useEffect(() => {
     const activeThumbnail = studyGuideThumbnailRailRef.current?.querySelector(".study-guide-slide-thumb.is-active");
     activeThumbnail?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
@@ -8724,21 +8708,29 @@ export default function App() {
       if (event.key === "ArrowLeft") goToPreviousStudyGuideSlide();
       if (event.key === "ArrowRight") goToNextStudyGuideSlide();
     };
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        setIsStudyGuideFocusMode(false);
-      }
-    };
     window.addEventListener("keydown", handleStudyGuideFocusKeyDown);
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
     return () => {
       document.body.classList.remove("study-guide-focus-open");
       window.removeEventListener("keydown", handleStudyGuideFocusKeyDown);
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
     };
   }, [isStudyGuideFocusMode, studyGuideSlides.length]);
+  useLayoutEffect(() => {
+    if (!isStudyGuideFocusMode || typeof document === "undefined") return undefined;
+    const focusStage = studyGuideFocusStageRef.current;
+    const originalParent = focusStage?.parentNode;
+    if (!focusStage || !originalParent) return undefined;
+
+    const positionMarker = document.createComment("study-guide-focus-stage");
+    originalParent.insertBefore(positionMarker, focusStage);
+    document.body.appendChild(focusStage);
+
+    return () => {
+      if (positionMarker.parentNode) {
+        positionMarker.parentNode.insertBefore(focusStage, positionMarker);
+        positionMarker.remove();
+      }
+    };
+  }, [isStudyGuideFocusMode]);
   const activeRoomGuideTopic = ((activeRoomGuideTitleSection?.content || "").split(/\n+/).find((line) => line.trim()) || "").trim()
     || activeRoom?.title
     || "Shared Study Guide";
@@ -29038,8 +29030,9 @@ export default function App() {
         aria-haspopup="menu"
         aria-expanded={isProfileMenuOpen}
       >
-        <UserRound className="h-4 w-4" aria-hidden="true" />
-        <span>Profile</span>
+        <span className="profile-menu-button-avatar" aria-hidden="true">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
+        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </button>
       {isProfileMenuOpen ? (
         <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
@@ -29523,7 +29516,7 @@ export default function App() {
                 ))}
               </div>
             </aside> : null}
-            <div className="min-w-0 space-y-5">
+            <div className="workspace-main-column min-w-0 space-y-5">
             <div className="hidden">
               <div className="force-mobile-stack flex items-start justify-between gap-3">
                 <div>
@@ -29572,23 +29565,23 @@ export default function App() {
             <div className="workspace-content-surface min-w-0 p-1 sm:p-3">
               {!isStudyGuideFocusMode ? <>
                 <div className={`workspace-tool-actions mb-4 flex flex-wrap items-center justify-between gap-3 ${activeTab === "guide" ? "is-guide-actions" : ""}`}>
-                  <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">Study Tool</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
+                  <div><p className="text-xs uppercase tracking-[0.28em] text-slate-400">{activeTab === "guide" ? "Slide View" : "Study Tool"}</p><h3 className="mt-2 text-2xl font-semibold text-white">{currentTabLabel}</h3></div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                   <button type="button" onClick={copyActiveContent} disabled={!canExportCurrent} className="workspace-icon-action" title="Copy" aria-label="Copy current section" data-mobile-label="Copy">
-                    {copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                    {copiedActiveContent ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}<span className="workspace-action-label">{copiedActiveContent ? "Copied" : "Copy"}</span>
                   </button>
                   <div className="relative">
                     <button type="button" onClick={() => setIsDownloadMenuOpen((current) => !current)} className="workspace-icon-action" title="Download" aria-label="Download" data-mobile-label="PDF">
-                      {downloadActionState.endsWith(":done") ? <Check className="h-4 w-4" aria-hidden="true" /> : downloadActionState ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+                      {downloadActionState.endsWith(":done") ? <Check className="h-4 w-4" aria-hidden="true" /> : downloadActionState ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}<span className="workspace-action-label">Download</span>
                     </button>
                     {isDownloadMenuOpen ? renderDownloadMenu() : null}
                   </div>
                   <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceEditMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceEditMode ? "is-active" : ""}`} title="Edit" aria-label="Edit study guide" aria-pressed={isWorkspaceEditMode} data-mobile-label="Edit">
-                    <Pencil className="h-4 w-4" aria-hidden="true" />
+                    <Pencil className="h-4 w-4" aria-hidden="true" /><span className="workspace-action-label">{isWorkspaceEditMode ? "Editing" : "Edit"}</span>
                   </button>
                   <div className="relative">
                     <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text" aria-pressed={isWorkspaceHighlightMode} data-mobile-label="Highlight">
-                      <Highlighter className="h-4 w-4" aria-hidden="true" />
+                      <Highlighter className="h-4 w-4" aria-hidden="true" /><span className="workspace-action-label">{isWorkspaceHighlightMode ? "Annotating" : "Annotate"}</span>
                     </button>
                     {isWorkspaceHighlightMode ? (
                       <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours" onPointerDown={(event) => event.preventDefault()}>
