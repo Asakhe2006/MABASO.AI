@@ -14316,3 +14316,67 @@ body.study-guide-focus-open .study-guide-focus-stage .study-guide-slide-progress
     writing-mode: horizontal-tb !important;
   }
 }
+
+/* Fullscreen focus mode must not inherit the normal workspace card geometry. */
+body.study-guide-focus-open > .study-guide-focus-stage,
+body.study-guide-focus-open .study-guide-focus-stage {
+  box-sizing: border-box !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  align-items: stretch !important;
+  justify-items: stretch !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck > .study-guide-title-card,
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck > .study-guide-section-slides,
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck > .study-guide-fallback,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .study-guide-title-card,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .study-guide-section-slides,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .study-guide-fallback {
+  box-sizing: border-box !important;
+  align-self: stretch !important;
+  justify-self: stretch !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck > .study-guide-section-slides > .study-guide-slide-active,
+body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .study-guide-section-slides > .study-guide-slide-active {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+@media (min-width: 769px) {
+  body.study-guide-focus-open > .study-guide-focus-stage,
+  body.study-guide-focus-open .study-guide-focus-stage {
+    padding: 18px 28px !important;
+  }
+
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck {
+    grid-template-columns: minmax(244px, 280px) minmax(0, 1fr) !important;
+    grid-template-rows: 58px minmax(0, 1fr) 68px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  body.study-guide-focus-open > .study-guide-focus-stage,
+  body.study-guide-focus-open .study-guide-focus-stage {
+    padding: 8px 8px calc(92px + env(safe-area-inset-bottom)) !important;
+  }
+
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-deck,
+  body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck {
+    grid-template-rows: 44px minmax(0, 1fr) 66px !important;
+  }
+}

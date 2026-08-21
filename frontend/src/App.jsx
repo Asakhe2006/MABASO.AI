@@ -29812,9 +29812,12 @@ export default function App() {
               </> : null}
 
               <BodyPortal active={activeTab === "guide" && isStudyGuideFocusMode}>
-              <div ref={studyGuideFocusStageRef} className={`content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${activeTab === "guide" && isStudyGuideFocusMode ? "study-guide-focus-stage" : ""} ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`}>
+              <div ref={studyGuideFocusStageRef} className={activeTab === "guide" && isStudyGuideFocusMode
+                ? "study-guide-focus-stage"
+                : `content-panel min-h-[420px] w-full min-w-0 max-w-full rounded-[24px] border border-white/10 p-4 sm:p-5 ${["guide", "examples"].includes(activeTab) ? "bg-slate-100/95" : "bg-slate-950/70"}`
+              }>
                 {activeTab === "guide" ? (
-                  <div className={`study-guide-shell study-guide-themed study-guide-slide-deck academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 space-y-3 rounded-[20px] p-0.5`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
+                  <div className={`study-guide-shell study-guide-themed study-guide-slide-deck academic-reading-document study-guide-theme-${studyGuideTheme.id} min-w-0 ${isStudyGuideFocusMode ? "study-guide-focus-deck" : "space-y-3 rounded-[20px] p-0.5"}`} style={studyGuideThemeStyle} data-study-guide-theme={studyGuideTheme.id}>
                     {isStudyGuideFocusMode ? (
                       <div className="study-guide-focus-toolbar">
                         <button type="button" onClick={closeStudyGuideFocusMode} className="study-guide-focus-exit"><X className="h-4 w-4" aria-hidden="true" />Exit Focus Mode</button>
