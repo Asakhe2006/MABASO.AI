@@ -409,6 +409,7 @@ function LectureAssistantPanelContent({ assistant }) {
     openMobileSidebar,
     openPanel,
     performanceMetrics,
+    prefetchConversation,
     providerLabel,
     previewingVoiceId,
     previewSelectedVoiceWithDraft,
@@ -550,6 +551,8 @@ function LectureAssistantPanelContent({ assistant }) {
       <div key={conversation.id} className="relative">
         <button
           type="button"
+          onPointerEnter={() => prefetchConversation?.(conversation.id)}
+          onPointerDown={() => prefetchConversation?.(conversation.id)}
           onClick={() => {
             setActionMenuId("");
             selectConversation(conversation.id);

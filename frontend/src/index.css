@@ -11722,3 +11722,206 @@ body > .study-guide-focus-stage button {
     overflow: auto !important;
   }
 }
+
+/* 2026-08-21 final mobile profile, mode-picker, and Study Guide viewport fixes. */
+@media (max-width: 768px) {
+  .profile-menu-button,
+  .capture-mobile-profile .profile-menu-button,
+  .upgrade-modal-profile .profile-menu-button,
+  .page-workspace .profile-menu-button {
+    display: inline-flex !important;
+    width: min(184px, 48vw) !important;
+    min-width: 142px !important;
+    height: 46px !important;
+    min-height: 46px !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+    padding: 5px 8px !important;
+    overflow: visible !important;
+    border: 1px solid rgba(74, 222, 128, 0.46) !important;
+    border-radius: 999px !important;
+    background: #03150d !important;
+    color: #f8fafc !important;
+  }
+
+  .profile-menu-button .profile-menu-button-avatar,
+  .capture-mobile-profile .profile-menu-button .profile-menu-button-avatar,
+  .upgrade-modal-profile .profile-menu-button .profile-menu-button-avatar {
+    display: inline-flex !important;
+    width: 34px !important;
+    height: 34px !important;
+    flex: 0 0 34px !important;
+  }
+
+  .profile-menu-button .profile-menu-button-copy,
+  .capture-mobile-profile .profile-menu-button .profile-menu-button-copy,
+  .upgrade-modal-profile .profile-menu-button .profile-menu-button-copy {
+    display: grid !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    gap: 1px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+
+  .profile-menu-button .profile-menu-button-copy strong {
+    display: block !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    color: #ffffff !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    -webkit-text-fill-color: #ffffff !important;
+  }
+
+  .profile-menu-button .profile-menu-button-copy small {
+    display: block !important;
+    color: #4ade80 !important;
+    font-size: 9px !important;
+    line-height: 1.15 !important;
+    white-space: nowrap !important;
+    -webkit-text-fill-color: #4ade80 !important;
+  }
+
+  .profile-menu-button .profile-menu-button-chevron,
+  .capture-mobile-profile .profile-menu-button .profile-menu-button-chevron,
+  .upgrade-modal-profile .profile-menu-button .profile-menu-button-chevron {
+    display: block !important;
+    width: 14px !important;
+    height: 14px !important;
+    flex: 0 0 14px !important;
+    margin-left: auto !important;
+    color: #dcfce7 !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+
+  .ai-chat-mode-menu {
+    display: block !important;
+    box-sizing: border-box !important;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 7px !important;
+  }
+
+  .ai-chat-mode-row {
+    position: relative !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 54px !important;
+    margin: 0 0 4px !important;
+    padding: 8px 72px 8px 36px !important;
+    overflow: hidden !important;
+    text-align: left !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-check {
+    position: absolute !important;
+    top: 18px !important;
+    left: 10px !important;
+    display: inline-flex !important;
+  }
+
+  .ai-chat-mode-copy {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    writing-mode: horizontal-tb !important;
+  }
+
+  .ai-chat-mode-name,
+  .ai-chat-mode-description {
+    display: block !important;
+    inline-size: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    overflow: hidden !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    writing-mode: horizontal-tb !important;
+    text-orientation: mixed !important;
+    white-space: normal !important;
+  }
+
+  .ai-chat-mode-name {
+    font-size: 13px !important;
+    line-height: 1.2 !important;
+  }
+
+  .ai-chat-mode-description {
+    margin-top: 2px !important;
+    font-size: 10px !important;
+    line-height: 1.3 !important;
+  }
+
+  .ai-chat-mode-lock {
+    position: absolute !important;
+    top: 16px !important;
+    right: 8px !important;
+    display: inline-flex !important;
+    max-width: 62px !important;
+    white-space: nowrap !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-shell.study-guide-slide-deck {
+    box-sizing: border-box !important;
+    height: calc(100dvh - 300px - env(safe-area-inset-bottom)) !important;
+    min-height: 420px !important;
+    max-height: 690px !important;
+    margin-bottom: calc(72px + env(safe-area-inset-bottom)) !important;
+    padding: 5px !important;
+  }
+
+  .page-workspace .workspace-shell:not(.is-focus-mode) .study-guide-slide-active {
+    box-sizing: border-box !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    padding: 14px 14px 28px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    color: #10231b !important;
+    scrollbar-gutter: stable;
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+  }
+
+  .page-workspace .study-guide-slide-active .study-guide-rich-editor,
+  .page-workspace .study-guide-slide-active .notes-markdown,
+  .page-workspace .study-guide-slide-active .study-guide-markdown {
+    color: #10231b !important;
+    font-size: 13.5px !important;
+    line-height: 1.48 !important;
+  }
+
+  .page-workspace .study-guide-slide-active :where(p, li, div, span, strong, em, code, pre, td, th) {
+    color: inherit !important;
+  }
+
+  .page-workspace .study-guide-slide-active pre,
+  .page-workspace .study-guide-slide-active code {
+    max-width: 100% !important;
+    color: #10231b !important;
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+  }
+
+  .page-workspace .study-guide-slide-active p,
+  .page-workspace .study-guide-slide-active ul,
+  .page-workspace .study-guide-slide-active ol,
+  .page-workspace .study-guide-slide-active pre {
+    margin-block: 7px !important;
+  }
+}

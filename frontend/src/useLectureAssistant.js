@@ -4474,6 +4474,7 @@ export function useLectureAssistant({
     openPanel,
     openMobileSidebar: () => setMobileSidebarOpen(true),
     performanceMetrics,
+    prefetchConversation: (conversationId) => loadConversation(conversationId, { silent: true }),
     providerLabel: formatProviderLabel(activeProvider || messages[messages.length - 1]?.provider),
     previewingVoiceId,
     previewSelectedVoiceWithDraft,

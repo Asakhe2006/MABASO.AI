@@ -7255,6 +7255,7 @@ export default function App() {
   const quizAutoSubmitTriggeredRef = useRef(false);
   const historyHydratingRef = useRef(false);
   const historyItemLoadPromisesRef = useRef(new Map());
+  const historyItemDetailCacheRef = useRef(new Map());
   const skipNextHistorySyncRef = useRef(false);
   const historyOwnerEmailRef = useRef(normalizeHistoryOwnerEmail(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const historyDestructiveSyncRequestedRef = useRef(false);
@@ -21294,6 +21295,8 @@ export default function App() {
   const resolveFullHistoryItem = async (item) => {
     if (!item?.isCompactHistoryItem) return item;
     const itemId = String(item.id || "");
+    const cachedItem = historyItemDetailCacheRef.current.get(itemId);
+    if (cachedItem && cachedItem.updatedAt === item.updatedAt) return cachedItem;
     const pendingRequest = historyItemLoadPromisesRef.current.get(itemId);
     if (pendingRequest) return pendingRequest;
     const request = (async () => {
@@ -21302,6 +21305,7 @@ export default function App() {
       if (!response.ok || !data.item) throw new Error(data.detail || "Could not open this saved study workspace.");
       const [fullItem] = normalizeHistoryItems([data.item]);
       if (!fullItem) throw new Error("This saved study workspace could not be read.");
+      historyItemDetailCacheRef.current.set(itemId, fullItem);
       setHistoryItems((current) => current.map((entry) => entry.id === fullItem.id ? fullItem : entry));
       return fullItem;
     })();
@@ -21443,6 +21447,10 @@ export default function App() {
 
     let cancelled = false;
     const normalizedHistoryOwnerEmail = normalizeHistoryOwnerEmail(authEmail);
+    if (historyOwnerEmailRef.current && historyOwnerEmailRef.current !== normalizedHistoryOwnerEmail) {
+      historyItemDetailCacheRef.current.clear();
+      historyItemLoadPromisesRef.current.clear();
+    }
     historyHydratingRef.current = true;
     setIsHistoryLoadingFromServer(true);
 

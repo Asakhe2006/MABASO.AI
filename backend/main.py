@@ -7764,6 +7764,12 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
+            ON study_history_items (lower(email), updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS public_shares (
                 id TEXT PRIMARY KEY,
                 token_hash TEXT NOT NULL UNIQUE,
