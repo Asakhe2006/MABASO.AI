@@ -4682,6 +4682,12 @@ function sanitizeStudyImagesForStorage(images) {
         source_type: image?.source_type || "",
         visual_type: image?.visual_type || "",
         matched_section: image?.matched_section || "",
+        original_file_url: sanitizeStoredImageUrl(image?.original_file_url || image?.original_url || ""),
+        license: truncateStoredText(image?.license || "", 180),
+        license_url: sanitizeStoredImageUrl(image?.license_url || ""),
+        author: truncateStoredText(image?.author || "", 180),
+        attribution_text: truncateStoredText(image?.attribution_text || "", 360),
+        alt_text: truncateStoredText(image?.alt_text || "", 360),
         key_highlight: truncateStoredText(image?.key_highlight || "", 260),
         diagram_label: image?.diagram_label || "",
         caption: truncateStoredText(image?.caption || "", 360),
@@ -4690,7 +4696,7 @@ function sanitizeStudyImagesForStorage(images) {
       };
     })
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
-    .slice(0, 6);
+    ;
 }
 
 function sanitizeStudyImagesForCollaboration(images) {
@@ -4706,6 +4712,12 @@ function sanitizeStudyImagesForCollaboration(images) {
         source_type: image?.source_type || "",
         visual_type: image?.visual_type || "",
         matched_section: image?.matched_section || "",
+        original_file_url: sanitizeStoredImageUrl(image?.original_file_url || image?.original_url || ""),
+        license: truncateStoredText(image?.license || "", 180),
+        license_url: sanitizeStoredImageUrl(image?.license_url || ""),
+        author: truncateStoredText(image?.author || "", 180),
+        attribution_text: truncateStoredText(image?.attribution_text || "", 360),
+        alt_text: truncateStoredText(image?.alt_text || "", 360),
         key_highlight: truncateStoredText(image?.key_highlight || "", 260),
         diagram_label: image?.diagram_label || "",
         caption: truncateStoredText(image?.caption || "", 360),
@@ -4714,7 +4726,7 @@ function sanitizeStudyImagesForCollaboration(images) {
       };
     })
     .filter((image) => image.image_url || image.source_url || image.title || image.query || image.matched_section)
-    .slice(0, 6);
+    ;
 }
 
 function sanitizeHistoryItemForStorage(item = {}) {

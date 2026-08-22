@@ -38,7 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 import requests
 from chat_assistant import (
@@ -353,15 +353,19 @@ TEACHER_REQUEST_TIMEOUT = float(os.getenv("TEACHER_REQUEST_TIMEOUT", "120"))
 PRESENTATION_REQUEST_TIMEOUT = float(os.getenv("PRESENTATION_REQUEST_TIMEOUT", "150"))
 STUDY_IMAGE_QUERY_TIMEOUT = float(os.getenv("STUDY_IMAGE_QUERY_TIMEOUT", "45"))
 STUDY_IMAGE_SEARCH_TIMEOUT = float(os.getenv("STUDY_IMAGE_SEARCH_TIMEOUT", "12"))
-MAX_STUDY_IMAGES = int(os.getenv("MAX_STUDY_IMAGES", "6"))
-STUDY_IMAGE_MODEL = (os.getenv("STUDY_IMAGE_MODEL", "gpt-image-1") or "gpt-image-1").strip()
+OPENAI_STUDY_GUIDE_IMAGE_MODEL = (os.getenv("OPENAI_STUDY_GUIDE_IMAGE_MODEL", "gpt-image-1-mini") or "gpt-image-1-mini").strip()
+STUDY_GUIDE_PEXELS_ENABLED = os.getenv("STUDY_GUIDE_PEXELS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+STUDY_GUIDE_WIKIMEDIA_ENABLED = os.getenv("STUDY_GUIDE_WIKIMEDIA_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+STUDY_GUIDE_UNSPLASH_ENABLED = os.getenv("STUDY_GUIDE_UNSPLASH_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+STUDY_GUIDE_AI_IMAGES_ENABLED = os.getenv("STUDY_GUIDE_AI_IMAGES_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+STUDY_GUIDE_VISUAL_CACHE_ENABLED = os.getenv("STUDY_GUIDE_VISUAL_CACHE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
+STUDY_GUIDE_VISUAL_PROVIDER_LIMIT = max(1, int(os.getenv("STUDY_GUIDE_VISUAL_PROVIDER_LIMIT", "5")))
 STUDY_IMAGE_SIZE = (os.getenv("STUDY_IMAGE_SIZE", "1024x1024") or "1024x1024").strip()
-STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "high") or "high").strip()
+STUDY_IMAGE_QUALITY = (os.getenv("STUDY_IMAGE_QUALITY", "medium") or "medium").strip()
 STUDY_IMAGE_GENERATION_TIMEOUT = float(os.getenv("STUDY_IMAGE_GENERATION_TIMEOUT", "120"))
 MAX_STUDY_IMAGE_INLINE_BYTES = int(os.getenv("MAX_STUDY_IMAGE_INLINE_BYTES", "3500000"))
-FREE_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("FREE_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
-PRO_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PRO_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
-PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE = max(0, get_early_int_env("PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE", MAX_STUDY_IMAGES))
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "lecture-ai-project"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PODCAST_OUTPUT_DIR = UPLOAD_DIR / "podcasts"
@@ -8220,6 +8224,64 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS study_guide_visual_cache (
+                id TEXT PRIMARY KEY,
+                concept_key TEXT NOT NULL,
+                visual_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_url TEXT NOT NULL DEFAULT '',
+                original_url TEXT NOT NULL DEFAULT '',
+                stored_url TEXT NOT NULL DEFAULT '',
+                search_query TEXT NOT NULL DEFAULT '',
+                image_hash TEXT NOT NULL DEFAULT '',
+                license TEXT NOT NULL DEFAULT '',
+                license_url TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                attribution_text TEXT NOT NULL DEFAULT '',
+                ai_generated INTEGER NOT NULL DEFAULT 0,
+                ai_model TEXT NOT NULL DEFAULT '',
+                estimated_generation_cost REAL NOT NULL DEFAULT 0,
+                relevance_score REAL NOT NULL DEFAULT 0,
+                quality_score REAL NOT NULL DEFAULT 0,
+                width INTEGER NOT NULL DEFAULT 0,
+                height INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                last_used_at TEXT NOT NULL,
+                reuse_count INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_study_guide_visual_cache_lookup
+            ON study_guide_visual_cache (concept_key, visual_type, source, last_used_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS study_guide_visual_events (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                visual_type TEXT NOT NULL,
+                concept_key TEXT NOT NULL DEFAULT '',
+                cache_hit INTEGER NOT NULL DEFAULT 0,
+                estimated_ai_cost REAL NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_study_guide_visual_events_created
+            ON study_guide_visual_events (created_at, source)
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS payment_requests (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -11830,6 +11892,9 @@ def build_study_image_caption_lines(image: dict[str, Any], fallback_number: int 
     lines = [f"{figure_label}. {title}"]
     if caption:
         lines.append(caption)
+    attribution = compact_text(image.get("attribution_text"))
+    if attribution:
+        lines.append(attribution)
     return lines
 
 
@@ -19411,8 +19476,6 @@ def normalize_collaboration_study_images(images: Any) -> list[dict[str, str]]:
                 "diagram_label": compact_text(item.get("diagram_label")),
             }
         )
-        if len(normalized_images) >= MAX_STUDY_IMAGES:
-            break
     return normalized_images
 
 
@@ -20866,6 +20929,11 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
                 """,
                 (range_start.isoformat(),),
             ).fetchall()
+            visual_event_rows = connection.execute(
+                """SELECT source, visual_type, concept_key, cache_hit, estimated_ai_cost, created_at
+                FROM study_guide_visual_events WHERE created_at >= ? ORDER BY created_at DESC LIMIT 1000""",
+                (range_start.isoformat(),),
+            ).fetchall()
     except Exception as exc:
         logger.exception("Admin dashboard base table load failed range=%s", range_key)
         dashboard_errors.append(f"base_tables: {exc}")
@@ -20874,6 +20942,36 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
         account_state_rows = []
         admin_attempt_rows = []
         usage_event_rows = []
+        visual_event_rows = []
+
+    visual_source_counts: dict[str, int] = {}
+    visual_type_counts: dict[str, int] = {}
+    visual_concept_counts: dict[str, int] = {}
+    visual_cache_hits = 0
+    visual_ai_cost = 0.0
+    for row in visual_event_rows:
+        source = compact_text(row["source"], "unknown")
+        visual_source_counts[source] = visual_source_counts.get(source, 0) + 1
+        visual_type = compact_text(row["visual_type"], "unknown")
+        visual_type_counts[visual_type] = visual_type_counts.get(visual_type, 0) + 1
+        concept = compact_text(row["concept_key"])
+        if concept:
+            visual_concept_counts[concept] = visual_concept_counts.get(concept, 0) + 1
+        visual_cache_hits += int(row["cache_hit"] or 0)
+        visual_ai_cost += float(row["estimated_ai_cost"] or 0)
+    visual_metrics = {
+        "visuals_used": sum(visual_source_counts.values()),
+        "source_counts": visual_source_counts,
+        "type_counts": visual_type_counts,
+        "ai_generated_visuals": visual_source_counts.get("ai_generated", 0),
+        "visual_cache_hits": visual_cache_hits,
+        "cache_hit_rate_percent": round(visual_cache_hits / max(1, sum(visual_source_counts.values())) * 100, 1),
+        "estimated_ai_image_cost": round(visual_ai_cost, 4),
+        "top_ai_concepts": [
+            {"concept_key": concept, "count": count}
+            for concept, count in sorted(visual_concept_counts.items(), key=lambda item: item[1], reverse=True)[:10]
+        ],
+    }
 
     account_state_by_email = {
         normalize_email(row["email"]): {
@@ -21707,6 +21805,7 @@ def build_admin_dashboard_snapshot(range_key: str | None = None) -> dict[str, An
             },
             "avg_generation_time_ms": avg_processing_time,
             "failed_jobs": failed_jobs,
+            "study_guide_visuals": visual_metrics,
         },
         "diagnostics": {
             "usage_event_groups": len(usage_event_rows),
@@ -27129,7 +27228,7 @@ def build_study_image_queries(
             ],
         )
         parsed = parse_json_object(response.choices[0].message.content or "")
-        return [compact_text(item) for item in parse_json_list(parsed.get("queries")) if compact_text(item)][:MAX_STUDY_IMAGES]
+        return [compact_text(item) for item in parse_json_list(parsed.get("queries")) if compact_text(item)]
     except Exception as exc:
         logger.warning("Study image query generation failed: %s", exc)
         return []
@@ -27241,7 +27340,7 @@ def search_wikimedia_photos(query: str, limit: int = 1) -> list[dict[str, str]]:
             "gsrsearch": query,
             "gsrlimit": max(4, limit * 5),
             "prop": "imageinfo",
-            "iiprop": "url|mime",
+            "iiprop": "url|mime|extmetadata|user",
             "iiurlwidth": 1400,
         },
         timeout=STUDY_IMAGE_SEARCH_TIMEOUT,
@@ -27255,24 +27354,132 @@ def search_wikimedia_photos(query: str, limit: int = 1) -> list[dict[str, str]]:
     results: list[dict[str, str]] = []
     for page in pages:
         title = compact_text(page.get("title"))
-        if not is_real_photo_candidate_title(title):
-            continue
         image_info = ((page.get("imageinfo") or [{}])[0]) if isinstance(page.get("imageinfo"), list) else {}
         mime_type = compact_text(image_info.get("mime")).lower()
         image_url = compact_text(image_info.get("thumburl") or image_info.get("url"))
         if mime_type not in {"image/jpeg", "image/png", "image/webp"} or not image_url:
             continue
+        metadata = image_info.get("extmetadata") or {}
+        license_name = compact_text((metadata.get("LicenseShortName") or {}).get("value"))
+        license_url = compact_text((metadata.get("LicenseUrl") or {}).get("value"))
+        author = compact_text((metadata.get("Artist") or {}).get("value")) or compact_text(image_info.get("user"))
         results.append(
             {
                 "query": compact_text(query),
                 "title": humanize_commons_title(title),
                 "image_url": image_url,
                 "source_url": compact_text(f"https://commons.wikimedia.org/wiki/{title.replace(' ', '_')}"),
+                "original_file_url": compact_text(image_info.get("url")),
+                "source_type": "wikimedia",
+                "license": license_name,
+                "license_url": license_url,
+                "author": author,
+                "attribution_text": compact_text(f"{humanize_commons_title(title)} by {re.sub('<[^>]+>', '', author) or 'Wikimedia Commons'}{f' ({license_name})' if license_name else ''}"),
+                "quality_score": 0.78,
+                "relevance_score": 0.72,
             }
         )
         if len(results) >= limit:
             break
     return results
+
+
+def search_pexels_study_visuals(query: str, limit: int = 1) -> list[dict[str, Any]]:
+    if not (STUDY_GUIDE_PEXELS_ENABLED and PEXELS_API_KEY and compact_text(query)):
+        return []
+    response = requests.get(
+        "https://api.pexels.com/v1/search",
+        params={"query": compact_text(query)[:180], "per_page": min(STUDY_GUIDE_VISUAL_PROVIDER_LIMIT, max(1, limit * 3)), "orientation": "landscape"},
+        headers={"Authorization": PEXELS_API_KEY}, timeout=STUDY_IMAGE_SEARCH_TIMEOUT,
+    )
+    response.raise_for_status()
+    results: list[dict[str, Any]] = []
+    for photo in (response.json().get("photos") or []):
+        source = photo.get("src") or {}
+        image_url = compact_text(source.get("large2x") or source.get("large") or source.get("medium"))
+        width, height = int(photo.get("width") or 0), int(photo.get("height") or 0)
+        if not image_url or width < 600 or height < 360:
+            continue
+        photographer = compact_text(photo.get("photographer"), "Pexels")
+        results.append({"query": compact_text(query), "title": compact_text(photo.get("alt"), query), "image_url": image_url, "original_file_url": compact_text(source.get("original")), "source_url": compact_text(photo.get("url")), "source_type": "pexels", "author": photographer, "license": "Pexels License", "license_url": "https://www.pexels.com/license/", "attribution_text": f"Photo by {photographer} on Pexels", "width": width, "height": height, "quality_score": 0.8, "relevance_score": 0.75})
+        if len(results) >= limit:
+            break
+    return results
+
+
+def search_unsplash_study_visuals(query: str, limit: int = 1) -> list[dict[str, Any]]:
+    if not (STUDY_GUIDE_UNSPLASH_ENABLED and UNSPLASH_ACCESS_KEY and compact_text(query)):
+        return []
+    response = requests.get(
+        "https://api.unsplash.com/search/photos",
+        params={"query": compact_text(query)[:180], "per_page": min(STUDY_GUIDE_VISUAL_PROVIDER_LIMIT, max(1, limit * 3)), "orientation": "landscape"},
+        headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}, timeout=STUDY_IMAGE_SEARCH_TIMEOUT,
+    )
+    response.raise_for_status()
+    results: list[dict[str, Any]] = []
+    for photo in (response.json().get("results") or []):
+        urls = photo.get("urls") or {}
+        image_url = compact_text(urls.get("regular") or urls.get("small"))
+        width, height = int(photo.get("width") or 0), int(photo.get("height") or 0)
+        if not image_url or width < 600 or height < 360:
+            continue
+        user = photo.get("user") or {}
+        photographer = compact_text(user.get("name"), "Unsplash")
+        profile_url = compact_text((user.get("links") or {}).get("html"))
+        results.append({"query": compact_text(query), "title": compact_text(photo.get("alt_description") or photo.get("description"), query), "image_url": image_url, "original_file_url": compact_text(urls.get("full")), "source_url": compact_text((photo.get("links") or {}).get("html")), "source_type": "unsplash", "author": photographer, "license": "Unsplash License", "license_url": "https://unsplash.com/license", "attribution_text": f"Photo by {photographer} on Unsplash", "author_url": profile_url, "width": width, "height": height, "quality_score": 0.76, "relevance_score": 0.7})
+        if len(results) >= limit:
+            break
+    return results
+
+
+def build_programmatic_study_visual(plan: dict[str, str]) -> dict[str, Any] | None:
+    visual_type = compact_text(plan.get("visual_type"))
+    if visual_type not in {"process_diagram", "comparison_visual", "timeline", "mathematical_graph"}:
+        return None
+    width, height = 1400, 760
+    image = Image.new("RGB", (width, height), "#f8fafc")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("arial.ttf", 30)
+        title_font = ImageFont.truetype("arialbd.ttf", 42)
+    except OSError:
+        font = ImageFont.load_default()
+        title_font = font
+    title = compact_text(plan.get("concept"), "Study visual")[:82]
+    draw.text((60, 48), title, fill="#052e16", font=title_font)
+    if visual_type == "mathematical_graph":
+        left, top, right, bottom = 130, 170, 1290, 650
+        draw.line((left, bottom, right, bottom), fill="#0f172a", width=4)
+        draw.line((left, top, left, bottom), fill="#0f172a", width=4)
+        points = []
+        import math
+        for x in range(left, right + 1, 8):
+            phase = (x - left) / (right - left) * math.pi * 4
+            y = (top + bottom) / 2 - math.sin(phase) * 150
+            points.append((x, int(y)))
+        draw.line(points, fill="#059669", width=7, joint="curve")
+        draw.text((right - 140, bottom + 24), "Input", fill="#334155", font=font)
+        draw.text((30, top), "Value", fill="#334155", font=font)
+    else:
+        labels = [part.strip() for part in re.split(r"[,;]|\bthen\b|\bto\b", compact_text(plan.get("content"))[:420], flags=re.I) if len(part.strip()) > 4][:4]
+        if len(labels) < 2:
+            labels = ["Input", "Process", "Output"] if visual_type == "process_diagram" else ["Key idea", "Related idea"]
+        step_width = min(300, (width - 120) // len(labels) - 28)
+        y = 300
+        for index, label in enumerate(labels):
+            x = 60 + index * (step_width + 30)
+            draw.rounded_rectangle((x, y, x + step_width, y + 170), radius=26, fill="#ecfdf5", outline="#10b981", width=4)
+            words = re.findall(r"\S+", label)[:10]
+            lines = [" ".join(words[offset:offset + 4]) for offset in range(0, len(words), 4)]
+            for line_index, line in enumerate(lines[:3]):
+                draw.text((x + 22, y + 38 + line_index * 38), line, fill="#064e3b", font=font)
+            if index < len(labels) - 1:
+                arrow_x = x + step_width + 8
+                draw.line((arrow_x, y + 85, arrow_x + 18, y + 85), fill="#0f766e", width=7)
+                draw.polygon([(arrow_x + 18, y + 85), (arrow_x + 4, y + 74), (arrow_x + 4, y + 96)], fill="#0f766e")
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return {"query": compact_text(plan.get("search_query")), "title": title, "image_url": build_data_url(output.getvalue(), "image/png", "programmatic-study-visual.png"), "source_url": "", "source_type": "programmatic_chart" if visual_type == "mathematical_graph" else "programmatic_diagram", "visual_type": visual_type, "matched_section": compact_text(plan.get("matched_section")), "concept_key": compact_text(plan.get("concept_key")), "caption": f"Figure — {title}.", "ai_explanation": compact_text(plan.get("reason")), "alt_text": f"Educational {visual_type.replace('_', ' ')} for {title}", "generation_reason": compact_text(plan.get("reason")), "width": width, "height": height, "quality_score": 1.0, "relevance_score": 1.0}
 
 
 async def generate_study_images(
@@ -27309,19 +27516,124 @@ async def generate_study_images(
                 continue
             seen_urls.add(image_url)
             images.append(result)
-            if len(images) >= MAX_STUDY_IMAGES:
+            if len(images) >= len(queries):
                 return images
 
     return images
 
 
-def get_study_image_plan_limit(email: str = "") -> int:
-    plan_id = get_effective_plan_id(email) if compact_text(email) else "free"
-    if plan_id == "premium_student":
-        return min(MAX_STUDY_IMAGES, PREMIUM_STUDENT_STUDY_IMAGES_PER_GUIDE)
-    if plan_id == "pro_student":
-        return min(MAX_STUDY_IMAGES, PRO_STUDENT_STUDY_IMAGES_PER_GUIDE)
-    return min(MAX_STUDY_IMAGES, FREE_STUDENT_STUDY_IMAGES_PER_GUIDE)
+def normalize_study_visual_concept_key(section_heading: str, concept: str = "") -> str:
+    raw = f"{section_heading} {concept}".lower()
+    tokens = re.findall(r"[a-z0-9]+", raw)
+    return "-".join(tokens[:18]) or "study-guide-visual"
+
+
+def build_study_guide_visual_plan(summary: str) -> list[dict[str, str]]:
+    """Create educationally necessary visual requests without using an image model.
+
+    The planner is intentionally conservative: it only asks for a visual when a
+    section contains a structure, relationship, time sequence, mathematical
+    behaviour, real-world application, or physical object that prose alone is
+    less effective at teaching.
+    """
+    plans: list[dict[str, str]] = []
+    seen_concepts: set[str] = set()
+    for section in parse_study_guide_sections(summary):
+        heading = compact_text(section.get("displayHeading") or section.get("heading"))
+        content = compact_text(section.get("content"))
+        if not heading or len(content) < 90 or normalize_guide_heading(heading) in {"lecture title", "short summary", "key takeaways", "revision questions"}:
+            continue
+        sample = f"{heading} {content}".lower()
+        visual_type = ""
+        reason = ""
+        search_query = ""
+        if re.search(r"\b(graph|waveform|sine|cosine|spectrum|distribution|histogram|scatter|frequency|amplitude|probability)\b", sample):
+            visual_type, reason = "mathematical_graph", "A deterministic graph makes the changing values easier to interpret than prose."
+        elif re.search(r"\b(timeline|century|year|years|war|history|historical|chronolog)\b", sample):
+            visual_type, reason = "timeline", "Chronological order is central to understanding this section."
+        elif re.search(r"\b(process|steps?|stage|cycle|flow|algorithm|signal|pathway|modulation|transmission|input|output|convert)\b", sample):
+            visual_type, reason = "process_diagram", "The ordered relationships in this section are clearer as a labelled process diagram."
+        elif re.search(r"\b(compare|comparison|difference|versus| vs\.? |advantages|disadvantages)\b", sample):
+            visual_type, reason = "comparison_visual", "A structured comparison helps students distinguish the related ideas."
+        elif re.search(r"\b(structure|anatomy|organ|cell|circuit|architecture|component|layer|system|equipment)\b", sample):
+            visual_type, reason = "scientific_diagram", "The named parts and their relationships benefit from a labelled academic visual."
+        elif re.search(r"\b(solar|building|laboratory|factory|farm|transport|antenna|computer|workplace|landscape|machine)\b", sample):
+            visual_type, reason = "real_world_photo", "A real-world example makes the application more concrete."
+            search_query = f"{heading} educational real world example"
+        if not visual_type:
+            continue
+        concept_key = normalize_study_visual_concept_key(heading, content[:180])
+        if concept_key in seen_concepts:
+            continue
+        seen_concepts.add(concept_key)
+        plans.append({
+            "section_id": normalize_guide_heading(heading) or concept_key,
+            "concept": heading,
+            "matched_section": heading,
+            "concept_key": concept_key,
+            "visual_needed": "true",
+            "educational_value": "high" if visual_type in {"process_diagram", "scientific_diagram", "mathematical_graph"} else "medium",
+            "visual_type": visual_type,
+            "preferred_source": "programmatic" if visual_type in {"process_diagram", "comparison_visual", "timeline", "mathematical_graph"} else ("pexels" if visual_type == "real_world_photo" else "wikimedia"),
+            "search_query": search_query or heading,
+            "reason": reason,
+            "ai_image_required": "false",
+            "content": content[:900],
+        })
+    return plans
+
+
+def record_study_guide_visual_event(email: str, job_id: str, visual: dict[str, Any], *, cache_hit: bool = False) -> None:
+    try:
+        with get_db_connection() as connection:
+            connection.execute(
+                """INSERT INTO study_guide_visual_events
+                (id, email, job_id, source, visual_type, concept_key, cache_hit, estimated_ai_cost, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    uuid4().hex, normalize_email(email), compact_text(job_id), compact_text(visual.get("source_type"), "unknown"),
+                    compact_text(visual.get("visual_type"), "unknown"), compact_text(visual.get("concept_key")), int(cache_hit),
+                    float(visual.get("estimated_generation_cost") or 0), json.dumps({"title": compact_text(visual.get("title")), "reason": compact_text(visual.get("generation_reason"))}, ensure_ascii=False), utc_now().isoformat(),
+                ),
+            )
+    except Exception as exc:
+        logger.warning("Could not record study-guide visual event: %s", exc)
+
+
+def get_cached_study_guide_visual(concept_key: str, visual_type: str) -> dict[str, Any] | None:
+    if not STUDY_GUIDE_VISUAL_CACHE_ENABLED:
+        return None
+    try:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM study_guide_visual_cache
+                WHERE concept_key = ? AND visual_type = ? AND stored_url != ''
+                ORDER BY quality_score DESC, last_used_at DESC LIMIT 1""",
+                (concept_key, visual_type),
+            ).fetchone()
+            if not row:
+                return None
+            connection.execute("UPDATE study_guide_visual_cache SET reuse_count = reuse_count + 1, last_used_at = ? WHERE id = ?", (utc_now().isoformat(), row["id"]))
+            metadata = parse_json_object(row["metadata_json"] or "{}")
+            return {**metadata, "image_url": row["stored_url"], "source_url": row["source_url"], "original_file_url": row["original_url"], "source_type": row["source"], "visual_type": row["visual_type"], "concept_key": row["concept_key"], "license": row["license"], "license_url": row["license_url"], "author": row["author"], "attribution_text": row["attribution_text"], "ai_model": row["ai_model"], "estimated_generation_cost": row["estimated_generation_cost"]}
+    except Exception as exc:
+        logger.warning("Study-guide visual cache lookup failed: %s", exc)
+        return None
+
+
+def cache_study_guide_visual(visual: dict[str, Any]) -> None:
+    if not STUDY_GUIDE_VISUAL_CACHE_ENABLED or not compact_text(visual.get("image_url")):
+        return
+    try:
+        with get_db_connection() as connection:
+            connection.execute(
+                """INSERT INTO study_guide_visual_cache
+                (id, concept_key, visual_type, source, source_url, original_url, stored_url, search_query, image_hash, license, license_url, author, attribution_text, ai_generated, ai_model, estimated_generation_cost, relevance_score, quality_score, width, height, metadata_json, created_at, last_used_at, reuse_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                (uuid4().hex, compact_text(visual.get("concept_key")), compact_text(visual.get("visual_type")), compact_text(visual.get("source_type")), compact_text(visual.get("source_url")), compact_text(visual.get("original_file_url")), compact_text(visual.get("image_url")), compact_text(visual.get("query")), hashlib.sha256(compact_text(visual.get("image_url")).encode()).hexdigest(), compact_text(visual.get("license")), compact_text(visual.get("license_url")), compact_text(visual.get("author")), compact_text(visual.get("attribution_text")), int(visual.get("source_type") == "ai_generated"), compact_text(visual.get("ai_model")), float(visual.get("estimated_generation_cost") or 0), float(visual.get("relevance_score") or 0), float(visual.get("quality_score") or 0), int(visual.get("width") or 0), int(visual.get("height") or 0), json.dumps({key: value for key, value in visual.items() if key not in {"image_url", "source_url", "original_file_url"}}, ensure_ascii=False), utc_now().isoformat(), utc_now().isoformat()),
+            )
+    except Exception as exc:
+        logger.warning("Study-guide visual cache write failed: %s", exc)
 
 
 def normalize_ai_study_image_specs(value: Any, limit: int) -> list[dict[str, str]]:
@@ -27631,11 +27943,14 @@ def make_study_image_data_url_durable(value: str) -> str:
 
 
 def generate_openai_study_image_url(prompt: str) -> str:
+    """The only Study Guide path allowed to call OpenAI Images."""
+    if not STUDY_GUIDE_AI_IMAGES_ENABLED:
+        return ""
     safe_prompt = compact_text(prompt)
     if not safe_prompt:
         return ""
     request_args: dict[str, Any] = {
-        "model": STUDY_IMAGE_MODEL,
+        "model": OPENAI_STUDY_GUIDE_IMAGE_MODEL,
         "prompt": safe_prompt,
         "size": STUDY_IMAGE_SIZE,
         "n": 1,
@@ -27675,52 +27990,9 @@ async def generate_ai_study_images(
     owner_email: str,
     output_language: str,
 ) -> list[dict[str, str]]:
-    image_limit = get_study_image_plan_limit(owner_email)
-    if image_limit <= 0:
-        return []
-
-    update_job(job_id, status="processing", stage="Planning premium study visuals", progress=90)
-    specs = await build_ai_study_image_specs(
-        summary,
-        transcript,
-        lecture_notes,
-        lecture_slides,
-        output_language,
-        image_limit,
-    )
-    if not specs:
-        return []
-
-    images: list[dict[str, str]] = []
-    for spec in specs[:image_limit]:
-        try:
-            update_job(job_id, status="processing", stage=f"Generating visual: {compact_text(spec.get('subtopic'), 'study concept')[:42]}", progress=92)
-            image_url = await asyncio.to_thread(generate_openai_study_image_url, spec.get("prompt", ""))
-        except Exception as exc:
-            logger.warning("AI study image generation failed for %s: %s", compact_text(spec.get("subtopic")), exc)
-            continue
-        if not image_url:
-            continue
-        figure_number = len(images) + 1
-        images.append(
-            {
-                "query": compact_text(spec.get("subtopic"), "AI educational image"),
-                "title": compact_text(spec.get("title"), compact_text(spec.get("subtopic"), "AI educational image")),
-                "image_url": image_url,
-                "source_url": "",
-                "source_type": "ai_generated",
-                "visual_type": compact_text(spec.get("visual_type"), "educational_illustration"),
-                "matched_section": compact_text(spec.get("matched_section"), compact_text(spec.get("subtopic"), "Key concept")),
-                "key_highlight": compact_text(spec.get("explanation"), compact_text(spec.get("purpose"), "Use this image as a visual anchor for the explanation.")),
-                "diagram_label": compact_text(spec.get("subtopic"), compact_text(spec.get("title"), "AI visual")),
-                "caption": compact_text(spec.get("caption"), compact_text(spec.get("explanation"), "Study visual")),
-                "ai_explanation": compact_text(spec.get("ai_explanation"), compact_text(spec.get("explanation"), "This visual reinforces the main exam idea.")),
-                "figure_number": figure_number,
-            }
-        )
-        if len(images) >= image_limit:
-            break
-    return images
+    # Kept as a compatibility wrapper for older callers. New study-guide jobs use
+    # resolve_study_guide_visuals, which puts this OpenAI fallback last.
+    return []
 
 
 def parse_visual_analysis_items(content: str) -> list[dict[str, str]]:
@@ -27892,7 +28164,111 @@ def build_uploaded_study_visuals(
                 "figure_number": index + 1,
             }
         )
-    return uploaded_visuals[:MAX_STUDY_IMAGES]
+    return uploaded_visuals
+
+
+def finalize_study_guide_visual(visual: dict[str, Any], plan: dict[str, str], figure_number: int) -> dict[str, Any]:
+    title = compact_text(visual.get("title"), compact_text(plan.get("concept"), "Study visual"))
+    source_type = compact_text(visual.get("source_type"), "unknown")
+    return {
+        **visual,
+        "title": title,
+        "query": compact_text(visual.get("query"), compact_text(plan.get("search_query"))),
+        "matched_section": compact_text(plan.get("matched_section")),
+        "concept_key": compact_text(plan.get("concept_key")),
+        "visual_type": compact_text(visual.get("visual_type"), compact_text(plan.get("visual_type"))),
+        "key_highlight": compact_text(visual.get("key_highlight"), compact_text(plan.get("reason"))),
+        "diagram_label": compact_text(visual.get("diagram_label"), title),
+        "caption": compact_text(visual.get("caption"), f"Figure {figure_number} — {title}."),
+        "ai_explanation": compact_text(visual.get("ai_explanation"), compact_text(plan.get("reason"))),
+        "alt_text": compact_text(visual.get("alt_text"), f"{title}: {compact_text(plan.get('reason'))}"),
+        "figure_number": figure_number,
+        "generation_reason": compact_text(visual.get("generation_reason"), compact_text(plan.get("reason"))),
+        "source_type": source_type,
+    }
+
+
+async def resolve_study_guide_visuals(
+    *,
+    summary: str,
+    reference_images: list[str],
+    visual_analysis: list[dict[str, str]],
+    job_id: str,
+    owner_email: str,
+) -> list[dict[str, Any]]:
+    """Resolve visuals in source priority order without subscription-tier limits."""
+    plans = build_study_guide_visual_plan(summary)
+    resolved: list[dict[str, Any]] = []
+    used_urls: set[str] = set()
+
+    # Student-owned lecture visuals always win and are never written to the
+    # reusable shared cache.
+    for uploaded in build_uploaded_study_visuals(reference_images, visual_analysis):
+        matching_plan = next((plan for plan in plans if normalize_guide_heading(plan["matched_section"]) == normalize_guide_heading(compact_text(uploaded.get("matched_section")))), None)
+        if not matching_plan:
+            matching_plan = {"matched_section": compact_text(uploaded.get("matched_section"), "Key concept"), "concept": compact_text(uploaded.get("title")), "concept_key": normalize_study_visual_concept_key(compact_text(uploaded.get("matched_section")), compact_text(uploaded.get("title"))), "visual_type": compact_text(uploaded.get("visual_type"), "existing_source_image"), "reason": "This visual came from the student's source material."}
+        final = finalize_study_guide_visual(uploaded, matching_plan, len(resolved) + 1)
+        url = compact_text(final.get("image_url"))
+        if url and url not in used_urls:
+            resolved.append(final)
+            used_urls.add(url)
+            record_study_guide_visual_event(owner_email, job_id, final)
+
+    for plan in plans:
+        if any(normalize_guide_heading(item.get("matched_section", "")) == normalize_guide_heading(plan["matched_section"]) for item in resolved):
+            continue
+        cached = get_cached_study_guide_visual(plan["concept_key"], plan["visual_type"])
+        if cached:
+            final = finalize_study_guide_visual(cached, plan, len(resolved) + 1)
+            if compact_text(final.get("image_url")) not in used_urls:
+                resolved.append(final)
+                used_urls.add(compact_text(final.get("image_url")))
+                record_study_guide_visual_event(owner_email, job_id, final, cache_hit=True)
+                continue
+
+        candidate = build_programmatic_study_visual(plan)
+        if not candidate and plan["visual_type"] == "real_world_photo":
+            try:
+                photos = await asyncio.to_thread(search_pexels_study_visuals, plan["search_query"], 1)
+                candidate = photos[0] if photos else None
+            except Exception as exc:
+                logger.warning("Pexels study-guide visual lookup failed for %s: %s", plan["concept_key"], exc)
+        if not candidate and STUDY_GUIDE_WIKIMEDIA_ENABLED:
+            try:
+                commons = await asyncio.to_thread(search_wikimedia_photos, plan["search_query"], 1)
+                candidate = commons[0] if commons else None
+            except Exception as exc:
+                logger.warning("Wikimedia study-guide visual lookup failed for %s: %s", plan["concept_key"], exc)
+        if not candidate and plan["visual_type"] == "real_world_photo":
+            try:
+                photos = await asyncio.to_thread(search_unsplash_study_visuals, plan["search_query"], 1)
+                candidate = photos[0] if photos else None
+            except Exception as exc:
+                logger.warning("Unsplash study-guide visual lookup failed for %s: %s", plan["concept_key"], exc)
+        if not candidate and plan["visual_type"] in {"scientific_diagram", "technical_diagram", "custom_illustration"} and STUDY_GUIDE_AI_IMAGES_ENABLED:
+            prompt = (
+                f"Create one accurate educational illustration of {plan['concept']}. "
+                f"It must explain: {plan['content'][:700]}. Use a clean light background, clear labels only where essential, "
+                "no logos, watermark, decorative scene, or cropped content."
+            )
+            try:
+                update_job(job_id, status="processing", stage=f"Creating essential visual: {plan['concept'][:42]}", progress=93)
+                image_url = await asyncio.to_thread(generate_openai_study_image_url, prompt)
+                if image_url:
+                    candidate = {"title": plan["concept"], "image_url": image_url, "source_type": "ai_generated", "visual_type": "custom_illustration", "ai_model": OPENAI_STUDY_GUIDE_IMAGE_MODEL, "estimated_generation_cost": 0.0, "generation_reason": "No uploaded, deterministic, Pexels, Wikimedia, or Unsplash asset adequately explained this scientific concept; GPT Image Mini was the final fallback.", "quality_score": 0.7, "relevance_score": 0.85}
+            except Exception as exc:
+                logger.warning("GPT Image Mini study-guide fallback failed for %s: %s", plan["concept_key"], exc)
+        if not candidate:
+            continue
+        final = finalize_study_guide_visual(candidate, plan, len(resolved) + 1)
+        image_url = compact_text(final.get("image_url"))
+        if not image_url or image_url in used_urls:
+            continue
+        resolved.append(final)
+        used_urls.add(image_url)
+        cache_study_guide_visual(final)
+        record_study_guide_visual_event(owner_email, job_id, final)
+    return resolved
 
 
 def merge_study_image_results(*image_groups: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -27905,8 +28281,6 @@ def merge_study_image_results(*image_groups: list[dict[str, str]]) -> list[dict[
                 continue
             seen_urls.add(image_url)
             merged.append(item)
-            if len(merged) >= MAX_STUDY_IMAGES:
-                return merged
     return merged
 
 
@@ -32780,10 +33154,8 @@ async def run_summary_job(
             generation_prompt,
         )
         raise_if_job_cancelled(job_id)
-        study_image_limit = get_study_image_plan_limit(owner_email)
-        uploaded_visuals: list[dict[str, str]] = []
         visual_analysis: list[dict[str, str]] = []
-        if study_image_limit > 0:
+        if reference_images:
             raise_if_job_cancelled(job_id)
             visual_analysis = await analyze_reference_images_for_study_guide(
                 reference_images,
@@ -32792,7 +33164,6 @@ async def run_summary_job(
                 lecture_slides,
                 output_language,
             )
-            uploaded_visuals = build_uploaded_study_visuals(reference_images, visual_analysis)[:study_image_limit]
         raise_if_job_cancelled(job_id)
         formula = await generate_study_formula_asset(
             summary,
@@ -32805,17 +33176,15 @@ async def run_summary_job(
             visual_analysis,
         )
         raise_if_job_cancelled(job_id)
-        generated_study_images = await generate_ai_study_images(
-            summary,
-            transcript,
-            lecture_notes,
-            lecture_slides,
-            job_id,
-            owner_email,
-            output_language,
+        update_job(job_id, status="processing", stage="Resolving educational visuals", progress=90)
+        study_images = await resolve_study_guide_visuals(
+            summary=summary,
+            reference_images=reference_images,
+            visual_analysis=visual_analysis,
+            job_id=job_id,
+            owner_email=owner_email,
         )
         raise_if_job_cancelled(job_id)
-        study_images = merge_study_image_results(uploaded_visuals, generated_study_images)[:study_image_limit]
         update_job(
             job_id,
             status="completed",
@@ -32837,7 +33206,14 @@ async def run_summary_job(
             resource_type="study_guide",
             resource_name=output_language,
             duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-            metadata={"job_id": job_id, "used_fallback": used_fallback},
+            metadata={
+                "job_id": job_id,
+                "used_fallback": used_fallback,
+                "visuals_requested": len(build_study_guide_visual_plan(summary)),
+                "visuals_used": len(study_images),
+                "visual_sources": {source: sum(1 for image in study_images if image.get("source_type") == source) for source in {image.get("source_type") for image in study_images}},
+                "ai_generated_visuals": sum(1 for image in study_images if image.get("source_type") == "ai_generated"),
+            },
         )
     except JobCancelledError:
         if job_cancel_requested(job_id):
