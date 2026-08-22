@@ -13911,6 +13911,11 @@ export default function App() {
     const manualPaymentRequests = billing.manual_payment_requests || [];
     const billingSubscriptions = billing.subscriptions || [];
     const billingAiCosts = billing.ai_costs || {};
+    const exchangeRate = billingAiCosts.exchange_rate || {};
+    const adminCostCurrency = adminDashboardCurrency === "ZAR" ? "ZAR" : "USD";
+    const formatDashboardCost = (value, currency = "USD") => (
+      formatAdminDashboardCost(value, currency, adminCostCurrency, exchangeRate)
+    );
     const openAiUsage = billingAiCosts.openai_usage || {};
     const openAiUsageTotals = openAiUsage.totals || {};
     const openAiIntegration = billingAiCosts.integration || {};
