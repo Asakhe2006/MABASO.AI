@@ -922,7 +922,7 @@ const fairSubscriptionPlans = [
     limits: "Higher daily limits, faster generation queue, better academic structure, exports, and stronger study tools.",
     howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets, faster responses, and more polished study output. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
-      "20 study chat questions/day",
+      "25 study chat questions/day",
       "6 reports/day",
       "3 study guides/day",
       "6 flashcard generations/day, choose 5-20 cards",
@@ -932,7 +932,7 @@ const fairSubscriptionPlans = [
       "6 mind maps/day",
       "3 audio/source processing jobs/day",
       "9 voice messages/day",
-      "15 photo or document uploads/day",
+      "10 photo or document uploads/day",
     ],
     safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
   },
@@ -960,7 +960,7 @@ const fairSubscriptionPlans = [
       "Unlimited podcasts",
       "Unlimited mind maps",
       "Unlimited slide and document analysis",
-      "15 photo or document uploads/day",
+      "Unlimited photo or document uploads",
     ],
     safeguards: ["Best quality tier", "Highest priority", "Premium features included"],
   },
@@ -7001,7 +7001,7 @@ export default function App() {
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [modelAccessBlock, setModelAccessBlock] = useState(null);
-  const [selectedAiChatMode, setSelectedAiChatMode] = useState("study");
+  const [selectedAiChatMode, setSelectedAiChatMode] = useState("think_deeper");
   const [isAiChatModeMenuOpen, setIsAiChatModeMenuOpen] = useState(false);
   const [lockedAiChatModeInfo, setLockedAiChatModeInfo] = useState(null);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
@@ -16139,6 +16139,17 @@ export default function App() {
     authTokenRef.current = "";
   }, [authToken]);
   useEffect(() => {
+    if (!authEmail) return;
+    try {
+      const savedMode = window.localStorage.getItem(`mabaso-ai-chat-mode:${String(authEmail).trim().toLowerCase()}`);
+      if (AI_CHAT_MODE_OPTIONS.some((option) => option.id === savedMode)) {
+        setSelectedAiChatMode(savedMode);
+      }
+    } catch {
+      // The server account preference is applied when the session refresh completes.
+    }
+  }, [authEmail]);
+  useEffect(() => {
     if (typeof document === "undefined" || !isAiChatModeMenuOpen) return undefined;
     const closeModePicker = (event) => {
       if (event?.target?.closest?.(".ai-chat-mode-picker")) return;
@@ -17828,8 +17839,8 @@ export default function App() {
         features: [nextFeature, ...currentFeatures.filter((item) => item.feature !== "study_chat")],
       };
     });
-    if (planId === "free" && Number(featureState.limit) === 3 && Number(featureState.remaining) === 2) {
-      setChatAttemptReminder({ remaining: 2, limit: 3 });
+    if (planId === "free" && Number(featureState.remaining) === 2) {
+      setChatAttemptReminder({ remaining: 2, limit: Number(featureState.limit) || 3, planId });
     }
   };
 
@@ -26312,12 +26323,25 @@ export default function App() {
 
   const persistAiChatModePreference = (mode) => {
     if (!authToken || !AI_CHAT_MODE_OPTIONS.some((option) => option.id === mode)) return;
+    const preferenceKey = `mabaso-ai-chat-mode:${String(authEmail || "").trim().toLowerCase()}`;
+    try {
+      window.localStorage.setItem(preferenceKey, mode);
+    } catch {
+      // Server persistence remains the account source of truth.
+    }
     void authFetch("/api/account/preferences/ai-chat-mode", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
+    }).then(async (response) => {
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not save your default AI mode.");
+      const savedMode = data?.preferred_ai_chat_mode;
+      if (AI_CHAT_MODE_OPTIONS.some((option) => option.id === savedMode)) {
+        setSelectedAiChatMode(savedMode);
+      }
     }).catch(() => {
-      // The visible selection stays responsive; the next account refresh retries hydration.
+      setError("Your AI mode could not be saved to this account. Please choose it again after reconnecting.");
     });
   };
 
@@ -26537,11 +26561,11 @@ export default function App() {
     return (
       <div className={`study-chat-page ${isStudyChatSidebarOpen ? "is-sidebar-open" : "is-sidebar-closed"}`}>
         {isUpgradeModalOpen ? renderUpgradeModal() : null}
-        {chatAttemptReminder ? (
+        {chatAttemptReminder?.planId === "free" ? (
           <div className="chat-attempt-reminder-backdrop" onPointerDown={() => setChatAttemptReminder(null)}>
             <div className="chat-attempt-reminder" role="dialog" aria-modal="true" aria-label="AI chat attempts remaining" onPointerDown={(event) => event.stopPropagation()}>
               <button type="button" className="chat-attempt-reminder-close" onClick={() => setChatAttemptReminder(null)} aria-label="Dismiss attempts reminder"><X className="h-4 w-4" aria-hidden="true" /></button>
-              <p><strong>{chatAttemptReminder.remaining}/{chatAttemptReminder.limit} messages left today.</strong> Upgrade to Pro for 15 daily messages and 5 uploads.</p>
+              <p><strong>{chatAttemptReminder.remaining}/{chatAttemptReminder.limit} messages left today.</strong> Pro includes 25 daily messages and 10 image or document uploads.</p>
               <button type="button" className="chat-attempt-reminder-upgrade" onClick={() => { setChatAttemptReminder(null); openUpgradeModal(); }}>Upgrade to Pro</button>
             </div>
           </div>

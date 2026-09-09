@@ -9,8 +9,8 @@ class PlanChatQuotaTests(unittest.TestCase):
         expected_defaults = (
             '"study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 3)',
             '"study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 1)',
-            '"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 15)',
-            '"study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 5)',
+            '"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25)',
+            '"study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 10)',
         )
         for expected in expected_defaults:
             self.assertIn(expected, source)

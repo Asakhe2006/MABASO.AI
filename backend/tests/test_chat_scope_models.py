@@ -1,4 +1,6 @@
+import asyncio
 import unittest
+from uuid import uuid4
 from unittest.mock import patch
 
 from backend import main
@@ -45,6 +47,16 @@ class ChatScopeModelTests(unittest.TestCase):
         self.assertTrue(slides[1]["title"].endswith("(continued)"))
         self.assertTrue(all(len(slide["bullets"]) <= main.PRESENTATION_MAX_BULLETS_PER_SLIDE for slide in slides))
         self.assertTrue(all(sum(len(bullet) for bullet in slide["bullets"]) <= main.PRESENTATION_MAX_BODY_CHARS for slide in slides))
+
+    def test_ai_chat_mode_is_account_default_then_persists_last_selection(self):
+        email = f"mode-preference-{uuid4().hex}@example.com"
+        self.assertEqual(main.sync_user_account_snapshot(email)["preferred_ai_chat_mode"], "think_deeper")
+        result = asyncio.run(main.update_ai_chat_mode_preference(
+            main.AiChatModePreferenceRequest(mode="maximum"),
+            current_user=email,
+        ))
+        self.assertEqual(result["preferred_ai_chat_mode"], "maximum")
+        self.assertEqual(main.sync_user_account_snapshot(email)["preferred_ai_chat_mode"], "maximum")
 
 
 if __name__ == "__main__":

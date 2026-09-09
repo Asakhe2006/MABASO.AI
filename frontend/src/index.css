@@ -14497,3 +14497,53 @@ body.study-guide-focus-open .study-guide-focus-stage .study-guide-focus-deck > .
     text-orientation: mixed !important;
   }
 }
+/* Fixed Study Guide slide canvases: every focus slide shares one viewport slot.
+   Long educational content scrolls inside that slot instead of changing slide size. */
+body > .study-guide-focus-stage .study-guide-slide-deck .study-guide-slide-hidden {
+  display: none !important;
+}
+
+body > .study-guide-focus-stage .study-guide-slide-deck .study-guide-slide-active {
+  box-sizing: border-box !important;
+  grid-area: slide !important;
+  align-self: stretch !important;
+  justify-self: stretch !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+body > .study-guide-focus-stage .study-guide-title-card.study-guide-slide-active,
+body > .study-guide-focus-stage .study-guide-section-card.study-guide-slide-active,
+body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
+  margin: 0 !important;
+  min-height: 0 !important;
+}
+
+@media (min-width: 769px) {
+  body > .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar toolbar"
+      "thumbnails slide"
+      "thumbnails navigation" !important;
+    grid-template-columns: clamp(230px, 18vw, 300px) minmax(0, 1fr) !important;
+    grid-template-rows: 68px minmax(0, 1fr) 58px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  body > .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar"
+      "slide"
+      "navigation" !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: 46px minmax(0, 1fr) 48px !important;
+  }
+}

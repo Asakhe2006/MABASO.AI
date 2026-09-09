@@ -550,8 +550,8 @@ BILLING_PLAN_QUOTAS = {
         "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 1),
     },
     "pro_student": {
-        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 15),
-        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 15),
+        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
         "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 3),
         "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 3),
         "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 3),
@@ -565,7 +565,7 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("PRO_STUDENT_AI_NOTES_PER_DAY", 3),
         "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
-        "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 5),
+        "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 10),
     },
     "premium_student": {
         "ai_chat": -1,
@@ -7014,7 +7014,7 @@ class GoogleAuthRequest(BaseModel):
 
 
 class AiChatModePreferenceRequest(BaseModel):
-    mode: str = "study"
+    mode: str = "think_deeper"
 
 
 class AppleAuthRequest(BaseModel):
@@ -7565,7 +7565,8 @@ def init_db():
             "subscription_end_at": "TEXT NOT NULL DEFAULT ''",
             "usage_reset_at": "TEXT NOT NULL DEFAULT ''",
             "feature_permissions_json": "TEXT NOT NULL DEFAULT '{}'",
-            "preferred_ai_chat_mode": "TEXT NOT NULL DEFAULT 'study'",
+            "preferred_ai_chat_mode": "TEXT NOT NULL DEFAULT 'think_deeper'",
+            "ai_chat_mode_preference_set_at": "TEXT NOT NULL DEFAULT ''",
             "last_login_at": "TEXT NOT NULL DEFAULT ''",
             "updated_at": "TEXT NOT NULL DEFAULT ''",
         }
@@ -18336,7 +18337,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
             (normalized_email, now_iso, uuid4().hex, now_iso),
         )
         row = connection.execute(
-            "SELECT user_id, role, created_at, preferred_ai_chat_mode FROM users WHERE email = ?",
+            "SELECT user_id, role, created_at, preferred_ai_chat_mode, ai_chat_mode_preference_set_at FROM users WHERE email = ?",
             (normalized_email,),
         ).fetchone()
         user_id = compact_text(row["user_id"]) if row else ""
@@ -18346,7 +18347,10 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
             account_role = "user"
         if not user_id:
             user_id = uuid4().hex
-        preferred_ai_chat_mode = normalize_ai_chat_mode(row["preferred_ai_chat_mode"] if row else "study")
+        has_saved_ai_chat_preference = bool(compact_text(row["ai_chat_mode_preference_set_at"] if row else ""))
+        preferred_ai_chat_mode = normalize_ai_chat_mode(
+            row["preferred_ai_chat_mode"] if has_saved_ai_chat_preference and row else "think_deeper"
+        )
         if mark_login:
             connection.execute(
                 """
@@ -23101,8 +23105,8 @@ async def update_ai_chat_mode_preference(
             (email, now_iso, uuid4().hex, now_iso),
         )
         connection.execute(
-            "UPDATE users SET preferred_ai_chat_mode = ?, updated_at = ? WHERE email = ?",
-            (mode, now_iso, email),
+            "UPDATE users SET preferred_ai_chat_mode = ?, ai_chat_mode_preference_set_at = ?, updated_at = ? WHERE email = ?",
+            (mode, now_iso, now_iso, email),
         )
     return {"preferred_ai_chat_mode": mode}
 
