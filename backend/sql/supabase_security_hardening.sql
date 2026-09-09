@@ -38,6 +38,12 @@ declare
     'billing_plan_features',
     'billing_usage_events',
     'payment_requests',
+    'public_shares',
+    'site_ratings',
+    'study_timetables',
+    'lecture_timetables',
+    'study_guide_visual_cache',
+    'study_guide_visual_events',
     'conversations',
     'messages'
   ];
@@ -128,6 +134,12 @@ where n.nspname = 'public'
     'billing_plan_features',
     'billing_usage_events',
     'payment_requests',
+    'public_shares',
+    'site_ratings',
+    'study_timetables',
+    'lecture_timetables',
+    'study_guide_visual_cache',
+    'study_guide_visual_events',
     'conversations',
     'messages'
   )

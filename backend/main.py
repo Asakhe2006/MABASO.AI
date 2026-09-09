@@ -8331,15 +8331,24 @@ def init_db():
             if column_name not in payment_request_columns:
                 connection.execute(f"ALTER TABLE payment_requests ADD COLUMN {column_name} {column_definition}")
         if DATABASE_BACKEND == "postgres":
-            connection.execute(
-                """
-                ALTER TABLE payment_requests ENABLE ROW LEVEL SECURITY
-                """
-            )
+            # All private records are accessed through FastAPI using the
+            # server-side database connection/service role. Keep Supabase's
+            # anon and authenticated API roles from accessing these tables
+            # directly, including tables added after the initial hardening.
             connection.execute(
                 """
                 DO $$
                 DECLARE
+                  table_name text;
+                  table_names text[] := array[
+                    'payment_requests',
+                    'public_shares',
+                    'site_ratings',
+                    'study_timetables',
+                    'lecture_timetables',
+                    'study_guide_visual_cache',
+                    'study_guide_visual_events'
+                  ];
                   policy_role_clause text;
                 BEGIN
                   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
@@ -8353,30 +8362,35 @@ def init_db():
                     policy_role_clause := 'public';
                   END IF;
 
-                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-                    REVOKE ALL ON TABLE payment_requests FROM anon;
-                  END IF;
+                  FOREACH table_name IN ARRAY table_names LOOP
+                    IF to_regclass(format('%I.%I', current_schema(), table_name)) IS NULL THEN
+                      CONTINUE;
+                    END IF;
 
-                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-                    REVOKE ALL ON TABLE payment_requests FROM authenticated;
-                  END IF;
+                    EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', current_schema(), table_name);
 
-                  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-                    GRANT ALL ON TABLE payment_requests TO service_role;
-                  END IF;
+                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                      EXECUTE format('REVOKE ALL ON TABLE %I.%I FROM anon', current_schema(), table_name);
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                      EXECUTE format('REVOKE ALL ON TABLE %I.%I FROM authenticated', current_schema(), table_name);
+                    END IF;
+                    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                      EXECUTE format('GRANT ALL ON TABLE %I.%I TO service_role', current_schema(), table_name);
+                    END IF;
 
-                  IF NOT EXISTS (
-                    SELECT 1
-                    FROM pg_policies
-                    WHERE schemaname = current_schema()
-                      AND tablename = 'payment_requests'
-                      AND policyname = 'Block direct client access'
-                  ) THEN
-                    EXECUTE format(
-                      'CREATE POLICY "Block direct client access" ON payment_requests FOR ALL TO %%s USING (false) WITH CHECK (false)',
-                      policy_role_clause
-                    );
-                  END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_policies
+                      WHERE schemaname = current_schema()
+                        AND tablename = table_name
+                        AND policyname = 'Block direct client access'
+                    ) THEN
+                      EXECUTE format(
+                        'CREATE POLICY "Block direct client access" ON %I.%I FOR ALL TO %s USING (false) WITH CHECK (false)',
+                        current_schema(), table_name, policy_role_clause
+                      );
+                    END IF;
+                  END LOOP;
                 END $$;
                 """
             )
