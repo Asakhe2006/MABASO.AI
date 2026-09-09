@@ -174,32 +174,32 @@ const AI_CHAT_MODE_OPTIONS = [
     shortLabel: "Study",
     label: "Study",
     description: "Detailed explanations and academic help",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "think_deeper",
     shortLabel: "Think",
     label: "Think Deeper",
     description: "More reasoning for difficult maths, engineering and multi-step problems",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "expert",
     shortLabel: "Expert",
     label: "Expert",
     description: "Advanced reasoning for challenging work",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "maximum",
     shortLabel: "Max",
     label: "Maximum",
     description: "Highest available reasoning capability",
-    minimumPlan: "premium",
-    planLabel: "Premium",
+    minimumPlan: "free",
+    planLabel: "",
   },
 ];
 const MAX_QUIZ_ANSWER_IMAGES = 6;
@@ -5853,6 +5853,51 @@ function sanitizeTeacherLessonForHistory(value) {
   };
 }
 
+function paginatePresentationSlidesForCanvas(slides) {
+  const maxBullets = 3;
+  const maxBulletChars = 100;
+  const maxBodyChars = 280;
+  const splitBullet = (value) => {
+    const parts = [];
+    let remaining = String(value || "").trim();
+    while (remaining.length > maxBulletChars) {
+      const boundaries = [". ", "; ", ": ", ", ", " "]
+        .map((marker) => remaining.lastIndexOf(marker, maxBulletChars))
+        .filter((index) => index >= Math.max(40, Math.floor(maxBulletChars / 2)));
+      const boundary = boundaries.length ? Math.max(...boundaries) + 1 : maxBulletChars;
+      parts.push(remaining.slice(0, boundary).trim());
+      remaining = remaining.slice(boundary).trim();
+    }
+    if (remaining) parts.push(remaining);
+    return parts;
+  };
+
+  return slides.flatMap((slide) => {
+    const bullets = (slide.bullets || []).flatMap(splitBullet).filter(Boolean);
+    if (!bullets.length) return [slide];
+    const pages = [];
+    let page = [];
+    let size = 0;
+    bullets.forEach((bullet) => {
+      if (page.length && (page.length >= maxBullets || size + bullet.length > maxBodyChars)) {
+        pages.push(page);
+        page = [];
+        size = 0;
+      }
+      page.push(bullet);
+      size += bullet.length;
+    });
+    if (page.length) pages.push(page);
+    return pages.map((pageBullets, index) => ({
+      ...slide,
+      title: index ? `${slide.title} (continued)` : slide.title,
+      bullets: pageBullets,
+      visualItems: index ? pageBullets.slice(0, 3) : slide.visualItems,
+      flowNote: index ? `Continue ${String(slide.title || "this topic").toLowerCase()} without reducing the readable slide layout.` : slide.flowNote,
+    }));
+  });
+}
+
 function normalizePresentationData(value) {
   const raw = value && typeof value === "object" ? value : {};
   const rawSlides = Array.isArray(raw.slides) ? raw.slides : Array.isArray(raw.presentation_slides) ? raw.presentation_slides : [];
@@ -5860,7 +5905,7 @@ function normalizePresentationData(value) {
     .filter((slide) => slide && typeof slide === "object")
     .map((slide) => ({
       title: slide.title || "",
-      bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean).slice(0, 5) : [],
+      bullets: Array.isArray(slide.bullets) ? slide.bullets.filter(Boolean) : [],
       visualTitle: slide.visual_title || slide.visualTitle || slide.note || "",
       visualType: slide.visual_type || slide.visualType || "cluster",
       visualItems: Array.isArray(slide.visual_items) ? slide.visual_items.filter(Boolean).slice(0, 4) : Array.isArray(slide.visualItems) ? slide.visualItems.filter(Boolean).slice(0, 4) : [],
@@ -5879,7 +5924,7 @@ function normalizePresentationData(value) {
       { allowLegacyDefault: normalizedSlides.length > 0 },
     ),
     templateName: raw.templateName || raw.template_name || raw.presentation_template_name || "",
-    slides: normalizedSlides,
+    slides: paginatePresentationSlidesForCanvas(normalizedSlides),
   };
 }
 
@@ -6956,7 +7001,7 @@ export default function App() {
   const [showLandingAuthOptions, setShowLandingAuthOptions] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [modelAccessBlock, setModelAccessBlock] = useState(null);
-  const [selectedAiChatMode, setSelectedAiChatMode] = useState("auto");
+  const [selectedAiChatMode, setSelectedAiChatMode] = useState("study");
   const [isAiChatModeMenuOpen, setIsAiChatModeMenuOpen] = useState(false);
   const [lockedAiChatModeInfo, setLockedAiChatModeInfo] = useState(null);
   const [billingCheckoutMessage, setBillingCheckoutMessage] = useState("");
@@ -12285,7 +12330,7 @@ export default function App() {
 
     if (visualType === "title") {
       return (
-        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "aspect-[16/9] p-3" : "aspect-[16/9] p-6"}`} style={frameStyle}>
           <div className="absolute inset-0 opacity-80">
             <div className="absolute left-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
             <div className="absolute bottom-0 right-0 h-40 w-72 rounded-full blur-3xl" style={accentOrbSecondaryStyle} />
@@ -12303,7 +12348,7 @@ export default function App() {
 
     if (visualType === "closing") {
       return (
-        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
+        <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "aspect-[16/9] p-3" : "aspect-[16/9] p-6"}`} style={frameStyle}>
           <div className="absolute inset-0 opacity-80">
             <div className="absolute right-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
             <div className="absolute bottom-0 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full blur-3xl" style={accentOrbSecondaryStyle} />
@@ -12317,7 +12362,7 @@ export default function App() {
     }
 
     return (
-      <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "p-3" : "min-h-[620px] p-6"}`} style={frameStyle}>
+      <div className={`relative w-full overflow-hidden rounded-[28px] border ${thumbnail ? "aspect-[16/9] p-3" : "aspect-[16/9] p-6"}`} style={frameStyle}>
         <div className="absolute inset-0 opacity-80">
           <div className="absolute right-0 top-0 h-32 w-32 rounded-full blur-3xl" style={accentOrbStyle} />
           <div className="absolute bottom-0 right-0 h-28 w-56 rounded-[999px]" style={accentOrbSecondaryStyle} />
@@ -16743,8 +16788,12 @@ export default function App() {
   }, [activeTab, currentPage]);
 
   const applyServerAccountState = (data = {}, { includeBilling = true } = {}) => {
-    if (!includeBilling) return;
     const account = data?.account && typeof data.account === "object" ? data.account : {};
+    const preferredAiChatMode = data?.preferred_ai_chat_mode || data?.preferredAiChatMode || account.preferred_ai_chat_mode || account.preferredAiChatMode || "";
+    if (AI_CHAT_MODE_OPTIONS.some((option) => option.id === preferredAiChatMode)) {
+      setSelectedAiChatMode(preferredAiChatMode);
+    }
+    if (!includeBilling) return;
     const hasBillingPayload = Boolean(
       Object.prototype.hasOwnProperty.call(data || {}, "usage")
       || Object.prototype.hasOwnProperty.call(data || {}, "subscription")
@@ -16823,19 +16872,15 @@ export default function App() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-      }, 25000);
+      }, 15000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
-      const verifiedSession = await checkSharedSession({ force: true, background: true });
-      if (verifiedSession.status === "unauthenticated") {
-        throw new Error("Google sign-in completed, but the secure session cookie was not accepted. Allow cookies for Mabaso AI and try again.");
-      }
-      const verifiedData = verifiedSession.status === "authenticated"
-        ? { ...data, ...verifiedSession.session, email: verifiedSession.session?.email || data.email }
-        : data;
-      applyAuthResponse(verifiedData, verifiedData.email || previewEmail || "", { promptForMode: true });
+      // The login response already sets the secure HttpOnly session cookie. Enter
+      // the workspace immediately; refresh account details without holding the page.
+      applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
       setStatus("Signed in successfully.");
-      setAuthMessage(verifiedData?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
+      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
+      void checkSharedSession({ force: true, background: true });
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
@@ -17252,7 +17297,19 @@ export default function App() {
       return;
     }
     if (!window.google?.accounts?.oauth2) {
-      setAuthMessage("Google sign-in is still loading. Try again in a moment.");
+      setAuthMessage("Preparing Google sign-in...");
+      const existingScript = document.querySelector('script[data-google-signin="mabaso"]');
+      const script = existingScript || document.createElement("script");
+      if (!existingScript) {
+        script.src = "https://accounts.google.com/gsi/client";
+        script.async = true;
+        script.defer = true;
+        script.dataset.googleSignin = "mabaso";
+        document.body.appendChild(script);
+      }
+      const retryGoogleSignIn = () => startDirectGoogleSignIn(redirectPath);
+      script.addEventListener("load", retryGoogleSignIn, { once: true });
+      script.addEventListener("error", () => setAuthMessage("Google sign-in could not load. Check your connection and try again."), { once: true });
       return;
     }
     if (!googleTokenClientRef.current) {
@@ -17816,13 +17873,7 @@ export default function App() {
     AI_CHAT_MODE_OPTIONS.find((option) => option.id === modeId) || AI_CHAT_MODE_OPTIONS[0]
   );
 
-  const canPlanUseAiChatMode = (planTier, modeId) => {
-    const option = getAiChatModeOption(modeId);
-    if (!option || option.minimumPlan === "free") return true;
-    if (option.minimumPlan === "pro") return planTier === "pro" || planTier === "premium";
-    if (option.minimumPlan === "premium") return planTier === "premium";
-    return false;
-  };
+  const canPlanUseAiChatMode = (_planTier, modeId) => Boolean(getAiChatModeOption(modeId));
 
   const canCurrentPlanUseAiChatMode = (modeId = selectedAiChatMode) => (
     canPlanUseAiChatMode(normalizeAiChatPlanTier(getResolvedCurrentPlanId()), modeId)
@@ -25062,7 +25113,7 @@ export default function App() {
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
         interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
         preferred_provider: "openai",
-        requested_mode: shouldUseLectureContext ? "study" : selectedAiChatMode,
+        requested_mode: selectedAiChatMode,
         conversation_id: conversationId,
         session_id: conversationId,
         context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
@@ -25649,16 +25700,7 @@ export default function App() {
       return;
     }
     if (isAskingChat) return;
-    if (currentPage === "voice" && !canCurrentPlanUseAiChatMode(selectedAiChatMode)) {
-      const requestedOption = getAiChatModeOption(selectedAiChatMode);
-      setLockedAiChatModeInfo(requestedOption);
-      setIsAiChatModeMenuOpen(true);
-      showModelAccessBlock({
-        requested_mode: requestedOption.id,
-        required_plan: getAiChatModeRequiredLabel(requestedOption.id),
-      });
-      return;
-    }
+
     if (studyChatResponseMode === "voice") {
       await submitStudyChatVoiceQuestion(question);
       return;
@@ -26268,6 +26310,17 @@ export default function App() {
     );
   };
 
+  const persistAiChatModePreference = (mode) => {
+    if (!authToken || !AI_CHAT_MODE_OPTIONS.some((option) => option.id === mode)) return;
+    void authFetch("/api/account/preferences/ai-chat-mode", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    }).catch(() => {
+      // The visible selection stays responsive; the next account refresh retries hydration.
+    });
+  };
+
   const renderAiChatModePicker = ({ compact = false } = {}) => {
     const selectedOption = getAiChatModeOption(selectedAiChatMode);
     const planTier = normalizeAiChatPlanTier(getResolvedCurrentPlanId());
@@ -26278,6 +26331,7 @@ export default function App() {
         return;
       }
       setSelectedAiChatMode(option.id);
+      persistAiChatModePreference(option.id);
       setLockedAiChatModeInfo(null);
       setIsAiChatModeMenuOpen(false);
     };
@@ -28789,21 +28843,6 @@ export default function App() {
             <p className="mt-4 text-sm text-slate-300">{authCheckError ? "Reconnecting securely in the background..." : "Checking your session..."}</p>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  if (isGoogleSigningIn) {
-    return (
-      <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
-        <main className="flex min-h-screen items-center justify-center px-4">
-          <section className="w-full max-w-sm rounded-[26px] border border-emerald-300/15 bg-slate-950/85 p-6 text-center shadow-[0_28px_80px_rgba(2,8,23,0.45)]">
-            <p className="brand-mark text-2xl font-black">Mabaso AI</p>
-            <div className="mx-auto mt-6 h-10 w-10 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
-            <h1 className="mt-5 text-xl font-semibold text-white">Opening your workspace</h1>
-            <p className="mt-3 text-sm leading-6 text-slate-300">Finishing Google sign-in. This should only take a moment.</p>
-          </section>
-        </main>
       </div>
     );
   }

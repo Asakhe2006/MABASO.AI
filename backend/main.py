@@ -7013,6 +7013,10 @@ class GoogleAuthRequest(BaseModel):
     access_token: str = ""
 
 
+class AiChatModePreferenceRequest(BaseModel):
+    mode: str = "study"
+
+
 class AppleAuthRequest(BaseModel):
     authorization_code: str = ""
     id_token: str = ""
@@ -7561,6 +7565,7 @@ def init_db():
             "subscription_end_at": "TEXT NOT NULL DEFAULT ''",
             "usage_reset_at": "TEXT NOT NULL DEFAULT ''",
             "feature_permissions_json": "TEXT NOT NULL DEFAULT '{}'",
+            "preferred_ai_chat_mode": "TEXT NOT NULL DEFAULT 'study'",
             "last_login_at": "TEXT NOT NULL DEFAULT ''",
             "updated_at": "TEXT NOT NULL DEFAULT ''",
         }
@@ -17075,18 +17080,18 @@ def get_ai_chat_plan_tier(plan_id: str = "") -> str:
 
 
 def can_use_ai_chat_mode(plan_id: str, requested_mode: str = "auto") -> bool:
-    plan_tier = get_ai_chat_plan_tier(plan_id)
+    # Chat modes are a learning preference, not a subscription entitlement.
+    # Keep this compatibility function so legacy callers stay safe while every
+    # signed-in learner can use each advertised Mabaso AI mode.
     mode = normalize_ai_chat_mode(requested_mode)
-    return mode in AI_CHAT_MODE_ACCESS.get(plan_tier, AI_CHAT_MODE_ACCESS["free"])
+    return mode == "auto" or mode in AI_CHAT_MODE_MODELS
 
 
 def can_use_model(plan_id: str, requested_model: str = "", chat_scope: str = "global") -> bool:
     """Compatibility guard for legacy clients that still submit provider model IDs."""
     if compact_text(chat_scope, "global").lower() != "global":
         return True
-    normalized_model = compact_text(requested_model).lower()
-    premium_only = bool(re.search(r"(?:terra|5[._-]?6|maximum)", normalized_model))
-    return can_use_ai_chat_mode(plan_id, "maximum" if premium_only else "quick")
+    return True
 
 
 def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
@@ -17099,16 +17104,9 @@ def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
 
 
 def route_auto_ai_chat_mode(question: str, plan_id: str) -> str:
-    plan_tier = get_ai_chat_plan_tier(plan_id)
     cleaned = compact_text(question).lower()
     difficult = bool(re.search(r"\b(fourier|laplace|derive|proof|matrix|eigen|integral|differential|circuit|control system|transfer function|z[- ]?transform|statistics|probability|multi[- ]?step)\b", cleaned))
-    if plan_tier == "free":
-        return "quick"
-    if plan_tier == "pro_student":
-        return "think_deeper" if difficult else "study"
-    if plan_tier == "premium_student":
-        return "maximum" if difficult else "expert"
-    return "quick"
+    return "think_deeper" if difficult else "study"
 
 
 def resolve_ai_chat_mode_and_model(requested_mode: str, question: str, plan_id: str) -> tuple[str, str]:
@@ -18324,7 +18322,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
             (normalized_email, now_iso, uuid4().hex, now_iso),
         )
         row = connection.execute(
-            "SELECT user_id, role, created_at FROM users WHERE email = ?",
+            "SELECT user_id, role, created_at, preferred_ai_chat_mode FROM users WHERE email = ?",
             (normalized_email,),
         ).fetchone()
         user_id = compact_text(row["user_id"]) if row else ""
@@ -18334,6 +18332,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
             account_role = "user"
         if not user_id:
             user_id = uuid4().hex
+        preferred_ai_chat_mode = normalize_ai_chat_mode(row["preferred_ai_chat_mode"] if row else "study")
         if mark_login:
             connection.execute(
                 """
@@ -18399,6 +18398,7 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
         "role": account_role,
         "created_at": created_at,
         "current_plan": compact_text(usage.get("plan_id"), "free"),
+        "preferred_ai_chat_mode": preferred_ai_chat_mode,
         "subscription": subscription,
         "usage": usage,
         "monthly_usage": monthly_usage,
@@ -23071,6 +23071,26 @@ async def list_billing_plans():
 @app.get("/api/account/status")
 async def get_account_status(current_user: str = Depends(require_authenticated_user)):
     return {"account": sync_user_account_snapshot(current_user)}
+
+
+@app.patch("/api/account/preferences/ai-chat-mode")
+async def update_ai_chat_mode_preference(
+    payload: AiChatModePreferenceRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    email = normalize_email(current_user)
+    mode = normalize_ai_chat_mode(payload.mode)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+            (email, now_iso, uuid4().hex, now_iso),
+        )
+        connection.execute(
+            "UPDATE users SET preferred_ai_chat_mode = ?, updated_at = ? WHERE email = ?",
+            (mode, now_iso, email),
+        )
+    return {"preferred_ai_chat_mode": mode}
 
 
 @app.get("/api/billing/subscription")
@@ -30964,6 +30984,69 @@ def normalize_visual_items(raw_items: Any, fallback_items: list[str]) -> list[st
     return [compact_text(item) for item in fallback_items if compact_text(item)][:4]
 
 
+PRESENTATION_MAX_BULLETS_PER_SLIDE = 3
+PRESENTATION_MAX_BULLET_CHARS = 100
+PRESENTATION_MAX_BODY_CHARS = 280
+
+
+def split_presentation_bullet_text(value: str) -> list[str]:
+    """Wrap an oversized teaching point before it reaches a fixed slide textbox."""
+    pending = compact_text(value)
+    parts: list[str] = []
+    while len(pending) > PRESENTATION_MAX_BULLET_CHARS:
+        boundary = max(
+            pending.rfind(marker, 0, PRESENTATION_MAX_BULLET_CHARS + 1)
+            for marker in (". ", "; ", ": ", ", ", " ")
+        )
+        if boundary < max(40, PRESENTATION_MAX_BULLET_CHARS // 2):
+            boundary = PRESENTATION_MAX_BULLET_CHARS
+        else:
+            boundary += 1
+        parts.append(pending[:boundary].strip())
+        pending = pending[boundary:].strip()
+    if pending:
+        parts.append(pending)
+    return parts
+
+
+def paginate_presentation_slide(slide: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep a fixed 16:9 slide canvas by carrying overflow into continuation slides."""
+    expanded_bullets = [
+        part
+        for bullet in slide.get("bullets", [])
+        for part in split_presentation_bullet_text(compact_text(bullet))
+        if part
+    ]
+    if not expanded_bullets:
+        return [slide]
+
+    pages: list[list[str]] = []
+    page: list[str] = []
+    page_characters = 0
+    for bullet in expanded_bullets:
+        next_size = page_characters + len(bullet)
+        if page and (len(page) >= PRESENTATION_MAX_BULLETS_PER_SLIDE or next_size > PRESENTATION_MAX_BODY_CHARS):
+            pages.append(page)
+            page = []
+            page_characters = 0
+        page.append(bullet)
+        page_characters += len(bullet)
+    if page:
+        pages.append(page)
+
+    paginated: list[dict[str, Any]] = []
+    for index, page_bullets in enumerate(pages):
+        continuation = index > 0
+        page_slide = dict(slide)
+        page_slide["title"] = f"{slide['title']} (continued)" if continuation else slide["title"]
+        page_slide["bullets"] = page_bullets
+        page_slide["visual_items"] = (page_bullets[:4] if continuation else slide.get("visual_items", []))[:4]
+        if continuation:
+            page_slide["flow_note"] = f"Continue {slide['title'].lower()} without reducing the readable slide layout."
+        paginated.append(page_slide)
+    return paginated
+
+
 def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_slides, list):
         return []
@@ -31005,19 +31088,15 @@ def normalize_presentation_slides(raw_slides: Any) -> list[dict[str, Any]]:
             visual_type = infer_presentation_visual_type(title, bullets)
             if visual_type == "photo":
                 visual_type = "components"
-        normalized.append(
-            {
-                "title": title,
-                "bullets": bullets[:5],
-                "visual_title": visual_title or "Visual summary",
-                "visual_items": (visual_items or bullets[:3])[:4],
-                "visual_type": visual_type,
-                "flow_note": flow_note,
-                "reference_image_index": reference_image_index,
-            }
-        )
-        if len(normalized) >= 8:
-            break
+        normalized.extend(paginate_presentation_slide({
+            "title": title,
+            "bullets": bullets,
+            "visual_title": visual_title or "Visual summary",
+            "visual_items": (visual_items or bullets[:3])[:4],
+            "visual_type": visual_type,
+            "flow_note": flow_note,
+            "reference_image_index": reference_image_index,
+        }))
     return normalized
 
 
@@ -36966,7 +37045,7 @@ def create_lecture_assistant_stream(
     plan_id = get_effective_plan_id(current_user)
     requested_mode = normalize_ai_chat_mode(payload.requested_mode)
     resolved_mode = "study"
-    if compact_text(payload.chat_scope, "study").lower() == "global" and not bool(payload.voice_mode):
+    if not bool(payload.voice_mode):
         resolved_mode, resolved_model = resolve_ai_chat_mode_and_model(requested_mode, payload.question, plan_id)
         if not can_use_ai_chat_mode(plan_id, resolved_mode):
             def blocked_event_stream():
