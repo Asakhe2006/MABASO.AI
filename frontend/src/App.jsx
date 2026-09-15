@@ -1,7 +1,7 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
-import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Pin, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -7160,6 +7160,7 @@ export default function App() {
   const [roomQuizSubmitted, setRoomQuizSubmitted] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
+  const [studyChatHistoryMenuId, setStudyChatHistoryMenuId] = useState("");
   const [isOpeningStudyChat, setIsOpeningStudyChat] = useState(false);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
@@ -16199,12 +16200,13 @@ export default function App() {
       if (!(target instanceof Element)) return;
       if (isProfileMenuOpen && !target.closest(".profile-menu-anchor")) setIsProfileMenuOpen(false);
       if (materialMenuItemId && !target.closest(".material-more-anchor")) setMaterialMenuItemId("");
+      if (studyChatHistoryMenuId && !target.closest(".study-chat-history-actions")) setStudyChatHistoryMenuId("");
       if (inlineVoicePicker && !target.closest(".inline-voice-anchor")) setInlineVoicePicker("");
       if (isMobileMoreMenuOpen && !target.closest(".mobile-app-nav")) setIsMobileMoreMenuOpen(false);
     };
     document.addEventListener("pointerdown", dismissOpenPopovers);
     return () => document.removeEventListener("pointerdown", dismissOpenPopovers);
-  }, [inlineVoicePicker, isMobileMoreMenuOpen, isProfileMenuOpen, materialMenuItemId]);
+  }, [inlineVoicePicker, isMobileMoreMenuOpen, isProfileMenuOpen, materialMenuItemId, studyChatHistoryMenuId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !authEmail) {
@@ -16237,6 +16239,7 @@ export default function App() {
           updatedAt: item.updatedAt || item.lastMessageAt || "",
           materialKey: item.contextKey || "general-study-chat",
           messageCount: Number(item.messageCount || 0),
+          isPinned: Boolean(item.isPinned),
           serverTitle: true,
         })).filter((item) => item.id));
       }).catch(() => {
@@ -16333,10 +16336,18 @@ export default function App() {
         };
         setStudyChatHistoryIndex((current) => {
           const existing = current.find((item) => item.id === activeStudyChatId);
-          const mergedRecord = existing?.serverTitle
-            ? { ...nextRecord, title: existing.title, serverTitle: true }
+          const mergedRecord = existing
+            ? {
+              ...nextRecord,
+              title: existing.serverTitle || existing.customTitle ? existing.title : nextRecord.title,
+              serverTitle: Boolean(existing.serverTitle),
+              customTitle: Boolean(existing.customTitle),
+              isPinned: Boolean(existing.isPinned),
+            }
             : nextRecord;
-          return [mergedRecord, ...current.filter((item) => item.id !== activeStudyChatId)].slice(0, 80);
+          return [mergedRecord, ...current.filter((item) => item.id !== activeStudyChatId)]
+            .sort((left, right) => Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned)))
+            .slice(0, 80);
         });
       }
     } catch {
@@ -16888,7 +16899,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       // The login response already sets the secure HttpOnly session cookie. Enter
       // the workspace immediately; refresh account details without holding the page.
-      applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: true });
+      applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: false });
       setStatus("Signed in successfully.");
       setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
       void checkSharedSession({ force: true, background: true });
@@ -26275,7 +26286,7 @@ export default function App() {
     const lastAssistantId = [...visibleMessages].reverse().find((message) => message.role === "assistant")?.id || "";
     return (
     <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
-      {isOpeningStudyChat ? <div className="study-chat-message-loader" role="status" aria-label="Loading conversation"><LoaderCircle className="animate-spin" aria-hidden="true" /></div> : null}
+      {isOpeningStudyChat ? <div className="study-chat-message-loader" role="status" aria-live="polite"><span>Loading conversation</span>{renderStreamingDots("Loading conversation")}</div> : null}
       {visibleMessages.length ? visibleMessages.map((message, index) => (
         <div
           key={message.id || `${message.role}-${index}`}
@@ -26545,19 +26556,21 @@ export default function App() {
     );
     const currentIndexedChat = visibleChatHistory.find((item) => item.id === activeStudyChatId);
     const chatHistoryRows = [
-      {
+      ...(chatMessages.length || currentIndexedChat ? [{
         id: activeStudyChatId,
-        title: currentIndexedChat?.title || (chatMessages.length ? "Current Study Chat" : "New Study Chat"),
+        title: currentIndexedChat?.title || "Current Study Chat",
         subtitle: `${chatMessages.length} message${chatMessages.length === 1 ? "" : "s"}`,
-      },
+        isPinned: Boolean(currentIndexedChat?.isPinned),
+      }] : []),
       ...visibleChatHistory
         .filter((item) => item.id !== activeStudyChatId)
         .map((item) => ({
           id: item.id,
           title: item.title || "Study Chat",
           subtitle: `${Number(item.messageCount || 0)} message${Number(item.messageCount || 0) === 1 ? "" : "s"}`,
+          isPinned: Boolean(item.isPinned),
         })),
-    ].slice(0, 80);
+    ].sort((left, right) => Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned))).slice(0, 80);
     return (
       <div className={`study-chat-page ${isStudyChatSidebarOpen ? "is-sidebar-open" : "is-sidebar-closed"}`}>
         {isUpgradeModalOpen ? renderUpgradeModal() : null}
@@ -26578,28 +26591,33 @@ export default function App() {
           </div>
           <button type="button" onClick={startNewStudyChat} className="study-chat-new-button"><Pencil className="h-4 w-4" aria-hidden="true" /><span>New chat</span></button>
 
-          <label className="study-chat-sidebar-voice">
+          <div className="study-chat-sidebar-voice">
             <span><Mic className="h-4 w-4" aria-hidden="true" /> Voice</span>
-            <select value={selectedTeacherVoiceName} onChange={(event) => setSelectedTeacherVoiceName(event.target.value)} aria-label="Choose study chat voice">
-              <option value="">Default voice</option>
-              {teacherVoiceOptions.map((voice) => <option key={voice.name} value={voice.name}>{voice.name}</option>)}
-            </select>
-          </label>
-          <div className="study-chat-history-list">
-            {chatHistoryRows.map((row) => (
-              <button
-                key={row.id}
-                type="button"
-                onClick={() => openSavedStudyChat(row.id)}
-                className={`study-chat-history-item ${row.id === activeStudyChatId ? "is-active" : ""}`}
-              >
-                <MessageCircle className="h-4 w-4" aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="block truncate">{row.title}</span>
-                  <small className="block truncate">{row.subtitle}</small>
-                </span>
+            <div className="inline-voice-anchor">
+              <button type="button" onClick={() => setInlineVoicePicker((current) => current === "page" ? "" : "page")} className="study-chat-voice-trigger" aria-haspopup="listbox" aria-expanded={inlineVoicePicker === "page"}>
+                <span>{selectedTeacherVoiceName || "Default voice"}</span><ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
-            ))}
+              {inlineVoicePicker === "page" ? <div className="inline-voice-picker study-chat-voice-picker" role="listbox" aria-label="Choose study chat voice">
+                <button type="button" className={!selectedTeacherVoiceName ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(""); setInlineVoicePicker(""); }}>Default voice</button>
+                {teacherVoiceOptions.map((voice) => <button key={voice.name} type="button" className={selectedTeacherVoiceName === voice.name ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(voice.name); setInlineVoicePicker(""); }}>{voice.name}</button>)}
+              </div> : null}
+            </div>
+          </div>
+          <div className="study-chat-history-list">
+            {chatHistoryRows.map((row) => <div key={row.id} className={`study-chat-history-row ${row.id === activeStudyChatId ? "is-active" : ""}`}>
+              <button type="button" onClick={() => openSavedStudyChat(row.id)} className="study-chat-history-item">
+                <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                <span className="min-w-0"><span className="block truncate">{row.title}</span><small className="block truncate">{row.subtitle}</small></span>
+              </button>
+              <div className="study-chat-history-actions">
+                <button type="button" className="study-chat-history-more" aria-label={`More actions for ${row.title}`} aria-haspopup="menu" aria-expanded={studyChatHistoryMenuId === row.id} onClick={(event) => { event.stopPropagation(); setStudyChatHistoryMenuId((current) => current === row.id ? "" : row.id); }}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+                {studyChatHistoryMenuId === row.id ? <div className="study-chat-history-menu" role="menu">
+                  <button type="button" role="menuitem" onClick={() => { void openChatShareDialogForConversation(row.id); }}><Link className="h-4 w-4" aria-hidden="true" />Share as a link</button>
+                  <button type="button" role="menuitem" onClick={() => { void updateStudyChatHistoryItem(row.id, { isPinned: !row.isPinned }); }}><Pin className="h-4 w-4" aria-hidden="true" />{row.isPinned ? "Unpin chat" : "Pin chat"}</button>
+                  <button type="button" role="menuitem" onClick={() => renameStudyChatHistoryItem(row.id, row.title)}><Pencil className="h-4 w-4" aria-hidden="true" />Rename</button>
+                </div> : null}
+              </div>
+            </div>)}
           </div>
           <div className="study-chat-sidebar-footer">
             <button type="button" onClick={openUpgradeFromStudyChat} className="study-chat-sidebar-upgrade">Upgrade to Pro</button>
@@ -27051,6 +27069,57 @@ export default function App() {
       return;
     }
     setPublicShareDialog({ open: true, type: "chat", conversationId: activeStudyChatId, title: deriveStudyChatTopicTitle(eligible.find((message) => message.role === "user")?.content || "Study Chat"), selectedIds: eligible.map((message) => message.id), chooseMessages: false });
+  };
+
+  const openChatShareDialogForConversation = async (conversationId = "") => {
+    const normalizedId = String(conversationId || "").trim();
+    setStudyChatHistoryMenuId("");
+    if (!normalizedId || normalizedId === activeStudyChatId) {
+      openChatShareDialog();
+      return;
+    }
+    try {
+      const snapshot = await requestLectureAssistantConversation(normalizedId, { messageLimit: 80 });
+      const messages = Array.isArray(snapshot?.conversation?.messages) ? snapshot.conversation.messages : [];
+      const eligible = messages.filter((message) => ["user", "assistant"].includes(message.role) && message.content && message.content !== "Thinking...");
+      if (!eligible.length) throw new Error("This conversation has no messages to share yet.");
+      setPublicShareDialog({
+        open: true,
+        type: "chat",
+        conversationId: normalizedId,
+        title: snapshot?.conversation?.title || "Study Chat",
+        selectedIds: eligible.map((message) => message.id),
+        chooseMessages: false,
+      });
+    } catch (error) {
+      setError(error?.message || "This conversation could not be prepared for sharing.");
+    }
+  };
+
+  const updateStudyChatHistoryItem = async (conversationId, updates = {}) => {
+    const normalizedId = String(conversationId || "").trim();
+    if (!normalizedId) return;
+    try {
+      await requestLectureAssistantConversationUpdate(normalizedId, updates);
+      setStudyChatHistoryIndex((current) => current
+        .map((item) => (item.id === normalizedId ? { ...item, ...updates } : item))
+        .sort((left, right) => Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned))));
+      setStatus(updates.title ? "Conversation renamed." : updates.isPinned ? "Conversation pinned." : "Conversation unpinned.");
+    } catch (error) {
+      setError(error?.message || "This conversation could not be updated.");
+    } finally {
+      setStudyChatHistoryMenuId("");
+    }
+  };
+
+  const renameStudyChatHistoryItem = (conversationId, currentTitle = "Study Chat") => {
+    const title = window.prompt("Rename conversation", String(currentTitle || "Study Chat"));
+    const cleanTitle = String(title || "").trim().slice(0, 180);
+    if (!cleanTitle || cleanTitle === currentTitle) {
+      setStudyChatHistoryMenuId("");
+      return;
+    }
+    void updateStudyChatHistoryItem(conversationId, { title: cleanTitle, customTitle: true });
   };
 
   const createChatPublicShare = async () => {
