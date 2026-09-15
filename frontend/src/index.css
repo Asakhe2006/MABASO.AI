@@ -14787,3 +14787,150 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
     grid-template-rows: 46px minmax(0, 1fr) 48px !important;
   }
 }
+
+/* Chat polish: history actions stay at their triggering row and prose never
+   forces a horizontal overflow on a narrow conversation surface. */
+.study-chat-history-pin {
+  color: #72e6a2;
+  filter: drop-shadow(0 1px 4px rgba(34, 197, 94, 0.35));
+}
+
+.study-chat-message,
+.study-chat-message .mabaso-ai-response,
+.study-chat-message .mabaso-ai-response .assistant-markdown,
+.study-chat-message .mabaso-ai-response .assistant-markdown * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.study-chat-message .mabaso-ai-response pre {
+  overflow-x: auto;
+  white-space: pre;
+}
+
+@media (max-width: 768px) {
+  .study-chat-history-menu {
+    width: 196px;
+    max-width: calc(100vw - 16px);
+  }
+
+  .study-chat-voice-picker {
+    max-width: calc(100vw - 16px);
+  }
+
+  .ai-chat-mode-trigger {
+    min-height: 34px !important;
+    width: auto !important;
+    border-radius: 10px !important;
+    padding: 0 10px !important;
+    font-size: 11px !important;
+  }
+}
+
+/* Collaboration Rooms: the same authenticated room system reorganised as a
+   focused desktop workspace and a compact mobile room experience. */
+.collaboration-workspace {
+  background:
+    radial-gradient(circle at 68% -12%, rgba(16, 185, 129, 0.17), transparent 30%),
+    radial-gradient(circle at 8% 42%, rgba(6, 182, 212, 0.08), transparent 25%),
+    #020b08 !important;
+}
+
+.collaboration-room-layout > :first-child {
+  position: sticky;
+  top: 1rem;
+}
+
+.collaboration-room-layout > :first-child > div,
+.collaboration-room-layout > :nth-child(2) > div,
+.collaboration-board-section {
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.18);
+}
+
+.collaboration-workspace input:focus,
+.collaboration-workspace textarea:focus {
+  border-color: rgba(74, 222, 128, 0.58) !important;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+}
+
+.collaboration-mobile-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .collaboration-workspace {
+    margin: -0.25rem -0.5rem 0;
+    border-width: 0 !important;
+    border-radius: 0 !important;
+    padding: 0.9rem 0.85rem 6.5rem !important;
+    box-shadow: none !important;
+  }
+
+  .collaboration-workspace > :first-child {
+    padding-bottom: 1rem;
+  }
+
+  .collaboration-workspace h2 {
+    font-size: 1.35rem !important;
+    line-height: 1.2;
+  }
+
+  .collaboration-room-layout > :first-child {
+    position: static;
+  }
+
+  .collaboration-room-layout {
+    gap: 0.9rem !important;
+  }
+
+  .collaboration-room-layout > :first-child > div,
+  .collaboration-room-layout > :nth-child(2) > div,
+  .collaboration-board-section {
+    border-radius: 18px !important;
+  }
+
+  .collaboration-mobile-nav {
+    position: fixed;
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: max(10px, env(safe-area-inset-left));
+    z-index: 100;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    min-height: 60px;
+    border: 1px solid rgba(110, 231, 183, 0.32);
+    border-radius: 20px;
+    background: rgba(2, 18, 12, 0.96);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.46);
+    backdrop-filter: blur(16px);
+  }
+
+  .collaboration-mobile-nav button {
+    display: grid;
+    min-height: 54px;
+    place-items: center;
+    gap: 2px;
+    border: 0;
+    background: transparent;
+    color: #bbf7d0;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .collaboration-mobile-nav button span {
+    font-size: 9px;
+  }
+
+  .collaboration-mobile-nav .collaboration-mobile-create {
+    width: 46px;
+    min-height: 46px;
+    justify-self: center;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #16a34a, #22c55e);
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(34, 197, 94, 0.34);
+  }
+}

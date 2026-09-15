@@ -7095,6 +7095,7 @@ export default function App() {
   const [downloadActionState, setDownloadActionState] = useState("");
   const [isWorkspaceEditMode, setIsWorkspaceEditMode] = useState(false);
   const [isWorkspaceHighlightMode, setIsWorkspaceHighlightMode] = useState(false);
+  const [isWorkspaceHighlightMenuOpen, setIsWorkspaceHighlightMenuOpen] = useState(false);
   const [isWorkspaceMobileFilterOpen, setIsWorkspaceMobileFilterOpen] = useState(false);
   const [isWorkspaceMobileMoreOpen, setIsWorkspaceMobileMoreOpen] = useState(false);
   const [workspaceSaveStatus, setWorkspaceSaveStatus] = useState("");
@@ -7161,6 +7162,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
   const [studyChatHistoryMenuId, setStudyChatHistoryMenuId] = useState("");
+  const [studyChatHistoryMenuAnchor, setStudyChatHistoryMenuAnchor] = useState(null);
   const [isOpeningStudyChat, setIsOpeningStudyChat] = useState(false);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
@@ -7178,6 +7180,7 @@ export default function App() {
   const [showStudyChatJumpToLatest, setShowStudyChatJumpToLatest] = useState(false);
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
+  const [inlineVoicePickerAnchor, setInlineVoicePickerAnchor] = useState(null);
   const [copiedStudyChatMessageId, setCopiedStudyChatMessageId] = useState("");
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
@@ -10436,7 +10439,7 @@ export default function App() {
   };
 
   const renderHelpAboutPage = () => (
-    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-start gap-4">
           {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
@@ -10501,7 +10504,7 @@ export default function App() {
   );
 
   const renderSupportPage = () => (
-    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="border-b border-white/10 pb-5">
         <div className="flex items-start gap-4">
           {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
@@ -11718,7 +11721,7 @@ export default function App() {
   };
 
   const renderCollaborationPage = () => (
-    <section className="overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
+    <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
       <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-start gap-4">
           {renderBackButton(() => openProtectedAppPage("workspace"), "Back to study workspace")}
@@ -11734,6 +11737,13 @@ export default function App() {
         </div>
       </div>
 
+      <nav className="collaboration-mobile-nav" aria-label="Collaboration navigation">
+        <button type="button" onClick={() => document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" })}><UsersRound className="h-4 w-4" aria-hidden="true" /><span>Rooms</span></button>
+        <button type="button" onClick={() => document.getElementById("collaboration-chat")?.scrollIntoView({ behavior: "smooth", block: "start" })}><MessageCircle className="h-4 w-4" aria-hidden="true" /><span>Chat</span></button>
+        <button type="button" className="collaboration-mobile-create" onClick={() => { document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" }); window.setTimeout(() => document.getElementById("collaboration-room-title")?.focus(), 250); }} aria-label="Create a room"><Plus className="h-5 w-5" aria-hidden="true" /></button>
+        <button type="button" onClick={() => document.getElementById("collaboration-board")?.scrollIntoView({ behavior: "smooth", block: "start" })}><LayoutDashboard className="h-4 w-4" aria-hidden="true" /><span>Board</span></button>
+        <button type="button" onClick={() => document.getElementById("collaboration-materials")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Ellipsis className="h-4 w-4" aria-hidden="true" /><span>More</span></button>
+      </nav>
       {invitedCollaborationRooms.length ? (
         <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -11763,7 +11773,7 @@ export default function App() {
         </div>
       ) : null}
 
-      <div className="mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
+      <div className="collaboration-room-layout mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
         <div className="min-w-0 space-y-5">
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
@@ -11772,7 +11782,7 @@ export default function App() {
             <div className="mt-5 space-y-4">
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
-                <input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} />
+                <input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} />
               </div>
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label>
@@ -11799,7 +11809,7 @@ export default function App() {
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <div className="force-mobile-stack flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p>
+                <p id="collaboration-rooms" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p>
                 <h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3>
               </div>
               <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button>
@@ -11831,7 +11841,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5 xl:flex xl:min-h-[36rem] xl:flex-col">
+          <div id="collaboration-chat" className="collaboration-chat-card rounded-[24px] border border-white/10 bg-slate-950/75 p-5 xl:flex xl:min-h-[36rem] xl:flex-col">
             <div className="force-mobile-stack flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study chat</p>
@@ -11925,7 +11935,7 @@ export default function App() {
               <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="min-w-0">
-                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p>
+                    <p id="collaboration-materials" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p>
                     <h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4>
                     <p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room's shared revision focus.</p>
                   </div>
@@ -12025,7 +12035,7 @@ export default function App() {
         <div className="mt-5 rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board pages</p>
+              <p id="collaboration-board" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board pages</p>
               <h3 className="mt-2 text-2xl font-semibold text-white">Shared notes board and uploaded board photos</h3>
               <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">These board pages now span the full row below the study guide so the board can use the full collaboration workspace instead of being squeezed into the right column.</p>
             </div>
@@ -16200,13 +16210,15 @@ export default function App() {
       if (!(target instanceof Element)) return;
       if (isProfileMenuOpen && !target.closest(".profile-menu-anchor")) setIsProfileMenuOpen(false);
       if (materialMenuItemId && !target.closest(".material-more-anchor")) setMaterialMenuItemId("");
-      if (studyChatHistoryMenuId && !target.closest(".study-chat-history-actions")) setStudyChatHistoryMenuId("");
-      if (inlineVoicePicker && !target.closest(".inline-voice-anchor")) setInlineVoicePicker("");
+      if (studyChatHistoryMenuId && !target.closest(".study-chat-history-actions")) { setStudyChatHistoryMenuId(""); setStudyChatHistoryMenuAnchor(null); }
+      if (inlineVoicePicker && !target.closest(".inline-voice-anchor")) { setInlineVoicePicker(""); setInlineVoicePickerAnchor(null); }
+      if (isWorkspaceHighlightMenuOpen && !target.closest(".workspace-highlight-menu") && !target.closest("[aria-label=\"Highlight selected text\"]")) setIsWorkspaceHighlightMenuOpen(false);
+
       if (isMobileMoreMenuOpen && !target.closest(".mobile-app-nav")) setIsMobileMoreMenuOpen(false);
     };
     document.addEventListener("pointerdown", dismissOpenPopovers);
     return () => document.removeEventListener("pointerdown", dismissOpenPopovers);
-  }, [inlineVoicePicker, isMobileMoreMenuOpen, isProfileMenuOpen, materialMenuItemId, studyChatHistoryMenuId]);
+  }, [inlineVoicePicker, isMobileMoreMenuOpen, isProfileMenuOpen, materialMenuItemId, studyChatHistoryMenuId, isWorkspaceHighlightMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !authEmail) {
@@ -16285,7 +16297,7 @@ export default function App() {
       setChatMessages([]);
     }
     if (authToken && activeStudyChatId) {
-      if (!hasLocalMessages) setIsOpeningStudyChat(true);
+      // The explicit room/history opener controls the loading indicator. New chats should stay ready immediately.
       void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
         timeoutMs: hasLocalMessages ? 2800 : 6500,
         retries: 0,
@@ -25535,6 +25547,10 @@ export default function App() {
   };
 
   const toggleWorkspaceHighlightMode = () => {
+    if (isWorkspaceHighlightMode && !isWorkspaceHighlightMenuOpen) {
+      setIsWorkspaceHighlightMenuOpen(true);
+      return;
+    }
     const next = !isWorkspaceHighlightMode;
     if (next) {
       setIsWorkspaceEditMode(false);
@@ -25542,6 +25558,7 @@ export default function App() {
       if (editor?.dataset?.sectionKey) setActiveGuideEditorSectionKey(editor.dataset.sectionKey);
     }
     setIsWorkspaceHighlightMode(next);
+    setIsWorkspaceHighlightMenuOpen(next);
     setStatus(next ? "Highlight mode on. Drag over text to paint it, or select text and choose a colour." : "Highlight mode off.");
   };
 
@@ -26603,10 +26620,10 @@ export default function App() {
           <div className="study-chat-sidebar-voice">
             <span><Mic className="h-4 w-4" aria-hidden="true" /> Voice</span>
             <div className="inline-voice-anchor">
-              <button type="button" onClick={() => setInlineVoicePicker((current) => current === "page" ? "" : "page")} className="study-chat-voice-trigger" aria-haspopup="listbox" aria-expanded={inlineVoicePicker === "page"}>
+              <button type="button" onClick={(event) => { const next = inlineVoicePicker === "page" ? "" : "page"; if (next) { const rect = event.currentTarget.getBoundingClientRect(); setInlineVoicePickerAnchor({ left: Math.max(8, rect.left), top: rect.bottom + 6, width: Math.min(Math.max(rect.width, 220), window.innerWidth - 16), mobile: window.innerWidth <= 768 }); } else setInlineVoicePickerAnchor(null); setInlineVoicePicker(next); }} className="study-chat-voice-trigger" aria-haspopup="listbox" aria-expanded={inlineVoicePicker === "page"}>
                 <span>{selectedTeacherVoiceName || "Default voice"}</span><ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
-              {inlineVoicePicker === "page" ? <div className="inline-voice-picker study-chat-voice-picker" role="listbox" aria-label="Choose study chat voice">
+              {inlineVoicePicker === "page" ? <div className="inline-voice-picker study-chat-voice-picker" role="listbox" aria-label="Choose study chat voice" style={inlineVoicePickerAnchor?.mobile ? { position: "fixed", left: `${inlineVoicePickerAnchor.left}px`, top: `${inlineVoicePickerAnchor.top}px`, bottom: "auto", width: `${inlineVoicePickerAnchor.width}px` } : undefined}>
                 <button type="button" className={!selectedTeacherVoiceName ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(""); setInlineVoicePicker(""); }}>Default voice</button>
                 {teacherVoiceOptions.map((voice) => <button key={voice.name} type="button" className={selectedTeacherVoiceName === voice.name ? "is-selected" : ""} onClick={() => { setSelectedTeacherVoiceName(voice.name); setInlineVoicePicker(""); }}>{voice.name}</button>)}
               </div> : null}
@@ -26616,11 +26633,11 @@ export default function App() {
             {chatHistoryRows.map((row) => <div key={row.id} className={`study-chat-history-row ${row.id === activeStudyChatId ? "is-active" : ""}`}>
               <button type="button" onClick={() => openSavedStudyChat(row.id)} className="study-chat-history-item">
                 <MessageCircle className="h-4 w-4" aria-hidden="true" />
-                <span className="min-w-0"><span className="block truncate">{row.title}</span><small className="block truncate">{row.subtitle}</small></span>
+                <span className="min-w-0"><span className="flex min-w-0 items-center gap-1.5"><span className="block truncate">{row.title}</span>{row.isPinned ? <Pin className="study-chat-history-pin h-3 w-3 shrink-0" aria-label="Pinned conversation" /> : null}</span><small className="block truncate">{row.subtitle}</small></span>
               </button>
               <div className="study-chat-history-actions">
-                <button type="button" className="study-chat-history-more" aria-label={`More actions for ${row.title}`} aria-haspopup="menu" aria-expanded={studyChatHistoryMenuId === row.id} onClick={(event) => { event.stopPropagation(); setStudyChatHistoryMenuId((current) => current === row.id ? "" : row.id); }}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
-                {studyChatHistoryMenuId === row.id ? <div className="study-chat-history-menu" role="menu">
+                <button type="button" className="study-chat-history-more" aria-label={`More actions for ${row.title}`} aria-haspopup="menu" aria-expanded={studyChatHistoryMenuId === row.id} onClick={(event) => { event.stopPropagation(); const next = studyChatHistoryMenuId === row.id ? "" : row.id; if (next) { const rect = event.currentTarget.closest(".study-chat-history-row")?.getBoundingClientRect(); setStudyChatHistoryMenuAnchor(rect ? { left: Math.max(8, Math.min(rect.right - 196, window.innerWidth - 204)), top: rect.bottom + 4, mobile: window.innerWidth <= 768 } : null); } else setStudyChatHistoryMenuAnchor(null); setStudyChatHistoryMenuId(next); }}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
+                {studyChatHistoryMenuId === row.id ? <div className="study-chat-history-menu" role="menu" style={studyChatHistoryMenuAnchor?.mobile ? { position: "fixed", left: `${studyChatHistoryMenuAnchor.left}px`, top: `${studyChatHistoryMenuAnchor.top}px`, right: "auto", bottom: "auto" } : undefined}>
                   <button type="button" role="menuitem" onClick={() => { void openChatShareDialogForConversation(row.id); }}><Link className="h-4 w-4" aria-hidden="true" />Share as a link</button>
                   <button type="button" role="menuitem" onClick={() => { void updateStudyChatHistoryItem(row.id, { isPinned: !row.isPinned }); }}><Pin className="h-4 w-4" aria-hidden="true" />{row.isPinned ? "Unpin chat" : "Pin chat"}</button>
                   <button type="button" role="menuitem" onClick={() => renameStudyChatHistoryItem(row.id, row.title)}><Pencil className="h-4 w-4" aria-hidden="true" />Rename</button>
@@ -29972,7 +29989,7 @@ export default function App() {
                     <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={toggleWorkspaceHighlightMode} disabled={activeTab !== "guide"} className={`workspace-icon-action ${isWorkspaceHighlightMode ? "is-active" : ""}`} title="Highlight" aria-label="Highlight selected text" aria-pressed={isWorkspaceHighlightMode} data-mobile-label="Highlight">
                       <Highlighter className="h-4 w-4" aria-hidden="true" /><span className="workspace-action-label">{isWorkspaceHighlightMode ? "Annotating" : "Annotate"}</span>
                     </button>
-                    {isWorkspaceHighlightMode ? (
+                    {isWorkspaceHighlightMenuOpen ? (
                       <div className="workspace-highlight-menu" role="menu" aria-label="Highlight colours" onPointerDown={(event) => event.preventDefault()}>
                         {[
                           ["Yellow", "#fef08a"],
@@ -29981,10 +29998,10 @@ export default function App() {
                           ["Pink", "#fbcfe8"],
                           ["Orange", "#fed7aa"],
                         ].map(([label, color]) => (
-                          <button key={label} type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("paint"); setActiveHighlightColor(color); applyWorkspaceHighlight(color); }} style={{ backgroundColor: color }} className={workspaceHighlightTool === "paint" && activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
+                          <button key={label} type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("paint"); setActiveHighlightColor(color); applyWorkspaceHighlight(color); setIsWorkspaceHighlightMenuOpen(false); }} style={{ backgroundColor: color }} className={workspaceHighlightTool === "paint" && activeHighlightColor === color ? "is-selected" : ""} aria-label={`Highlight ${label}`} title={label} />
                         ))}
-                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("erase"); eraseSelectedWorkspaceHighlight(); }} className={`workspace-highlight-tool ${workspaceHighlightTool === "erase" ? "is-selected" : ""}`} title="Erase selected highlight or drag across highlights to remove them" aria-label="Activate highlight eraser">Erase</button>
-                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={clearActiveWorkspaceHighlights} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
+                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { setWorkspaceHighlightTool("erase"); eraseSelectedWorkspaceHighlight(); setIsWorkspaceHighlightMenuOpen(false); }} className={`workspace-highlight-tool ${workspaceHighlightTool === "erase" ? "is-selected" : ""}`} title="Erase selected highlight or drag across highlights to remove them" aria-label="Activate highlight eraser">Erase</button>
+                        <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={() => { clearActiveWorkspaceHighlights(); setIsWorkspaceHighlightMenuOpen(false); }} className="workspace-highlight-tool" title="Clear all highlights in this section" aria-label="Clear all highlights in this section">Clear</button>
                       </div>
                     ) : null}
                   </div>
@@ -30307,7 +30324,7 @@ export default function App() {
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room, then share workspace materials whenever you are ready. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room, then share workspace materials whenever you are ready. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p id="collaboration-rooms" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p id="collaboration-materials" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
               </BodyPortal>
             </div>
