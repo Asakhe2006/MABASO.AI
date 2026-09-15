@@ -509,7 +509,6 @@ BILLING_FEATURE_LABELS = {
     "mind_map": "Mind maps",
     "presentation": "Presentations",
     "podcast": "Podcasts",
-    "study_chat": "Study chat messages",
     "voice_transcription": "Voice messages",
     "source_upload": "Audio/source processing",
     "study_chat_upload": "Study chat attachments",
@@ -532,8 +531,6 @@ def get_float_env(name: str, default: float) -> float:
 
 BILLING_PLAN_QUOTAS = {
     "free": {
-        "ai_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 3),
-        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 3),
         "study_guide": get_int_env("FREE_PLAN_STUDY_GUIDES_PER_DAY", 1),
         "worked_examples": get_int_env("FREE_PLAN_WORKED_EXAMPLES_PER_DAY", 2),
         "formula_solver": get_int_env("FREE_PLAN_FORMULA_SOLVER_PER_DAY", 2),
@@ -547,11 +544,9 @@ BILLING_PLAN_QUOTAS = {
         "teacher_lesson": get_int_env("FREE_PLAN_AI_NOTES_PER_DAY", 1),
         "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 3),
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
-        "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 1),
+        "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 3),
     },
     "pro_student": {
-        "ai_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
-        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
         "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 3),
         "worked_examples": get_int_env("PRO_STUDENT_WORKED_EXAMPLES_PER_DAY", 3),
         "formula_solver": get_int_env("PRO_STUDENT_FORMULA_SOLVER_PER_DAY", 3),
@@ -568,8 +563,6 @@ BILLING_PLAN_QUOTAS = {
         "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 10),
     },
     "premium_student": {
-        "ai_chat": -1,
-        "study_chat": -1,
         "study_guide": -1,
         "worked_examples": -1,
         "formula_solver": -1,
@@ -8208,6 +8201,12 @@ def init_db():
                         feature_seed_time,
                     ),
                 )
+        # Chat has no billable allowance: remove legacy feature rows so it
+        # cannot reappear in account usage responses after a deployment.
+        connection.execute(
+            "DELETE FROM billing_plan_features WHERE feature IN (?, ?)",
+            ("ai_chat", "study_chat"),
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS billing_usage_events (
@@ -35094,7 +35093,7 @@ async def extract_slide_text(
     )
 
     def finish_extracted_source(text: str, image_urls: list[str], *, source_kind: str) -> dict[str, Any]:
-        consume_plan_quota(
+        usage = consume_plan_quota(
             email=current_user,
             feature=quota_feature,
             request=request,
@@ -35113,7 +35112,7 @@ async def extract_slide_text(
                 "text_chars": len(text or ""),
             },
         )
-        return {"text": text, "image_urls": image_urls}
+        return {"text": text, "image_urls": image_urls, "usage": usage}
 
     try:
         logger.info("Study source extraction started for %s (%s) by %s", file.filename, content_type or "unknown", current_user)
@@ -36275,16 +36274,6 @@ async def ask_study_assistant(
     enforce_rate_limit(scope="study_chat", request=request, limit=60, window_seconds=10 * 60, identity=current_user)
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="A question is required.")
-    consume_plan_quota(
-        email=current_user,
-        feature="study_chat",
-        request=request,
-        metadata={
-            "route": "ask_study_assistant",
-            "delivery_mode": compact_text(payload.delivery_mode, "chat"),
-            "current_section": compact_text(payload.current_section),
-        },
-    )
     ensure_openai_key()
     reference_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
 
@@ -37100,38 +37089,12 @@ def create_lecture_assistant_stream(
                 },
             )
         attempts = apply_ai_chat_mode_model(attempts, resolved_model, resolved_mode)
-    quota_usage = consume_plan_quota(
-        email=current_user,
-        feature="study_chat",
-        request=request,
-        metadata={
-            "route": "lecture_assistant_stream",
-            "voice_mode": bool(payload.voice_mode),
-            "reference_images": len(reference_images),
-            "requested_mode": requested_mode,
-            "resolved_mode": resolved_mode,
-        },
-    )
-
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 
     def event_stream():
-        yield build_sse_event(
-            "usage",
-            {
-                "feature": "study_chat",
-                "plan_id": quota_usage.get("plan_id", "free"),
-                "used": quota_usage.get("used", 0),
-                "limit": quota_usage.get("limit", 0),
-                "remaining": quota_usage.get("remaining"),
-                "reset_at": quota_usage.get("reset_at", ""),
-                "reset_label": quota_usage.get("reset_label", ""),
-                "unlimited": int(quota_usage.get("limit", 0)) < 0,
-            },
-        )
         selected_attempt: dict[str, str] | None = None
         emitted_characters = 0
         fallback_count = 0
@@ -37379,17 +37342,6 @@ def create_lecture_assistant_stream(
                 )
         finally:
             total_latency_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
-            update_usage_event_metadata(
-                compact_text(quota_usage.get("usage_event_id")),
-                status="successful" if generation_completed else "failed",
-                model=compact_text((selected_attempt or {}).get("model")),
-                provider=compact_text((selected_attempt or {}).get("provider"), terminal_provider),
-                openai_request_id=compact_text(payload.client_request_id),
-                request_id_source="client_trace" if compact_text(payload.client_request_id) else "mabaso_usage_event",
-                latency_ms=total_latency_ms,
-                duration_ms=total_latency_ms,
-                error=terminal_error if not generation_completed else "",
-            )
             record_audit_log(
                 action="lecture_assistant.chat",
                 email=current_user,
@@ -37778,9 +37730,6 @@ async def create_collaboration_room(
     summary = payload.summary.strip()
     lecture_notes = payload.lecture_notes.strip()
     lecture_slides = payload.lecture_slides.strip()
-    if not any([transcript, summary, lecture_notes, lecture_slides]):
-        raise HTTPException(status_code=400, detail="Create the collaboration room from a lecture that already has content.")
-
     room_id = uuid4().hex
     now_iso = utc_now().isoformat()
     invited_emails = normalize_invited_emails(payload.invited_emails, current_user)

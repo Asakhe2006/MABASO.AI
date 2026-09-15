@@ -1,7 +1,7 @@
 import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
-import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Pin, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Pin, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, Trash2, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
 import { findProtectedWorkspaceRoute, findSitePageByRoute } from "./sitePageConfig";
 import {
   normalizeRoutePath,
@@ -893,7 +893,7 @@ const fairSubscriptionPlans = [
     limits: "Daily limits reset every 24 hours. Standard speed and entry-level study quality. No card required.",
     howItWorks: "Free users can generate within the daily attempts below. When a tool reaches 0 attempts, that tool is blocked until the next daily reset or the user upgrades.",
     attempts: [
-      "10 study chat questions/day",
+      "Unlimited AI chat messages",
       "1 report/day",
       "1 study guide/day",
       "1 flashcard generation/day, choose 5-10 cards",
@@ -922,7 +922,7 @@ const fairSubscriptionPlans = [
     limits: "Higher daily limits, faster generation queue, better academic structure, exports, and stronger study tools.",
     howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets, faster responses, and more polished study output. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
     attempts: [
-      "25 study chat questions/day",
+      "Unlimited AI chat messages",
       "6 reports/day",
       "3 study guides/day",
       "6 flashcard generations/day, choose 5-20 cards",
@@ -11726,7 +11726,7 @@ export default function App() {
             <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 4 of 4</div>
             <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration</p>
             <h2 className="mt-2 text-3xl font-semibold text-white">Create or open a shared study room.</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Students can move here after the study workspace to share notes, sync a revision tool, chat inside one lecture room, and add members by email.</p>
+            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Create a room at any time, then share workspace materials, notes, and revision tools when they are ready.</p>
           </div>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
@@ -11768,11 +11768,11 @@ export default function App() {
           <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">Create a collaboration room from this lecture. Added members receive an email invitation and see the class request when they sign in.</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room first. Share current workspace material whenever it is ready, then invite members by email.</p>
             <div className="mt-5 space-y-4">
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
-                <input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} />
+                <input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} />
               </div>
               <div>
                 <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label>
@@ -11826,7 +11826,7 @@ export default function App() {
                   <p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p>
                 </button>
               )) : (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>
+                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>
               )}
             </div>
           </div>
@@ -11889,7 +11889,7 @@ export default function App() {
                   <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
                 </div>
                 <div className="force-mobile-stack flex flex-wrap gap-3">
-                  {activeRoom.is_owner ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button> : null}
+                  {activeRoom.is_owner ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button> : null}
                   <button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button>
                 </div>
               </div>
@@ -17834,22 +17834,30 @@ export default function App() {
   };
 
   const applyStreamedChatUsage = (featureState = {}) => {
-    if (!featureState || featureState.feature !== "study_chat") return;
+    // Messages are unlimited on every plan. Uploads are the only AI-chat quota.
+    if (!featureState || featureState.feature !== "study_chat_upload") return;
     const planId = String(featureState.plan_id || billingUsage?.plan_id || "free").toLowerCase();
     setBillingUsage((current) => {
       const currentFeatures = Array.isArray(current?.features) ? current.features : [];
       const nextFeature = {
-        ...currentFeatures.find((item) => item.feature === "study_chat"),
+        ...currentFeatures.find((item) => item.feature === "study_chat_upload"),
         ...featureState,
-        label: "Study chat messages",
+        label: "AI chat uploads",
         period_type: "daily",
       };
       return {
         ...(current || {}),
         plan_id: planId,
-        features: [nextFeature, ...currentFeatures.filter((item) => item.feature !== "study_chat")],
+        features: [nextFeature, ...currentFeatures.filter((item) => item.feature !== "study_chat_upload")],
       };
     });
+  };
+
+  const applyStudyChatUploadUsage = (usage = {}) => {
+    const featureState = usage?.feature === "study_chat_upload" ? usage : null;
+    if (!featureState) return;
+    applyStreamedChatUsage(featureState);
+    const planId = String(featureState.plan_id || billingUsage?.plan_id || "free").toLowerCase();
     if (planId === "free" && Number(featureState.remaining) === 2) {
       setChatAttemptReminder({ remaining: 2, limit: Number(featureState.limit) || 3, planId });
     }
@@ -22906,6 +22914,7 @@ export default function App() {
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
+    applyStudyChatUploadUsage(data.usage);
     refreshBillingStatusInBackground();
     const imageUrl = Array.isArray(data.image_urls) ? data.image_urls.find(Boolean) : "";
     return {
@@ -26578,7 +26587,7 @@ export default function App() {
           <div className="chat-attempt-reminder-backdrop" onPointerDown={() => setChatAttemptReminder(null)}>
             <div className="chat-attempt-reminder" role="dialog" aria-modal="true" aria-label="AI chat attempts remaining" onPointerDown={(event) => event.stopPropagation()}>
               <button type="button" className="chat-attempt-reminder-close" onClick={() => setChatAttemptReminder(null)} aria-label="Dismiss attempts reminder"><X className="h-4 w-4" aria-hidden="true" /></button>
-              <p><strong>{chatAttemptReminder.remaining}/{chatAttemptReminder.limit} messages left today.</strong> Pro includes 25 daily messages and 10 image or document uploads.</p>
+              <p><strong>{chatAttemptReminder.remaining} of {chatAttemptReminder.limit} uploads left today</strong><br />Upgrade to <strong>Pro</strong> for more daily uploads.</p>
               <button type="button" className="chat-attempt-reminder-upgrade" onClick={() => { setChatAttemptReminder(null); openUpgradeModal(); }}>Upgrade to Pro</button>
             </div>
           </div>
@@ -26615,6 +26624,7 @@ export default function App() {
                   <button type="button" role="menuitem" onClick={() => { void openChatShareDialogForConversation(row.id); }}><Link className="h-4 w-4" aria-hidden="true" />Share as a link</button>
                   <button type="button" role="menuitem" onClick={() => { void updateStudyChatHistoryItem(row.id, { isPinned: !row.isPinned }); }}><Pin className="h-4 w-4" aria-hidden="true" />{row.isPinned ? "Unpin chat" : "Pin chat"}</button>
                   <button type="button" role="menuitem" onClick={() => renameStudyChatHistoryItem(row.id, row.title)}><Pencil className="h-4 w-4" aria-hidden="true" />Rename</button>
+                  <button type="button" role="menuitem" className="study-chat-history-delete" onClick={() => { void deleteStudyChatHistoryItem(row.id, row.title); }}><Trash2 className="h-4 w-4" aria-hidden="true" />Delete conversation</button>
                 </div> : null}
               </div>
             </div>)}
@@ -27122,6 +27132,21 @@ export default function App() {
     void updateStudyChatHistoryItem(conversationId, { title: cleanTitle, customTitle: true });
   };
 
+  const deleteStudyChatHistoryItem = async (conversationId, title = "Study Chat") => {
+    const normalizedId = String(conversationId || "").trim();
+    setStudyChatHistoryMenuId("");
+    if (!normalizedId) return;
+    if (!window.confirm(`Delete "${String(title || "Study Chat").slice(0, 120)}"? This conversation cannot be recovered.`)) return;
+    try {
+      await requestLectureAssistantConversationDelete(normalizedId);
+      setStudyChatHistoryIndex((current) => current.filter((item) => item.id !== normalizedId));
+      if (normalizedId === activeStudyChatId) startNewStudyChat();
+      setStatus("Conversation deleted.");
+    } catch (error) {
+      setError(error?.message || "This conversation could not be deleted.");
+    }
+  };
+
   const createChatPublicShare = async () => {
     if (!publicShareDialog?.conversationId || isUpdatingPublicShare) return;
     setIsUpdatingPublicShare(true);
@@ -27434,8 +27459,9 @@ export default function App() {
   };
 
   const createCollaborationRoom = async () => {
-    if (!hasCollaborationSeedContent) return setError("Generate a transcript, study guide, or other study material first, then create a collaboration room.");
-    const resolvedTitle = roomTitleInput.trim() || `${extractHistoryTitle(summary, workspaceFileLabel)} group room`;
+    const resolvedTitle = roomTitleInput.trim() || (hasCollaborationSeedContent
+      ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room`
+      : "New study group");
     setIsCreatingRoom(true);
     setError("");
     try {
@@ -27653,7 +27679,29 @@ export default function App() {
   };
 
   const syncCurrentTabToRoom = async () => {
-    await shareTabToRoom(activeTab);
+    if (!activeRoomId) return;
+    if (!activeRoom?.is_owner) {
+      setError("Only the room owner can share workspace materials. Ask the owner to add the material.");
+      return;
+    }
+    try {
+      await updateActiveRoomMaterials({
+        transcript,
+        summary,
+        formula,
+        example,
+        lecture_notes: lectureNotes,
+        lecture_slides: lectureSlides,
+        study_images: sanitizeStudyImagesForCollaboration(studyImages),
+        flashcards,
+        quiz_questions: selectedQuizQuestions,
+        active_tab: ["podcast", "presentation", "collaboration"].includes(activeTab) ? "guide" : activeTab,
+      });
+      await shareTabToRoom(["podcast", "presentation", "collaboration"].includes(activeTab) ? "guide" : activeTab);
+      setStatus("Current workspace materials are now shared with the room.");
+    } catch (error) {
+      setError(error?.message || "Could not share the current workspace materials.");
+    }
   };
 
   const updateActiveRoomMaterials = async (payload = {}) => {
@@ -29455,7 +29503,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
               <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{timetableNavStatusLabel ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{timetableNavStatusLabel}</span> : null}</button>
-              <button type="button" onClick={() => openCollaborationPage()} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Collaboration</button>
+              <button type="button" onClick={() => openCollaborationPage()} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
               {isAdminAccount ? <button type="button" onClick={() => (authSessionMode === "admin" ? openProtectedAppRoute("admin") : openModeSelection())} className="rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-4 py-2.5 text-sm font-medium text-emerald-50">{authSessionMode === "admin" ? "Protected Dashboard" : "Choose Mode"}</button> : null}
             </div>
@@ -30259,7 +30307,7 @@ export default function App() {
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an email-based collaboration room from this lecture. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={`${extractHistoryTitle(summary, workspaceFileLabel)} group room`} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first one from the current lecture.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share current tool</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room, then share workspace materials whenever you are ready. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
               </BodyPortal>
             </div>
