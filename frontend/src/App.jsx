@@ -7229,6 +7229,10 @@ export default function App() {
   const [isCollaborationDiscoverOpen, setIsCollaborationDiscoverOpen] = useState(false);
   const [collaborationDiscoverQuery, setCollaborationDiscoverQuery] = useState("");
   const [collaborationDiscoverProfiles, setCollaborationDiscoverProfiles] = useState([]);
+  const [collaborationMobileView, setCollaborationMobileView] = useState("rooms");
+  const [collaborationMaterialFilter, setCollaborationMaterialFilter] = useState("all");
+  const [isCreateRoomPanelOpen, setIsCreateRoomPanelOpen] = useState(false);
+  const [profileEditorAnchor, setProfileEditorAnchor] = useState(null);
   const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", discoverable: true, show_institution: true, allow_requests: true });
 
   useEffect(() => {
@@ -7876,7 +7880,7 @@ export default function App() {
             {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
-        <button type="button" onClick={() => { setIsUpgradeModalOpen(false); openCollaborationPage({ refresh: false }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
+        <button type="button" onClick={() => { setIsUpgradeModalOpen(false); openCollaborationPage({ refresh: false }); setProfileEditorAnchor({ top: 70, left: Math.max(12, window.innerWidth - 430) }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
           <UsersRound className="h-4 w-4" aria-hidden="true" />
           <span>{collaborationProfile ? "Edit Collaboration Profile" : "Create Collaboration Profile"}</span>
         </button>
@@ -11739,490 +11743,61 @@ export default function App() {
     );
   };
 
-  const renderCollaborationPage = () => (
-    <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-      <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div className="flex items-start gap-4">
-          {renderBackButton(() => openProtectedAppPage("workspace"), "Back to study workspace")}
-          <div>
-            <div className="inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-xs uppercase tracking-[0.3em] text-emerald-100">Step 4 of 4</div>
-            <p className="mt-4 text-xs uppercase tracking-[0.3em] text-emerald-200/70">Collaboration</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">Create or open a shared study room.</h2>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Create a room at any time, then share workspace materials, notes, and revision tools when they are ready.</p>
-          </div>
-        </div>
-        <div className="force-mobile-stack flex flex-wrap gap-3">
-          <button type="button" onClick={() => setIsProfileEditorOpen(true)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">{collaborationProfile ? "Edit profile" : "Create profile"}</button>
-          <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh Rooms</button>
-        </div>
-      </div>
+  const renderCollaborationPage = () => {
+    const materialFilters = [
+      { id: "all", label: "All Materials" }, { id: "study_guide", label: "Study Guides" },
+      { id: "note", label: "Notes" }, { id: "presentation", label: "PowerPoints" },
+      { id: "mind_map", label: "Mind Maps" }, { id: "podcast", label: "Podcasts" },
+      { id: "image", label: "Images" }, { id: "video", label: "Videos" },
+    ];
+    const visibleMaterials = (activeRoom?.materials || []).filter((item) => collaborationMaterialFilter === "all" || item.material_type === collaborationMaterialFilter);
+    const openProfilePopover = (event) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setProfileEditorAnchor({ top: rect.bottom + 10, left: Math.max(12, Math.min(rect.left, window.innerWidth - 430)) });
+      setIsProfileEditorOpen(true);
+    };
+    const switchMobileView = (view) => {
+      setCollaborationMobileView(view);
+      if (view === "more") setIsCollaborationActionSheetOpen(true);
+    };
+    return (
+      <section className="collaboration-product-shell">
+        <header className="collaboration-global-bar">
+          <button type="button" onClick={() => openProtectedAppPage("workspace")} className="collaboration-brand" aria-label="Back to Mabaso AI workspace"><span className="collaboration-brand-mark">◆</span><span><strong>MABASO AI</strong><small>Learn Smarter. Go Further.</small></span></button>
+          <div className="collaboration-global-actions"><button type="button" onClick={() => { setIsCollaborationDiscoverOpen((value) => !value); document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" }); }} className="collaboration-search-trigger">⌕ <span>Search materials, people, rooms...</span></button><button type="button" onClick={openProfilePopover} className="collaboration-account-trigger"><span>{profileDisplayName.slice(0, 2).toUpperCase()}</span><strong>{profileDisplayName}</strong><small>{getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></button></div>
+        </header>
 
-      <nav className="collaboration-mobile-nav" aria-label="Collaboration navigation">
-        <button type="button" onClick={() => document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" })}><UsersRound className="h-4 w-4" aria-hidden="true" /><span>Rooms</span></button>
-        <button type="button" onClick={() => document.getElementById("collaboration-chat")?.scrollIntoView({ behavior: "smooth", block: "start" })}><MessageCircle className="h-4 w-4" aria-hidden="true" /><span>Chat</span></button>
-        <button type="button" className="collaboration-mobile-create" onClick={() => setIsCollaborationActionSheetOpen(true)} aria-label="Create or share"><Plus className="h-5 w-5" aria-hidden="true" /></button>
-        <button type="button" onClick={() => document.getElementById("collaboration-board")?.scrollIntoView({ behavior: "smooth", block: "start" })}><LayoutDashboard className="h-4 w-4" aria-hidden="true" /><span>Board</span></button>
-        <button type="button" onClick={() => document.getElementById("collaboration-materials")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Ellipsis className="h-4 w-4" aria-hidden="true" /><span>More</span></button>
-      </nav>
-      {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" aria-label="Create or share in collaboration" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><p className="mt-2 text-sm leading-6 text-slate-300">Choose an action for this collaboration room.</p><div className="mt-5 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" }); window.setTimeout(() => document.getElementById("collaboration-room-title")?.focus(), 250); }} className="collaboration-sheet-action">Create room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }} className="collaboration-sheet-action disabled:opacity-40">Share current material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setIsBoardComposerOpen(true); window.setTimeout(() => document.getElementById("collaboration-board")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }} className="collaboration-sheet-action disabled:opacity-40">Add board note</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); roomBoardImageInputRef.current?.click(); }} className="collaboration-sheet-action disabled:opacity-40">Upload board photo</button></div><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)} className="mt-4 w-full rounded-xl px-4 py-3 text-sm font-semibold text-slate-200">Cancel</button></section></div> : null}
+        {isProfileEditorOpen ? <section className="collaboration-profile-popover" role="dialog" aria-label="Collaboration profile" style={profileEditorAnchor ? { top: profileEditorAnchor.top, left: profileEditorAnchor.left } : undefined}><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">{collaborationProfile ? "Edit profile" : "Create profile"}</h3></div><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="text-sm text-slate-400">Close</button></div><p className="mt-2 text-xs leading-5 text-slate-300">Your email and precise location are never shown to students.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={collaborationProfileDraft.display_name} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, display_name: event.target.value }))} className="collaboration-popover-field" placeholder="Display name" /><input value={collaborationProfileDraft.course} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, course: event.target.value }))} className="collaboration-popover-field" placeholder="Course / programme" /><input value={collaborationProfileDraft.subjects} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, subjects: event.target.value }))} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules, comma-separated" /><input value={collaborationProfileDraft.can_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, can_help: event.target.value }))} className="collaboration-popover-field sm:col-span-2" placeholder="Can help with" /></div><label className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-200"><span>Discoverable to students by academic interests</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.discoverable)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, discoverable: event.target.checked }))} /></label><button type="button" onClick={saveCollaborationProfile} disabled={isProfileLoading} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{isProfileLoading ? "Saving..." : "Save profile"}</button></section> : null}
 
-      {isProfileEditorOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsProfileEditorOpen(false)}><section className="collaboration-profile-dialog" role="dialog" aria-modal="true" aria-label="Collaboration profile" onMouseDown={(event) => event.stopPropagation()}><div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Academic discovery</p><h3 className="mt-2 text-2xl font-semibold text-white">{collaborationProfile ? "Edit collaboration profile" : "Create collaboration profile"}</h3><p className="mt-2 text-sm leading-6 text-slate-300">Only academic details you choose are shown. Your email and precise location are never public.</p></div><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="rounded-full border border-white/10 px-3 py-2 text-sm text-slate-200">Close</button></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Display name<input value={collaborationProfileDraft.display_name} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, display_name: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="How students should know you" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Course / programme<input value={collaborationProfileDraft.course} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, course: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. Electrical Engineering" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Institution (optional)<input value={collaborationProfileDraft.institution} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, institution: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="School, college, or university" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Year / grade<input value={collaborationProfileDraft.study_year} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, study_year: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. 2nd year" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Academic bio<textarea value={collaborationProfileDraft.bio} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, bio: event.target.value }))} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="What are you studying or working on?" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Subjects / modules (comma-separated)<input value={collaborationProfileDraft.subjects} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, subjects: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Communication Systems, Engineering Mathematics" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Can help with<input value={collaborationProfileDraft.can_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, can_help: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="MATLAB, Fourier series" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Looking for help with<input value={collaborationProfileDraft.needs_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, needs_help: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Digital communications" /></label></div><div className="mt-5 grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-200"><label className="flex items-center justify-between gap-4"><span>Let students discover my academic profile</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.discoverable)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, discoverable: event.target.checked }))} /></label><label className="flex items-center justify-between gap-4"><span>Show my institution</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.show_institution)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, show_institution: event.target.checked }))} /></label><label className="flex items-center justify-between gap-4"><span>Allow collaboration requests</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.allow_requests)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, allow_requests: event.target.checked }))} /></label></div><div className="mt-5 flex justify-end gap-3"><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="rounded-full px-4 py-2 text-sm text-slate-200">Cancel</button><button type="button" onClick={saveCollaborationProfile} disabled={isProfileLoading} className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{isProfileLoading ? "Saving..." : "Save profile"}</button></div></section></div> : null}
-      {invitedCollaborationRooms.length ? (
-        <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-[0.28em] text-cyan-100/80">Class requests</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">Rooms shared with you</h3>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Join a class request to open the owner&apos;s shared study guide, formulas, worked examples, flashcards, test, notes, and room chat.</p>
-            </div>
-            <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-4 py-2 text-sm font-semibold text-cyan-50">{invitedCollaborationRooms.length} request{invitedCollaborationRooms.length === 1 ? "" : "s"}</span>
-          </div>
-          <div className="mt-5 grid gap-3 lg:grid-cols-2">
-            {invitedCollaborationRooms.map((room) => (
-              <article key={room.id} className="rounded-2xl border border-cyan-300/15 bg-slate-950/70 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
-                    <p className="phone-safe-copy mt-2 text-xs leading-6 text-slate-300">{room.owner_email} invited you to join this class.</p>
-                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-cyan-100/75">{room.member_count} member{room.member_count === 1 ? "" : "s"} - {room.test_visibility === "shared" ? "shared test answers" : "private test answers"}</p>
-                  </div>
-                  <button type="button" onClick={() => joinCollaborationRequest(room.id)} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#2563eb,#38bdf8)] px-4 py-2 text-sm font-semibold text-white">
-                    Join Class
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="collaboration-room-layout mt-6 grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
-        <div className="min-w-0 space-y-5">
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p>
-            <h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room first. Share current workspace material whenever it is ready, then invite members by email.</p>
-            <div className="mt-5 space-y-4">
-              <div>
-                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label>
-                <input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} />
-              </div>
-              <div>
-                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label>
-                <textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" />
-              </div>
-              <div>
-                <label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Test answer visibility</label>
-                <p className="mt-2 text-xs leading-6 text-slate-400">This setting affects the room test only. The room owner can change it later.</p>
-                <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                  <button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
-                    <p className="font-semibold">Private answers</p>
-                    <p className="mt-2 text-xs leading-6 text-slate-300">Members can mark their own test answers, but they cannot see what others submitted.</p>
-                  </button>
-                  <button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}>
-                    <p className="font-semibold">Shared answers</p>
-                    <p className="mt-2 text-xs leading-6 text-slate-300">Members can compare synced written answers while working on the same room test.</p>
-                  </button>
-                </div>
-              </div>
-              <button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button>
-            </div>
-          </div>
-
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <div className="force-mobile-stack flex items-center justify-between gap-3">
-              <div>
-                <p id="collaboration-rooms" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p>
-                <h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3>
-              </div>
-              <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button>
-            </div>
-            <div className="mt-4 space-y-3">
-              {sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => (
-                <button
-                  key={room.id}
-                  type="button"
-                  onClick={() => openCollaborationRoom(room.id)}
-                  className={`w-full rounded-2xl border p-4 text-left transition ${
-                    activeRoomId === room.id
-                      ? "border-emerald-300/35 bg-emerald-300/10"
-                      : room.id === highlightedInviteRoomId || room.owner_email !== normalizedAuthEmail
-                        ? "border-cyan-300/20 bg-cyan-400/10 hover:bg-cyan-400/15"
-                        : "border-white/10 bg-slate-950/75 hover:bg-white/10"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="phone-safe-copy text-sm font-semibold text-white">{room.title}</p>
-                    {room.owner_email !== normalizedAuthEmail ? <span className="rounded-full border border-cyan-300/20 bg-slate-950/75 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-cyan-50">Shared with you</span> : null}
-                  </div>
-                  <p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p>
-                  <p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p>
-                </button>
-              )) : (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Discover</p><h3 className="mt-2 text-xl font-semibold text-white">Find academic collaborators</h3></div><button type="button" onClick={() => { if (!collaborationProfile) { setIsProfileEditorOpen(true); } else { void discoverCollaborationProfiles(); } }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50">{collaborationProfile ? "Search students" : "Create profile"}</button></div>
-            <p className="mt-3 text-sm leading-6 text-slate-300">Match by modules, course, and help topics—not by private contact details or precise location.</p>
-            {collaborationProfile ? <div className="mt-4 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void discoverCollaborationProfiles(); } }} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-white outline-none" placeholder="e.g. MATLAB or Communication Systems" /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Search</button></div> : null}
-            {isCollaborationDiscoverOpen ? <div className="mt-4 space-y-3">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 4).map((profile, index) => <article key={`${profile.display_name}-${index}`} className="rounded-2xl border border-white/10 bg-slate-950/70 p-3"><p className="font-semibold text-white">{profile.display_name || "Mabaso student"}</p><p className="mt-1 text-xs text-slate-400">{[profile.course, profile.study_year, profile.institution].filter(Boolean).join(" • ") || "Academic profile"}</p>{(profile.subjects || []).length ? <p className="mt-2 text-xs leading-5 text-emerald-100">Studies {profile.subjects.slice(0, 3).join(", ")}</p> : null}{(profile.can_help || []).length ? <p className="mt-1 text-xs leading-5 text-slate-300">Can help with {profile.can_help.slice(0, 2).join(", ")}</p> : null}</article>) : <p className="rounded-2xl border border-dashed border-white/10 p-3 text-xs leading-6 text-slate-300">No matching students found. Try a subject, module, or tool.</p>}</div> : null}
-          </div>
-          <div id="collaboration-chat" className="collaboration-chat-card rounded-[24px] border border-white/10 bg-slate-950/75 p-5 xl:flex xl:min-h-[36rem] xl:flex-col">
-            <div className="force-mobile-stack flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Study chat</p>
-                <h4 className="mt-2 text-2xl font-semibold text-white">Live room discussion</h4>
-              </div>
-              {activeRoom && isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}
-            </div>
-
-            {activeRoom ? (
-              <>
-                <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4 xl:flex-1 xl:min-h-0 xl:overflow-hidden">
-                  {(activeRoom.messages || []).length ? (
-                    <div className="space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1">
-                      {activeRoom.messages.map((message) => (
-                        <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                          <p className="phone-safe-copy text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p>
-                          <p className="phone-safe-copy mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="xl:flex xl:h-full xl:items-center">
-                      <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4">
-                  <div className="force-mobile-stack flex items-end gap-3">
-                    <textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." />
-                    <button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message">
-                      <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">
-                        <path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
-                      </svg>
-                    </button>
-                  </div>
-                  <p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p>
-                </div>
-              </>
-            ) : (
-              <div className="mt-4 rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm leading-7 text-slate-300 xl:flex xl:flex-1 xl:items-center">
-                Open a room from the list to start the study chat and coordinate the shared board with your group.
-              </div>
-            )}
-          </div>
+        <div className="collaboration-room-header">
+          <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
+          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => document.getElementById("collaboration-invite")?.scrollIntoView({ behavior: "smooth", block: "center" })} className="collaboration-outline-button">♙ Invite</button> : null}<button type="button" onClick={() => setFollowRoomView((value) => !value)} className="collaboration-dark-button">⚙ Room settings</button><button type="button" onClick={() => { setActiveRoom(null); setActiveRoomId(""); }} className="collaboration-primary-button">Leave room</button></div> : null}
         </div>
 
-        <div className="min-w-0 space-y-5">
-          {activeRoom ? (
-            <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p>
-                  <h3 className="phone-safe-copy mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3>
-                  <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p>
-                  <p className="mt-3 text-xs uppercase tracking-[0.24em] text-emerald-200/70">Room test mode: {activeRoom.test_visibility === "shared" ? "Shared answers" : "Private answers"}</p>
-                </div>
-                <div className="force-mobile-stack flex flex-wrap gap-3">
-                  {activeRoom.is_owner ? <button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button> : null}
-                  <button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button>
-                </div>
-              </div>
-              <div className="mt-5 flex flex-wrap gap-2">
-                {(activeRoom.members || []).map((member) => (
-                  <span key={member.email} className="phone-safe-copy rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>
-                ))}
-              </div>
-              {activeRoom.is_owner ? (
-                <div className="mt-5 rounded-[24px] border border-cyan-300/20 bg-cyan-400/10 p-5">
-                  <p className="text-xs uppercase tracking-[0.24em] text-cyan-100/80">Add members</p>
-                  <h4 className="mt-2 text-2xl font-semibold text-white">Add more people to this room</h4>
-                  <p className="mt-3 text-sm leading-7 text-slate-100">Use email addresses here. New members receive an email invitation and see this class request when they sign in.</p>
-                  <textarea
-                    value={roomMembersInput}
-                    onChange={(event) => setRoomMembersInput(event.target.value)}
-                    rows={3}
-                    className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white outline-none"
-                    placeholder="student1@email.com, student2@email.com"
-                  />
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={addMembersToActiveRoom}
-                      disabled={isAddingRoomMembers}
-                      className="rounded-full border border-cyan-300/20 bg-slate-950/80 px-4 py-2 text-sm font-semibold text-cyan-50 disabled:opacity-50"
-                    >
-                      {isAddingRoomMembers ? "Adding members..." : "Add members"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-              <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
-                    <p id="collaboration-materials" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p>
-                    <h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4>
-                    <p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room's shared revision focus.</p>
-                  </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-2">
-                    {collaborationMaterialTabs.map((tab) => (
-                      <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(Boolean(activeRoom.is_owner)); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-5 rounded-[22px] border border-white/10 bg-black/20 p-4">
-                  <div className="force-mobile-stack flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Shared materials</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">Room members can share a reference to their existing Mabaso study work without downloading and uploading it again.</p>
-                    </div>
-                    <button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={isSharingRoomMaterial} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#15803d,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isSharingRoomMaterial ? "Sharing..." : "Share current material"}</button>
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {(activeRoom.materials || []).length ? (activeRoom.materials || []).map((item) => (
-                      <article key={item.id} className="collaboration-material-card rounded-2xl border border-white/10 bg-slate-950/75 p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/80">{String(item.material_type || "material").replace(/_/g, " ")}</p>
-                            <h5 className="phone-safe-copy mt-2 text-sm font-semibold text-white">{item.title}</h5>
-                          </div>
-                          {(item.owner_email === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={() => removeCollaborationMaterial(item)} className="shrink-0 rounded-lg px-2 py-1 text-xs text-rose-200 hover:bg-rose-400/10">Remove</button> : null}
-                        </div>
-                        {item.description ? <p className="phone-safe-copy mt-2 text-xs leading-6 text-slate-300">{item.description}</p> : null}
-                        <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-400"><span className="truncate">Shared by {item.owner_email === normalizedAuthEmail ? "you" : "a room member"}</span><button type="button" onClick={() => { const tab = item.source?.active_tab; if (tab) { setFollowRoomView(true); void shareTabToRoom(tab); } }} disabled={!item.source?.active_tab} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-100 disabled:opacity-40">Open</button></div>
-                      </article>
-                    )) : <p className="rounded-2xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-300 sm:col-span-2">No independent materials have been shared yet. Share a Study Guide, notes, flashcards, or a test from your workspace.</p>}
-                  </div>
-                </div>
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Generate room materials</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">{activeRoom.is_owner ? "Use these buttons to generate or refresh the owner materials shown to every room member." : "Only the room owner can generate or refresh these shared class materials."}</p>
-                    </div>
-                    <div className="force-mobile-stack flex flex-wrap gap-2">
-                      {[
-                        { id: "guide", label: "Generate Study Guide" },
-                        { id: "formulas", label: "Generate Formulas" },
-                        { id: "examples", label: "Generate Worked Examples" },
-                        { id: "flashcards", label: "Generate Flashcards" },
-                        { id: "quiz", label: "Generate Test" },
-                      ].map((tool) => (
-                        <button
-                          key={tool.id}
-                          type="button"
-                          onClick={() => generateCollaborationMaterial(tool.id)}
-                          disabled={!activeRoom.is_owner || Boolean(generatingRoomMaterial)}
-                          className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 disabled:cursor-not-allowed disabled:opacity-45"
-                        >
-                          {generatingRoomMaterial === tool.id ? "Generating..." : tool.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  {activeRoom.active_tab === "guide" ? renderStudyGuideContent({
-                    topic: activeRoomGuideTopic,
-                    titleSection: activeRoomGuideTitleSection,
-                    summarySection: activeRoomGuideSummarySection,
-                    visibleSections: activeRoomVisibleGuideSections,
-                    formattedContent: activeRoomFormattedGuide,
-                    studyImageList: activeRoom?.study_images || [],
-                    emptyMessage: "No shared study guide selected yet.",
-                  }) : null}
-                  {activeRoom.active_tab === "transcript" ? <div className="academic-reading-theme phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-slate-200" style={getAcademicReadingCssVariables()}>{activeRoom.transcript || "No shared transcript selected yet."}</div> : null}
-                  {activeRoom.active_tab === "formulas" ? (
-                    <StudyToolFormulaPanel
-                      rows={activeRoomFormulaRows}
-                      content={activeRoomFormattedFormula}
-                      emptyMessage="No shared formulas selected yet."
-                    />
-                  ) : null}
-                  {activeRoom.active_tab === "examples" ? (
-                    <StudyToolMarkdownCard
-                      content={activeRoomFormattedExample}
-                      emptyMessage="No shared worked examples selected yet."
-                    />
-                  ) : null}
-                  {activeRoom.active_tab === "flashcards" ? (
-                    <StudyToolFlashcardsPanel
-                      cards={activeRoom.flashcards || []}
-                      emptyMessage="No shared flashcards selected yet."
-                    />
-                  ) : null}
-                  {activeRoom.active_tab === "quiz" ? renderQuizSection({
-                    questions: activeRoomQuizQuestions,
-                    answers: roomQuizAnswers,
-                    results: roomQuizResults,
-                    quizImages: roomQuizAnswerImages,
-                    submitted: roomQuizSubmitted,
-                    isMarking: isMarkingRoomQuiz,
-                    onMark: markRoomQuiz,
-                    onAnswerChange: handleRoomQuizAnswerChange,
-                    onOptionChange: handleRoomQuizOptionChange,
-                    onImageChange: handleRoomQuizImageChange,
-                    sharedAnswerGroups: roomAnswerGroups,
-                    visibilityMode: activeRoom.test_visibility,
-                    scoreValue: activeRoomQuizQuestions.reduce((total, item) => total + Number(roomQuizResults[item.number]?.score || 0), 0),
-                    scopeId: `room-${activeRoom.id}`,
-                    ownerControls: activeRoom.is_owner ? <div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null,
-                    ownerNotice: activeRoom.is_owner ? "" : "Only the room owner can switch between private answers and shared answers for the room test.",
-                    emptyMessage: "No room test has been added to this collaboration yet.",
-                  }) : null}
-                  {!["guide", "transcript", "formulas", "examples", "flashcards", "quiz"].includes(activeRoom.active_tab) ? <div className="phone-safe-copy whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div> : null}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>
-          )}
+        <div className="collaboration-main-grid">
+          <aside className={`collaboration-room-sidebar ${collaborationMobileView === "rooms" ? "is-mobile-active" : ""}`}>
+            <button type="button" onClick={() => setIsCreateRoomPanelOpen((value) => !value)} className="collaboration-create-room">＋ Create New Room</button>
+            <div className="collaboration-sidebar-actions"><button type="button" className="is-active" onClick={() => setCollaborationMobileView("rooms")}>♙ My Rooms</button><button type="button" onClick={() => { setIsCollaborationDiscoverOpen(true); document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" }); }}>⌕ Discover</button></div>
+            {isCreateRoomPanelOpen ? <div className="collaboration-create-form"><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} placeholder="Room title" /><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={2} placeholder="Invite emails (optional)" /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={newRoomVisibility === "private" ? "is-active" : ""}>Private</button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={newRoomVisibility === "shared" ? "is-active" : ""}>Shared test</button></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom}>{isCreatingRoom ? "Creating..." : "Create Room"}</button></div> : null}
+            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { setCollaborationMobileView("chat"); void openCollaborationRoom(room.id); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.member_count} members</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">You have not joined any collaboration rooms yet.</p>}</div>
+            <div className="collaboration-upload-card"><strong>Uploads ({getCurrentPlanTier() === "free" ? "Free Plan" : `${getCurrentPlanTier()} Plan`})</strong><span>{getCurrentPlanTier() === "free" ? "2 of 3 uploads left today" : getCurrentPlanTier() === "premium" ? "Unlimited uploads" : "10 uploads per day"}</span>{getCurrentPlanTier() === "free" ? <button type="button" onClick={() => setIsUpgradeModalOpen(true)}>Upgrade to Pro</button> : null}</div>
+            <div id="collaboration-discover" className="collaboration-discover-panel"><div className="flex items-center justify-between gap-2"><strong>Discover students</strong><button type="button" onClick={openProfilePopover}>{collaborationProfile ? "Edit" : "Create"} profile</button></div><div className="mt-3 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} placeholder="MATLAB, signals..." /><button type="button" onClick={() => void discoverCollaborationProfiles()}>Search</button></div>{isCollaborationDiscoverOpen ? <div className="mt-3 space-y-2">{collaborationDiscoverProfiles.slice(0, 3).map((profile, index) => <div key={`${profile.display_name}-${index}`} className="collaboration-discovery-result"><strong>{profile.display_name || "Mabaso student"}</strong><span>{[profile.course, ...(profile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ")}</span></div>) || <span className="text-xs text-slate-400">Search by academic interests.</span>}</div> : null}</div>
+          </aside>
+
+          <main className="collaboration-center-stage">
+            <div className="collaboration-mobile-room-tabs"><button type="button" onClick={() => switchMobileView("chat")} className={collaborationMobileView === "chat" ? "is-active" : ""}>Chat</button><button type="button" onClick={() => switchMobileView("materials")} className={collaborationMobileView === "materials" ? "is-active" : ""}>Materials</button><button type="button" onClick={() => switchMobileView("board")} className={collaborationMobileView === "board" ? "is-active" : ""}>Board</button></div>
+            <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => setCollaborationMaterialFilter(filter.id)} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div><div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</small><span>⌄ Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={() => removeCollaborationMaterial(item)} aria-label="Remove material">⋮</button> : null}</article>) : <p className="collaboration-empty-copy">No materials have been shared yet.</p>}</div></section>
+              <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={() => removeCollaborationBoardItem(item)}>⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
+          </main>
+
+          <aside className={`collaboration-chat-panel ${collaborationMobileView === "chat" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>◯ Room Chat</h2><small><i /> {activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members` : "Open a room"}</small></div></div><div className="collaboration-chat-messages">{(activeRoom?.messages || []).length ? activeRoom.messages.map((message) => <article key={message.id} className={message.author_email === normalizedAuthEmail ? "is-own" : ""}><span>{message.author_email === normalizedAuthEmail ? "You" : String(message.author_email || "M").split("@")[0]}</span><p>{message.content}</p></article>) : <p className="collaboration-empty-copy">Start the conversation.</p>}</div><div className="collaboration-chat-composer"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} placeholder="Type a message..." rows={1} /><button type="button" onClick={sendRoomMessage} disabled={!activeRoom || isSendingRoomMessage}>➤</button></div>{activeRoom?.is_owner ? <div id="collaboration-invite" className="collaboration-invite-strip"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>Invite</button></div> : null}</aside>
         </div>
-      </div>
 
-      {activeRoom ? (
-        <div className="mt-5 rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <p id="collaboration-board" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board pages</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">Shared notes board and uploaded board photos</h3>
-              <p className="mt-3 max-w-4xl text-sm leading-7 text-slate-300">These board pages now span the full row below the study guide so the board can use the full collaboration workspace instead of being squeezed into the right column.</p>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-[24px] border border-emerald-300/15 bg-emerald-400/[0.045] p-4">
-            <div className="force-mobile-stack flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Collaboration board</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">Pin the group’s most important quote, task, reminder, or announcement here. Board items are separate from the materials library.</p>
-              </div>
-              <button type="button" onClick={() => setIsBoardComposerOpen((current) => !current)} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#15803d,#22c55e)] px-4 py-2 text-sm font-semibold text-white">{isBoardComposerOpen ? "Close composer" : "+ Add to board"}</button>
-            </div>
-            {isBoardComposerOpen ? <div className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-slate-950/75 p-4 md:grid-cols-2"><label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Card type<select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none"><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select></label><label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Title<input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. Chapter 3 revision task" /></label><label className="md:col-span-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Message<textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Write the essential information for your group..." /></label>{boardItemType === "task" ? <label className="md:col-span-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Checklist (one task per line)<textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Summarise Chapter 3&#10;Prepare presentation" /></label> : null}<div className="md:col-span-2 flex justify-end"><button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem} className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{isPostingBoardItem ? "Posting..." : "Post to board"}</button></div></div> : null}
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {(activeRoom.board_items || []).length ? (activeRoom.board_items || []).map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type} rounded-2xl p-4 text-slate-950`}><div className="flex items-start justify-between gap-3"><p className="text-[10px] font-bold uppercase tracking-[0.2em]">{String(item.item_type || "note").replace(/_/g, " ")}</p>{(item.owner_email === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={() => removeCollaborationBoardItem(item)} className="rounded-md px-2 py-1 text-xs hover:bg-black/10">Delete</button> : null}</div>{item.title ? <h4 className="mt-2 text-base font-bold">{item.title}</h4> : null}{item.content ? <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">{item.content}</p> : null}{(item.checklist || []).length ? <ul className="mt-3 space-y-1 text-sm">{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}<p className="mt-4 text-[11px] text-slate-700">Added by {item.owner_email === normalizedAuthEmail ? "you" : "a room member"}</p></article>) : <p className="rounded-2xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-300 sm:col-span-2 xl:col-span-3">Nothing has been added to the board yet. Use Add to board to post the group’s first note or task.</p>}
-            </div>
-          </div>
-          <div className="mt-5">
-            <input
-              ref={roomBoardImageInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(event) => {
-                uploadRoomBoardImages(event.target.files);
-                event.target.value = "";
-              }}
-            />
-            <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)] 2xl:grid-cols-[minmax(0,1.22fr)_minmax(460px,0.78fr)]">
-              <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(2,6,23,0.98))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.38)] xl:min-h-[72vh] xl:flex xl:flex-col">
-                <div className="force-mobile-stack flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 1</p>
-                    <h4 className="mt-2 text-2xl font-semibold text-white">Large shared notes board</h4>
-                    <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">A clear square canvas for the whole group. Use it for section plans, reminders, definitions, or the lecturer&apos;s key steps.</p>
-                  </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Syncing..." : "Sync board"}</button>
-                    <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
-                  </div>
-                </div>
-                <div className="mt-4 aspect-square min-h-[440px] overflow-hidden rounded-[30px] border border-white/10 bg-[linear-gradient(rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.14)_1px,transparent_1px),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.98))] bg-[size:30px_30px,30px_30px,auto] xl:min-h-0 xl:flex-1 xl:aspect-auto">
-                  <textarea
-                    value={roomSharedNotesDraft}
-                    onChange={(event) => {
-                      roomNotesLastEditedAtRef.current = Date.now();
-                      setRoomSharedNotesDraft(event.target.value);
-                    }}
-                    rows={18}
-                    className="h-full w-full resize-none bg-transparent px-5 py-5 text-base leading-8 text-slate-50 outline-none placeholder:text-slate-500"
-                    placeholder="Write the next section the teacher must follow, add sentence-by-sentence key points, note formulas, or plan how the group will revise this lecture..."
-                  />
-                </div>
-                <p className="mt-3 text-xs text-slate-400">Shared notes sync automatically, and board photos stay in the separate page beside this one.</p>
-              </div>
-
-              <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5 xl:min-h-[72vh] xl:flex xl:flex-col">
-                <div className="force-mobile-stack flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Board Page 2</p>
-                    <h4 className="mt-2 text-2xl font-semibold text-white">Uploaded board photos</h4>
-                    <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300">Photos uploaded in the room appear large here so the group can inspect diagrams, handwritten work, or classroom board captures clearly.</p>
-                  </div>
-                  <div className="force-mobile-stack flex flex-wrap gap-3">
-                    <div className="rounded-full border border-white/10 bg-slate-950/75 px-4 py-2 text-sm text-slate-200">{activeRoomBoardImages.length} photo{activeRoomBoardImages.length === 1 ? "" : "s"}</div>
-                    <button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={isUploadingRoomBoardImage} className="rounded-full border border-sky-300/20 bg-sky-400/10 px-4 py-2 text-sm font-semibold text-sky-50 disabled:opacity-50">{isUploadingRoomBoardImage ? "Uploading..." : "Upload Photo"}</button>
-                  </div>
-                </div>
-
-                {selectedRoomBoardImage ? (
-                  <>
-                    <article className="mt-5 overflow-hidden rounded-[28px] border border-white/10 bg-slate-950/85 shadow-[0_22px_70px_rgba(2,8,23,0.34)] xl:flex xl:flex-1 xl:flex-col">
-                      <img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Collaboration board upload"} className="aspect-[4/3] w-full bg-black/30 object-contain md:aspect-[16/11] xl:min-h-[46vh] xl:flex-1 xl:aspect-auto" loading="lazy" />
-                      <div className="space-y-3 p-4">
-                        <div className="force-mobile-stack flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="phone-safe-copy text-lg font-semibold text-white">{selectedRoomBoardImage.name || "Board photo"}</p>
-                            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedRoomBoardImage.uploaded_by || "Room member"}{selectedRoomBoardImage.created_at ? ` - ${new Date(selectedRoomBoardImage.created_at).toLocaleString()}` : ""}</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => deleteRoomBoardImage(selectedRoomBoardImage.id)}
-                            disabled={deletingRoomBoardImageId === selectedRoomBoardImage.id}
-                            className="rounded-full border border-rose-300/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 disabled:opacity-50"
-                          >
-                            {deletingRoomBoardImageId === selectedRoomBoardImage.id ? "Removing..." : "Remove"}
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-
-                    {activeRoomBoardImages.length > 1 ? (
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-                        {activeRoomBoardImages.map((image) => (
-                          <article key={image.id} className={`relative overflow-hidden rounded-[22px] border transition ${selectedRoomBoardImage?.id === image.id ? "border-sky-300/35 bg-sky-400/10" : "border-white/10 bg-slate-950/75"}`}>
-                            <button type="button" onClick={() => setSelectedRoomBoardImageId(image.id)} className="block w-full text-left">
-                              <img src={image.image_url} alt={image.name || "Board photo"} className="h-36 w-full object-cover" loading="lazy" />
-                              <div className="p-3">
-                                <p className="phone-safe-copy text-sm font-semibold text-white">{image.name || "Board photo"}</p>
-                                <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">{image.uploaded_by || "Room member"}</p>
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                deleteRoomBoardImage(image.id);
-                              }}
-                              disabled={deletingRoomBoardImageId === image.id}
-                              className="absolute right-3 top-3 rounded-full border border-white/10 bg-slate-950/85 px-3 py-1 text-[11px] text-white disabled:opacity-50"
-                            >
-                              {deletingRoomBoardImageId === image.id ? "..." : "Remove"}
-                            </button>
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="mt-5 rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] p-8 text-sm leading-7 text-slate-300 xl:flex xl:flex-1 xl:items-center">
-                    No board photo uploaded yet. Add a photo of the board, notebook, or worked solution and it will appear large here for the whole room.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-
+        <nav className="collaboration-mobile-bottom-nav" aria-label="Collaboration navigation"><button type="button" onClick={() => switchMobileView("rooms")} className={collaborationMobileView === "rooms" ? "is-active" : ""}>⌂<span>Rooms</span></button><button type="button" onClick={() => switchMobileView("chat")} className={collaborationMobileView === "chat" ? "is-active" : ""}>◯<span>Chat</span></button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)} className="collaboration-mobile-add">＋</button><button type="button" onClick={() => switchMobileView("board")} className={collaborationMobileView === "board" ? "is-active" : ""}>♧<span>Board</span></button><button type="button" onClick={() => switchMobileView("more")}>•••<span>More</span></button></nav>
+        {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><div className="mt-4 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); setIsCreateRoomPanelOpen(true); setCollaborationMobileView("rooms"); }}>Create Room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }}>Share Existing Material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setCollaborationMobileView("board"); setIsBoardComposerOpen(true); }}>Add to Board</button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)}>Cancel</button></div></section></div> : null}
+      </section>
+    );
+  };
   const renderPresentationVisualPreview = (slide, { compact = false } = {}) => {
     const visualType = (slide?.visualType || "cluster").toLowerCase();
     const visualItems = (slide?.visualItems || []).filter(Boolean);
@@ -29674,7 +29249,7 @@ export default function App() {
               {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
-          <button type="button" onClick={() => { setIsProfileMenuOpen(false); openCollaborationPage({ refresh: false }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
+          <button type="button" onClick={() => { setIsProfileMenuOpen(false); openCollaborationPage({ refresh: false }); setProfileEditorAnchor({ top: 70, left: Math.max(12, window.innerWidth - 430) }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
             <UsersRound className="h-4 w-4" aria-hidden="true" />
             <span>{collaborationProfile ? "Edit Collaboration Profile" : "Create Collaboration Profile"}</span>
           </button>
