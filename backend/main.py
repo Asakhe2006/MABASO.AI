@@ -8364,20 +8364,20 @@ def init_db():
                   END IF;
 
                   FOREACH table_name IN ARRAY table_names LOOP
-                    IF to_regclass(format('%I.%I', current_schema(), table_name)) IS NULL THEN
+                    IF to_regclass(format('%%I.%%I', current_schema(), table_name)) IS NULL THEN
                       CONTINUE;
                     END IF;
 
-                    EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', current_schema(), table_name);
+                    EXECUTE format('ALTER TABLE %%I.%%I ENABLE ROW LEVEL SECURITY', current_schema(), table_name);
 
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-                      EXECUTE format('REVOKE ALL ON TABLE %I.%I FROM anon', current_schema(), table_name);
+                      EXECUTE format('REVOKE ALL ON TABLE %%I.%%I FROM anon', current_schema(), table_name);
                     END IF;
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-                      EXECUTE format('REVOKE ALL ON TABLE %I.%I FROM authenticated', current_schema(), table_name);
+                      EXECUTE format('REVOKE ALL ON TABLE %%I.%%I FROM authenticated', current_schema(), table_name);
                     END IF;
                     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-                      EXECUTE format('GRANT ALL ON TABLE %I.%I TO service_role', current_schema(), table_name);
+                      EXECUTE format('GRANT ALL ON TABLE %%I.%%I TO service_role', current_schema(), table_name);
                     END IF;
 
                     IF NOT EXISTS (
@@ -8387,7 +8387,7 @@ def init_db():
                         AND policyname = 'Block direct client access'
                     ) THEN
                       EXECUTE format(
-                        'CREATE POLICY "Block direct client access" ON %I.%I FOR ALL TO %s USING (false) WITH CHECK (false)',
+                        'CREATE POLICY "Block direct client access" ON %%I.%%I FOR ALL TO %%s USING (false) WITH CHECK (false)',
                         current_schema(), table_name, policy_role_clause
                       );
                     END IF;
