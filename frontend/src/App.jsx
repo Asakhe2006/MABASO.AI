@@ -7215,6 +7215,21 @@ export default function App() {
   const [isAddingRoomMembers, setIsAddingRoomMembers] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
+  const [isCollaborationActionSheetOpen, setIsCollaborationActionSheetOpen] = useState(false);
+  const [isBoardComposerOpen, setIsBoardComposerOpen] = useState(false);
+  const [boardItemType, setBoardItemType] = useState("note");
+  const [boardItemTitle, setBoardItemTitle] = useState("");
+  const [boardItemContent, setBoardItemContent] = useState("");
+  const [boardItemChecklist, setBoardItemChecklist] = useState("");
+  const [isPostingBoardItem, setIsPostingBoardItem] = useState(false);
+  const [isSharingRoomMaterial, setIsSharingRoomMaterial] = useState(false);
+  const [collaborationProfile, setCollaborationProfile] = useState(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
+  const [isCollaborationDiscoverOpen, setIsCollaborationDiscoverOpen] = useState(false);
+  const [collaborationDiscoverQuery, setCollaborationDiscoverQuery] = useState("");
+  const [collaborationDiscoverProfiles, setCollaborationDiscoverProfiles] = useState([]);
+  const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", discoverable: true, show_institution: true, allow_requests: true });
 
   useEffect(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return undefined;
@@ -7861,6 +7876,10 @@ export default function App() {
             {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
+        <button type="button" onClick={() => { setIsUpgradeModalOpen(false); openCollaborationPage({ refresh: false }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
+          <UsersRound className="h-4 w-4" aria-hidden="true" />
+          <span>{collaborationProfile ? "Edit Collaboration Profile" : "Create Collaboration Profile"}</span>
+        </button>
         <button type="button" onClick={() => { setIsUpgradeModalOpen(false); setIsLogoutConfirmOpen(true); }} className="profile-menu-row profile-menu-logout" role="menuitem">
           <LogOut className="h-4 w-4" aria-hidden="true" />
           <span>Log out</span>
@@ -11733,6 +11752,7 @@ export default function App() {
           </div>
         </div>
         <div className="force-mobile-stack flex flex-wrap gap-3">
+          <button type="button" onClick={() => setIsProfileEditorOpen(true)} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50">{collaborationProfile ? "Edit profile" : "Create profile"}</button>
           <button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh Rooms</button>
         </div>
       </div>
@@ -11740,10 +11760,13 @@ export default function App() {
       <nav className="collaboration-mobile-nav" aria-label="Collaboration navigation">
         <button type="button" onClick={() => document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" })}><UsersRound className="h-4 w-4" aria-hidden="true" /><span>Rooms</span></button>
         <button type="button" onClick={() => document.getElementById("collaboration-chat")?.scrollIntoView({ behavior: "smooth", block: "start" })}><MessageCircle className="h-4 w-4" aria-hidden="true" /><span>Chat</span></button>
-        <button type="button" className="collaboration-mobile-create" onClick={() => { document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" }); window.setTimeout(() => document.getElementById("collaboration-room-title")?.focus(), 250); }} aria-label="Create a room"><Plus className="h-5 w-5" aria-hidden="true" /></button>
+        <button type="button" className="collaboration-mobile-create" onClick={() => setIsCollaborationActionSheetOpen(true)} aria-label="Create or share"><Plus className="h-5 w-5" aria-hidden="true" /></button>
         <button type="button" onClick={() => document.getElementById("collaboration-board")?.scrollIntoView({ behavior: "smooth", block: "start" })}><LayoutDashboard className="h-4 w-4" aria-hidden="true" /><span>Board</span></button>
         <button type="button" onClick={() => document.getElementById("collaboration-materials")?.scrollIntoView({ behavior: "smooth", block: "start" })}><Ellipsis className="h-4 w-4" aria-hidden="true" /><span>More</span></button>
       </nav>
+      {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" aria-label="Create or share in collaboration" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><p className="mt-2 text-sm leading-6 text-slate-300">Choose an action for this collaboration room.</p><div className="mt-5 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); document.getElementById("collaboration-rooms")?.scrollIntoView({ behavior: "smooth", block: "start" }); window.setTimeout(() => document.getElementById("collaboration-room-title")?.focus(), 250); }} className="collaboration-sheet-action">Create room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }} className="collaboration-sheet-action disabled:opacity-40">Share current material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setIsBoardComposerOpen(true); window.setTimeout(() => document.getElementById("collaboration-board")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }} className="collaboration-sheet-action disabled:opacity-40">Add board note</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); roomBoardImageInputRef.current?.click(); }} className="collaboration-sheet-action disabled:opacity-40">Upload board photo</button></div><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)} className="mt-4 w-full rounded-xl px-4 py-3 text-sm font-semibold text-slate-200">Cancel</button></section></div> : null}
+
+      {isProfileEditorOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsProfileEditorOpen(false)}><section className="collaboration-profile-dialog" role="dialog" aria-modal="true" aria-label="Collaboration profile" onMouseDown={(event) => event.stopPropagation()}><div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Academic discovery</p><h3 className="mt-2 text-2xl font-semibold text-white">{collaborationProfile ? "Edit collaboration profile" : "Create collaboration profile"}</h3><p className="mt-2 text-sm leading-6 text-slate-300">Only academic details you choose are shown. Your email and precise location are never public.</p></div><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="rounded-full border border-white/10 px-3 py-2 text-sm text-slate-200">Close</button></div><div className="mt-5 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Display name<input value={collaborationProfileDraft.display_name} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, display_name: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="How students should know you" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Course / programme<input value={collaborationProfileDraft.course} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, course: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. Electrical Engineering" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Institution (optional)<input value={collaborationProfileDraft.institution} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, institution: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="School, college, or university" /></label><label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Year / grade<input value={collaborationProfileDraft.study_year} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, study_year: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. 2nd year" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Academic bio<textarea value={collaborationProfileDraft.bio} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, bio: event.target.value }))} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="What are you studying or working on?" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Subjects / modules (comma-separated)<input value={collaborationProfileDraft.subjects} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, subjects: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Communication Systems, Engineering Mathematics" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Can help with<input value={collaborationProfileDraft.can_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, can_help: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="MATLAB, Fourier series" /></label><label className="sm:col-span-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">Looking for help with<input value={collaborationProfileDraft.needs_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, needs_help: event.target.value }))} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Digital communications" /></label></div><div className="mt-5 grid gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-200"><label className="flex items-center justify-between gap-4"><span>Let students discover my academic profile</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.discoverable)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, discoverable: event.target.checked }))} /></label><label className="flex items-center justify-between gap-4"><span>Show my institution</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.show_institution)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, show_institution: event.target.checked }))} /></label><label className="flex items-center justify-between gap-4"><span>Allow collaboration requests</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.allow_requests)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, allow_requests: event.target.checked }))} /></label></div><div className="mt-5 flex justify-end gap-3"><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="rounded-full px-4 py-2 text-sm text-slate-200">Cancel</button><button type="button" onClick={saveCollaborationProfile} disabled={isProfileLoading} className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{isProfileLoading ? "Saving..." : "Save profile"}</button></div></section></div> : null}
       {invitedCollaborationRooms.length ? (
         <div className="mt-6 rounded-[28px] border border-cyan-300/20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.88))] p-5 shadow-[0_22px_70px_rgba(2,8,23,0.42)]">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -11841,6 +11864,12 @@ export default function App() {
             </div>
           </div>
 
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Discover</p><h3 className="mt-2 text-xl font-semibold text-white">Find academic collaborators</h3></div><button type="button" onClick={() => { if (!collaborationProfile) { setIsProfileEditorOpen(true); } else { void discoverCollaborationProfiles(); } }} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-50">{collaborationProfile ? "Search students" : "Create profile"}</button></div>
+            <p className="mt-3 text-sm leading-6 text-slate-300">Match by modules, course, and help topics—not by private contact details or precise location.</p>
+            {collaborationProfile ? <div className="mt-4 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void discoverCollaborationProfiles(); } }} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/75 px-3 py-2 text-sm text-white outline-none" placeholder="e.g. MATLAB or Communication Systems" /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading} className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Search</button></div> : null}
+            {isCollaborationDiscoverOpen ? <div className="mt-4 space-y-3">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 4).map((profile, index) => <article key={`${profile.display_name}-${index}`} className="rounded-2xl border border-white/10 bg-slate-950/70 p-3"><p className="font-semibold text-white">{profile.display_name || "Mabaso student"}</p><p className="mt-1 text-xs text-slate-400">{[profile.course, profile.study_year, profile.institution].filter(Boolean).join(" • ") || "Academic profile"}</p>{(profile.subjects || []).length ? <p className="mt-2 text-xs leading-5 text-emerald-100">Studies {profile.subjects.slice(0, 3).join(", ")}</p> : null}{(profile.can_help || []).length ? <p className="mt-1 text-xs leading-5 text-slate-300">Can help with {profile.can_help.slice(0, 2).join(", ")}</p> : null}</article>) : <p className="rounded-2xl border border-dashed border-white/10 p-3 text-xs leading-6 text-slate-300">No matching students found. Try a subject, module, or tool.</p>}</div> : null}
+          </div>
           <div id="collaboration-chat" className="collaboration-chat-card rounded-[24px] border border-white/10 bg-slate-950/75 p-5 xl:flex xl:min-h-[36rem] xl:flex-col">
             <div className="force-mobile-stack flex items-center justify-between gap-3">
               <div>
@@ -11945,6 +11974,30 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                <div className="mt-5 rounded-[22px] border border-white/10 bg-black/20 p-4">
+                  <div className="force-mobile-stack flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Shared materials</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-300">Room members can share a reference to their existing Mabaso study work without downloading and uploading it again.</p>
+                    </div>
+                    <button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={isSharingRoomMaterial} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#15803d,#22c55e)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isSharingRoomMaterial ? "Sharing..." : "Share current material"}</button>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {(activeRoom.materials || []).length ? (activeRoom.materials || []).map((item) => (
+                      <article key={item.id} className="collaboration-material-card rounded-2xl border border-white/10 bg-slate-950/75 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/80">{String(item.material_type || "material").replace(/_/g, " ")}</p>
+                            <h5 className="phone-safe-copy mt-2 text-sm font-semibold text-white">{item.title}</h5>
+                          </div>
+                          {(item.owner_email === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={() => removeCollaborationMaterial(item)} className="shrink-0 rounded-lg px-2 py-1 text-xs text-rose-200 hover:bg-rose-400/10">Remove</button> : null}
+                        </div>
+                        {item.description ? <p className="phone-safe-copy mt-2 text-xs leading-6 text-slate-300">{item.description}</p> : null}
+                        <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-400"><span className="truncate">Shared by {item.owner_email === normalizedAuthEmail ? "you" : "a room member"}</span><button type="button" onClick={() => { const tab = item.source?.active_tab; if (tab) { setFollowRoomView(true); void shareTabToRoom(tab); } }} disabled={!item.source?.active_tab} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-100 disabled:opacity-40">Open</button></div>
+                      </article>
+                    )) : <p className="rounded-2xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-300 sm:col-span-2">No independent materials have been shared yet. Share a Study Guide, notes, flashcards, or a test from your workspace.</p>}
+                  </div>
+                </div>
                 <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
@@ -12041,6 +12094,19 @@ export default function App() {
             </div>
           </div>
 
+          <div className="mt-5 rounded-[24px] border border-emerald-300/15 bg-emerald-400/[0.045] p-4">
+            <div className="force-mobile-stack flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.22em] text-emerald-200/70">Collaboration board</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Pin the group’s most important quote, task, reminder, or announcement here. Board items are separate from the materials library.</p>
+              </div>
+              <button type="button" onClick={() => setIsBoardComposerOpen((current) => !current)} className="shrink-0 rounded-full bg-[linear-gradient(135deg,#15803d,#22c55e)] px-4 py-2 text-sm font-semibold text-white">{isBoardComposerOpen ? "Close composer" : "+ Add to board"}</button>
+            </div>
+            {isBoardComposerOpen ? <div className="mt-4 grid gap-3 rounded-2xl border border-white/10 bg-slate-950/75 p-4 md:grid-cols-2"><label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Card type<select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none"><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select></label><label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Title<input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="e.g. Chapter 3 revision task" /></label><label className="md:col-span-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Message<textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Write the essential information for your group..." /></label>{boardItemType === "task" ? <label className="md:col-span-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Checklist (one task per line)<textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} rows={3} className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm normal-case tracking-normal text-white outline-none" placeholder="Summarise Chapter 3&#10;Prepare presentation" /></label> : null}<div className="md:col-span-2 flex justify-end"><button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem} className="rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{isPostingBoardItem ? "Posting..." : "Post to board"}</button></div></div> : null}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {(activeRoom.board_items || []).length ? (activeRoom.board_items || []).map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type} rounded-2xl p-4 text-slate-950`}><div className="flex items-start justify-between gap-3"><p className="text-[10px] font-bold uppercase tracking-[0.2em]">{String(item.item_type || "note").replace(/_/g, " ")}</p>{(item.owner_email === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={() => removeCollaborationBoardItem(item)} className="rounded-md px-2 py-1 text-xs hover:bg-black/10">Delete</button> : null}</div>{item.title ? <h4 className="mt-2 text-base font-bold">{item.title}</h4> : null}{item.content ? <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">{item.content}</p> : null}{(item.checklist || []).length ? <ul className="mt-3 space-y-1 text-sm">{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}<p className="mt-4 text-[11px] text-slate-700">Added by {item.owner_email === normalizedAuthEmail ? "you" : "a room member"}</p></article>) : <p className="rounded-2xl border border-dashed border-white/10 p-4 text-sm leading-6 text-slate-300 sm:col-span-2 xl:col-span-3">Nothing has been added to the board yet. Use Add to board to post the group’s first note or task.</p>}
+            </div>
+          </div>
           <div className="mt-5">
             <input
               ref={roomBoardImageInputRef}
@@ -21862,6 +21928,14 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
+    if (!authToken) {
+      setCollaborationProfile(null);
+      return;
+    }
+    void loadCollaborationProfile();
+  }, [authToken]);
+
+  useEffect(() => {
     const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
     if (!authToken || !isCollaborationVisible) return undefined;
     const interval = window.setInterval(() => {
@@ -27665,6 +27739,151 @@ export default function App() {
     }
   };
 
+  const shareCurrentWorkspaceMaterialToRoom = async () => {
+    if (!activeRoomId) return setError("Open a collaboration room first.");
+    setIsSharingRoomMaterial(true);
+    setError("");
+    try {
+      const sharedTab = ["podcast", "presentation", "collaboration"].includes(activeTab) ? "guide" : activeTab;
+      const materialTypeByTab = { guide: "study_guide", formulas: "note", examples: "note", flashcards: "flashcards", quiz: "quiz", transcript: "document" };
+      const label = tabs.find((tab) => tab.id === sharedTab)?.label || "Study material";
+      const title = workspaceFileLabel || extractHistoryTitle(summary, "Study material");
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/material-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `${title} — ${label}`.slice(0, 180),
+          material_type: materialTypeByTab[sharedTab] || "note",
+          description: `Shared from this Mabaso AI workspace: ${label}.`,
+          source: { kind: "workspace", active_tab: sharedTab, room_materials: true },
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not share this material with the room.");
+      setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
+      void refreshCollaborationRooms(true);
+      setStatus(`${label} shared with the room.`);
+    } catch (err) {
+      setError(err.message || "Could not share this material with the room.");
+    } finally {
+      setIsSharingRoomMaterial(false);
+    }
+  };
+
+  const removeCollaborationMaterial = async (item) => {
+    if (!activeRoomId || !item?.id) return;
+    if (!window.confirm(`Remove “${item.title}” from this room? The original Mabaso material is not deleted.`)) return;
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/material-items/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not remove the room material.");
+      setActiveRoom((room) => room ? { ...room, materials: (room.materials || []).filter((entry) => entry.id !== item.id) } : room);
+      void refreshCollaborationRooms(true);
+      setStatus("Material removed from this room. Your original material is unchanged.");
+    } catch (err) {
+      setError(err.message || "Could not remove the room material.");
+    }
+  };
+
+  const postCollaborationBoardItem = async () => {
+    if (!activeRoomId) return setError("Open a collaboration room first.");
+    if (!boardItemTitle.trim() && !boardItemContent.trim()) return setError("Add a board title or message first.");
+    setIsPostingBoardItem(true);
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item_type: boardItemType,
+          title: boardItemTitle,
+          content: boardItemContent,
+          checklist: boardItemChecklist.split("\n").map((item) => item.trim()).filter(Boolean),
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not add that item to the board.");
+      setActiveRoom((room) => room ? { ...room, board_items: [data.item, ...(room.board_items || [])] } : room);
+      setBoardItemTitle("");
+      setBoardItemContent("");
+      setBoardItemChecklist("");
+      setIsBoardComposerOpen(false);
+      void refreshCollaborationRooms(true);
+      setStatus("Added to the collaboration board.");
+    } catch (err) {
+      setError(err.message || "Could not add that item to the board.");
+    } finally {
+      setIsPostingBoardItem(false);
+    }
+  };
+
+  const removeCollaborationBoardItem = async (item) => {
+    if (!activeRoomId || !item?.id) return;
+    if (!window.confirm(`Delete “${item.title || "this board item"}”?`)) return;
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-items/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not delete the board item.");
+      setActiveRoom((room) => room ? { ...room, board_items: (room.board_items || []).filter((entry) => entry.id !== item.id) } : room);
+      void refreshCollaborationRooms(true);
+      setStatus("Board item deleted.");
+    } catch (err) {
+      setError(err.message || "Could not delete the board item.");
+    }
+  };
+
+  const loadCollaborationProfile = async () => {
+    if (!authToken) return;
+    setIsProfileLoading(true);
+    try {
+      const response = await authFetch("/collaboration/profile/me");
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not load collaboration profile.");
+      const profile = data.profile || null;
+      setCollaborationProfile(profile);
+      if (profile) setCollaborationProfileDraft({ ...profile, subjects: (profile.subjects || []).join(", "), can_help: (profile.can_help || []).join(", "), needs_help: (profile.needs_help || []).join(", ") });
+    } catch (err) {
+      setError(err.message || "Could not load collaboration profile.");
+    } finally {
+      setIsProfileLoading(false);
+    }
+  };
+
+  const discoverCollaborationProfiles = async () => {
+    setIsProfileLoading(true);
+    setError("");
+    try {
+      const query = collaborationDiscoverQuery.trim();
+      const response = await authFetch(`/collaboration/discover/profiles${query ? `?query=${encodeURIComponent(query)}` : ""}`);
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not search collaboration profiles.");
+      setCollaborationDiscoverProfiles(data.profiles || []);
+      setIsCollaborationDiscoverOpen(true);
+    } catch (err) {
+      setError(err.message || "Could not search collaboration profiles.");
+    } finally {
+      setIsProfileLoading(false);
+    }
+  };
+  const saveCollaborationProfile = async () => {
+    setIsProfileLoading(true);
+    try {
+      const fields = ["subjects", "can_help", "needs_help"];
+      const payload = { ...collaborationProfileDraft };
+      fields.forEach((field) => { payload[field] = String(payload[field] || "").split(",").map((value) => value.trim()).filter(Boolean); });
+      const response = await authFetch("/collaboration/profile/me", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not save your collaboration profile.");
+      setCollaborationProfile(data.profile);
+      setCollaborationProfileDraft({ ...data.profile, subjects: (data.profile.subjects || []).join(", "), can_help: (data.profile.can_help || []).join(", "), needs_help: (data.profile.needs_help || []).join(", ") });
+      setIsProfileEditorOpen(false);
+      setStatus("Collaboration profile saved. You control what other students can discover.");
+    } catch (err) {
+      setError(err.message || "Could not save your collaboration profile.");
+    } finally {
+      setIsProfileLoading(false);
+    }
+  };
   const shareTabToRoom = async (tabId = activeTab) => {
     if (!activeRoomId) return;
     if (["podcast", "presentation"].includes(tabId)) {
@@ -29455,6 +29674,10 @@ export default function App() {
               {outputLanguageOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
+          <button type="button" onClick={() => { setIsProfileMenuOpen(false); openCollaborationPage({ refresh: false }); setIsProfileEditorOpen(true); }} className="profile-menu-row" role="menuitem">
+            <UsersRound className="h-4 w-4" aria-hidden="true" />
+            <span>{collaborationProfile ? "Edit Collaboration Profile" : "Create Collaboration Profile"}</span>
+          </button>
           <button type="button" onClick={() => { setIsProfileMenuOpen(false); logout(); }} className="profile-menu-row profile-menu-logout" role="menuitem">
             <LogOut className="h-4 w-4" aria-hidden="true" />
             <span>Log out</span>

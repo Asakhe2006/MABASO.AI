@@ -7235,6 +7235,36 @@ class CollaborationRoomCreateRequest(BaseModel):
     test_visibility: str = "private"
 
 
+class CollaborationMaterialCreateRequest(BaseModel):
+    title: str
+    material_type: str = "note"
+    description: str = ""
+    source: dict[str, Any] = {}
+
+
+class CollaborationBoardItemCreateRequest(BaseModel):
+    item_type: str = "note"
+    title: str = ""
+    content: str = ""
+    checklist: list[str] = []
+    due_at: str = ""
+    material_id: str = ""
+
+
+class CollaborationProfileRequest(BaseModel):
+    display_name: str = ""
+    bio: str = ""
+    institution: str = ""
+    course: str = ""
+    study_year: str = ""
+    subjects: list[str] = []
+    can_help: list[str] = []
+    needs_help: list[str] = []
+    discoverable: bool = False
+    show_institution: bool = False
+    allow_requests: bool = True
+
+
 class CollaborationMessageRequest(BaseModel):
     content: str
 
@@ -7774,6 +7804,63 @@ def init_db():
             ON study_history_items (email, updated_at DESC)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_profiles (
+                email TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                bio TEXT NOT NULL DEFAULT '',
+                institution TEXT NOT NULL DEFAULT '',
+                course TEXT NOT NULL DEFAULT '',
+                study_year TEXT NOT NULL DEFAULT '',
+                subjects_json TEXT NOT NULL DEFAULT '[]',
+                can_help_json TEXT NOT NULL DEFAULT '[]',
+                needs_help_json TEXT NOT NULL DEFAULT '[]',
+                discoverable INTEGER NOT NULL DEFAULT 0,
+                show_institution INTEGER NOT NULL DEFAULT 0,
+                allow_requests INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_materials (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                title TEXT NOT NULL,
+                material_type TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                source_json TEXT NOT NULL DEFAULT '{}',
+                visibility TEXT NOT NULL DEFAULT 'room',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_board_items (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                checklist_json TEXT NOT NULL DEFAULT '[]',
+                due_at TEXT NOT NULL DEFAULT '',
+                material_id TEXT NOT NULL DEFAULT '',
+                pinned INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_materials_room_created ON collaboration_materials (room_id, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_board_room_created ON collaboration_board_items (room_id, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_profiles_discoverable ON collaboration_profiles (discoverable, updated_at DESC)")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
@@ -19518,6 +19605,74 @@ def normalize_collaboration_board_images(images: Any) -> list[dict[str, str]]:
     return normalized_images
 
 
+def collaboration_room_can_manage(room: sqlite3.Row, current_user: str) -> bool:
+    if room["owner_email"] == current_user:
+        return True
+    with get_db_connection() as connection:
+        membership = connection.execute(
+            "SELECT role FROM collaboration_room_members WHERE room_id = ? AND email = ?",
+            (room["id"], current_user),
+        ).fetchone()
+    return bool(membership and membership["role"] == "moderator")
+
+
+def load_collaboration_json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}") if isinstance(value, str) else value
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def get_collaboration_room_materials(room_id: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, room_id, owner_email, title, material_type, description,
+                   source_json, visibility, created_at, updated_at
+            FROM collaboration_materials
+            WHERE room_id = ?
+            ORDER BY created_at DESC
+            LIMIT 120
+            """,
+            (room_id,),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"], "room_id": row["room_id"], "owner_email": row["owner_email"],
+            "title": row["title"], "material_type": row["material_type"],
+            "description": row["description"], "source": load_collaboration_json_object(row["source_json"]),
+            "visibility": row["visibility"], "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def get_collaboration_board_items(room_id: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, room_id, owner_email, item_type, title, content, checklist_json,
+                   due_at, material_id, pinned, created_at, updated_at
+            FROM collaboration_board_items
+            WHERE room_id = ?
+            ORDER BY pinned DESC, created_at DESC
+            LIMIT 120
+            """,
+            (room_id,),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"], "room_id": row["room_id"], "owner_email": row["owner_email"],
+            "item_type": row["item_type"], "title": row["title"], "content": row["content"],
+            "checklist": [compact_text(item) for item in load_json_list(row["checklist_json"]) if compact_text(item)][:20],
+            "due_at": row["due_at"], "material_id": row["material_id"], "pinned": bool(row["pinned"]),
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
 def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> dict:
     room_id = room_row["id"]
     test_visibility = normalize_test_visibility(room_row["test_visibility"])
@@ -19544,8 +19699,11 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "updated_at": room_row["updated_at"],
         "members": members,
         "messages": get_collaboration_room_messages(room_id),
+        "materials": get_collaboration_room_materials(room_id),
+        "board_items": get_collaboration_board_items(room_id),
         "quiz_answers": get_collaboration_room_answers(room_id, current_user, test_visibility),
         "is_owner": room_row["owner_email"] == current_user,
+        "can_manage": collaboration_room_can_manage(room_row, current_user),
     }
 
 
@@ -37973,6 +38131,198 @@ async def update_collaboration_room_materials(
 
     updated_room = get_accessible_collaboration_room(room_id, current_user)
     return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.get("/collaboration/rooms/{room_id}/material-items")
+async def list_collaboration_material_items(room_id: str, current_user: str = Depends(require_authenticated_user)):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    return {"items": get_collaboration_room_materials(room["id"])}
+
+
+@app.post("/collaboration/rooms/{room_id}/material-items")
+async def create_collaboration_material_item(
+    room_id: str,
+    payload: CollaborationMaterialCreateRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    title = compact_text(payload.title)[:180]
+    material_type = compact_text(payload.material_type, "note").lower()[:48]
+    allowed_types = {"study_guide", "note", "presentation", "mind_map", "podcast", "image", "video", "quiz", "flashcards", "practice_test", "timetable", "document"}
+    if not title:
+        raise HTTPException(status_code=400, detail="A material title is required.")
+    if material_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="That material type is not supported in collaboration rooms.")
+    item_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    safe_source = payload.source if isinstance(payload.source, dict) else {}
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_materials (
+                id, room_id, owner_email, title, material_type, description,
+                source_json, visibility, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (item_id, room["id"], current_user, title, material_type, compact_text(payload.description)[:2000], dump_json(safe_source), "room", now_iso, now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {"item": next(item for item in get_collaboration_room_materials(room["id"]) if item["id"] == item_id)}
+
+
+@app.delete("/collaboration/rooms/{room_id}/material-items/{item_id}")
+async def delete_collaboration_material_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    with get_db_connection() as connection:
+        item = connection.execute("SELECT owner_email FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="Collaboration material not found.")
+        if item["owner_email"] != current_user and not collaboration_room_can_manage(room, current_user):
+            raise HTTPException(status_code=403, detail="You cannot remove another member's material.")
+        connection.execute("DELETE FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"]))
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (utc_now().isoformat(), room["id"]))
+    return {"deleted": True, "id": item_id}
+
+
+@app.get("/collaboration/rooms/{room_id}/board-items")
+async def list_collaboration_board_items(room_id: str, current_user: str = Depends(require_authenticated_user)):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    return {"items": get_collaboration_board_items(room["id"])}
+
+
+@app.post("/collaboration/rooms/{room_id}/board-items")
+async def create_collaboration_board_item(
+    room_id: str,
+    payload: CollaborationBoardItemCreateRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    item_type = compact_text(payload.item_type, "note").lower()[:32]
+    if item_type not in {"note", "important", "quote", "task", "announcement", "material"}:
+        raise HTTPException(status_code=400, detail="That board item type is not supported.")
+    title = compact_text(payload.title)[:180]
+    content = compact_text(payload.content)[:5000]
+    if not title and not content and not compact_text(payload.material_id):
+        raise HTTPException(status_code=400, detail="Add a title, message, or material before posting to the board.")
+    item_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_board_items (
+                id, room_id, owner_email, item_type, title, content, checklist_json,
+                due_at, material_id, pinned, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (item_id, room["id"], current_user, item_type, title, content, dump_json([compact_text(item)[:240] for item in payload.checklist if compact_text(item)][:20]), compact_text(payload.due_at)[:64], compact_text(payload.material_id)[:96], 0, now_iso, now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
+
+
+@app.delete("/collaboration/rooms/{room_id}/board-items/{item_id}")
+async def delete_collaboration_board_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    with get_db_connection() as connection:
+        item = connection.execute("SELECT owner_email FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
+        if not item:
+            raise HTTPException(status_code=404, detail="Board item not found.")
+        if item["owner_email"] != current_user and not collaboration_room_can_manage(room, current_user):
+            raise HTTPException(status_code=403, detail="You cannot remove another member's board item.")
+        connection.execute("DELETE FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"]))
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (utc_now().isoformat(), room["id"]))
+    return {"deleted": True, "id": item_id}
+
+
+def serialize_collaboration_profile(row: sqlite3.Row, *, include_email: bool = False) -> dict[str, Any]:
+    profile = {
+        "display_name": row["display_name"],
+        "bio": row["bio"],
+        "institution": row["institution"] if row["show_institution"] else "",
+        "course": row["course"],
+        "study_year": row["study_year"],
+        "subjects": load_json_list(row["subjects_json"]),
+        "can_help": load_json_list(row["can_help_json"]),
+        "needs_help": load_json_list(row["needs_help_json"]),
+        "discoverable": bool(row["discoverable"]),
+        "show_institution": bool(row["show_institution"]),
+        "allow_requests": bool(row["allow_requests"]),
+        "updated_at": row["updated_at"],
+    }
+    if include_email:
+        profile["email"] = row["email"]
+    return profile
+
+
+@app.get("/collaboration/profile/me")
+async def get_my_collaboration_profile(current_user: str = Depends(require_authenticated_user)):
+    with get_db_connection() as connection:
+        row = connection.execute("SELECT * FROM collaboration_profiles WHERE email = ?", (current_user,)).fetchone()
+    return {"profile": serialize_collaboration_profile(row, include_email=True) if row else None}
+
+
+@app.put("/collaboration/profile/me")
+async def save_my_collaboration_profile(
+    payload: CollaborationProfileRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    now_iso = utc_now().isoformat()
+    clean_list = lambda values: [compact_text(value)[:80] for value in values if compact_text(value)][:20]
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_profiles (
+                email, display_name, bio, institution, course, study_year, subjects_json,
+                can_help_json, needs_help_json, discoverable, show_institution, allow_requests,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                display_name = excluded.display_name, bio = excluded.bio,
+                institution = excluded.institution, course = excluded.course,
+                study_year = excluded.study_year, subjects_json = excluded.subjects_json,
+                can_help_json = excluded.can_help_json, needs_help_json = excluded.needs_help_json,
+                discoverable = excluded.discoverable, show_institution = excluded.show_institution,
+                allow_requests = excluded.allow_requests, updated_at = excluded.updated_at
+            """,
+            (
+                current_user, compact_text(payload.display_name)[:120], compact_text(payload.bio)[:800],
+                compact_text(payload.institution)[:160], compact_text(payload.course)[:160],
+                compact_text(payload.study_year)[:80], dump_json(clean_list(payload.subjects)),
+                dump_json(clean_list(payload.can_help)), dump_json(clean_list(payload.needs_help)),
+                int(bool(payload.discoverable)), int(bool(payload.show_institution)), int(bool(payload.allow_requests)),
+                now_iso, now_iso,
+            ),
+        )
+        row = connection.execute("SELECT * FROM collaboration_profiles WHERE email = ?", (current_user,)).fetchone()
+    return {"profile": serialize_collaboration_profile(row, include_email=True)}
+
+
+@app.get("/collaboration/discover/profiles")
+async def discover_collaboration_profiles(
+    query: str = "",
+    current_user: str = Depends(require_authenticated_user),
+):
+    needle = compact_text(query).lower()[:100]
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM collaboration_profiles
+            WHERE discoverable = 1 AND email != ?
+            ORDER BY updated_at DESC
+            LIMIT 100
+            """,
+            (current_user,),
+        ).fetchall()
+    profiles = [serialize_collaboration_profile(row) for row in rows]
+    if needle:
+        profiles = [
+            profile for profile in profiles
+            if needle in " ".join([
+                profile["display_name"], profile["bio"], profile["institution"], profile["course"],
+                profile["study_year"], *profile["subjects"], *profile["can_help"], *profile["needs_help"],
+            ]).lower()
+        ]
+    return {"profiles": profiles[:50]}
 
 
 @app.post("/collaboration/rooms/{room_id}/board-images")
