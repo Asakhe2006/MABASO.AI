@@ -38241,8 +38241,9 @@ async def create_collaboration_board_item(
         raise HTTPException(status_code=400, detail="That board item type is not supported.")
     title = compact_text(payload.title)[:180]
     content = compact_text(payload.content)[:5000]
-    if not title and not content and not compact_text(payload.material_id):
-        raise HTTPException(status_code=400, detail="Add a title, message, or material before posting to the board.")
+    checklist = [compact_text(item)[:240] for item in payload.checklist if compact_text(item)][:20]
+    if not title and not content and not compact_text(payload.material_id) and not checklist:
+        raise HTTPException(status_code=400, detail="Add a title, message, checklist, or material before posting to the board.")
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
@@ -38253,7 +38254,7 @@ async def create_collaboration_board_item(
                 due_at, material_id, pinned, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (item_id, room["id"], current_user, item_type, title, content, dump_json([compact_text(item)[:240] for item in payload.checklist if compact_text(item)][:20]), compact_text(payload.due_at)[:64], compact_text(payload.material_id)[:96], 0, now_iso, now_iso),
+            (item_id, room["id"], current_user, item_type, title, content, dump_json(checklist), compact_text(payload.due_at)[:64], compact_text(payload.material_id)[:96], 0, now_iso, now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}

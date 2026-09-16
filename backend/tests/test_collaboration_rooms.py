@@ -117,6 +117,16 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(board_result["item"]["checklist"], ["Summarise chapter 3", "Prepare examples"])
 
+        checklist_only_result = await main.create_collaboration_board_item(
+            room_id,
+            main.CollaborationBoardItemCreateRequest(
+                item_type="task",
+                checklist=["Review the final answer"],
+            ),
+            current_user=owner,
+        )
+        self.assertEqual(checklist_only_result["item"]["checklist"], ["Review the final answer"])
+
         profile_result = await main.save_my_collaboration_profile(
             main.CollaborationProfileRequest(
                 display_name="Student One",
@@ -142,18 +152,36 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         discovery = await main.discover_collaboration_profiles("MATLAB", current_user=owner)
         self.assertEqual(discovery["profiles"][0]["public_id"], student_profile["profile"]["public_id"])
         self.assertTrue(discovery["profiles"][0]["match_reasons"])
+        self.assertNotIn("email", discovery["profiles"][0])
 
         invite_result = await main.invite_discovered_profile_to_room(
             room_id,
             student_profile["profile"]["public_id"],
             current_user=owner,
         )
-        self.assertEqual(invite_result["room"]["members"][-1]["email"], "student2@example.com")
+        self.assertIn("student2@example.com", {member["email"] for member in invite_result["room"]["members"]})
+
+        member_message = await main.send_collaboration_message(
+            room_id,
+            main.CollaborationMessageRequest(content="I have added my revision task."),
+            current_user="student2@example.com",
+        )
+        self.assertEqual(member_message["room"]["messages"][-1]["author_email"], "student2@example.com")
+
+        member_board_item = await main.create_collaboration_board_item(
+            room_id,
+            main.CollaborationBoardItemCreateRequest(item_type="note", content="Member revision note"),
+            current_user="student2@example.com",
+        )
+        self.assertEqual(member_board_item["item"]["owner_email"], "student2@example.com")
+
+        with self.assertRaises(main.HTTPException):
+            await main.get_collaboration_room(room_id, current_user="outsider@example.com")
 
         reopened = await main.get_collaboration_room(room_id, current_user=owner)
-        self.assertEqual(len(reopened["room"]["messages"]), 1)
+        self.assertEqual(len(reopened["room"]["messages"]), 2)
         self.assertEqual(len(reopened["room"]["materials"]), 1)
-        self.assertEqual(len(reopened["room"]["board_items"]), 1)
+        self.assertEqual(len(reopened["room"]["board_items"]), 3)
 
 
 if __name__ == "__main__":
