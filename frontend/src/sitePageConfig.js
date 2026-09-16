@@ -1,4 +1,6 @@
 import termsAndConditionsMarkdown from "./content/terms-and-conditions.md?raw";
+import collaborationGuideMarkdown from "./content/collaboration-guide.md?raw";
+import collaborationPermissionsGuideMarkdown from "./content/collaboration-permissions-guide.md?raw";
 
 const primaryCta = (label, action, target = "") => ({ label, action, target, variant: "primary" });
 const secondaryCta = (label, action, target = "") => ({ label, action, target, variant: "secondary" });
@@ -10,6 +12,7 @@ const page = ({
   access,
   hero,
   metadata,
+  updatedAt = "",
   aliases = [],
   contains = [],
   layout = [],
@@ -35,6 +38,7 @@ const page = ({
   access,
   hero,
   metadata,
+  updatedAt,
   contains,
   layout,
   modules,
@@ -1352,114 +1356,44 @@ export const sitePages = [
     route: "/collaboration/shared-study-rooms",
     title: "Shared Study Rooms",
     category: "Collaboration",
-    access: "login",
+    access: "public",
     metadata: {
       title: "Shared Study Rooms | Mabaso AI",
-      description: "Invite collaborators, sync study tools, share notes, and revise one lecture together inside Mabaso AI study rooms.",
+      description: "A complete public guide to Mabaso AI Collaboration Rooms, including rooms, chat, materials, board controls, profiles, discovery, permissions and mobile navigation.",
     },
+    updatedAt: "16 September 2026",
     hero: {
-      eyebrow: "Collaboration / Shared Study Rooms",
-      headline: "Create study rooms around a real lecture workspace, not isolated chat threads.",
-      description: "Shared Study Rooms give students a lecture-centered collaboration layer: shared notes, synced tools, room chat, and test-answer visibility modes that keep the group anchored to one revision pack.",
+      eyebrow: "Collaboration / Complete Guide",
+      headline: "Learn every Collaboration Rooms control before opening your first room.",
+      description: "This signed-out reference explains every room, material, board, chat, profile, discovery and mobile navigation control in continuous detail. The guide is public; private room data still requires sign-in and membership.",
       ctas: [
         primaryCta("Open Collaboration", "open-app", "collaboration"),
         secondaryCta("Explore Group Study Features", "route", "/collaboration/group-study-features"),
       ],
       metrics: [
-        { label: "Room type", value: "Lecture centered" },
-        { label: "Shared tools", value: "Guide, test, flashcards, notes" },
-        { label: "Protection", value: "Members only" },
+        { label: "Guide access", value: "Public" },
+        { label: "Room content", value: "Members only" },
+        { label: "Messages", value: "Unlimited" },
       ],
-      preview: {
-        kicker: "Shared workspace preview",
-        title: "Participants, shared notes, synced tools, and room chat",
-        subtitle: "Show a real-time collaboration shell with member chips, room context, and active tool syncing.",
-        tabs: ["Room", "Notes", "Tool Sync", "Chat"],
-        rows: [
-          { label: "Room creation", value: "Invite by email" },
-          { label: "Shared focus", value: "Guide, exam, flashcards, notes" },
-          { label: "Protection", value: "Authenticated and room scoped" },
-        ],
-      },
     },
-    contains: [
-      { icon: "users", title: "Shared lecture rooms", description: "Rooms stay attached to a specific study pack so group discussion remains contextual." },
-      { icon: "sticky-note", title: "Shared notes board", description: "Everyone sees the same pinned note surface for reminders and plans." },
-      { icon: "send", title: "Room chat and synced tool focus", description: "Participants can chat and keep the room aligned on one study tool at a time." },
-    ],
-    layout: [
-      { title: "Collaboration hero shell", description: "Lead with the room layout: members, notes, active tool, and chat." },
-      { title: "Permission and visibility section", description: "Explain owner controls, invite model, and answer visibility settings." },
-      { title: "Adoption CTA strip", description: "Guide visitors into the live collaboration experience after sign-in." },
-    ],
-    modules: [
-      {
-        icon: "users-2",
-        title: "Main modules",
-        items: [
-          "Room creation and invite flow",
-          "Shared notes board",
-          "Room chat and active-tool sync panel",
-        ],
-      },
-      {
-        icon: "waypoints",
-        title: "Collaboration architecture",
-        items: [
-          "One lecture room per revision context",
-          "Shared focus tool in the center",
-          "Notes, chat, and test controls around it",
-        ],
-      },
-      {
-        icon: "shield-check",
-        title: "Access rules",
-        items: [
-          "All collaboration features require login",
-          "Room membership, shared notes, and answer visibility are protected user data",
-          "Signed-out visitors see a blurred team workspace with a premium login wall",
-        ],
-      },
-    ],
-    visuals: [
-      "Live participant chips and room-status pills",
-      "Shared notes board with collaborative cards",
-      "Room chat shell beside the synced active-tool preview",
-    ],
-    emptyState: {
-      title: "No study room created yet",
-      description: "Render an empty shared room canvas with invite placeholders and a CTA to open collaboration after sign-in.",
-    },
-    designNotes: [
-      "Collaboration must feel mature, secure, and team-ready rather than social or noisy.",
-      "Use wider desktop layouts so the room can show notes, chat, and active tool together.",
-      "Keep member identity, ownership, and room focus visually obvious at all times.",
-    ],
+    markdown: collaborationGuideMarkdown,
     relatedPages: ["/collaboration/group-study-features", "/product/study-workspace", "/product/ai-test-generator"],
     footerCrossLinks: ["/company/security", "/support/help-center", "/company/privacy"],
-    lockedPreview: {
-      title: "Shared study rooms are member-protected",
-      description: "Room notes, participant lists, answer visibility, and shared study content require authenticated access tied to invited members.",
-      benefits: [
-        "Invite teammates into a lecture-specific room",
-        "Share the current study tool in one click",
-        "Coordinate revision through notes, chat, and room controls",
-      ],
-    },
   }),
   page({
     route: "/collaboration/group-study-features",
     title: "Group Study Features",
     category: "Collaboration",
-    access: "login",
+    access: "public",
     metadata: {
       title: "Group Study Features | Mabaso AI",
-      description: "Permissions, shared answers, room ownership, real-time notes, and collaborative revision controls in Mabaso AI.",
+      description: "A public reference for Collaboration Room roles, permissions, private and shared answers, member actions, discovery privacy and responsive navigation.",
     },
+    updatedAt: "16 September 2026",
     hero: {
-      eyebrow: "Collaboration / Group Study Features",
-      headline: "Permission-aware collaboration for teams that revise together.",
-      description: "Group Study Features explains the governance layer of collaboration: room ownership, visibility modes, shared-answer settings, note flows, and real-time study alignment across the same lecture pack.",
+      eyebrow: "Collaboration / Permissions Guide",
+      headline: "Understand exactly what owners, managers and room members can do.",
+      description: "This signed-out reference explains room roles, invitations, chat, materials, board permissions, profile privacy and the controls that protect student work on desktop and mobile.",
       ctas: [
         primaryCta("Create a Study Room", "open-app", "collaboration"),
         secondaryCta("View Shared Study Rooms", "route", "/collaboration/shared-study-rooms"),
@@ -1467,84 +1401,12 @@ export const sitePages = [
       metrics: [
         { label: "Visibility modes", value: "Private or shared" },
         { label: "Room control", value: "Owner managed" },
-        { label: "Collab trust", value: "Protected" },
+        { label: "Private data", value: "Membership protected" },
       ],
-      preview: {
-        kicker: "Permissions preview",
-        title: "Room visibility, shared answers, and moderation controls",
-        subtitle: "A premium governance view shows how collaboration stays structured and safe at scale.",
-        tabs: ["Permissions", "Answers", "Notes", "Ownership"],
-        rows: [
-          { label: "Owner actions", value: "Visibility and room focus control" },
-          { label: "Member flow", value: "Shared notes and answer comparison" },
-          { label: "Protection", value: "Sign-in required" },
-        ],
-      },
     },
-    contains: [
-      { icon: "shield", title: "Permission controls", description: "Owner-managed settings keep group revision organized and intentional." },
-      { icon: "eye", title: "Answer visibility modes", description: "Rooms can keep answers private or allow shared answer comparison." },
-      { icon: "notebook-tabs", title: "Real-time shared notes", description: "Teams collaborate on one lecture pack through notes and synchronized context." },
-    ],
-    layout: [
-      { title: "Permission-led hero", description: "Start with governance and answer-visibility cards rather than generic collaboration copy." },
-      { title: "Feature modules", description: "Show shared notes, answer modes, and room ownership as separate, clear modules." },
-      { title: "Security reassurance band", description: "Tie collaboration trust back to authenticated membership and platform monitoring." },
-    ],
-    modules: [
-      {
-        icon: "list-checks",
-        title: "Feature modules",
-        items: [
-          "Owner controls and room settings",
-          "Shared-answer and private-answer modes",
-          "Shared notes and coordination flows",
-        ],
-      },
-      {
-        icon: "panel-left-dashed",
-        title: "Page architecture",
-        items: [
-          "Governance overview first",
-          "Real-time collaboration examples second",
-          "Trust, safety, and adoption CTA last",
-        ],
-      },
-      {
-        icon: "lock",
-        title: "Access rules",
-        items: [
-          "All group-study features are login protected",
-          "Notes, room messages, answer comparisons, and room controls are treated as user data",
-          "Visitors without a session see blurred room-state cards behind a premium login wall",
-        ],
-      },
-    ],
-    visuals: [
-      "Permission cards for private vs shared answers",
-      "Shared whiteboard-style note canvas",
-      "Owner control panel with room state and moderation chips",
-    ],
-    emptyState: {
-      title: "No team collaboration has started yet",
-      description: "Use a soft glass governance card set with placeholder permissions and a CTA to create the first room.",
-    },
-    designNotes: [
-      "This page should look like enterprise collaboration software, not a school discussion board.",
-      "Keep ownership and visibility states strong and unmistakable.",
-      "Use security language carefully to reinforce trust without turning the page into a legal document.",
-    ],
+    markdown: collaborationPermissionsGuideMarkdown,
     relatedPages: ["/collaboration/shared-study-rooms", "/product/ai-test-generator", "/company/security"],
     footerCrossLinks: ["/support/help-center", "/company/privacy", "/company/terms"],
-    lockedPreview: {
-      title: "Group-study controls require secure membership",
-      description: "Permissions, shared-answer modes, and room-level notes only make sense inside authenticated member spaces.",
-      benefits: [
-        "Manage who sees answers in collaborative tests",
-        "Keep shared notes synced to the lecture room",
-        "Protect participant identity and room context",
-      ],
-    },
   }),
   page({
     route: "/resources/supported-file-types",

@@ -3,8 +3,12 @@ import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
+const siteConfigSource = await readFile(new URL("../src/sitePageConfig.js", import.meta.url), "utf8");
+const siteShellSource = await readFile(new URL("../src/EnterpriseSiteShell.jsx", import.meta.url), "utf8");
+const publicGuideSource = await readFile(new URL("../src/content/collaboration-guide.md", import.meta.url), "utf8");
 
 assert.doesNotMatch(appSource, /\/>\\n\\n\s*\{isProfileEditorOpen/, "Collaboration must not render literal newline text.");
+assert.doesNotMatch(appSource, /collaboration-upload-card/, "Collaboration must not display an upload allowance card.");
 assert.match(appSource, /currentPage === "collaboration" \|\| isUpgradeModalOpen/, "The global mobile nav must not overlap Collaboration navigation.");
 assert.match(appSource, /currentPage !== "collaboration" \? \(/, "The outer profile strip must not duplicate the Collaboration account menu.");
 assert.match(appSource, /renderCompactProfileMenu\(\{ displayName: collaborationDisplayName \}\)/, "Collaboration must use the real account menu with logout.");
@@ -20,5 +24,11 @@ assert.match(appSource, /inviteDiscoveredProfileToRoom\(profile\)/, "Discovery r
 assert.match(appSource, /role=\{error \? "alert" : "status"\}/, "Collaboration API failures must be visible in the page.");
 assert.match(cssSource, /\.collaboration-chat-panel\.is-mobile-active \.collaboration-chat-composer \{ position:fixed;/, "Mobile room chat composer must stay above the bottom navigation.");
 assert.match(cssSource, /\.study-chat-page-composer \.ai-chat-mode-full-label \{ display:none !important;/, "The mobile model picker must use the compact non-overlapping label.");
+assert.match(siteConfigSource, /route: "\/collaboration\/shared-study-rooms"[\s\S]*?access: "public"/, "The Collaboration guide must be readable without signing in.");
+assert.match(siteConfigSource, /markdown: collaborationGuideMarkdown/, "The public Collaboration route must render the complete guide.");
+assert.match(siteShellSource, /page\.route\.startsWith\("\/collaboration\/"\)/, "Collaboration public pages must use the prose-only layout.");
+for (const requiredSection of ["Rooms and the room list", "Shared materials and the category buttons", "Collaboration Board", "Room Chat", "Create Profile and student discovery", "More actions", "Privacy and access rules"]) {
+  assert.match(publicGuideSource, new RegExp(requiredSection), `The public guide must explain ${requiredSection}.`);
+}
 
 console.log("Collaboration control wiring checks passed.");

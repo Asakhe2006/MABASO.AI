@@ -512,18 +512,19 @@ export function EnterpriseSiteShell({
 
   const isLocked = !isAuthenticated && page.access !== "public";
   const isStudyWorkflowPage = page.route === "/resources/study-workflow";
+  const isProseOnlyGuide = isStudyWorkflowPage || page.route.startsWith("/collaboration/");
   const filteredFaq = useMemo(() => {
     if (!page.faq?.length) return [];
     const normalizedQuery = faqQuery.trim().toLowerCase();
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
-  const visibleContains = isStudyWorkflowPage ? [] : (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
-  const visibleModules = (isStudyWorkflowPage ? [] : (page.modules || []))
+  const visibleContains = isProseOnlyGuide ? [] : (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const visibleModules = (isProseOnlyGuide ? [] : (page.modules || []))
     .filter((module) => isUsefulPublicCopy(module.title))
     .map((module) => ({ ...module, items: (module.items || []).filter(isUsefulPublicCopy) }))
     .filter((module) => module.items.length);
-  const visibleWorkflow = (page.workflow || []).filter(isUsefulPublicCopy);
+  const visibleWorkflow = isProseOnlyGuide ? [] : (page.workflow || []).filter(isUsefulPublicCopy);
   const visibleFileGroups = (page.fileGroups || [])
     .map((group) => ({ ...group, items: (group.items || []).filter(isUsefulPublicCopy) }))
     .filter((group) => isUsefulPublicCopy(group.label) && group.items.length);
@@ -565,7 +566,7 @@ export function EnterpriseSiteShell({
               <p className="text-xs uppercase tracking-[0.34em] text-cyan-200/70">{page.hero?.eyebrow || `${page.category} / ${page.title}`}</p>
               <h1 className="mt-4 text-3xl font-semibold text-white sm:text-4xl xl:text-5xl">{page.hero?.headline || page.title}</h1>
               <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
-              <p className="enterprise-document-updated">Last updated 6 August 2026</p>
+              <p className="enterprise-document-updated">Last updated {page.updatedAt || "6 August 2026"}</p>
               <div className="mt-7 flex flex-wrap gap-3">
                 {(page.hero?.ctas || []).map((cta) => (
                   <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
