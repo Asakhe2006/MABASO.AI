@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlpar
 from uuid import uuid4
 from xml.etree import ElementTree as ET
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -7825,6 +7825,14 @@ def init_db():
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_presence (
+                email TEXT PRIMARY KEY,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
         collaboration_profile_columns = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(collaboration_profiles)").fetchall()
@@ -7877,6 +7885,7 @@ def init_db():
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_board_room_created ON collaboration_board_items (room_id, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_profiles_discoverable ON collaboration_profiles (discoverable, updated_at DESC)")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_collaboration_profiles_public_id ON collaboration_profiles (public_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_presence_last_seen ON collaboration_presence (last_seen_at DESC)")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
@@ -9952,9 +9961,9 @@ def send_verification_email(email: str, code: str):
 
 def send_collaboration_invite_email(invited_email: str, owner_email: str, room_title: str, room_id: str):
     smtp_settings = get_smtp_settings()
-    room_url = f"{APP_PUBLIC_URL}/app/collaboration?room={quote(room_id)}"
+    room_url = f"{APP_PUBLIC_URL.rstrip('/')}/app/collaboration?room={quote(room_id)}"
     message = EmailMessage()
-    message["Subject"] = "You have been invited to join a MABASO.AI class"
+    message["Subject"] = f"Join {room_title} on MABASO AI"
     message["From"] = smtp_settings["from_email"]
     message["To"] = invited_email
     message.set_content(
@@ -9966,6 +9975,20 @@ def send_collaboration_invite_email(invited_email: str, owner_email: str, room_t
             "Inside the room you can view the shared study guide, formulas, worked examples, flashcards, tests, notes, and class messages.\n\n"
             "MABASO.AI"
         )
+    )
+    message.add_alternative(
+        (
+            "<!doctype html><html><body style=\"margin:0;background:#03130d;color:#eaf7f1;font-family:Arial,sans-serif\">"
+            "<div style=\"max-width:560px;margin:28px auto;padding:28px;border-radius:18px;background:#082019;border:1px solid #184c38\">"
+            "<p style=\"color:#23d982;font-weight:700;letter-spacing:.12em\">MABASO AI</p>"
+            f"<h1 style=\"font-size:24px\">Join {html.escape(room_title)}</h1>"
+            f"<p style=\"line-height:1.7\">{html.escape(owner_email)} invited you to this private study room.</p>"
+            "<p style=\"line-height:1.7\">For your security, sign in to Mabaso AI with the same email address that received this invitation. The room opens after your account is verified.</p>"
+            f"<p><a href=\"{html.escape(room_url, quote=True)}\" style=\"display:inline-block;padding:13px 20px;border-radius:10px;background:#12c779;color:#032016;text-decoration:none;font-weight:700\">Sign in and join the room</a></p>"
+            "<p style=\"color:#9eb9ad;font-size:13px;line-height:1.6\">If you did not expect this invitation, you can ignore this email.</p>"
+            "</div></body></html>"
+        ),
+        subtype="html",
     )
     send_smtp_message(message)
 
@@ -10570,7 +10593,13 @@ def compact_history_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge browser history into the account without deleting unseen server records.
+
+    A browser can temporarily hold only compact or partially hydrated history.  Treating
+    that snapshot as a complete replacement caused valid account history to disappear.
+    Deletion is now only performed by the explicit DELETE endpoints below.
+    """
     normalized_email = normalize_email(email)
     if not normalized_email:
         return []
@@ -10598,10 +10627,13 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
         item["ownerEmail"] = normalized_email
 
     with get_db_connection() as connection:
-        connection.execute("DELETE FROM study_history_items WHERE lower(email) = ?", (normalized_email,))
         for item in normalized_items:
             created_at = compact_text(item.get("createdAt"), utc_now().isoformat())
             updated_at = compact_text(item.get("updatedAt"), created_at)
+            connection.execute(
+                "DELETE FROM study_history_items WHERE lower(email) = ? AND id = ?",
+                (normalized_email, item["id"]),
+            )
             connection.execute(
                 """
                 INSERT INTO study_history_items (email, id, payload_json, created_at, updated_at)
@@ -10610,7 +10642,32 @@ def replace_history_items_for_user(email: str, items: list[dict[str, Any]]) -> l
                 (normalized_email, item["id"], json.dumps(item), created_at, updated_at),
             )
 
-    return normalized_items
+    return get_history_items_for_user(normalized_email)
+
+
+def delete_history_item_for_user(email: str, item_id: str) -> bool:
+    normalized_email = normalize_email(email)
+    normalized_id = compact_text(item_id)
+    if not normalized_email or not normalized_id:
+        return False
+    with get_db_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM study_history_items WHERE lower(email) = ? AND id = ?",
+            (normalized_email, normalized_id),
+        )
+    return bool(cursor.rowcount)
+
+
+def clear_history_for_user(email: str) -> int:
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return 0
+    with get_db_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM study_history_items WHERE lower(email) = ?",
+            (normalized_email,),
+        )
+    return max(0, int(cursor.rowcount or 0))
 
 
 def upsert_history_item_for_user(email: str, item: dict[str, Any], item_id: str = "") -> dict[str, Any]:
@@ -23704,7 +23761,24 @@ async def sync_study_history(
     current_user: str = Depends(require_authenticated_user),
 ):
     items = payload.items if isinstance(payload.items, list) else []
-    return {"items": replace_history_items_for_user(current_user, items)}
+    return {"items": merge_history_items_for_user(current_user, items)}
+
+
+@app.delete("/history")
+async def clear_study_history(
+    current_user: str = Depends(require_authenticated_user),
+):
+    return {"deleted": clear_history_for_user(current_user)}
+
+
+@app.delete("/history/{item_id}")
+async def delete_study_history_item(
+    item_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    if not delete_history_item_for_user(current_user, item_id):
+        raise HTTPException(status_code=404, detail="Saved study workspace not found.")
+    return {"deleted": True, "id": compact_text(item_id)}
 
 
 @app.put("/history/{item_id}")
@@ -37894,6 +37968,7 @@ async def list_collaboration_rooms(current_user: str = Depends(require_authentic
 @app.post("/collaboration/rooms")
 async def create_collaboration_room(
     payload: CollaborationRoomCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user: str = Depends(require_authenticated_user),
 ):
     title = payload.title.strip()
@@ -37958,7 +38033,7 @@ async def create_collaboration_room(
 
     room = get_accessible_collaboration_room(room_id, current_user)
     if invited_emails:
-        asyncio.create_task(deliver_collaboration_invite_emails(invited_emails, current_user, title, room_id))
+        background_tasks.add_task(deliver_collaboration_invite_emails, invited_emails, current_user, title, room_id)
     return {"room": serialize_collaboration_room(room, current_user), "invited_emails": invited_emails}
 
 
@@ -37975,6 +38050,13 @@ async def accept_collaboration_invitation(
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_collaboration_room_by_id(room_id)
+    with get_db_connection() as connection:
+        invited_member = connection.execute(
+            "SELECT role FROM collaboration_room_members WHERE room_id = ? AND lower(email) = ?",
+            (room["id"], normalize_email(current_user)),
+        ).fetchone()
+    if room["owner_email"] != current_user and not invited_member:
+        raise HTTPException(status_code=404, detail="Collaboration room not found.")
     now_iso = utc_now().isoformat()
     member_role = "owner" if room["owner_email"] == current_user else "member"
 
@@ -38014,27 +38096,37 @@ async def send_collaboration_message(
         raise HTTPException(status_code=400, detail="Type a collaboration message first.")
 
     now_iso = utc_now().isoformat()
+    message_id = uuid4().hex
     with get_db_connection() as connection:
         connection.execute(
             """
             INSERT INTO collaboration_room_messages (id, room_id, author_email, content, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (uuid4().hex, room["id"], current_user, content, now_iso),
+            (message_id, room["id"], current_user, content, now_iso),
         )
         connection.execute(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
         )
 
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user)}
+    return {
+        "message": {
+            "id": message_id,
+            "author_email": current_user,
+            "content": content,
+            "created_at": now_iso,
+        },
+        "room_id": room["id"],
+        "updated_at": now_iso,
+    }
 
 
 @app.post("/collaboration/rooms/{room_id}/members")
 async def add_collaboration_room_members(
     room_id: str,
     payload: CollaborationRoomMembersRequest,
+    background_tasks: BackgroundTasks,
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_accessible_collaboration_room(room_id, current_user)
@@ -38065,8 +38157,43 @@ async def add_collaboration_room_members(
 
     updated_room = get_accessible_collaboration_room(room_id, current_user)
     if newly_invited_emails:
-        asyncio.create_task(deliver_collaboration_invite_emails(newly_invited_emails, current_user, room["title"], room["id"]))
+        background_tasks.add_task(
+            deliver_collaboration_invite_emails,
+            newly_invited_emails,
+            current_user,
+            room["title"],
+            room["id"],
+        )
     return {"room": serialize_collaboration_room(updated_room, current_user), "invited_emails": newly_invited_emails}
+
+
+@app.delete("/collaboration/rooms/{room_id}/members/{member_email}")
+async def remove_collaboration_room_member(
+    room_id: str,
+    member_email: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_can_manage(room, current_user):
+        raise HTTPException(status_code=403, detail="Only a room owner or moderator can remove members.")
+    normalized_member_email = normalize_email(member_email)
+    if not normalized_member_email:
+        raise HTTPException(status_code=400, detail="Choose a valid room member.")
+    if normalized_member_email == normalize_email(room["owner_email"]):
+        raise HTTPException(status_code=400, detail="The room owner cannot be removed.")
+    with get_db_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM collaboration_room_members WHERE room_id = ? AND lower(email) = ?",
+            (room["id"], normalized_member_email),
+        )
+        if not cursor.rowcount:
+            raise HTTPException(status_code=404, detail="This student is no longer a room member.")
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (utc_now().isoformat(), room["id"]),
+        )
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {"room": serialize_collaboration_room(updated_room, current_user), "removed_email": normalized_member_email}
 
 
 @app.delete("/collaboration/rooms/{room_id}/membership")
@@ -38295,6 +38422,34 @@ def serialize_collaboration_profile(row: sqlite3.Row, *, include_email: bool = F
     return profile
 
 
+COLLABORATION_PRESENCE_TTL_SECONDS = max(60, int(os.getenv("COLLABORATION_PRESENCE_TTL_SECONDS", "120")))
+
+
+@app.post("/collaboration/presence")
+async def update_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_presence (email, last_seen_at)
+            VALUES (?, ?)
+            ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at
+            """,
+            (normalize_email(current_user), now_iso),
+        )
+    return {"online": True, "last_seen_at": now_iso}
+
+
+@app.delete("/collaboration/presence")
+async def clear_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM collaboration_presence WHERE lower(email) = ?",
+            (normalize_email(current_user),),
+        )
+    return {"online": False}
+
+
 @app.get("/collaboration/profile/me")
 async def get_my_collaboration_profile(current_user: str = Depends(require_authenticated_user)):
     with get_db_connection() as connection:
@@ -38363,7 +38518,29 @@ async def discover_collaboration_profiles(
             """,
             (current_user,),
         ).fetchall()
-    profiles = [serialize_collaboration_profile(row) for row in rows]
+        online_cutoff = (utc_now() - timedelta(seconds=COLLABORATION_PRESENCE_TTL_SECONDS)).isoformat()
+        online_rows = connection.execute(
+            "SELECT email FROM collaboration_presence WHERE last_seen_at >= ?",
+            (online_cutoff,),
+        ).fetchall()
+        collaborated_rows = connection.execute(
+            """
+            SELECT DISTINCT other.email
+            FROM collaboration_room_members mine
+            JOIN collaboration_room_members other ON other.room_id = mine.room_id
+            WHERE lower(mine.email) = ? AND lower(other.email) != ?
+            """,
+            (normalize_email(current_user), normalize_email(current_user)),
+        ).fetchall()
+    online_emails = {normalize_email(row["email"]) for row in online_rows}
+    collaborated_emails = {normalize_email(row["email"]) for row in collaborated_rows}
+    profiles = []
+    for row in rows:
+        profile = serialize_collaboration_profile(row)
+        profile_email = normalize_email(row["email"])
+        profile["is_online"] = profile_email in online_emails
+        profile["has_collaborated"] = profile_email in collaborated_emails
+        profiles.append(profile)
     if needle:
         profiles = [
             profile for profile in profiles
@@ -38384,6 +38561,8 @@ async def discover_collaboration_profiles(
             reasons.append("Same course")
         if profile.get("can_help"):
             reasons.append(f"Can help with {profile['can_help'][0]}")
+        if profile.get("has_collaborated"):
+            reasons.append("Collaborated with you")
         profile["match_reasons"] = reasons[:2]
     return {"profiles": profiles[:50]}
 
@@ -38392,6 +38571,7 @@ async def discover_collaboration_profiles(
 async def invite_discovered_profile_to_room(
     room_id: str,
     profile_id: str,
+    background_tasks: BackgroundTasks,
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_accessible_collaboration_room(room_id, current_user)
@@ -38420,6 +38600,13 @@ async def invite_discovered_profile_to_room(
             (room["id"], profile_row["email"], "member", now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    background_tasks.add_task(
+        deliver_collaboration_invite_emails,
+        [profile_row["email"]],
+        current_user,
+        room["title"],
+        room["id"],
+    )
     updated_room = get_accessible_collaboration_room(room_id, current_user)
     return {
         "room": serialize_collaboration_room(updated_room, current_user),

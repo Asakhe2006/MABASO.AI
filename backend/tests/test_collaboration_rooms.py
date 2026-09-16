@@ -70,6 +70,9 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     discoverable INTEGER NOT NULL DEFAULT 0, show_institution INTEGER NOT NULL DEFAULT 0,
                     allow_requests INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
+                CREATE TABLE collaboration_presence (
+                    email TEXT PRIMARY KEY, last_seen_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -81,8 +84,10 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_room_chat_material_board_and_profile_are_persisted(self):
         owner = "owner@example.com"
+        room_background_tasks = main.BackgroundTasks()
         room_result = await main.create_collaboration_room(
             main.CollaborationRoomCreateRequest(title="Engineering Ethics"),
+            background_tasks=room_background_tasks,
             current_user=owner,
         )
         room_id = room_result["room"]["id"]
@@ -93,7 +98,7 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             main.CollaborationMessageRequest(content="Let us revise chapter three."),
             current_user=owner,
         )
-        self.assertEqual(message_result["room"]["messages"][-1]["content"], "Let us revise chapter three.")
+        self.assertEqual(message_result["message"]["content"], "Let us revise chapter three.")
 
         material_result = await main.create_collaboration_material_item(
             room_id,
@@ -149,24 +154,39 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
             current_user="student2@example.com",
         )
+        await main.update_collaboration_presence(current_user="student2@example.com")
         discovery = await main.discover_collaboration_profiles("MATLAB", current_user=owner)
         self.assertEqual(discovery["profiles"][0]["public_id"], student_profile["profile"]["public_id"])
         self.assertTrue(discovery["profiles"][0]["match_reasons"])
+        self.assertTrue(discovery["profiles"][0]["is_online"])
         self.assertNotIn("email", discovery["profiles"][0])
 
+        invite_background_tasks = main.BackgroundTasks()
         invite_result = await main.invite_discovered_profile_to_room(
             room_id,
             student_profile["profile"]["public_id"],
+            background_tasks=invite_background_tasks,
             current_user=owner,
         )
         self.assertIn("student2@example.com", {member["email"] for member in invite_result["room"]["members"]})
+        self.assertEqual(len(invite_background_tasks.tasks), 1)
+
+        discovery_after_invite = await main.discover_collaboration_profiles("MATLAB", current_user=owner)
+        self.assertTrue(discovery_after_invite["profiles"][0]["has_collaborated"])
+
+        with self.assertRaises(main.HTTPException):
+            await main.accept_collaboration_invitation(
+                room_id,
+                request=None,
+                current_user="not-invited@example.com",
+            )
 
         member_message = await main.send_collaboration_message(
             room_id,
             main.CollaborationMessageRequest(content="I have added my revision task."),
             current_user="student2@example.com",
         )
-        self.assertEqual(member_message["room"]["messages"][-1]["author_email"], "student2@example.com")
+        self.assertEqual(member_message["message"]["author_email"], "student2@example.com")
 
         member_board_item = await main.create_collaboration_board_item(
             room_id,
@@ -182,6 +202,32 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(reopened["room"]["messages"]), 2)
         self.assertEqual(len(reopened["room"]["materials"]), 1)
         self.assertEqual(len(reopened["room"]["board_items"]), 3)
+
+        removed = await main.remove_collaboration_room_member(
+            room_id,
+            "student2@example.com",
+            current_user=owner,
+        )
+        self.assertNotIn("student2@example.com", {member["email"] for member in removed["room"]["members"]})
+        with self.assertRaises(main.HTTPException):
+            await main.get_collaboration_room(room_id, current_user="student2@example.com")
+
+    def test_invitation_email_contains_authenticated_room_link(self):
+        with patch.object(main, "get_smtp_settings", return_value={"from_email": "hello@mabaso.ai"}), patch.object(
+            main,
+            "send_smtp_message",
+        ) as send_message:
+            main.send_collaboration_invite_email(
+                "student@gmail.com",
+                "owner@example.com",
+                "Signals Study Group",
+                "room-123",
+            )
+        message = send_message.call_args.args[0]
+        self.assertEqual(message["To"], "student@gmail.com")
+        plain_body = message.get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("/app/collaboration?room=room-123", plain_body)
+        self.assertIn("sign in", plain_body.lower())
 
 
 if __name__ == "__main__":
