@@ -41,7 +41,7 @@ async function parseJsonSafe(response) {
   }
 }
 
-async function requestSession() {
+async function requestSession({ retryUnauthorizedOnce = false } = {}) {
   const startedAt = performance.now();
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), SESSION_CHECK_TIMEOUT_MS);
@@ -65,6 +65,10 @@ async function requestSession() {
       backendCache: response.headers.get("X-Auth-Cache") || "none",
       status: response.status,
     });
+    if ((response.status === 401 || response.status === 403) && retryUnauthorizedOnce) {
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      return requestSession({ retryUnauthorizedOnce: false });
+    }
     if (response.status === 401 || response.status === 403) {
       return { status: "unauthenticated", session: null, error: "" };
     }
@@ -85,12 +89,12 @@ async function requestSession() {
   }
 }
 
-function getSessionSingleFlight({ force = false } = {}) {
+function getSessionSingleFlight({ force = false, retryUnauthorizedOnce = false } = {}) {
   if (!force && startupSessionResult && startupSessionResult.status !== "unknown") return Promise.resolve(startupSessionResult);
   if (startupSessionPromise) return startupSessionPromise;
   if (force) startupSessionResult = null;
   const requestRevision = sessionStateRevision;
-  startupSessionPromise = requestSession().then((result) => {
+  startupSessionPromise = requestSession({ retryUnauthorizedOnce }).then((result) => {
     // A login or logout completed while this request was in flight. Its result is
     // now stale and must not overwrite the newer authenticated state.
     if (requestRevision !== sessionStateRevision) {
@@ -112,7 +116,7 @@ export function AuthProvider({ children }) {
     error: "",
   });
 
-  const checkSession = useCallback(async ({ force = false, background = false } = {}) => {
+  const checkSession = useCallback(async ({ force = false, background = false, retryUnauthorizedOnce = false } = {}) => {
     if (!background) {
       setAuthState((current) => (
         current.status === "authenticated"
@@ -120,7 +124,7 @@ export function AuthProvider({ children }) {
           : { ...current, status: "checking", error: "" }
       ));
     }
-    const result = await getSessionSingleFlight({ force });
+    const result = await getSessionSingleFlight({ force, retryUnauthorizedOnce });
     if (result.status === "unknown") {
       setAuthState((current) => (
         current.status === "authenticated"
@@ -166,7 +170,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (!["checking", "unknown"].includes(authState.status) || !authState.error) return undefined;
+    if (!["checking", "unknown", "authenticated"].includes(authState.status) || !authState.error) return undefined;
     const delay = SESSION_RETRY_DELAYS_MS[Math.min(retryAttemptRef.current, SESSION_RETRY_DELAYS_MS.length - 1)];
     const timer = window.setTimeout(() => {
       retryAttemptRef.current += 1;

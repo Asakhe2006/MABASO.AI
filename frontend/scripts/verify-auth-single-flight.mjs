@@ -19,8 +19,13 @@ assert.match(authSource, /sessionStateRevision/, "AuthContext must version sessi
 assert.match(authSource, /requestRevision !== sessionStateRevision/, "Stale session results must be ignored after login or logout changes the session revision.");
 assert.match(authSource, /status:\s*"unknown"/, "AuthContext must classify timeout, network, and 5xx session checks as unknown.");
 assert.match(authSource, /response\.status === 401 \|\| response\.status === 403/, "Only definite 401/403 responses should mark the session unauthenticated.");
+assert.match(authSource, /retryUnauthorizedOnce/, "Fresh sign-ins must tolerate one cookie-propagation delay before becoming unauthenticated.");
+assert.match(authSource, /\["checking", "unknown", "authenticated"\]/, "Transient verification failures must keep retrying without logging out an authenticated user.");
 assert.match(appSource, /sharedAuthStatus === "unknown"/, "App.jsx must keep restorable sessions available while auth is unknown.");
 assert.match(appSource, /loadPersistedAuthStateToken/, "App.jsx must restore the cookie-backed local auth marker before the background session check finishes.");
+assert.match(appSource, /const isAuthReady = authChecked && authServerStateReady;/, "A local browser marker must not bypass server session verification.");
+assert.match(appSource, /Opening your workspace\.\.\./, "Protected workspace authentication must show the opening state.");
+assert.match(appSource, /confirmSessionAfterUnauthorized/, "Protected API requests must recheck the session before forcing logout.");
 assert.match(appSource, /authSessionRevisionRef/, "Protected requests must be tied to the session revision that started them.");
 assert.match(appSource, /requestSessionRevision !== authSessionRevisionRef\.current/, "A stale protected 401 must not log out a newer successful session.");
 assert.doesNotMatch(appSource, /setInterval\([^)]*\/auth\/me/s, "Session verification must not run on an interval.");

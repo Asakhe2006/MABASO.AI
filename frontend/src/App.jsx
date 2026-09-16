@@ -6988,13 +6988,14 @@ export default function App() {
   const [isSigningInWithPassword, setIsSigningInWithPassword] = useState(false);
   const [isRequestingEmailCode, setIsRequestingEmailCode] = useState(false);
   const [isVerifyingEmailCode, setIsVerifyingEmailCode] = useState(false);
-  const [authChecked, setAuthChecked] = useState(hasPersistedCookieSessionMarker);
-  const [authServerStateReady, setAuthServerStateReady] = useState(hasPersistedCookieSessionMarker);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authServerStateReady, setAuthServerStateReady] = useState(false);
   const [authCheckError, setAuthCheckError] = useState("");
   const hasRestorableSessionState = Boolean(authToken || hasPersistedCookieSessionMarker());
-  const isAuthReady = (authChecked && authServerStateReady) || (sharedAuthStatus === "unknown" && hasRestorableSessionState);
+  const isAuthReady = authChecked && authServerStateReady;
   const [authMessage, setAuthMessage] = useState("");
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState(false);
+  const [isOpeningAuthenticatedWorkspace, setIsOpeningAuthenticatedWorkspace] = useState(false);
   const [isAppleSigningIn, setIsAppleSigningIn] = useState(false);
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -15573,6 +15574,7 @@ export default function App() {
     setIsSigningInWithPassword(false);
     setIsRequestingEmailCode(false);
     setIsVerifyingEmailCode(false);
+    setIsOpeningAuthenticatedWorkspace(false);
     setShowLandingAuthOptions(false);
     setHistoryItems([]);
     setActiveHistoryId("");
@@ -15714,16 +15716,8 @@ export default function App() {
 
   useEffect(() => {
     if (sharedAuthStatus === "checking") {
-      if (hasRestorableSessionState) {
-        const nextToken = authTokenRef.current || authToken || COOKIE_SESSION_AUTH_STATE;
-        authTokenRef.current = nextToken;
-        if (!authToken) setAuthToken(nextToken);
-        setAuthChecked(true);
-        setAuthServerStateReady(true);
-      } else {
-        setAuthChecked(false);
-        setAuthServerStateReady(false);
-      }
+      setAuthChecked(false);
+      setAuthServerStateReady(false);
       setAuthCheckError("");
       return;
     }
@@ -15750,14 +15744,6 @@ export default function App() {
     }
     if (sharedAuthStatus === "unknown") {
       setAuthCheckError(sharedAuthError || "Session check is still restoring. We will retry in the background.");
-      if (hasRestorableSessionState) {
-        const nextToken = authTokenRef.current || authToken || COOKIE_SESSION_AUTH_STATE;
-        authTokenRef.current = nextToken;
-        if (!authToken) setAuthToken(nextToken);
-        setAuthChecked(true);
-        setAuthServerStateReady(true);
-        return;
-      }
       setAuthChecked(false);
       setAuthServerStateReady(false);
       return;
@@ -16558,19 +16544,32 @@ export default function App() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
-      }, 15000);
+      }, 45000);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
-      // The login response already sets the secure HttpOnly session cookie. Enter
-      // the workspace immediately; refresh account details without holding the page.
+      setIsOpeningAuthenticatedWorkspace(true);
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: false });
+      const confirmation = await checkSharedSession({
+        force: true,
+        background: true,
+        retryUnauthorizedOnce: true,
+      });
+      if (confirmation.status === "unauthenticated") {
+        throw new Error("Google sign-in could not establish a secure session. Please try again.");
+      }
       setStatus("Signed in successfully.");
-      setAuthMessage(data?.available_modes?.includes("admin") ? "Choose user mode or protected mode to continue." : "You are signed in.");
-      void checkSharedSession({ force: true, background: true });
+      setAuthMessage(
+        confirmation.status === "unknown"
+          ? "Signed in. We are reconnecting securely in the background."
+          : data?.available_modes?.includes("admin")
+            ? "Choose user mode or protected mode to continue."
+            : "You are signed in.",
+      );
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
       setIsGoogleSigningIn(false);
+      setIsOpeningAuthenticatedWorkspace(false);
     }
   };
 
@@ -17265,6 +17264,11 @@ export default function App() {
       const headers = withAuthHeaders(requestOptions.headers || {}, activeToken);
       return apiFetch(path, { ...requestOptions, headers }, timeoutMs);
     };
+    const confirmSessionAfterUnauthorized = async () => checkSharedSession({
+      force: true,
+      background: true,
+      retryUnauthorizedOnce: true,
+    });
     let response;
     try {
       response = await sendRequest();
@@ -17276,16 +17280,25 @@ export default function App() {
       }
     } catch (err) {
       if (err?.status === 401) {
-        if (!authExpiryHandledRef.current) {
-          authExpiryHandledRef.current = true;
-          clearSession("Your session has expired. Please sign in again.");
+        const recovery = await confirmSessionAfterUnauthorized();
+        if (recovery.status === "authenticated") {
+          rememberAuthCsrfToken(recovery.session?.csrf_token || "");
+          response = await sendRequest({ refreshCsrf: isWriteRequest });
+        } else if (recovery.status === "unknown") {
+          throw new Error("We could not verify your session because the connection was interrupted. Please try again.");
+        } else {
+          if (!authExpiryHandledRef.current) {
+            authExpiryHandledRef.current = true;
+            clearSession("Your session has expired. Please sign in again.");
+          }
+          throw new Error("Your session has expired. Please sign in again.");
         }
-        throw new Error("Your session has expired. Please sign in again.");
+      } else {
+        const requestError = new Error(getReadableRequestError(err, path));
+        requestError.aborted = isAbortError(err);
+        if (requestError.aborted) requestError.name = "AbortError";
+        throw requestError;
       }
-      const requestError = new Error(getReadableRequestError(err, path));
-      requestError.aborted = isAbortError(err);
-      if (requestError.aborted) requestError.name = "AbortError";
-      throw requestError;
     }
     if (response.status === 401) {
       if (requestSessionRevision !== authSessionRevisionRef.current) {
@@ -17299,11 +17312,20 @@ export default function App() {
         staleAuthError.staleAuthRequest = true;
         throw staleAuthError;
       }
-      if (!authExpiryHandledRef.current) {
-        authExpiryHandledRef.current = true;
-        clearSession("Your session has expired. Please sign in again.");
+      const recovery = await confirmSessionAfterUnauthorized();
+      if (recovery.status === "authenticated") {
+        rememberAuthCsrfToken(recovery.session?.csrf_token || "");
+        response = await sendRequest({ refreshCsrf: isWriteRequest });
+      } else if (recovery.status === "unknown") {
+        throw new Error("We could not verify your session because the connection was interrupted. Please try again.");
       }
-      throw new Error("Your session has expired. Please sign in again.");
+      if (response.status === 401) {
+        if (!authExpiryHandledRef.current) {
+          authExpiryHandledRef.current = true;
+          clearSession("Your session has expired. Please sign in again.");
+        }
+        throw new Error("Your session has expired. Please sign in again.");
+      }
     }
     const shouldRefreshUsage = response.ok
       && requestMethod !== "GET"
@@ -28881,16 +28903,28 @@ export default function App() {
     return recoveredRecordingConfirmModal;
   }
 
-  const shouldBlockForAuthBootstrap = !isAuthReady && !activeSitePage && !activeProtectedWorkspaceRoute && !["/", "/signin", "/register", "/payment-success"].includes(browserPath);
+  const shouldBlockForAuthBootstrap = !isAuthReady
+    && !activeSitePage
+    && (
+      Boolean(activeProtectedWorkspaceRoute)
+      || hasRestorableSessionState
+      || !["/", "/signin", "/register", "/payment-success"].includes(browserPath)
+    );
 
-  if (shouldBlockForAuthBootstrap) {
+  if (isOpeningAuthenticatedWorkspace || shouldBlockForAuthBootstrap) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
           <div className="px-8 py-10 text-center">
             <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
             <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
-            <p className="mt-4 text-sm text-slate-300">{authCheckError ? "Reconnecting securely in the background..." : "Checking your session..."}</p>
+            <p className="mt-4 text-sm text-slate-300">
+              {isOpeningAuthenticatedWorkspace || activeProtectedWorkspaceRoute || hasRestorableSessionState
+                ? "Opening your workspace..."
+                : authCheckError
+                  ? "Reconnecting securely in the background..."
+                  : "Checking your session..."}
+            </p>
           </div>
         </div>
       </div>

@@ -1,4 +1,3 @@
-import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -60,7 +59,7 @@ class CsrfValidationTests(unittest.TestCase):
         }
 
         with patch.object(main, "get_session_context", return_value=session_context):
-            payload = asyncio.run(main.refresh_auth_csrf(request, response))
+            payload = main.refresh_auth_csrf(request, response)
 
         self.assertTrue(main.is_valid_csrf_cookie_value(session_token, payload["csrf_token"]))
         self.assertEqual(response.headers["cache-control"], "no-store, private")
