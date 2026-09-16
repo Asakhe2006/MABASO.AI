@@ -815,7 +815,7 @@ const MOBILE_MORE_NAV_ITEMS = [
   { id: "capture", label: "Capture", icon: UploadCloud },
   { id: "materials", label: "My Materials", icon: FolderOpen },
   { id: "payments", label: "Payments", icon: CreditCard },
-  { id: "collaboration", label: "Rooms", icon: UsersRound, requiresResults: true },
+  { id: "collaboration", label: "Rooms", icon: UsersRound },
   { id: "upgrade", label: "Pro", icon: CreditCard },
 ];
 const reportAcademicLevels = ["High School", "College", "Undergraduate", "Honours", "Masters", "PhD", "Professional Research"];
@@ -7235,6 +7235,9 @@ export default function App() {
   const [profileEditorAnchor, setProfileEditorAnchor] = useState(null);
   const [isShareMaterialPickerOpen, setIsShareMaterialPickerOpen] = useState(false);
   const [isSharingHistoryMaterialId, setIsSharingHistoryMaterialId] = useState("");
+  const [selectedCollaborationMaterial, setSelectedCollaborationMaterial] = useState(null);
+  const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
+  const [isCollaborationSettingsOpen, setIsCollaborationSettingsOpen] = useState(false);
   const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", discoverable: true, show_institution: true, allow_requests: true });
 
   useEffect(() => {
@@ -11753,6 +11756,7 @@ export default function App() {
       { id: "image", label: "Images" }, { id: "video", label: "Videos" },
     ];
     const visibleMaterials = (activeRoom?.materials || []).filter((item) => collaborationMaterialFilter === "all" || item.material_type === collaborationMaterialFilter);
+    const selectedMaterialSnapshot = selectedCollaborationMaterial?.source?.snapshot || {};
     const openProfilePopover = (event) => {
       const rect = event.currentTarget.getBoundingClientRect();
       setProfileEditorAnchor({ top: rect.bottom + 10, left: Math.max(12, Math.min(rect.left, window.innerWidth - 430)) });
@@ -11775,6 +11779,7 @@ export default function App() {
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
           {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => document.getElementById("collaboration-invite")?.scrollIntoView({ behavior: "smooth", block: "center" })} className="collaboration-outline-button">♙ Invite</button> : null}<button type="button" onClick={() => setFollowRoomView((value) => !value)} className="collaboration-dark-button">{followRoomView ? "Following shared view" : "Follow shared view"}</button><button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button></div> : null}
         </div>
+        {activeRoom ? <div className="collaboration-room-utility-actions" aria-label="Room controls"><button type="button" onClick={() => setIsCollaborationMembersOpen(true)}><UsersRound className="h-4 w-4" aria-hidden="true" />Members ({activeRoom.member_count || activeRoom.members?.length || 1})</button><button type="button" onClick={() => setIsCollaborationSettingsOpen(true)}><Settings className="h-4 w-4" aria-hidden="true" />Room settings</button></div> : null}
 
         <div className="collaboration-main-grid">
           <aside className={`collaboration-room-sidebar ${collaborationMobileView === "rooms" ? "is-mobile-active" : ""}`}>
@@ -11798,6 +11803,9 @@ export default function App() {
         <nav className="collaboration-mobile-bottom-nav" aria-label="Collaboration navigation"><button type="button" onClick={() => switchMobileView("rooms")} className={collaborationMobileView === "rooms" ? "is-active" : ""}>⌂<span>Rooms</span></button><button type="button" onClick={() => switchMobileView("chat")} className={collaborationMobileView === "chat" ? "is-active" : ""}>◯<span>Chat</span></button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)} className="collaboration-mobile-add">＋</button><button type="button" onClick={() => switchMobileView("board")} className={collaborationMobileView === "board" ? "is-active" : ""}>♧<span>Board</span></button><button type="button" onClick={() => switchMobileView("more")}>•••<span>More</span></button></nav>
         {isShareMaterialPickerOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsShareMaterialPickerOpen(false)}><section className="collaboration-history-picker" role="dialog" aria-modal="true" aria-label="Share saved material" onMouseDown={(event) => event.stopPropagation()}><div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Your Mabaso history</p><h3 className="mt-1 text-xl font-semibold text-white">Share a saved material</h3><p className="mt-2 text-sm leading-6 text-slate-300">Choose any saved material. It is added to this room, then opened here immediately.</p></div><button type="button" onClick={() => setIsShareMaterialPickerOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-200">Close</button></div><div className="mt-4 max-h-[55dvh] space-y-2 overflow-y-auto">{historyItems.length ? historyItems.map((item) => <button key={item.id} type="button" onClick={() => void shareHistoryMaterialToRoom(item)} disabled={Boolean(isSharingHistoryMaterialId)} className="collaboration-history-picker-item"><span className="collaboration-material-icon is-study_guide">PDF</span><span><strong>{item.title || item.fileName || "Saved study material"}</strong><small>{item.subject || item.fileName || "Mabaso AI material"}</small></span><b>{isSharingHistoryMaterialId === item.id ? "Sharing..." : "Share & Open"}</b></button>) : <p className="collaboration-empty-copy">No saved materials are available yet. Generate a Study Guide or save a workspace first.</p>}</div></section></div> : null}
         {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><div className="mt-4 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); setIsCreateRoomPanelOpen(true); setCollaborationMobileView("rooms"); }}>Create Room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }}>Share Existing Material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setCollaborationMobileView("board"); setIsBoardComposerOpen(true); }}>Add to Board</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); roomBoardImageInputRef.current?.click(); }}>Upload board photo</button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)}>Cancel</button></div></section></div> : null}
+        {selectedCollaborationMaterial ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setSelectedCollaborationMaterial(null)}><section className="collaboration-material-preview" role="dialog" aria-modal="true" aria-label={`${selectedCollaborationMaterial.title} preview`} onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>{String(selectedCollaborationMaterial.material_type || "material").replaceAll("_", " ")}</p><h3>{selectedCollaborationMaterial.title}</h3><small>Shared by {selectedCollaborationMaterial.owner_email === normalizedAuthEmail ? "you" : "a room member"}</small></div><button type="button" onClick={() => setSelectedCollaborationMaterial(null)} aria-label="Close material preview"><X className="h-5 w-5" aria-hidden="true" /></button></div><div className="collaboration-preview-content">{selectedMaterialSnapshot.summary || selectedMaterialSnapshot.transcript ? <article><h4>Study guide</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.summary || selectedMaterialSnapshot.transcript}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.formula ? <article><h4>Formulas</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.formula}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.example ? <article><h4>Worked examples</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.example}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.presentation?.slides?.length ? <article><h4>PowerPoint</h4><p>{selectedMaterialSnapshot.presentation.slides.length} slides are included in this shared material.</p></article> : null}{selectedMaterialSnapshot.podcast?.script ? <article><h4>Podcast</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.podcast.script}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.quiz_questions?.length ? <article><h4>Practice questions</h4><p>{selectedMaterialSnapshot.quiz_questions.length} questions are included.</p></article> : null}{!selectedMaterialSnapshot.summary && !selectedMaterialSnapshot.transcript && !selectedMaterialSnapshot.formula && !selectedMaterialSnapshot.example && !selectedMaterialSnapshot.presentation?.slides?.length && !selectedMaterialSnapshot.podcast?.script && !selectedMaterialSnapshot.quiz_questions?.length ? <p className="collaboration-empty-copy">This material reference is available to the room, but its original preview is no longer available.</p> : null}</div></section></div> : null}
+        {isCollaborationMembersOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationMembersOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room members" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room members</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationMembersOpen(false)} aria-label="Close members"><X className="h-5 w-5" /></button></div><div className="collaboration-members-list">{(activeRoom.members || []).map((member) => <div key={member.email}><span>{String(member.email || "M").slice(0, 2).toUpperCase()}</span><p><strong>{member.email === normalizedAuthEmail ? "You" : String(member.email || "Member").split("@")[0]}</strong><small>{member.role || "member"}</small></p></div>)}</div>{activeRoom.is_owner ? <div className="collaboration-dialog-invite"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite student by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>{isAddingRoomMembers ? "Inviting..." : "Invite"}</button></div> : null}</section></div> : null}
+        {isCollaborationSettingsOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationSettingsOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room settings" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room settings</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationSettingsOpen(false)} aria-label="Close room settings"><X className="h-5 w-5" /></button></div><div className="collaboration-setting-list"><div><strong>Room access</strong><small>Only the owner and invited members can open this room.</small></div><div><strong>Test answers</strong><small>{activeRoom.test_visibility === "shared" ? "Members can compare shared answers." : "Each member's answers remain private."}</small></div>{activeRoom.is_owner ? <div className="collaboration-setting-buttons"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={activeRoom.test_visibility === "private" ? "is-active" : ""}>Private answers</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={activeRoom.test_visibility === "shared" ? "is-active" : ""}>Shared answers</button></div> : null}<button type="button" onClick={() => { setIsCollaborationSettingsOpen(false); setIsCollaborationMembersOpen(true); }}>Manage members</button>{!activeRoom.is_owner ? <button type="button" className="is-danger" onClick={() => { setIsCollaborationSettingsOpen(false); void leaveCollaborationRoom(); }}>Leave room</button> : null}</div></section></div> : null}
       </section>
     );
   };
@@ -21506,6 +21514,13 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
+    if (currentPage !== "workspace" || activeTab !== "collaboration") return;
+    // Collaboration has one production surface. Older saved workspaces can still
+    // restore the legacy tab id, so route them to the fully wired room workspace.
+    openCollaborationPage({ replace: true, refresh: true, promptNotifications: false });
+  }, [activeTab, currentPage]);
+
+  useEffect(() => {
     if (!authToken) {
       setCollaborationProfile(null);
       return;
@@ -27299,7 +27314,7 @@ export default function App() {
   };
 
   const sendRoomMessage = async () => {
-    if (!activeRoomId) return;
+    if (!activeRoomId) return setError("Open or create a collaboration room before sending a message.");
     if (!roomMessageDraft.trim()) return setError("Type a room message first.");
     setIsSendingRoomMessage(true);
     setError("");
@@ -27350,7 +27365,8 @@ export default function App() {
   };
 
   const shareHistoryMaterialToRoom = async (item) => {
-    if (!activeRoomId || !item?.id) return;
+    if (!activeRoomId) return setError("Open or create a collaboration room before sharing material.");
+    if (!item?.id) return setError("That saved material could not be opened.");
     setIsSharingHistoryMaterialId(item.id);
     setError("");
     try {
@@ -27373,9 +27389,9 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Could not share this saved material.");
       setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
       setIsShareMaterialPickerOpen(false);
-      await loadHistoryItem(resolvedItem, { collaboration: true });
+      setSelectedCollaborationMaterial(data.item);
       void refreshCollaborationRooms(true);
-      setStatus(`${resolvedItem.title || "Material"} is now shared in this collaboration room.`);
+      setStatus(`${resolvedItem.title || "Material"} is now shared and open in this collaboration room.`);
     } catch (err) {
       setError(err.message || "Could not share this saved material.");
     } finally {
@@ -27397,13 +27413,34 @@ export default function App() {
         setStudyImages(snapshot.study_images || []);
         setActiveTab(source.active_tab || "guide");
       });
-      openCollaborationPage({ refresh: false });
+      setSelectedCollaborationMaterial(item);
       setCollaborationMobileView("materials");
       setStatus(`Opened ${item.title} in this collaboration room.`);
       return;
     }
     const historyItem = historyItems.find((entry) => entry.id === source.history_id);
-    if (historyItem) await loadHistoryItem(historyItem, { collaboration: true });
+    if (historyItem) {
+      const resolvedItem = await resolveFullHistoryItem(historyItem);
+      const hydratedItem = {
+        ...item,
+        source: {
+          ...source,
+          snapshot: {
+            transcript: resolvedItem.transcript || "",
+            summary: resolvedItem.summary || "",
+            formula: resolvedItem.formula || "",
+            example: resolvedItem.example || "",
+            flashcards: resolvedItem.flashcards || [],
+            quiz_questions: resolvedItem.quizQuestions || [],
+            study_images: resolvedItem.studyImages || [],
+            presentation: resolvedItem.presentationData || null,
+            podcast: resolvedItem.podcastData || null,
+          },
+        },
+      };
+      setSelectedCollaborationMaterial(hydratedItem);
+      setStatus(`Opened ${item.title} in this collaboration room.`);
+    }
     else setError("This material no longer has an available preview.");
   };
   const removeCollaborationMaterial = async (item) => {
