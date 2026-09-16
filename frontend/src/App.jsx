@@ -17176,7 +17176,7 @@ export default function App() {
   }, [activeStudyChatId, authAvailableModes, authChecked, authServerStateReady, authSessionMode, authToken, browserPath, currentPage, workspaceContextId]);
 
   useEffect(() => {
-    if (authToken || !authChecked) return;
+    if (hasRestorableSessionState) return;
     if (!GOOGLE_CLIENT_ID) {
       return;
     }
@@ -17239,14 +17239,14 @@ export default function App() {
       cancelled = true;
       script.removeEventListener("load", handleLoad);
     };
-  }, [authChecked, authToken, browserPath]);
+  }, [browserPath, hasRestorableSessionState]);
 
   useEffect(() => {
-    if (authToken || !authChecked || !APPLE_CLIENT_ID || !isAppleWebSigninSupported()) return;
+    if (hasRestorableSessionState || !APPLE_CLIENT_ID || !isAppleWebSigninSupported()) return;
     ensureAppleAuthScript().catch(() => {
       // The button can still try again on click.
     });
-  }, [authChecked, authToken]);
+  }, [hasRestorableSessionState]);
 
   const authFetch = async (path, options = {}) => {
     const { timeoutMs = 30000, tokenOverride = "", ...requestOptions } = options;

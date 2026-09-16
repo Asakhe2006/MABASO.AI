@@ -26,6 +26,7 @@ assert.match(appSource, /loadPersistedAuthStateToken/, "App.jsx must restore the
 assert.match(appSource, /const isAuthReady = authChecked && authServerStateReady;/, "A local browser marker must not bypass server session verification.");
 assert.match(appSource, /Opening your workspace\.\.\./, "Protected workspace authentication must show the opening state.");
 assert.match(appSource, /confirmSessionAfterUnauthorized/, "Protected API requests must recheck the session before forcing logout.");
+assert.doesNotMatch(appSource, /if \(authToken \|\| !authChecked\) return;/, "The public Google button must not wait for a cold backend session check.");
 assert.match(appSource, /authSessionRevisionRef/, "Protected requests must be tied to the session revision that started them.");
 assert.match(appSource, /requestSessionRevision !== authSessionRevisionRef\.current/, "A stale protected 401 must not log out a newer successful session.");
 assert.doesNotMatch(appSource, /setInterval\([^)]*\/auth\/me/s, "Session verification must not run on an interval.");
