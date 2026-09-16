@@ -7808,6 +7808,7 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS collaboration_profiles (
                 email TEXT PRIMARY KEY,
+                public_id TEXT NOT NULL DEFAULT '',
                 display_name TEXT NOT NULL DEFAULT '',
                 bio TEXT NOT NULL DEFAULT '',
                 institution TEXT NOT NULL DEFAULT '',
@@ -7824,6 +7825,20 @@ def init_db():
             )
             """
         )
+        collaboration_profile_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(collaboration_profiles)").fetchall()
+        }
+        if "public_id" not in collaboration_profile_columns:
+            connection.execute("ALTER TABLE collaboration_profiles ADD COLUMN public_id TEXT NOT NULL DEFAULT ''")
+        profiles_without_public_ids = connection.execute(
+            "SELECT email FROM collaboration_profiles WHERE public_id = '' OR public_id IS NULL"
+        ).fetchall()
+        for profile_row in profiles_without_public_ids:
+            connection.execute(
+                "UPDATE collaboration_profiles SET public_id = ? WHERE email = ?",
+                (uuid4().hex, profile_row["email"]),
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS collaboration_materials (
@@ -7861,6 +7876,7 @@ def init_db():
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_materials_room_created ON collaboration_materials (room_id, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_board_room_created ON collaboration_board_items (room_id, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_profiles_discoverable ON collaboration_profiles (discoverable, updated_at DESC)")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_collaboration_profiles_public_id ON collaboration_profiles (public_id)")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
@@ -38259,6 +38275,7 @@ async def delete_collaboration_board_item(room_id: str, item_id: str, current_us
 
 def serialize_collaboration_profile(row: sqlite3.Row, *, include_email: bool = False) -> dict[str, Any]:
     profile = {
+        "public_id": row["public_id"],
         "display_name": row["display_name"],
         "bio": row["bio"],
         "institution": row["institution"] if row["show_institution"] else "",
@@ -38292,13 +38309,18 @@ async def save_my_collaboration_profile(
     now_iso = utc_now().isoformat()
     clean_list = lambda values: [compact_text(value)[:80] for value in values if compact_text(value)][:20]
     with get_db_connection() as connection:
+        existing_profile = connection.execute(
+            "SELECT public_id FROM collaboration_profiles WHERE email = ?",
+            (current_user,),
+        ).fetchone()
+        public_id = compact_text(existing_profile["public_id"] if existing_profile else "") or uuid4().hex
         connection.execute(
             """
             INSERT INTO collaboration_profiles (
-                email, display_name, bio, institution, course, study_year, subjects_json,
+                email, public_id, display_name, bio, institution, course, study_year, subjects_json,
                 can_help_json, needs_help_json, discoverable, show_institution, allow_requests,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 display_name = excluded.display_name, bio = excluded.bio,
                 institution = excluded.institution, course = excluded.course,
@@ -38308,7 +38330,7 @@ async def save_my_collaboration_profile(
                 allow_requests = excluded.allow_requests, updated_at = excluded.updated_at
             """,
             (
-                current_user, compact_text(payload.display_name)[:120], compact_text(payload.bio)[:800],
+                current_user, public_id, compact_text(payload.display_name)[:120], compact_text(payload.bio)[:800],
                 compact_text(payload.institution)[:160], compact_text(payload.course)[:160],
                 compact_text(payload.study_year)[:80], dump_json(clean_list(payload.subjects)),
                 dump_json(clean_list(payload.can_help)), dump_json(clean_list(payload.needs_help)),
@@ -38327,6 +38349,10 @@ async def discover_collaboration_profiles(
 ):
     needle = compact_text(query).lower()[:100]
     with get_db_connection() as connection:
+        current_profile_row = connection.execute(
+            "SELECT * FROM collaboration_profiles WHERE email = ?",
+            (current_user,),
+        ).fetchone()
         rows = connection.execute(
             """
             SELECT * FROM collaboration_profiles
@@ -38345,7 +38371,59 @@ async def discover_collaboration_profiles(
                 profile["study_year"], *profile["subjects"], *profile["can_help"], *profile["needs_help"],
             ]).lower()
         ]
+    current_profile = serialize_collaboration_profile(current_profile_row, include_email=True) if current_profile_row else None
+    current_subjects = {compact_text(item).lower() for item in (current_profile or {}).get("subjects", []) if compact_text(item)}
+    current_course = compact_text((current_profile or {}).get("course", "")).lower()
+    for profile in profiles:
+        reasons: list[str] = []
+        shared_subjects = current_subjects.intersection({compact_text(item).lower() for item in profile.get("subjects", []) if compact_text(item)})
+        if shared_subjects:
+            reasons.append(f"{len(shared_subjects)} subject{'s' if len(shared_subjects) != 1 else ''} in common")
+        if current_course and compact_text(profile.get("course", "")).lower() == current_course:
+            reasons.append("Same course")
+        if profile.get("can_help"):
+            reasons.append(f"Can help with {profile['can_help'][0]}")
+        profile["match_reasons"] = reasons[:2]
     return {"profiles": profiles[:50]}
+
+
+@app.post("/collaboration/rooms/{room_id}/invite-profile/{profile_id}")
+async def invite_discovered_profile_to_room(
+    room_id: str,
+    profile_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_can_manage(room, current_user):
+        raise HTTPException(status_code=403, detail="Only a room owner or moderator can invite students.")
+    with get_db_connection() as connection:
+        profile_row = connection.execute(
+            """
+            SELECT email, display_name
+            FROM collaboration_profiles
+            WHERE public_id = ? AND discoverable = 1 AND allow_requests = 1
+            """,
+            (compact_text(profile_id)[:96],),
+        ).fetchone()
+        if not profile_row:
+            raise HTTPException(status_code=404, detail="This student is not available for collaboration invitations.")
+        if profile_row["email"] == current_user:
+            raise HTTPException(status_code=400, detail="You are already the room owner.")
+        now_iso = utc_now().isoformat()
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_members (room_id, email, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(room_id, email) DO UPDATE SET role = excluded.role
+            """,
+            (room["id"], profile_row["email"], "member", now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    updated_room = get_accessible_collaboration_room(room_id, current_user)
+    return {
+        "room": serialize_collaboration_room(updated_room, current_user),
+        "profile": {"public_id": profile_id, "display_name": profile_row["display_name"]},
+    }
 
 
 @app.post("/collaboration/rooms/{room_id}/board-images")

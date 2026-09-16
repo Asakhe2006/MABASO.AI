@@ -63,7 +63,7 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE collaboration_profiles (
-                    email TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '',
+                    email TEXT PRIMARY KEY, public_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '',
                     institution TEXT NOT NULL DEFAULT '', course TEXT NOT NULL DEFAULT '',
                     study_year TEXT NOT NULL DEFAULT '', subjects_json TEXT NOT NULL DEFAULT '[]',
                     can_help_json TEXT NOT NULL DEFAULT '[]', needs_help_json TEXT NOT NULL DEFAULT '[]',
@@ -127,6 +127,28 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             current_user=owner,
         )
         self.assertEqual(profile_result["profile"]["display_name"], "Student One")
+
+        student_profile = await main.save_my_collaboration_profile(
+            main.CollaborationProfileRequest(
+                display_name="Student Two",
+                course="Electrical Engineering",
+                subjects=["Communication Systems", "MATLAB"],
+                can_help=["MATLAB"],
+                discoverable=True,
+                allow_requests=True,
+            ),
+            current_user="student2@example.com",
+        )
+        discovery = await main.discover_collaboration_profiles("MATLAB", current_user=owner)
+        self.assertEqual(discovery["profiles"][0]["public_id"], student_profile["profile"]["public_id"])
+        self.assertTrue(discovery["profiles"][0]["match_reasons"])
+
+        invite_result = await main.invite_discovered_profile_to_room(
+            room_id,
+            student_profile["profile"]["public_id"],
+            current_user=owner,
+        )
+        self.assertEqual(invite_result["room"]["members"][-1]["email"], "student2@example.com")
 
         reopened = await main.get_collaboration_room(room_id, current_user=owner)
         self.assertEqual(len(reopened["room"]["messages"]), 1)

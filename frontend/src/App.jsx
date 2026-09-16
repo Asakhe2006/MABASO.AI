@@ -7240,6 +7240,8 @@ export default function App() {
   const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
   const [isCollaborationSettingsOpen, setIsCollaborationSettingsOpen] = useState(false);
   const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", discoverable: true, show_institution: true, allow_requests: true });
+  const [collaborationProfileSaveState, setCollaborationProfileSaveState] = useState("");
+  const [invitingCollaborationProfileId, setInvitingCollaborationProfileId] = useState("");
 
   useEffect(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return undefined;
@@ -27336,22 +27338,28 @@ export default function App() {
   };
 
   const sendRoomMessage = async () => {
-    if (!activeRoomId) return setError("Open or create a collaboration room before sending a message.");
-    if (!roomMessageDraft.trim()) return setError("Type a room message first.");
+    const roomId = activeRoom?.id || activeRoomId;
+    const content = roomMessageDraft.trim();
+    if (!roomId) return setError("Open or create a collaboration room before sending a message.");
+    if (!content) return setError("Type a room message first.");
     setIsSendingRoomMessage(true);
     setError("");
     try {
-      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/messages`, {
+      const response = await authFetch(`/collaboration/rooms/${roomId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: roomMessageDraft }),
+        body: JSON.stringify({ content }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not send the room message.");
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoom(data.room || null);
       setRoomMessageDraft("");
-      refreshCollaborationRooms(true);
+      void refreshCollaborationRooms(true);
+      window.requestAnimationFrame(() => {
+        const messageList = document.querySelector(".collaboration-chat-messages");
+        if (messageList) messageList.scrollTop = messageList.scrollHeight;
+      });
       setStatus("Collaboration message sent.");
     } catch (err) {
       setError(err.message || "Could not send the room message.");
@@ -27381,9 +27389,19 @@ export default function App() {
       setError(err.message || "Could not leave the room.");
     }
   };
-  const shareCurrentWorkspaceMaterialToRoom = () => {
-    if (!activeRoomId) return setError("Open a collaboration room first.");
+  const shareCurrentWorkspaceMaterialToRoom = async () => {
+    if (!(activeRoom?.id || activeRoomId)) return setError("Open a collaboration room first.");
     setIsShareMaterialPickerOpen(true);
+    setIsSharingRoomMaterial(true);
+    setError("");
+    try {
+      const serverHistoryItems = await loadHistoryFromServer();
+      setHistoryItems((current) => mergeHistoryItems(serverHistoryItems, current));
+    } catch (err) {
+      setError(err.message || "Could not refresh your saved materials. Showing the history already on this device.");
+    } finally {
+      setIsSharingRoomMaterial(false);
+    }
   };
 
   const shareHistoryMaterialToRoom = async (item) => {
@@ -27412,6 +27430,7 @@ export default function App() {
       setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
       setIsShareMaterialPickerOpen(false);
       setSelectedCollaborationMaterial(data.item);
+      await loadCollaborationRoom(activeRoomId, { silent: true });
       void refreshCollaborationRooms(true);
       setStatus(`${resolvedItem.title || "Material"} is now shared and open in this collaboration room.`);
     } catch (err) {
@@ -27481,20 +27500,19 @@ export default function App() {
   };
 
   const postCollaborationBoardItem = async () => {
-    if (!activeRoomId) return setError("Open a collaboration room first.");
-    if (!boardItemTitle.trim() && !boardItemContent.trim()) return setError("Add a board title or message first.");
+    const roomId = activeRoom?.id || activeRoomId;
+    const title = boardItemTitle.trim();
+    const content = boardItemContent.trim();
+    const checklist = boardItemChecklist.split("\n").map((item) => item.trim()).filter(Boolean);
+    if (!roomId) return setError("Open a collaboration room first.");
+    if (!title && !content && !checklist.length) return setError("Add a board title, message, or checklist first.");
     setIsPostingBoardItem(true);
     setError("");
     try {
-      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-items`, {
+      const response = await authFetch(`/collaboration/rooms/${roomId}/board-items`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          item_type: boardItemType,
-          title: boardItemTitle,
-          content: boardItemContent,
-          checklist: boardItemChecklist.split("\n").map((item) => item.trim()).filter(Boolean),
-        }),
+        body: JSON.stringify({ item_type: boardItemType, title, content, checklist }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not add that item to the board.");
@@ -27503,6 +27521,7 @@ export default function App() {
       setBoardItemContent("");
       setBoardItemChecklist("");
       setIsBoardComposerOpen(false);
+      await loadCollaborationRoom(roomId, { silent: true });
       void refreshCollaborationRooms(true);
       setStatus("Added to the collaboration board.");
     } catch (err) {
@@ -27562,6 +27581,8 @@ export default function App() {
   };
   const saveCollaborationProfile = async () => {
     setIsProfileLoading(true);
+    setCollaborationProfileSaveState("saving");
+    setError("");
     try {
       const fields = ["subjects", "can_help", "needs_help"];
       const payload = { ...collaborationProfileDraft };
@@ -27569,14 +27590,38 @@ export default function App() {
       const response = await authFetch("/collaboration/profile/me", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your collaboration profile.");
-      setCollaborationProfile(data.profile);
-      setCollaborationProfileDraft({ ...data.profile, subjects: (data.profile.subjects || []).join(", "), can_help: (data.profile.can_help || []).join(", "), needs_help: (data.profile.needs_help || []).join(", ") });
-      setIsProfileEditorOpen(false);
+      const verificationResponse = await authFetch("/collaboration/profile/me", { cache: "no-store" });
+      const verificationData = await parseJsonSafe(verificationResponse);
+      if (!verificationResponse.ok || !verificationData.profile) throw new Error(verificationData.detail || "Your profile was saved but could not be verified.");
+      setCollaborationProfile(verificationData.profile);
+      setCollaborationProfileDraft({ ...verificationData.profile, subjects: (verificationData.profile.subjects || []).join(", "), can_help: (verificationData.profile.can_help || []).join(", "), needs_help: (verificationData.profile.needs_help || []).join(", ") });
+      setCollaborationProfileSaveState("saved");
       setStatus("Collaboration profile saved. You control what other students can discover.");
     } catch (err) {
+      setCollaborationProfileSaveState("error");
       setError(err.message || "Could not save your collaboration profile.");
     } finally {
       setIsProfileLoading(false);
+    }
+  };
+  const inviteDiscoveredProfileToRoom = async (profile) => {
+    const roomId = activeRoom?.id || activeRoomId;
+    if (!roomId || !activeRoom) return setError("Open a room before inviting a student.");
+    if (!activeRoom.can_manage) return setError("Only the room owner or moderator can invite students.");
+    if (!profile?.public_id) return setError("This student is not available for a private invitation.");
+    setInvitingCollaborationProfileId(profile.public_id);
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${roomId}/invite-profile/${encodeURIComponent(profile.public_id)}`, { method: "POST" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not invite this student.");
+      setActiveRoom(data.room || activeRoom);
+      void refreshCollaborationRooms(true);
+      setStatus(`${profile.display_name || "Student"} was invited to ${activeRoom.title}.`);
+    } catch (err) {
+      setError(err.message || "Could not invite this student.");
+    } finally {
+      setInvitingCollaborationProfileId("");
     }
   };
   const shareTabToRoom = async (tabId = activeTab) => {
