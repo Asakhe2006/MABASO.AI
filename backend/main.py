@@ -38053,6 +38053,29 @@ async def add_collaboration_room_members(
     return {"room": serialize_collaboration_room(updated_room, current_user), "invited_emails": newly_invited_emails}
 
 
+@app.delete("/collaboration/rooms/{room_id}/membership")
+async def leave_collaboration_room(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if room["owner_email"] == current_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Room owners cannot leave their room. Transfer ownership or delete the room first.",
+        )
+    with get_db_connection() as connection:
+        connection.execute(
+            "DELETE FROM collaboration_room_members WHERE room_id = ? AND email = ?",
+            (room["id"], current_user),
+        )
+        connection.execute(
+            "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
+            (utc_now().isoformat(), room["id"]),
+        )
+    return {"left": True, "id": room["id"]}
+
+
 @app.post("/collaboration/rooms/{room_id}/notes")
 async def save_collaboration_notes(
     room_id: str,
