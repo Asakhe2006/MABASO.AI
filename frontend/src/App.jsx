@@ -85,6 +85,7 @@ function normalizePostAuthRedirectPath(path = "") {
 }
 
 const API_BASE_URL = resolveApiBaseUrl();
+const PUBLIC_TERMS_PATH = "/company/terms";
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
 const APPLE_REDIRECT_URI = (import.meta.env.VITE_APPLE_REDIRECT_URI || "").trim();
