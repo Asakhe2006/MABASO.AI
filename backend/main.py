@@ -186,6 +186,8 @@ GROQ_SPEECH_MODEL = os.getenv("GROQ_SPEECH_MODEL", "whisper-large-v3")
 GROQ_SPEECH_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_SPEECH_TIMEOUT_SECONDS = float(os.getenv("GROQ_SPEECH_TIMEOUT_SECONDS", "20"))
 MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES = int(os.getenv("MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES", str(12 * 1024 * 1024)))
+MAX_COLLABORATION_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_COLLABORATION_IMAGE_UPLOAD_BYTES", str(12 * 1024 * 1024)))
+MAX_COLLABORATION_VIDEO_UPLOAD_BYTES = int(os.getenv("MAX_COLLABORATION_VIDEO_UPLOAD_BYTES", str(50 * 1024 * 1024)))
 ASSET_GENERATION_MODEL = normalize_standard_text_model(os.getenv("ASSET_GENERATION_MODEL"), BASE_TEXT_MODEL)
 PODCAST_SCRIPT_MODEL = normalize_standard_text_model(os.getenv("PODCAST_SCRIPT_MODEL"), BASE_TEXT_MODEL)
 PODCAST_TTS_MODEL = os.getenv("PODCAST_TTS_MODEL", "gpt-4o-mini-tts")
@@ -7260,8 +7262,11 @@ class CollaborationProfileRequest(BaseModel):
     subjects: list[str] = []
     can_help: list[str] = []
     needs_help: list[str] = []
+    phone: str = ""
     discoverable: bool = False
     show_institution: bool = False
+    show_email: bool = False
+    show_phone: bool = False
     allow_requests: bool = True
 
 
@@ -7412,6 +7417,7 @@ def translate_postgres_sql(sql: str) -> str:
             f"{translated} ON CONFLICT (room_id, email) DO UPDATE SET "
             "role = EXCLUDED.role, created_at = EXCLUDED.created_at"
         )
+    translated = re.sub(r"\bBLOB\b", "BYTEA", translated, flags=re.IGNORECASE)
     translated = re.sub(r"\bexcluded\.", "EXCLUDED.", translated, flags=re.IGNORECASE)
     return translated.replace("?", "%s")
 
@@ -7668,10 +7674,27 @@ def init_db():
                 room_id TEXT NOT NULL,
                 author_email TEXT NOT NULL,
                 content TEXT NOT NULL,
+                message_type TEXT NOT NULL DEFAULT 'text',
+                media_id TEXT NOT NULL DEFAULT '',
+                duration_seconds INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
             """
         )
+        collaboration_message_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(collaboration_room_messages)").fetchall()
+        }
+        collaboration_message_column_defaults = {
+            "message_type": "TEXT NOT NULL DEFAULT 'text'",
+            "media_id": "TEXT NOT NULL DEFAULT ''",
+            "duration_seconds": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for column_name, column_definition in collaboration_message_column_defaults.items():
+            if column_name not in collaboration_message_columns:
+                connection.execute(
+                    f"ALTER TABLE collaboration_room_messages ADD COLUMN {column_name} {column_definition}"
+                )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS collaboration_room_answers (
@@ -7817,8 +7840,11 @@ def init_db():
                 subjects_json TEXT NOT NULL DEFAULT '[]',
                 can_help_json TEXT NOT NULL DEFAULT '[]',
                 needs_help_json TEXT NOT NULL DEFAULT '[]',
+                phone TEXT NOT NULL DEFAULT '',
                 discoverable INTEGER NOT NULL DEFAULT 0,
                 show_institution INTEGER NOT NULL DEFAULT 0,
+                show_email INTEGER NOT NULL DEFAULT 0,
+                show_phone INTEGER NOT NULL DEFAULT 0,
                 allow_requests INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -7839,6 +7865,13 @@ def init_db():
         }
         if "public_id" not in collaboration_profile_columns:
             connection.execute("ALTER TABLE collaboration_profiles ADD COLUMN public_id TEXT NOT NULL DEFAULT ''")
+        for column_name, column_sql in {
+            "phone": "TEXT NOT NULL DEFAULT ''",
+            "show_email": "INTEGER NOT NULL DEFAULT 0",
+            "show_phone": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if column_name not in collaboration_profile_columns:
+                connection.execute(f"ALTER TABLE collaboration_profiles ADD COLUMN {column_name} {column_sql}")
         profiles_without_public_ids = connection.execute(
             "SELECT email FROM collaboration_profiles WHERE public_id = '' OR public_id IS NULL"
         ).fetchall()
@@ -7883,9 +7916,59 @@ def init_db():
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_materials_room_created ON collaboration_materials (room_id, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_board_room_created ON collaboration_board_items (room_id, created_at DESC)")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_media (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                media_kind TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                data_blob BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_media_room_created ON collaboration_media (room_id, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_profiles_discoverable ON collaboration_profiles (discoverable, updated_at DESC)")
         connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_collaboration_profiles_public_id ON collaboration_profiles (public_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_presence_last_seen ON collaboration_presence (last_seen_at DESC)")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_room_invites (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                room_id TEXT NOT NULL,
+                inviter_email TEXT NOT NULL,
+                invited_email TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                email_status TEXT NOT NULL DEFAULT 'pending',
+                email_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_notifications (
+                id TEXT PRIMARY KEY,
+                recipient_email TEXT NOT NULL,
+                actor_email TEXT NOT NULL DEFAULT '',
+                room_id TEXT NOT NULL DEFAULT '',
+                notification_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                read_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_invites_recipient ON collaboration_room_invites (invited_email, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_invites_room ON collaboration_room_invites (room_id, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_notifications_recipient ON collaboration_notifications (recipient_email, created_at DESC)")
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
@@ -9959,9 +10042,32 @@ def send_verification_email(email: str, code: str):
     send_smtp_message(message)
 
 
-def send_collaboration_invite_email(invited_email: str, owner_email: str, room_title: str, room_id: str):
+def safe_email_delivery_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        return compact_text(exc.detail, exc.__class__.__name__)[:300]
+    return f"{exc.__class__.__name__}: {compact_text(str(exc), 'email delivery failed')[:240]}"
+
+
+def send_collaboration_invite_email(
+    invited_email: str,
+    owner_email: str,
+    room_title: str,
+    room_id: str,
+    invite_token: str = "",
+):
     smtp_settings = get_smtp_settings()
+    logger.info(
+        "SMTP configuration available host=%s port=%s tls=%s ssl=%s username_configured=%s from_configured=%s",
+        smtp_settings["host"],
+        smtp_settings["port"],
+        smtp_settings["use_tls"],
+        smtp_settings["use_ssl"],
+        bool(smtp_settings["username"]),
+        bool(smtp_settings["from_email"]),
+    )
     room_url = f"{APP_PUBLIC_URL.rstrip('/')}/app/collaboration?room={quote(room_id)}"
+    if invite_token:
+        room_url = f"{room_url}&invitation={quote(invite_token)}"
     message = EmailMessage()
     message["Subject"] = f"Join {room_title} on MABASO AI"
     message["From"] = smtp_settings["from_email"]
@@ -9993,10 +10099,48 @@ def send_collaboration_invite_email(invited_email: str, owner_email: str, room_t
     send_smtp_message(message)
 
 
-async def deliver_collaboration_invite_emails(invited_emails: list[str], owner_email: str, room_title: str, room_id: str):
-    for invited_email in invited_emails:
+async def deliver_collaboration_invite_emails(
+    invitations: list[dict[str, str] | str],
+    owner_email: str,
+    room_title: str,
+    room_id: str,
+):
+    for invitation in invitations:
+        if isinstance(invitation, dict):
+            invited_email = normalize_email(invitation.get("email"))
+            invitation_id = compact_text(invitation.get("id"))
+            invite_token = compact_text(invitation.get("token"))
+        else:
+            invited_email = normalize_email(invitation)
+            invitation_id = ""
+            invite_token = ""
+        logger.info(
+            "Attempting collaboration invitation email room_id=%s invitation_id=%s recipient=%s",
+            room_id,
+            invitation_id or "legacy",
+            invited_email,
+        )
         try:
-            await asyncio.to_thread(send_collaboration_invite_email, invited_email, owner_email, room_title, room_id)
+            await asyncio.to_thread(
+                send_collaboration_invite_email,
+                invited_email,
+                owner_email,
+                room_title,
+                room_id,
+                invite_token,
+            )
+            if invitation_id:
+                with get_db_connection() as connection:
+                    connection.execute(
+                        "UPDATE collaboration_room_invites SET email_status = ?, email_error = ?, updated_at = ? WHERE id = ?",
+                        ("sent", "", utc_now().isoformat(), invitation_id),
+                    )
+            logger.info(
+                "Collaboration invitation email sent room_id=%s invitation_id=%s recipient=%s",
+                room_id,
+                invitation_id or "legacy",
+                invited_email,
+            )
             record_audit_log(
                 action="collaboration.invite.email",
                 email=owner_email,
@@ -10005,7 +10149,20 @@ async def deliver_collaboration_invite_emails(invited_emails: list[str], owner_e
                 metadata={"invited_email": invited_email, "delivery_status": "sent"},
             )
         except HTTPException as exc:
-            logger.warning("Collaboration invite email failed for %s: %s", invited_email, exc.detail)
+            safe_error = safe_email_delivery_error(exc)
+            if invitation_id:
+                with get_db_connection() as connection:
+                    connection.execute(
+                        "UPDATE collaboration_room_invites SET email_status = ?, email_error = ?, updated_at = ? WHERE id = ?",
+                        ("failed", safe_error, utc_now().isoformat(), invitation_id),
+                    )
+            logger.warning(
+                "Collaboration invitation email failed room_id=%s invitation_id=%s recipient=%s error=%s",
+                room_id,
+                invitation_id or "legacy",
+                invited_email,
+                safe_error,
+            )
             record_audit_log(
                 action="collaboration.invite.email",
                 status="error",
@@ -10015,7 +10172,20 @@ async def deliver_collaboration_invite_emails(invited_emails: list[str], owner_e
                 metadata={"invited_email": invited_email, "delivery_status": "failed", "error": str(exc.detail)},
             )
         except Exception as exc:
-            logger.exception("Unexpected collaboration invite email failure for %s", invited_email)
+            safe_error = safe_email_delivery_error(exc)
+            if invitation_id:
+                with get_db_connection() as connection:
+                    connection.execute(
+                        "UPDATE collaboration_room_invites SET email_status = ?, email_error = ?, updated_at = ? WHERE id = ?",
+                        ("failed", safe_error, utc_now().isoformat(), invitation_id),
+                    )
+            logger.exception(
+                "Collaboration invitation email failed room_id=%s invitation_id=%s recipient=%s error=%s",
+                room_id,
+                invitation_id or "legacy",
+                invited_email,
+                safe_error,
+            )
             record_audit_log(
                 action="collaboration.invite.email",
                 status="error",
@@ -19525,7 +19695,7 @@ def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, author_email, content, created_at
+            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
             FROM collaboration_room_messages
             WHERE room_id = ?
             ORDER BY created_at DESC
@@ -19540,6 +19710,9 @@ def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[
             "id": row["id"],
             "author_email": row["author_email"],
             "content": row["content"],
+            "message_type": compact_text(row["message_type"], "text"),
+            "media_id": compact_text(row["media_id"]),
+            "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
             "created_at": row["created_at"],
         }
         for row in ordered_rows
@@ -19550,7 +19723,7 @@ def get_latest_collaboration_room_message(room_id: str) -> dict[str, str] | None
     with get_db_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, author_email, content, created_at
+            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
             FROM collaboration_room_messages
             WHERE room_id = ?
             ORDER BY created_at DESC
@@ -19566,6 +19739,9 @@ def get_latest_collaboration_room_message(room_id: str) -> dict[str, str] | None
         "id": row["id"],
         "author_email": row["author_email"],
         "content": row["content"],
+        "message_type": compact_text(row["message_type"], "text"),
+        "media_id": compact_text(row["media_id"]),
+        "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
         "created_at": row["created_at"],
     }
 
@@ -19610,6 +19786,23 @@ def get_accessible_collaboration_room(room_id: str, current_user: str) -> sqlite
             (room_id, current_user, current_user),
         ).fetchone()
 
+    if not row:
+        raise HTTPException(status_code=404, detail="Collaboration room not found.")
+    return row
+
+
+def get_accessible_collaboration_room_access(room_id: str, current_user: str) -> sqlite3.Row:
+    """Load only authorization/header fields for frequent room mutations."""
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT DISTINCT r.id, r.owner_email, r.title, r.updated_at
+            FROM collaboration_rooms r
+            LEFT JOIN collaboration_room_members m ON m.room_id = r.id
+            WHERE r.id = ? AND (r.owner_email = ? OR m.email = ?)
+            """,
+            (room_id, current_user, current_user),
+        ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Collaboration room not found.")
     return row
@@ -19676,6 +19869,30 @@ def normalize_collaboration_board_images(images: Any) -> list[dict[str, str]]:
         if len(normalized_images) >= MAX_COLLABORATION_BOARD_IMAGES:
             break
     return normalized_images
+
+
+def optimize_collaboration_image_bytes(
+    file_bytes: bytes,
+    content_type: str,
+    filename: str,
+) -> tuple[bytes, str, str]:
+    """Keep collaboration photos quick to load without changing non-raster uploads."""
+    if content_type.lower() == "image/gif":
+        return file_bytes, content_type, filename
+    try:
+        with Image.open(BytesIO(file_bytes)) as source_image:
+            image = source_image.convert("RGBA")
+            image.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
+            flattened = Image.new("RGB", image.size, (255, 255, 255))
+            flattened.paste(image, mask=image.getchannel("A"))
+            output = BytesIO()
+            flattened.save(output, format="JPEG", quality=86, optimize=True, progressive=True)
+        optimized = output.getvalue()
+        if optimized and len(optimized) < len(file_bytes):
+            return optimized, "image/jpeg", f"{Path(filename).stem or 'photo'}.jpg"
+    except Exception as exc:
+        logger.info("Keeping original collaboration image after optimization skipped: %s", exc)
+    return file_bytes, content_type, filename
 
 
 def collaboration_room_can_manage(room: sqlite3.Row, current_user: str) -> bool:
@@ -19749,7 +19966,81 @@ def get_collaboration_board_items(room_id: str) -> list[dict[str, Any]]:
 def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> dict:
     room_id = room_row["id"]
     test_visibility = normalize_test_visibility(room_row["test_visibility"])
-    members = get_collaboration_room_members(room_id)
+    answer_query = """
+        SELECT question_number, author_email, answer_text, updated_at
+        FROM collaboration_room_answers WHERE room_id = ?
+    """
+    answer_params: list[str] = [room_id]
+    if test_visibility != "shared":
+        answer_query += " AND author_email = ?"
+        answer_params.append(current_user)
+    answer_query += " ORDER BY question_number ASC, author_email ASC"
+    with get_db_connection() as connection:
+        member_rows = connection.execute(
+            "SELECT email, role, created_at FROM collaboration_room_members WHERE room_id = ? ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, email ASC",
+            (room_id,),
+        ).fetchall()
+        message_rows = connection.execute(
+            """
+            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
+            FROM collaboration_room_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 80
+            """,
+            (room_id,),
+        ).fetchall()
+        material_rows = connection.execute(
+            """
+            SELECT id, room_id, owner_email, title, material_type, description,
+                   source_json, visibility, created_at, updated_at
+            FROM collaboration_materials WHERE room_id = ? ORDER BY created_at DESC LIMIT 120
+            """,
+            (room_id,),
+        ).fetchall()
+        board_rows = connection.execute(
+            """
+            SELECT id, room_id, owner_email, item_type, title, content, checklist_json,
+                   due_at, material_id, pinned, created_at, updated_at
+            FROM collaboration_board_items WHERE room_id = ? ORDER BY pinned DESC, created_at DESC LIMIT 120
+            """,
+            (room_id,),
+        ).fetchall()
+        answer_rows = connection.execute(answer_query, answer_params).fetchall()
+        membership = connection.execute(
+            "SELECT role FROM collaboration_room_members WHERE room_id = ? AND email = ?",
+            (room_id, current_user),
+        ).fetchone()
+
+    members = [{"email": row["email"], "role": row["role"], "created_at": row["created_at"]} for row in member_rows]
+    messages = [
+        {
+            "id": row["id"], "author_email": row["author_email"], "content": row["content"],
+            "message_type": compact_text(row["message_type"], "text"), "media_id": compact_text(row["media_id"]),
+            "duration_seconds": max(0, int(row["duration_seconds"] or 0)), "created_at": row["created_at"],
+        }
+        for row in reversed(message_rows)
+    ]
+    materials = [
+        {
+            "id": row["id"], "room_id": row["room_id"], "owner_email": row["owner_email"],
+            "title": row["title"], "material_type": row["material_type"], "description": row["description"],
+            "source": load_collaboration_json_object(row["source_json"]), "visibility": row["visibility"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+        for row in material_rows
+    ]
+    board_items = [
+        {
+            "id": row["id"], "room_id": row["room_id"], "owner_email": row["owner_email"],
+            "item_type": row["item_type"], "title": row["title"], "content": row["content"],
+            "checklist": [compact_text(item) for item in load_json_list(row["checklist_json"]) if compact_text(item)][:20],
+            "due_at": row["due_at"], "material_id": row["material_id"], "pinned": bool(row["pinned"]),
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+        for row in board_rows
+    ]
+    quiz_answers = [
+        {"question_number": row["question_number"], "author_email": row["author_email"], "answer_text": row["answer_text"], "updated_at": row["updated_at"]}
+        for row in answer_rows
+    ]
 
     return {
         "id": room_id,
@@ -19771,12 +20062,12 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "created_at": room_row["created_at"],
         "updated_at": room_row["updated_at"],
         "members": members,
-        "messages": get_collaboration_room_messages(room_id),
-        "materials": get_collaboration_room_materials(room_id),
-        "board_items": get_collaboration_board_items(room_id),
-        "quiz_answers": get_collaboration_room_answers(room_id, current_user, test_visibility),
+        "messages": messages,
+        "materials": materials,
+        "board_items": board_items,
+        "quiz_answers": quiz_answers,
         "is_owner": room_row["owner_email"] == current_user,
-        "can_manage": collaboration_room_can_manage(room_row, current_user),
+        "can_manage": room_row["owner_email"] == current_user or bool(membership and membership["role"] == "moderator"),
     }
 
 
@@ -37961,8 +38252,139 @@ async def list_collaboration_rooms(current_user: str = Depends(require_authentic
             """,
             (current_user, current_user),
         ).fetchall()
+        room_ids = [row["id"] for row in rows]
+        if not room_ids:
+            return {"rooms": []}
+        placeholders = ",".join("?" for _ in room_ids)
+        member_rows = connection.execute(
+            f"""
+            SELECT room_id, email, role, created_at
+            FROM collaboration_room_members
+            WHERE room_id IN ({placeholders})
+            ORDER BY room_id, CASE role WHEN 'owner' THEN 0 ELSE 1 END, email ASC
+            """,
+            tuple(room_ids),
+        ).fetchall()
+        latest_rows = connection.execute(
+            f"""
+            SELECT id, room_id, author_email, content, message_type, media_id, duration_seconds, created_at
+            FROM (
+                SELECT id, room_id, author_email, content, message_type, media_id, duration_seconds, created_at,
+                       ROW_NUMBER() OVER (PARTITION BY room_id ORDER BY created_at DESC) AS row_number
+                FROM collaboration_room_messages
+                WHERE room_id IN ({placeholders})
+            ) recent
+            WHERE row_number = 1
+            """,
+            tuple(room_ids),
+        ).fetchall()
 
-    return {"rooms": [serialize_collaboration_room_card(row) for row in rows]}
+    members_by_room: dict[str, list[dict[str, str]]] = {room_id: [] for room_id in room_ids}
+    for member in member_rows:
+        members_by_room.setdefault(member["room_id"], []).append(
+            {"email": member["email"], "role": member["role"], "created_at": member["created_at"]}
+        )
+    latest_by_room = {
+        message["room_id"]: {
+            "id": message["id"],
+            "author_email": message["author_email"],
+            "content": message["content"],
+            "message_type": compact_text(message["message_type"], "text"),
+            "media_id": compact_text(message["media_id"]),
+            "duration_seconds": max(0, int(message["duration_seconds"] or 0)),
+            "created_at": message["created_at"],
+        }
+        for message in latest_rows
+    }
+    cards = []
+    for room in rows:
+        members = members_by_room.get(room["id"], [])
+        cards.append(
+            {
+                "id": room["id"],
+                "title": room["title"],
+                "owner_email": room["owner_email"],
+                "created_at": room["created_at"],
+                "updated_at": room["updated_at"],
+                "active_tab": sanitize_collaboration_tab(room["active_tab"]),
+                "test_visibility": normalize_test_visibility(room["test_visibility"]),
+                "board_image_count": len(normalize_collaboration_board_images(load_json_list(room["board_images_json"]))),
+                "member_count": len(members),
+                "members": members,
+                "latest_message": latest_by_room.get(room["id"]),
+            }
+        )
+    return {"rooms": cards}
+
+
+def create_collaboration_invitation_records(
+    connection: Any,
+    *,
+    room_id: str,
+    room_title: str,
+    inviter_email: str,
+    invited_emails: list[str],
+) -> list[dict[str, str]]:
+    now_iso = utc_now().isoformat()
+    invitations: list[dict[str, str]] = []
+    for invited_email in invited_emails:
+        normalized_email = normalize_email(invited_email)
+        if not normalized_email:
+            continue
+        invitation_id = uuid4().hex
+        invite_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(invite_token.encode("utf-8")).hexdigest()
+        connection.execute(
+            "UPDATE collaboration_room_invites SET status = ?, updated_at = ? WHERE room_id = ? AND lower(invited_email) = ? AND status = ?",
+            ("superseded", now_iso, room_id, normalized_email, "pending"),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_invites (
+                id, token_hash, room_id, inviter_email, invited_email, status,
+                email_status, email_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                invitation_id,
+                token_hash,
+                room_id,
+                normalize_email(inviter_email),
+                normalized_email,
+                "pending",
+                "pending",
+                "",
+                now_iso,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_notifications (
+                id, recipient_email, actor_email, room_id, notification_type,
+                title, message, read_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid4().hex,
+                normalized_email,
+                normalize_email(inviter_email),
+                room_id,
+                "room_invitation",
+                f"Invitation to {compact_text(room_title, 'a study room')[:140]}",
+                "You were invited to collaborate in a Mabaso AI study room.",
+                "",
+                now_iso,
+            ),
+        )
+        invitations.append({"id": invitation_id, "email": normalized_email, "token": invite_token})
+        logger.info(
+            "Collaboration invitation created room_id=%s invitation_id=%s recipient=%s",
+            room_id,
+            invitation_id,
+            normalized_email,
+        )
+    return invitations
 
 
 @app.post("/collaboration/rooms")
@@ -38030,11 +38452,22 @@ async def create_collaboration_room(
                 """,
                 (room_id, email, "member", now_iso),
             )
+        invitations = create_collaboration_invitation_records(
+            connection,
+            room_id=room_id,
+            room_title=title,
+            inviter_email=current_user,
+            invited_emails=invited_emails,
+        )
 
     room = get_accessible_collaboration_room(room_id, current_user)
-    if invited_emails:
-        background_tasks.add_task(deliver_collaboration_invite_emails, invited_emails, current_user, title, room_id)
-    return {"room": serialize_collaboration_room(room, current_user), "invited_emails": invited_emails}
+    if invitations:
+        background_tasks.add_task(deliver_collaboration_invite_emails, invitations, current_user, title, room_id)
+    return {
+        "room": serialize_collaboration_room(room, current_user),
+        "invited_emails": invited_emails,
+        "invitation_count": len(invitations),
+    }
 
 
 @app.get("/collaboration/rooms/{room_id}")
@@ -38072,6 +38505,10 @@ async def accept_collaboration_invitation(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
         )
+        connection.execute(
+            "UPDATE collaboration_room_invites SET status = ?, updated_at = ? WHERE room_id = ? AND lower(invited_email) = ? AND status = ?",
+            ("accepted", now_iso, room["id"], normalize_email(current_user), "pending"),
+        )
 
     updated_room = get_accessible_collaboration_room(room_id, current_user)
     record_audit_log(
@@ -38090,7 +38527,7 @@ async def send_collaboration_message(
     payload: CollaborationMessageRequest,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Type a collaboration message first.")
@@ -38154,17 +38591,29 @@ async def add_collaboration_room_members(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
         )
+        invitations = create_collaboration_invitation_records(
+            connection,
+            room_id=room["id"],
+            room_title=room["title"],
+            inviter_email=current_user,
+            invited_emails=newly_invited_emails,
+        )
 
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    if newly_invited_emails:
+    if invitations:
         background_tasks.add_task(
             deliver_collaboration_invite_emails,
-            newly_invited_emails,
+            invitations,
             current_user,
             room["title"],
             room["id"],
         )
-    return {"room": serialize_collaboration_room(updated_room, current_user), "invited_emails": newly_invited_emails}
+    return {
+        "room_id": room["id"],
+        "members": get_collaboration_room_members(room["id"]),
+        "invited_emails": newly_invited_emails,
+        "invitation_count": len(invitations),
+        "updated_at": now_iso,
+    }
 
 
 @app.delete("/collaboration/rooms/{room_id}/members/{member_email}")
@@ -38173,7 +38622,7 @@ async def remove_collaboration_room_member(
     member_email: str,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     if not collaboration_room_can_manage(room, current_user):
         raise HTTPException(status_code=403, detail="Only a room owner or moderator can remove members.")
     normalized_member_email = normalize_email(member_email)
@@ -38192,8 +38641,12 @@ async def remove_collaboration_room_member(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (utc_now().isoformat(), room["id"]),
         )
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user), "removed_email": normalized_member_email}
+    return {
+        "room_id": room["id"],
+        "members": get_collaboration_room_members(room["id"]),
+        "removed_email": normalized_member_email,
+        "updated_at": utc_now().isoformat(),
+    }
 
 
 @app.delete("/collaboration/rooms/{room_id}/membership")
@@ -38201,7 +38654,7 @@ async def leave_collaboration_room(
     room_id: str,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     if room["owner_email"] == current_user:
         raise HTTPException(
             status_code=400,
@@ -38237,8 +38690,11 @@ async def save_collaboration_notes(
             (payload.shared_notes.strip(), now_iso, room["id"]),
         )
 
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user)}
+    return {
+        "room_id": room["id"],
+        "shared_notes": payload.shared_notes.strip(),
+        "updated_at": now_iso,
+    }
 
 
 @app.post("/collaboration/rooms/{room_id}/materials")
@@ -38311,7 +38767,7 @@ async def create_collaboration_material_item(
     payload: CollaborationMaterialCreateRequest,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     title = compact_text(payload.title)[:180]
     material_type = compact_text(payload.material_type, "note").lower()[:48]
     allowed_types = {"study_guide", "note", "presentation", "mind_map", "podcast", "image", "video", "quiz", "flashcards", "practice_test", "timetable", "document"}
@@ -38322,7 +38778,24 @@ async def create_collaboration_material_item(
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
     safe_source = payload.source if isinstance(payload.source, dict) else {}
+    replaced_ids: list[str] = []
     with get_db_connection() as connection:
+        if compact_text(safe_source.get("kind")).lower() == "history":
+            replaced_rows = connection.execute(
+                """
+                SELECT id FROM collaboration_materials
+                WHERE room_id = ? AND material_type = ?
+                  AND source_json LIKE ?
+                """,
+                (room["id"], material_type, '%"kind": "history"%'),
+            ).fetchall()
+            replaced_ids = [compact_text(row["id"]) for row in replaced_rows if compact_text(row["id"])]
+            if replaced_ids:
+                placeholders = ",".join("?" for _ in replaced_ids)
+                connection.execute(
+                    f"DELETE FROM collaboration_materials WHERE room_id = ? AND id IN ({placeholders})",
+                    tuple([room["id"], *replaced_ids]),
+                )
         connection.execute(
             """
             INSERT INTO collaboration_materials (
@@ -38333,19 +38806,243 @@ async def create_collaboration_material_item(
             (item_id, room["id"], current_user, title, material_type, compact_text(payload.description)[:2000], dump_json(safe_source), "room", now_iso, now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
-    return {"item": next(item for item in get_collaboration_room_materials(room["id"]) if item["id"] == item_id)}
+    return {
+        "item": {
+            "id": item_id,
+            "room_id": room["id"],
+            "owner_email": current_user,
+            "title": title,
+            "material_type": material_type,
+            "description": compact_text(payload.description)[:2000],
+            "source": safe_source,
+            "visibility": "room",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        },
+        "replaced_ids": replaced_ids,
+    }
+
+
+@app.post("/collaboration/rooms/{room_id}/media")
+async def upload_collaboration_media(
+    room_id: str,
+    request: Request,
+    media: UploadFile = File(...),
+    media_kind: str = Form(""),
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    filename = compact_text(media.filename)
+    if not filename:
+        raise HTTPException(status_code=400, detail="Choose a photo or video before uploading.")
+    enforce_rate_limit(
+        scope="collaboration_media_upload",
+        request=request,
+        limit=40,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    content_type = compact_text(media.content_type, mimetypes.guess_type(filename)[0] or "").lower()
+    requested_kind = compact_text(media_kind).lower()
+    resolved_kind = "image" if content_type.startswith("image/") else "video" if content_type.startswith("video/") else ""
+    if requested_kind in {"image", "video"} and requested_kind != resolved_kind:
+        raise HTTPException(status_code=400, detail=f"Choose a valid {requested_kind} file.")
+    if resolved_kind == "image":
+        ensure_allowed_image_upload(filename, content_type)
+        max_bytes = MAX_COLLABORATION_IMAGE_UPLOAD_BYTES
+    elif resolved_kind == "video":
+        ensure_allowed_audio_video_upload(filename, content_type)
+        max_bytes = MAX_COLLABORATION_VIDEO_UPLOAD_BYTES
+    else:
+        raise HTTPException(status_code=400, detail="Only supported image and video files can be shared here.")
+
+    try:
+        file_bytes = await media.read()
+    finally:
+        await media.close()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The selected media file is empty.")
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"This {resolved_kind} is too large. Keep it below {max_bytes / (1024 * 1024):.0f} MB.",
+        )
+    if resolved_kind == "image":
+        file_bytes, content_type, filename = optimize_collaboration_image_bytes(file_bytes, content_type, filename)
+
+    media_id = uuid4().hex
+    item_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    safe_title = compact_text(Path(filename).stem, "Room photo" if resolved_kind == "image" else "Room video")[:180]
+    source = {
+        "kind": "uploaded_media",
+        "media_id": media_id,
+        "content_type": content_type,
+        "size_bytes": len(file_bytes),
+    }
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_media (
+                id, room_id, owner_email, media_kind, filename, content_type,
+                size_bytes, data_blob, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (media_id, room["id"], current_user, resolved_kind, filename, content_type, len(file_bytes), file_bytes, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_materials (
+                id, room_id, owner_email, title, material_type, description,
+                source_json, visibility, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_id, room["id"], current_user, safe_title, resolved_kind,
+                f"Uploaded {resolved_kind} shared with this room.", dump_json(source), "room", now_iso, now_iso,
+            ),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {
+        "item": {
+            "id": item_id,
+            "room_id": room["id"],
+            "owner_email": current_user,
+            "title": safe_title,
+            "material_type": resolved_kind,
+            "description": f"Uploaded {resolved_kind} shared with this room.",
+            "source": source,
+            "visibility": "room",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+    }
+
+
+@app.get("/collaboration/rooms/{room_id}/media/{media_id}")
+async def stream_collaboration_media(
+    room_id: str,
+    media_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT filename, content_type, size_bytes, data_blob
+            FROM collaboration_media
+            WHERE id = ? AND room_id = ?
+            """,
+            (compact_text(media_id), room["id"]),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Collaboration media not found.")
+    data = bytes(row["data_blob"] or b"")
+    total = len(data)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": f'inline; filename="{Path(compact_text(row["filename"], "media")).name}"',
+    }
+    range_header = compact_text(request.headers.get("range"))
+    if range_header.startswith("bytes=") and total:
+        match = re.match(r"bytes=(\d*)-(\d*)", range_header)
+        if match:
+            start_text, end_text = match.groups()
+            start = int(start_text) if start_text else 0
+            end = int(end_text) if end_text else total - 1
+            start = max(0, min(start, total - 1))
+            end = max(start, min(end, total - 1))
+            headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+            headers["Content-Length"] = str(end - start + 1)
+            return Response(content=data[start:end + 1], status_code=206, media_type=row["content_type"], headers=headers)
+    headers["Content-Length"] = str(total)
+    return Response(content=data, media_type=row["content_type"], headers=headers)
+
+
+@app.post("/collaboration/rooms/{room_id}/voice-notes")
+async def upload_collaboration_voice_note(
+    room_id: str,
+    request: Request,
+    voice_note: UploadFile = File(...),
+    duration_seconds: int = Form(0),
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    filename = compact_text(voice_note.filename, "voice-note.webm")
+    content_type = compact_text(voice_note.content_type, mimetypes.guess_type(filename)[0] or "audio/webm").lower()
+    ensure_allowed_audio_video_upload(filename, content_type)
+    if not content_type.startswith("audio/"):
+        raise HTTPException(status_code=400, detail="Only an audio recording can be sent as a voice note.")
+    enforce_rate_limit(
+        scope="collaboration_voice_note_upload",
+        request=request,
+        limit=80,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    try:
+        audio_bytes = await voice_note.read()
+    finally:
+        await voice_note.close()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="The voice note is empty. Record it again.")
+    if len(audio_bytes) > MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="The voice note is too large. Keep it below 12 MB.")
+
+    media_id = uuid4().hex
+    message_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    safe_duration = max(0, min(int(duration_seconds or 0), 60 * 30))
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_media (
+                id, room_id, owner_email, media_kind, filename, content_type,
+                size_bytes, data_blob, created_at
+            ) VALUES (?, ?, ?, 'audio', ?, ?, ?, ?, ?)
+            """,
+            (media_id, room["id"], current_user, filename, content_type, len(audio_bytes), audio_bytes, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_messages (
+                id, room_id, author_email, content, message_type, media_id, duration_seconds, created_at
+            ) VALUES (?, ?, ?, ?, 'audio', ?, ?, ?)
+            """,
+            (message_id, room["id"], current_user, "Voice note", media_id, safe_duration, now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {
+        "message": {
+            "id": message_id,
+            "author_email": current_user,
+            "content": "Voice note",
+            "message_type": "audio",
+            "media_id": media_id,
+            "duration_seconds": safe_duration,
+            "created_at": now_iso,
+        },
+        "room_id": room["id"],
+        "updated_at": now_iso,
+    }
 
 
 @app.delete("/collaboration/rooms/{room_id}/material-items/{item_id}")
 async def delete_collaboration_material_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     with get_db_connection() as connection:
-        item = connection.execute("SELECT owner_email FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
+        item = connection.execute("SELECT owner_email, source_json FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
         if not item:
             raise HTTPException(status_code=404, detail="Collaboration material not found.")
         if item["owner_email"] != current_user and not collaboration_room_can_manage(room, current_user):
             raise HTTPException(status_code=403, detail="You cannot remove another member's material.")
+        source = load_collaboration_json_object(item["source_json"])
+        media_id = compact_text(source.get("media_id")) if source.get("kind") == "uploaded_media" else ""
         connection.execute("DELETE FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"]))
+        if media_id:
+            connection.execute("DELETE FROM collaboration_media WHERE id = ? AND room_id = ?", (media_id, room["id"]))
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (utc_now().isoformat(), room["id"]))
     return {"deleted": True, "id": item_id}
 
@@ -38362,7 +39059,7 @@ async def create_collaboration_board_item(
     payload: CollaborationBoardItemCreateRequest,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     item_type = compact_text(payload.item_type, "note").lower()[:32]
     if item_type not in {"note", "important", "quote", "task", "announcement", "material"}:
         raise HTTPException(status_code=400, detail="That board item type is not supported.")
@@ -38389,7 +39086,7 @@ async def create_collaboration_board_item(
 
 @app.delete("/collaboration/rooms/{room_id}/board-items/{item_id}")
 async def delete_collaboration_board_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     with get_db_connection() as connection:
         item = connection.execute("SELECT owner_email FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
         if not item:
@@ -38412,17 +39109,50 @@ def serialize_collaboration_profile(row: sqlite3.Row, *, include_email: bool = F
         "subjects": load_json_list(row["subjects_json"]),
         "can_help": load_json_list(row["can_help_json"]),
         "needs_help": load_json_list(row["needs_help_json"]),
+        "phone": compact_text(row["phone"]) if include_email or bool(row["show_phone"]) else "",
         "discoverable": bool(row["discoverable"]),
         "show_institution": bool(row["show_institution"]),
+        "show_email": bool(row["show_email"]),
+        "show_phone": bool(row["show_phone"]),
         "allow_requests": bool(row["allow_requests"]),
         "updated_at": row["updated_at"],
     }
-    if include_email:
+    if include_email or bool(row["show_email"]):
         profile["email"] = row["email"]
     return profile
 
 
 COLLABORATION_PRESENCE_TTL_SECONDS = max(60, int(os.getenv("COLLABORATION_PRESENCE_TTL_SECONDS", "120")))
+
+
+@app.get("/collaboration/notifications")
+async def list_collaboration_notifications(current_user: str = Depends(require_authenticated_user)):
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, actor_email, room_id, notification_type, title, message, read_at, created_at
+            FROM collaboration_notifications
+            WHERE lower(recipient_email) = ?
+            ORDER BY created_at DESC
+            LIMIT 80
+            """,
+            (normalize_email(current_user),),
+        ).fetchall()
+    return {
+        "notifications": [
+            {
+                "id": row["id"],
+                "actor_email": row["actor_email"],
+                "room_id": row["room_id"],
+                "type": row["notification_type"],
+                "title": row["title"],
+                "message": row["message"],
+                "read_at": row["read_at"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+    }
 
 
 @app.post("/collaboration/presence")
@@ -38474,15 +39204,17 @@ async def save_my_collaboration_profile(
             """
             INSERT INTO collaboration_profiles (
                 email, public_id, display_name, bio, institution, course, study_year, subjects_json,
-                can_help_json, needs_help_json, discoverable, show_institution, allow_requests,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                can_help_json, needs_help_json, phone, discoverable, show_institution, show_email,
+                show_phone, allow_requests, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 display_name = excluded.display_name, bio = excluded.bio,
                 institution = excluded.institution, course = excluded.course,
                 study_year = excluded.study_year, subjects_json = excluded.subjects_json,
                 can_help_json = excluded.can_help_json, needs_help_json = excluded.needs_help_json,
+                phone = excluded.phone,
                 discoverable = excluded.discoverable, show_institution = excluded.show_institution,
+                show_email = excluded.show_email, show_phone = excluded.show_phone,
                 allow_requests = excluded.allow_requests, updated_at = excluded.updated_at
             """,
             (
@@ -38490,7 +39222,8 @@ async def save_my_collaboration_profile(
                 compact_text(payload.institution)[:160], compact_text(payload.course)[:160],
                 compact_text(payload.study_year)[:80], dump_json(clean_list(payload.subjects)),
                 dump_json(clean_list(payload.can_help)), dump_json(clean_list(payload.needs_help)),
-                int(bool(payload.discoverable)), int(bool(payload.show_institution)), int(bool(payload.allow_requests)),
+                compact_text(payload.phone)[:40], int(bool(payload.discoverable)), int(bool(payload.show_institution)),
+                int(bool(payload.show_email)), int(bool(payload.show_phone)), int(bool(payload.allow_requests)),
                 now_iso, now_iso,
             ),
         )
@@ -38574,7 +39307,7 @@ async def invite_discovered_profile_to_room(
     background_tasks: BackgroundTasks,
     current_user: str = Depends(require_authenticated_user),
 ):
-    room = get_accessible_collaboration_room(room_id, current_user)
+    room = get_accessible_collaboration_room_access(room_id, current_user)
     if not collaboration_room_can_manage(room, current_user):
         raise HTTPException(status_code=403, detail="Only a room owner or moderator can invite students.")
     with get_db_connection() as connection:
@@ -38600,17 +39333,27 @@ async def invite_discovered_profile_to_room(
             (room["id"], profile_row["email"], "member", now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        invitations = create_collaboration_invitation_records(
+            connection,
+            room_id=room["id"],
+            room_title=room["title"],
+            inviter_email=current_user,
+            invited_emails=[profile_row["email"]],
+        )
     background_tasks.add_task(
         deliver_collaboration_invite_emails,
-        [profile_row["email"]],
+        invitations,
         current_user,
         room["title"],
         room["id"],
     )
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
     return {
-        "room": serialize_collaboration_room(updated_room, current_user),
+        "room_id": room["id"],
+        "members": get_collaboration_room_members(room["id"]),
         "profile": {"public_id": profile_id, "display_name": profile_row["display_name"]},
+        "invited": True,
+        "invitation_id": invitations[0]["id"] if invitations else "",
+        "email_delivery": "queued" if invitations else "not_queued",
     }
 
 
@@ -38654,16 +39397,20 @@ async def upload_collaboration_board_image(
                 detail=f"This room already has {MAX_COLLABORATION_BOARD_IMAGES} board images. Remove one before uploading another.",
             )
 
-        now_iso = utc_now().isoformat()
-        current_images.append(
-            {
-                "id": uuid4().hex,
-                "name": compact_text(Path(image.filename).stem, f"Board photo {len(current_images) + 1}"),
-                "image_url": build_data_url(image_bytes, content_type, image.filename),
-                "uploaded_by": current_user,
-                "created_at": now_iso,
-            }
+        optimized_bytes, optimized_content_type, optimized_filename = optimize_collaboration_image_bytes(
+            image_bytes,
+            content_type,
+            image.filename,
         )
+        now_iso = utc_now().isoformat()
+        uploaded_image = {
+            "id": uuid4().hex,
+            "name": compact_text(Path(optimized_filename).stem, f"Board photo {len(current_images) + 1}"),
+            "image_url": build_data_url(optimized_bytes, optimized_content_type, optimized_filename),
+            "uploaded_by": current_user,
+            "created_at": now_iso,
+        }
+        current_images.append(uploaded_image)
 
         with get_db_connection() as connection:
             connection.execute(
@@ -38677,8 +39424,7 @@ async def upload_collaboration_board_image(
     finally:
         await image.close()
 
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user)}
+    return {"image": uploaded_image, "room_id": room["id"], "updated_at": now_iso}
 
 
 @app.delete("/collaboration/rooms/{room_id}/board-images/{image_id}")
@@ -38704,8 +39450,7 @@ async def delete_collaboration_board_image(
             (dump_json(remaining_images), now_iso, room["id"]),
         )
 
-    updated_room = get_accessible_collaboration_room(room_id, current_user)
-    return {"room": serialize_collaboration_room(updated_room, current_user)}
+    return {"deleted": True, "id": compact_text(image_id), "room_id": room["id"], "updated_at": now_iso}
 
 
 @app.post("/collaboration/rooms/{room_id}/active-tab")

@@ -25,7 +25,13 @@ assert.match(appSource, /removeMemberFromActiveRoom\(member\)/, "Manage Members 
 assert.match(appSource, /authFetch\("\/collaboration\/presence", \{ method: "POST" \}\)/, "Collaboration must publish authenticated presence heartbeats.");
 assert.match(appSource, /profile\.is_online \? <i className="collaboration-presence-dot"/, "Discover must mark genuinely online students.");
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{activeRoomId\}\/material-items`/, "Saved material sharing must call the room-material endpoint.");
-assert.match(appSource, /verificationResponse = await authFetch\("\/collaboration\/profile\/me"/, "Profile saving must verify persisted server state.");
+assert.match(appSource, /if \(!data\.profile\) throw new Error\("The server did not return the saved profile\."\)/, "Profile saving must use the persisted profile returned by the save endpoint without a second slow request.");
+assert.match(appSource, /disabled=\{isSavingCollaborationProfile\}/, "Profile fields must be locked while the save request is running.");
+assert.match(appSource, /Show my account email in Discover/, "Profile privacy must include explicit email sharing consent.");
+assert.match(appSource, /Show my personal number in Discover/, "Profile privacy must include explicit phone sharing consent.");
+assert.match(appSource, /\/voice-notes`/, "Room chat must send recorded voice notes through the authenticated backend.");
+assert.match(appSource, /\+ Add photo/, "The room Images tool must provide a working photo upload action.");
+assert.match(appSource, /\+ Add video/, "The room Videos tool must provide a working video upload action.");
 assert.match(appSource, /inviteDiscoveredProfileToRoom\(profile\)/, "Discovery results must offer privacy-safe room invitations.");
 assert.match(appSource, /role=\{error \? "alert" : "status"\}/, "Collaboration API failures must be visible in the page.");
 assert.match(cssSource, /\.collaboration-chat-panel\.is-mobile-active \.collaboration-chat-composer \{ position:fixed;/, "Mobile room chat composer must stay above the bottom navigation.");

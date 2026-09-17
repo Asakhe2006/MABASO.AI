@@ -91,6 +91,7 @@ const SUPPORT_CONTACT_CATEGORIES = [
   "General feedback",
 ];
 const ROOM_REFRESH_INTERVAL_MS = 5000;
+const ROOM_LIST_REFRESH_INTERVAL_MS = 30000;
 const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
 const ADMIN_DASHBOARD_REFRESH_MS = 60000;
@@ -428,13 +429,47 @@ function resolveSpeechLocale(language = "English") {
 function resolveTeacherVoice(voices = [], selectedVoiceName = "", language = "English") {
   const preferredLocale = resolveSpeechLocale(language).toLowerCase();
   const preferredLanguageCode = preferredLocale.split("-")[0];
-  return voices.find((voice) => voice.name === selectedVoiceName)
+  const selectedVoice = voices.find((voice) => voice.name === selectedVoiceName);
+  const selectedMatchesLanguage = selectedVoice
+    && String(selectedVoice.lang || "").toLowerCase().startsWith(preferredLanguageCode);
+  return (selectedMatchesLanguage ? selectedVoice : null)
     || voices.find((voice) => String(voice.lang || "").toLowerCase() === preferredLocale)
     || voices.find((voice) => String(voice.lang || "").toLowerCase().startsWith(`${preferredLanguageCode}-`))
+    || selectedVoice
     || voices.find((voice) => /female|woman|zira|aria|samantha|google uk english female|michelle|serena/i.test(voice.name))
     || voices.find((voice) => /google|microsoft|natural|english/i.test(voice.name))
     || voices[0]
     || null;
+}
+
+function CollaborationProfileContactPortal({ draft, setDraft, disabled, onSave, saveState }) {
+  const [target, setTarget] = useState(null);
+  useEffect(() => {
+    setTarget(document.querySelector(".collaboration-profile-popover"));
+  }, []);
+  if (!target) return null;
+  return createPortal(
+    <div className="collaboration-profile-contact-fields">
+      <p className="text-xs leading-5 text-slate-300">Your email and phone number stay private unless you tick the matching option below.</p>
+      <input
+        type="tel"
+        value={draft.phone || ""}
+        onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))}
+        disabled={disabled}
+        className="collaboration-popover-field"
+        placeholder="Personal number (optional)"
+        autoComplete="tel"
+      />
+      <div className="collaboration-profile-privacy">
+        <label><span>Show my account email in Discover</span><input type="checkbox" checked={Boolean(draft.show_email)} disabled={disabled} onChange={(event) => setDraft((current) => ({ ...current, show_email: event.target.checked }))} /></label>
+        <label><span>Show my personal number in Discover</span><input type="checkbox" checked={Boolean(draft.show_phone)} disabled={disabled || !String(draft.phone || "").trim()} onChange={(event) => setDraft((current) => ({ ...current, show_phone: event.target.checked }))} /></label>
+      </div>
+      <button type="button" onClick={onSave} disabled={disabled} className="collaboration-profile-contact-save">
+        {disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}
+      </button>
+    </div>,
+    target,
+  );
 }
 
 function getSpeechRecognitionConstructor() {
@@ -1059,8 +1094,8 @@ const TIMETABLE_CACHE_STORAGE_KEY = "mabaso-study-timetable-cache-v1";
 const TIMETABLE_COACH_PROMPT_STORAGE_KEY = "mabaso-study-timetable-coach-v1";
 const TIMETABLE_LOADING_STORAGE_KEY = "mabaso-study-timetable-loader-v1";
 const TIMETABLE_VIEW_STORAGE_KEY = "mabaso-study-timetable-view-v1";
-const TIMETABLE_LOADING_MESSAGE_MS = 5000;
-const TIMETABLE_LOADING_MIN_MS = TIMETABLE_LOADING_MESSAGE_MS * 3;
+const TIMETABLE_LOADING_MESSAGE_MS = 1500;
+const TIMETABLE_LOADING_MIN_MS = 350;
 const TIMETABLE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 const TIMETABLE_LOADING_STAGES = [
@@ -7226,10 +7261,12 @@ export default function App() {
   const [isSharingRoomMaterial, setIsSharingRoomMaterial] = useState(false);
   const [collaborationProfile, setCollaborationProfile] = useState(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [isSavingCollaborationProfile, setIsSavingCollaborationProfile] = useState(false);
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false);
   const [isCollaborationDiscoverOpen, setIsCollaborationDiscoverOpen] = useState(false);
   const [collaborationDiscoverQuery, setCollaborationDiscoverQuery] = useState("");
   const [collaborationDiscoverProfiles, setCollaborationDiscoverProfiles] = useState([]);
+  const [collaborationNotifications, setCollaborationNotifications] = useState([]);
   const [collaborationMobileView, setCollaborationMobileView] = useState("rooms");
   const [collaborationMaterialFilter, setCollaborationMaterialFilter] = useState("all");
   const [isCreateRoomPanelOpen, setIsCreateRoomPanelOpen] = useState(false);
@@ -7237,13 +7274,30 @@ export default function App() {
   const [isShareMaterialPickerOpen, setIsShareMaterialPickerOpen] = useState(false);
   const [isSharingHistoryMaterialId, setIsSharingHistoryMaterialId] = useState("");
   const [selectedCollaborationMaterial, setSelectedCollaborationMaterial] = useState(null);
+  const [selectedCollaborationMediaItem, setSelectedCollaborationMediaItem] = useState(null);
+  const [selectedCollaborationMediaUrl, setSelectedCollaborationMediaUrl] = useState("");
+  const [isLoadingCollaborationMedia, setIsLoadingCollaborationMedia] = useState(false);
+  const [isUploadingCollaborationMedia, setIsUploadingCollaborationMedia] = useState(false);
   const [selectedCollaborationBoardItem, setSelectedCollaborationBoardItem] = useState(null);
   const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
   const [isCollaborationSettingsOpen, setIsCollaborationSettingsOpen] = useState(false);
   const [removingRoomMemberEmail, setRemovingRoomMemberEmail] = useState("");
-  const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", discoverable: true, show_institution: true, allow_requests: true });
+  const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", phone: "", discoverable: true, show_institution: true, show_email: false, show_phone: false, allow_requests: true });
   const [collaborationProfileSaveState, setCollaborationProfileSaveState] = useState("");
   const [invitingCollaborationProfileId, setInvitingCollaborationProfileId] = useState("");
+  const [isRecordingRoomVoice, setIsRecordingRoomVoice] = useState(false);
+  const [isUploadingRoomVoice, setIsUploadingRoomVoice] = useState(false);
+
+  useEffect(() => {
+    if (!isSavingCollaborationProfile || typeof document === "undefined") return undefined;
+    const controls = Array.from(document.querySelectorAll(".collaboration-profile-popover input, .collaboration-profile-popover textarea, .collaboration-profile-popover select, .collaboration-profile-popover button"));
+    controls.forEach((control) => { control.disabled = true; });
+    return () => controls.forEach((control) => { control.disabled = false; });
+  }, [isSavingCollaborationProfile]);
+
+  useEffect(() => () => {
+    if (selectedCollaborationMediaUrl?.startsWith("blob:")) URL.revokeObjectURL(selectedCollaborationMediaUrl);
+  }, [selectedCollaborationMediaUrl]);
 
   useEffect(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return undefined;
@@ -7352,7 +7406,24 @@ export default function App() {
   const activeStudySessionAssistantStartRef = useRef(null);
   const pendingActiveStudySessionAnchorIdRef = useRef("");
   const roomBoardImageInputRef = useRef(null);
+  const roomImageMaterialInputRef = useRef(null);
+  const roomVideoMaterialInputRef = useRef(null);
   const roomMessageInputRef = useRef(null);
+  const roomVoiceMediaRecorderRef = useRef(null);
+  const roomVoiceStreamRef = useRef(null);
+  const roomVoiceChunksRef = useRef([]);
+  const roomVoiceStartedAtRef = useRef(0);
+  const collaborationRoomsRequestInFlightRef = useRef(false);
+  const collaborationRoomRequestInFlightRef = useRef("");
+  useEffect(() => () => {
+    const recorder = roomVoiceMediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = null;
+      recorder.stop();
+    }
+    roomVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    roomVoiceStreamRef.current = null;
+  }, []);
   const studyChatEndRef = useRef(null);
   const studyChatScrollRef = useRef(null);
   const studyChatAssistantStartRef = useRef(null);
@@ -11776,6 +11847,7 @@ export default function App() {
       { id: "all", label: "All Materials" }, { id: "study_guide", label: "Study Guides" },
       { id: "note", label: "Notes" }, { id: "presentation", label: "PowerPoints" },
       { id: "mind_map", label: "Mind Maps" }, { id: "podcast", label: "Podcasts" },
+      { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Quizzes" },
       { id: "image", label: "Images" }, { id: "video", label: "Videos" },
     ];
     const visibleMaterials = (activeRoom?.materials || []).filter((item) => collaborationMaterialFilter === "all" || item.material_type === collaborationMaterialFilter);
@@ -11816,23 +11888,28 @@ export default function App() {
 
         {isProfileEditorOpen ? <section className="collaboration-profile-popover" role="dialog" aria-label="Collaboration profile" style={profileEditorAnchor ? { top: profileEditorAnchor.top, left: profileEditorAnchor.left } : undefined}><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">{collaborationProfile ? "Edit profile" : "Create profile"}</h3></div><button type="button" onClick={() => setIsProfileEditorOpen(false)} className="text-sm text-slate-400">Close</button></div><p className="mt-2 text-xs leading-5 text-slate-300">Your email and precise location are never shown to students.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={collaborationProfileDraft.display_name} onChange={(event) => { setCollaborationProfileSaveState(""); setCollaborationProfileDraft((current) => ({ ...current, display_name: event.target.value })); }} className="collaboration-popover-field" placeholder="Display name" /><input value={collaborationProfileDraft.course} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, course: event.target.value }))} className="collaboration-popover-field" placeholder="Course / programme" /><input value={collaborationProfileDraft.institution} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, institution: event.target.value }))} className="collaboration-popover-field" placeholder="School / university (optional)" /><input value={collaborationProfileDraft.study_year} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, study_year: event.target.value }))} className="collaboration-popover-field" placeholder="Year / grade" /><input value={collaborationProfileDraft.subjects} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, subjects: event.target.value }))} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules, comma-separated" /><input value={collaborationProfileDraft.can_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, can_help: event.target.value }))} className="collaboration-popover-field sm:col-span-2" placeholder="Can help with" /><input value={collaborationProfileDraft.needs_help} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, needs_help: event.target.value }))} className="collaboration-popover-field sm:col-span-2" placeholder="Needs help with" /><textarea value={collaborationProfileDraft.bio} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, bio: event.target.value }))} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy"><label><span>Discoverable by academic interests</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.discoverable)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, discoverable: event.target.checked }))} /></label><label><span>Show institution</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.show_institution)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, show_institution: event.target.checked }))} /></label><label><span>Allow collaboration requests</span><input type="checkbox" checked={Boolean(collaborationProfileDraft.allow_requests)} onChange={(event) => setCollaborationProfileDraft((current) => ({ ...current, allow_requests: event.target.checked }))} /></label></div>{collaborationProfileSaveState === "saved" ? <p className="collaboration-profile-saved" role="status">✓ Profile saved and active</p> : collaborationProfileSaveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={saveCollaborationProfile} disabled={isProfileLoading} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{isProfileLoading ? "Saving..." : collaborationProfileSaveState === "saved" ? "Saved" : "Save profile"}</button></section> : null}
 
+        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} saveState={collaborationProfileSaveState} /> : null}
         <div className="collaboration-room-header">
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
           {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => document.getElementById("collaboration-invite")?.scrollIntoView({ behavior: "smooth", block: "center" })} className="collaboration-outline-button">♙ Invite</button> : null}<button type="button" onClick={() => setFollowRoomView((value) => !value)} className="collaboration-dark-button">{followRoomView ? "Following shared view" : "Follow shared view"}</button>{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
         </div>
         {(error || status) ? <div className={`collaboration-feedback ${error ? "is-error" : "is-success"}`} role={error ? "alert" : "status"}>{error || status}</div> : null}
+        {collaborationNotifications[0] ? <button type="button" className="collaboration-in-app-notification" onClick={() => { const roomId = collaborationNotifications[0]?.room_id; if (roomId) void openCollaborationRoom(roomId); }}><Bell className="h-4 w-4" aria-hidden="true" /><span><strong>{collaborationNotifications[0].title}</strong><small>{collaborationNotifications[0].message}</small></span></button> : null}
         {activeRoom ? <div className="collaboration-room-utility-actions" aria-label="Room controls"><button type="button" onClick={() => setIsCollaborationMembersOpen(true)}><UsersRound className="h-4 w-4" aria-hidden="true" />Members ({activeRoom.member_count || activeRoom.members?.length || 1})</button><button type="button" onClick={() => setIsCollaborationSettingsOpen(true)}><Settings className="h-4 w-4" aria-hidden="true" />Room settings</button></div> : null}
 
         <div className="collaboration-main-grid">
+          {activeRoom ? <button type="button" className={`collaboration-voice-note-button ${isRecordingRoomVoice ? "is-recording" : ""}`} onClick={() => isRecordingRoomVoice ? stopRoomVoiceRecording() : void startRoomVoiceRecording()} disabled={isUploadingRoomVoice}>{isUploadingRoomVoice ? "Sending..." : isRecordingRoomVoice ? "Stop & send" : "🎙 Voice note"}</button> : null}
           <aside className={`collaboration-room-sidebar ${collaborationMobileView === "rooms" ? "is-mobile-active" : ""}`}>
             <button type="button" onClick={() => setIsCreateRoomPanelOpen((value) => !value)} className="collaboration-create-room">＋ Create New Room</button>
             <div className="collaboration-sidebar-actions"><button type="button" className="is-active" onClick={() => setCollaborationMobileView("rooms")}>♙ My Rooms</button><button type="button" onClick={() => { setIsCollaborationDiscoverOpen(true); void discoverCollaborationProfiles(); window.requestAnimationFrame(() => document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}>⌕ Discover</button></div>
             {isCreateRoomPanelOpen ? <div className="collaboration-create-form"><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} placeholder="Room title" /><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={2} placeholder="Invite emails (optional)" /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={newRoomVisibility === "private" ? "is-active" : ""}>Private</button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={newRoomVisibility === "shared" ? "is-active" : ""}>Shared test</button></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom}>{isCreatingRoom ? "Creating..." : "Create Room"}</button></div> : null}
             <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { setCollaborationMobileView("chat"); void openCollaborationRoom(room.id); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.member_count} members</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">You have not joined any collaboration rooms yet.</p>}</div>
             <div id="collaboration-discover" className="collaboration-discover-panel"><div className="flex items-center justify-between gap-2"><strong>Discover students</strong><button type="button" onClick={openProfilePopover}>{collaborationProfile ? "Edit profile" : "Create profile"}</button></div>{collaborationProfile ? <div className="collaboration-profile-summary"><b>✓ {collaborationProfile.display_name || "Profile saved"}</b><span>{[collaborationProfile.course, ...(collaborationProfile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic profile active"}</span></div> : <p className="collaboration-discovery-help">Create a profile to let academically relevant students find you.</p>}<div className="mt-3 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void discoverCollaborationProfiles(); }} placeholder="MATLAB, signals..." /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading}>{isProfileLoading ? "Searching..." : "Search"}</button></div>{isCollaborationDiscoverOpen ? <div className="mt-3 space-y-2">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 20).map((profile) => <article key={profile.public_id} className="collaboration-discovery-result"><div><strong className="collaboration-discovery-name">{profile.display_name || "Mabaso student"}{profile.is_online ? <i className="collaboration-presence-dot" aria-label="Online now" title="Online now" /> : null}</strong><span>{[profile.course, ...(profile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic collaborator"}</span>{(profile.match_reasons || []).length ? <small>{profile.match_reasons.slice(0, 2).join(" • ")}</small> : null}</div><button type="button" onClick={() => void inviteDiscoveredProfileToRoom(profile)} disabled={!activeRoom?.can_manage || invitingCollaborationProfileId === profile.public_id}>{invitingCollaborationProfileId === profile.public_id ? "Inviting..." : activeRoom?.can_manage ? "Invite" : "Open your room"}</button></article>) : <p className="collaboration-empty-copy">No matching students found. Try a subject, module, course, or skill.</p>}</div> : null}</div>
+            {isCollaborationDiscoverOpen && collaborationDiscoverProfiles.some((profile) => profile.email || profile.phone) ? <div className="collaboration-discover-contacts" aria-label="Student shared contact details">{collaborationDiscoverProfiles.filter((profile) => profile.email || profile.phone).map((profile) => <div key={`contact-${profile.public_id}`}><strong>{profile.display_name || "Student"}</strong>{profile.email ? <a href={`mailto:${profile.email}`}>{profile.email}</a> : null}{profile.phone ? <a href={`tel:${String(profile.phone).replace(/[^+\d]/g, "")}`}>{profile.phone}</a> : null}</div>)}</div> : null}
           </aside>
 
           <main className="collaboration-center-stage">
+            {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload photos and open them in a large viewer." : "Upload videos and watch them inside Mabaso AI."}</small></div><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
             {activeRoom && collaborationMobileView !== "rooms" ? <div className="collaboration-mobile-room-tabs"><button type="button" onClick={() => switchMobileView("chat")} className={collaborationMobileView === "chat" ? "is-active" : ""}>Chat</button><button type="button" onClick={() => switchMobileView("materials")} className={collaborationMobileView === "materials" ? "is-active" : ""}>Materials</button><button type="button" onClick={() => switchMobileView("board")} className={collaborationMobileView === "board" ? "is-active" : ""}>Board</button></div> : null}
             <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => setCollaborationMaterialFilter(filter.id)} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div><div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : <p className="collaboration-empty-copy">No materials have been shared yet.</p>}</div></section>
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
@@ -11848,6 +11925,8 @@ export default function App() {
         {selectedCollaborationMaterial ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setSelectedCollaborationMaterial(null)}><section className="collaboration-material-preview" role="dialog" aria-modal="true" aria-label={`${selectedCollaborationMaterial.title} preview`} onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>{String(selectedCollaborationMaterial.material_type || "material").replaceAll("_", " ")}</p><h3>{selectedCollaborationMaterial.title}</h3><small>Shared by {selectedCollaborationMaterial.owner_email === normalizedAuthEmail ? "you" : "a room member"}</small></div><button type="button" onClick={() => setSelectedCollaborationMaterial(null)} aria-label="Close material preview"><X className="h-5 w-5" aria-hidden="true" /></button></div><div className="collaboration-preview-content">{selectedMaterialSnapshot.summary || selectedMaterialSnapshot.transcript ? <article><h4>Study guide</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.summary || selectedMaterialSnapshot.transcript}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.formula ? <article><h4>Formulas</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.formula}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.example ? <article><h4>Worked examples</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.example}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.presentation?.slides?.length ? <article><h4>PowerPoint</h4><p>{selectedMaterialSnapshot.presentation.slides.length} slides are included in this shared material.</p></article> : null}{selectedMaterialSnapshot.podcast?.script ? <article><h4>Podcast</h4><MobileFirstMarkdown>{selectedMaterialSnapshot.podcast.script}</MobileFirstMarkdown></article> : null}{selectedMaterialSnapshot.mind_map?.root ? <article><h4>Mind Map</h4><p>{selectedMaterialSnapshot.mind_map.title || selectedMaterialSnapshot.mind_map.root.title || "Shared mind map"} • {selectedMaterialSnapshot.mind_map.nodeCount || flattenMindMapNodes(selectedMaterialSnapshot.mind_map.root).length} nodes</p></article> : null}{selectedMaterialSnapshot.study_images?.length ? <article><h4>Images</h4><p>{selectedMaterialSnapshot.study_images.length} study image{selectedMaterialSnapshot.study_images.length === 1 ? "" : "s"} included.</p></article> : null}{selectedMaterialSnapshot.quiz_questions?.length ? <article><h4>Practice questions</h4><p>{selectedMaterialSnapshot.quiz_questions.length} questions are included.</p></article> : null}{!selectedMaterialSnapshot.summary && !selectedMaterialSnapshot.transcript && !selectedMaterialSnapshot.formula && !selectedMaterialSnapshot.example && !selectedMaterialSnapshot.presentation?.slides?.length && !selectedMaterialSnapshot.podcast?.script && !selectedMaterialSnapshot.mind_map?.root && !selectedMaterialSnapshot.study_images?.length && !selectedMaterialSnapshot.quiz_questions?.length ? <p className="collaboration-empty-copy">This material reference is available to the room, but its original preview is no longer available.</p> : null}</div></section></div> : null}
         {isCollaborationMembersOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationMembersOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room members" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room members</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationMembersOpen(false)} aria-label="Close members"><X className="h-5 w-5" /></button></div><div className="collaboration-members-list">{(activeRoom.members || []).map((member) => <div key={member.email}><span>{String(member.email || "M").slice(0, 2).toUpperCase()}</span><p><strong>{member.email === normalizedAuthEmail ? "You" : String(member.email || "Member").split("@")[0]}</strong><small>{member.role || "member"}</small></p>{activeRoom.can_manage && member.role !== "owner" && member.email !== normalizedAuthEmail ? <button type="button" className="collaboration-remove-member" onClick={() => void removeMemberFromActiveRoom(member)} disabled={removingRoomMemberEmail === member.email}>{removingRoomMemberEmail === member.email ? "Removing..." : "Remove"}</button> : null}</div>)}</div>{activeRoom.is_owner ? <div className="collaboration-dialog-invite"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite student by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>{isAddingRoomMembers ? "Inviting..." : "Invite"}</button></div> : null}</section></div> : null}
         {isCollaborationSettingsOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationSettingsOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room settings" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room settings</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationSettingsOpen(false)} aria-label="Close room settings"><X className="h-5 w-5" /></button></div><div className="collaboration-setting-list"><div><strong>Room access</strong><small>Only the owner and invited members can open this room.</small></div><div><strong>Test answers</strong><small>{activeRoom.test_visibility === "shared" ? "Members can compare shared answers." : "Each member's answers remain private."}</small></div>{activeRoom.is_owner ? <div className="collaboration-setting-buttons"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={activeRoom.test_visibility === "private" ? "is-active" : ""}>Private answers</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={activeRoom.test_visibility === "shared" ? "is-active" : ""}>Shared answers</button></div> : null}<button type="button" onClick={() => { setIsCollaborationSettingsOpen(false); setIsCollaborationMembersOpen(true); }}>Manage members</button>{!activeRoom.is_owner ? <button type="button" className="is-danger" onClick={() => { setIsCollaborationSettingsOpen(false); void leaveCollaborationRoom(); }}>Leave room</button> : null}</div></section></div> : null}
+        {selectedCollaborationMediaItem ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label={`${selectedCollaborationMediaItem.title} viewer`} onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>{selectedCollaborationMediaItem.material_type}</p><h3>{selectedCollaborationMediaItem.title}</h3></div><button type="button" onClick={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }} aria-label="Close media viewer"><X className="h-5 w-5" aria-hidden="true" /></button></div>{isLoadingCollaborationMedia ? <div className="collaboration-media-loading"><LoaderCircle className="h-6 w-6 animate-spin" aria-hidden="true" />Opening media...</div> : selectedCollaborationMediaUrl ? selectedCollaborationMediaItem.material_type === "video" ? <video src={selectedCollaborationMediaUrl} controls playsInline preload="metadata" /> : <img src={selectedCollaborationMediaUrl} alt={selectedCollaborationMediaItem.title || "Room photo"} /> : <p className="collaboration-empty-copy">This media could not be opened.</p>}</section></div> : null}
+        {selectedRoomBoardImageId && selectedRoomBoardImage ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setSelectedRoomBoardImageId("")}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label="Board photo viewer" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Board photo</p><h3>{selectedRoomBoardImage.name || "Room photo"}</h3></div><button type="button" onClick={() => setSelectedRoomBoardImageId("")} aria-label="Close board photo"><X className="h-5 w-5" aria-hidden="true" /></button></div><img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Board photo"} /></section></div> : null}
       </section>
     );
   };
@@ -21465,7 +21544,8 @@ export default function App() {
   }, [authChecked, authEmail, authToken, historyItems, isHistoryLoadingFromServer]);
 
   const refreshCollaborationRooms = async (silent = false) => {
-    if (!authToken) return;
+    if (!authToken || collaborationRoomsRequestInFlightRef.current) return;
+    collaborationRoomsRequestInFlightRef.current = true;
     try {
       const response = await authFetch("/collaboration/rooms");
       const data = await parseJsonSafe(response);
@@ -21485,6 +21565,8 @@ export default function App() {
       }
     } catch (err) {
       if (!silent) setError(err.message || "Could not load collaboration rooms.");
+    } finally {
+      collaborationRoomsRequestInFlightRef.current = false;
     }
   };
 
@@ -21501,12 +21583,14 @@ export default function App() {
 
   const loadCollaborationRoom = async (roomId, options = {}) => {
     const { silent = false, resetNotesDraft = false } = options;
-    if (!roomId) return;
+    if (!roomId || collaborationRoomRequestInFlightRef.current === roomId) return;
+    collaborationRoomRequestInFlightRef.current = roomId;
     if (!silent) setIsRoomLoading(true);
     try {
       const response = await authFetch(`/collaboration/rooms/${roomId}`);
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
+      if (collaborationRoomRequestInFlightRef.current !== roomId) return;
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId((current) => (current === roomId ? current : roomId));
       const nextRoom = data.room || null;
@@ -21519,6 +21603,7 @@ export default function App() {
     } catch (err) {
       if (!silent) setError(err.message || "Could not open the collaboration room.");
     } finally {
+      if (collaborationRoomRequestInFlightRef.current === roomId) collaborationRoomRequestInFlightRef.current = "";
       if (!silent) setIsRoomLoading(false);
     }
   };
@@ -21582,9 +21667,14 @@ export default function App() {
   useEffect(() => {
     if (!authToken) {
       setCollaborationProfile(null);
+      setCollaborationNotifications([]);
       return;
     }
     void loadCollaborationProfile();
+    authFetch("/collaboration/notifications", { timeoutMs: 8000 })
+      .then(parseJsonSafe)
+      .then((data) => setCollaborationNotifications(data.notifications || []))
+      .catch(() => undefined);
   }, [authToken]);
 
   useEffect(() => {
@@ -21592,7 +21682,11 @@ export default function App() {
     if (!authToken || !isCollaborationVisible) return undefined;
     const interval = window.setInterval(() => {
       refreshCollaborationRooms(true);
-    }, ROOM_REFRESH_INTERVAL_MS);
+      authFetch("/collaboration/notifications", { timeoutMs: 8000 })
+        .then(parseJsonSafe)
+        .then((data) => setCollaborationNotifications(data.notifications || []))
+        .catch(() => undefined);
+    }, ROOM_LIST_REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
     };
@@ -21622,6 +21716,64 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [activeRoomId, activeTab, authToken, currentPage]);
+
+  useEffect(() => {
+    if (currentPage !== "collaboration") return undefined;
+    const handleBoardPhotoOpen = (event) => {
+      if (event.target?.closest?.("button")) return;
+      const figure = event.target?.closest?.(".collaboration-board-uploads figure");
+      if (!figure) return;
+      const figures = Array.from(figure.parentElement?.children || []);
+      const image = activeRoom?.board_images?.[figures.indexOf(figure)];
+      if (image?.id) setSelectedRoomBoardImageId(image.id);
+    };
+    document.addEventListener("click", handleBoardPhotoOpen);
+    return () => document.removeEventListener("click", handleBoardPhotoOpen);
+  }, [activeRoom?.board_images, currentPage]);
+
+  useEffect(() => {
+    const boardUploads = document.querySelector(".collaboration-board-uploads");
+    if (!boardUploads) return;
+    boardUploads.classList.toggle("is-board-view", collaborationMobileView === "board");
+  }, [activeRoom?.board_images, collaborationMobileView]);
+
+  useEffect(() => {
+    if (currentPage !== "collaboration" || !activeRoomId) return undefined;
+    const timer = window.setTimeout(() => {
+      const cards = Array.from(document.querySelectorAll(".collaboration-chat-messages article"));
+      (activeRoom?.messages || []).forEach((message, index) => {
+        if (message.message_type !== "audio" || !message.media_id || !cards[index]) return;
+        cards[index].dataset.voiceMediaId = message.media_id;
+        cards[index].dataset.voiceDuration = String(message.duration_seconds || 0);
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeRoom?.messages, activeRoomId, currentPage]);
+
+  useEffect(() => {
+    if (currentPage !== "collaboration" || !activeRoomId) return undefined;
+    const openVoiceNote = async (event) => {
+      const card = event.target?.closest?.(".collaboration-chat-messages article[data-voice-media-id]");
+      if (!card || card.dataset.voiceLoading === "true" || card.querySelector("audio")) return;
+      card.dataset.voiceLoading = "true";
+      try {
+        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/media/${encodeURIComponent(card.dataset.voiceMediaId)}`, { timeoutMs: 45000 });
+        if (!response.ok) throw new Error("Could not open voice note.");
+        const audio = document.createElement("audio");
+        audio.className = "collaboration-voice-player";
+        audio.controls = true;
+        audio.autoplay = true;
+        audio.src = URL.createObjectURL(await response.blob());
+        card.appendChild(audio);
+      } catch {
+        setError("Could not open that voice note. Tap it to retry.");
+      } finally {
+        card.dataset.voiceLoading = "false";
+      }
+    };
+    document.addEventListener("click", openVoiceNote);
+    return () => document.removeEventListener("click", openVoiceNote);
+  }, [activeRoomId, currentPage]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return undefined;
@@ -27290,10 +27442,9 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not add members to this room.");
-      handleCollaborationRoomActivity(data.room ? [data.room] : []);
-      setActiveRoom(data.room || null);
+      setActiveRoom((room) => room ? { ...room, members: data.members || room.members, updated_at: data.updated_at || room.updated_at } : room);
       setRoomMembersInput("");
-      await refreshCollaborationRooms(true);
+      void refreshCollaborationRooms(true);
       const invitedCount = Array.isArray(data.invited_emails) ? data.invited_emails.length : emails.length;
       setStatus(
         invitedCount === 1
@@ -27320,8 +27471,7 @@ export default function App() {
       );
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not remove this room member.");
-      setActiveRoom(data.room || null);
-      handleCollaborationRoomActivity(data.room ? [data.room] : []);
+      setActiveRoom((room) => room ? { ...room, members: data.members || room.members, updated_at: data.updated_at || room.updated_at } : room);
       void refreshCollaborationRooms(true);
       setStatus(`${memberEmail} was removed from the room.`);
     } catch (err) {
@@ -27345,15 +27495,59 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save shared notes.");
-      setActiveRoom(data.room || null);
-      roomNotesLastSyncedValueRef.current = data.room?.shared_notes || nextSharedNotes;
-      await refreshCollaborationRooms(true);
+      setActiveRoom((room) => room ? { ...room, shared_notes: data.shared_notes ?? nextSharedNotes, updated_at: data.updated_at || room.updated_at } : room);
+      roomNotesLastSyncedValueRef.current = data.shared_notes ?? nextSharedNotes;
+      void refreshCollaborationRooms(true);
       if (!preserveStatus) setStatus("Shared notes saved for the room.");
     } catch (err) {
       if (!silent) setError(err.message || "Could not save shared notes.");
     } finally {
       setIsSavingRoomNotes(false);
     }
+  };
+
+  const uploadCollaborationMedia = async (files, mediaKind) => {
+    if (!activeRoomId) return setError("Open a collaboration room before uploading media.");
+    const fileList = Array.from(files || []).filter(Boolean);
+    if (!fileList.length || !["image", "video"].includes(mediaKind)) return;
+    setIsUploadingCollaborationMedia(true);
+    setError("");
+    try {
+      const uploadedItems = [];
+      for (const selectedFile of fileList) {
+        const formData = new FormData();
+        formData.append("media", selectedFile);
+        formData.append("media_kind", mediaKind);
+        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/media`, {
+          method: "POST",
+          body: formData,
+          timeoutMs: Math.max(45000, getAdaptiveFileUploadTimeoutMs(selectedFile)),
+        });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || `Could not upload the ${mediaKind}.`);
+        if (!data.item) throw new Error(`The server did not return the uploaded ${mediaKind}.`);
+        uploadedItems.push(data.item);
+        setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
+      }
+      setCollaborationMaterialFilter(mediaKind);
+      void refreshCollaborationRooms(true);
+      setStatus(`${uploadedItems.length} ${mediaKind}${uploadedItems.length === 1 ? "" : "s"} uploaded to the room.`);
+      if (uploadedItems.length === 1) void openCollaborationMaterial(uploadedItems[0]);
+    } catch (err) {
+      setError(err.message || `Could not upload the ${mediaKind}.`);
+    } finally {
+      setIsUploadingCollaborationMedia(false);
+    }
+  };
+
+  const pickCollaborationMedia = (mediaKind) => {
+    if (!["image", "video"].includes(mediaKind) || typeof document === "undefined") return;
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = mediaKind === "image" ? "image/*" : "video/*";
+    picker.multiple = true;
+    picker.addEventListener("change", () => void uploadCollaborationMedia(picker.files, mediaKind), { once: true });
+    picker.click();
   };
 
   const uploadRoomBoardImages = async (files) => {
@@ -27363,7 +27557,7 @@ export default function App() {
     setIsUploadingRoomBoardImage(true);
     setError("");
     try {
-      let latestRoom = activeRoom;
+      const uploadedImages = [];
       for (const selectedFile of fileList) {
         const formData = new FormData();
         formData.append("image", selectedFile);
@@ -27374,14 +27568,16 @@ export default function App() {
         });
         const data = await parseJsonSafe(response);
         if (!response.ok) throw new Error(data.detail || "Could not upload the board photo.");
-        latestRoom = data.room || latestRoom;
-        setActiveRoom(latestRoom || null);
+        if (!data.image) throw new Error("The server did not return the uploaded board photo.");
+        uploadedImages.push(data.image);
+        setActiveRoom((room) => room ? {
+          ...room,
+          updated_at: data.updated_at || room.updated_at,
+          board_images: [...(room.board_images || []), data.image],
+        } : room);
       }
-      if (latestRoom?.board_images?.length) {
-        const latestImage = latestRoom.board_images[latestRoom.board_images.length - 1];
-        setSelectedRoomBoardImageId(latestImage?.id || "");
-      }
-      await refreshCollaborationRooms(true);
+      if (uploadedImages.length) setSelectedRoomBoardImageId(uploadedImages[uploadedImages.length - 1]?.id || "");
+      void refreshCollaborationRooms(true);
       setStatus(fileList.length === 1 ? "Board photo uploaded." : `${fileList.length} board photos uploaded.`);
     } catch (err) {
       setError(err.message || "Could not upload the board photo.");
@@ -27392,18 +27588,21 @@ export default function App() {
 
   const deleteRoomBoardImage = async (imageId) => {
     if (!activeRoomId || !imageId) return;
+    const removedImage = (activeRoom?.board_images || []).find((image) => image.id === imageId) || null;
     setDeletingRoomBoardImageId(imageId);
     setError("");
+    setActiveRoom((room) => room ? { ...room, board_images: (room.board_images || []).filter((image) => image.id !== imageId) } : room);
+    if (selectedRoomBoardImageId === imageId) setSelectedRoomBoardImageId("");
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/board-images/${encodeURIComponent(imageId)}`, {
         method: "DELETE",
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not remove the board photo.");
-      setActiveRoom(data.room || null);
-      await refreshCollaborationRooms(true);
+      void refreshCollaborationRooms(true);
       setStatus("Board photo removed.");
     } catch (err) {
+      if (removedImage) setActiveRoom((room) => room ? { ...room, board_images: [...(room.board_images || []), removedImage] } : room);
       setError(err.message || "Could not remove the board photo.");
     } finally {
       setDeletingRoomBoardImageId("");
@@ -27458,6 +27657,86 @@ export default function App() {
     }
   };
 
+  const uploadRoomVoiceNote = async (audioBlob, durationSeconds) => {
+    const roomId = activeRoom?.id || activeRoomId;
+    if (!roomId || !audioBlob?.size) return;
+    setIsUploadingRoomVoice(true);
+    setError("");
+    try {
+      const contentType = audioBlob.type || "audio/webm";
+      const extension = contentType.includes("mp4") ? "m4a" : contentType.includes("ogg") ? "ogg" : "webm";
+      const formData = new FormData();
+      formData.append("voice_note", audioBlob, `voice-note-${Date.now()}.${extension}`);
+      formData.append("duration_seconds", String(Math.max(1, Math.round(durationSeconds || 1))));
+      const response = await authFetch(`/collaboration/rooms/${roomId}/voice-notes`, {
+        method: "POST",
+        body: formData,
+        timeoutMs: 45000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not send the voice note.");
+      if (!data.message) throw new Error("The room did not confirm the voice note.");
+      setActiveRoom((room) => room ? {
+        ...room,
+        updated_at: data.updated_at || room.updated_at,
+        messages: [...(room.messages || []), data.message],
+      } : room);
+      void refreshCollaborationRooms(true);
+      window.requestAnimationFrame(() => {
+        const messageList = document.querySelector(".collaboration-chat-messages");
+        if (messageList) messageList.scrollTop = messageList.scrollHeight;
+      });
+    } catch (err) {
+      setError(err.message || "Could not send the voice note.");
+    } finally {
+      setIsUploadingRoomVoice(false);
+    }
+  };
+
+  const stopRoomVoiceRecording = () => {
+    const recorder = roomVoiceMediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    setIsRecordingRoomVoice(false);
+  };
+
+  const startRoomVoiceRecording = async () => {
+    if (!activeRoom) return setError("Open a room before recording a voice note.");
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      return setError("Voice notes are not supported in this browser.");
+    }
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const preferredType = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+      const recorder = preferredType ? new MediaRecorder(stream, { mimeType: preferredType }) : new MediaRecorder(stream);
+      roomVoiceStreamRef.current = stream;
+      roomVoiceMediaRecorderRef.current = recorder;
+      roomVoiceChunksRef.current = [];
+      roomVoiceStartedAtRef.current = Date.now();
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) roomVoiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const durationSeconds = (Date.now() - roomVoiceStartedAtRef.current) / 1000;
+        const blob = new Blob(roomVoiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        roomVoiceChunksRef.current = [];
+        roomVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+        roomVoiceStreamRef.current = null;
+        roomVoiceMediaRecorderRef.current = null;
+        setIsRecordingRoomVoice(false);
+        if (durationSeconds >= 0.5 && blob.size) void uploadRoomVoiceNote(blob, durationSeconds);
+      };
+      recorder.start(250);
+      setIsRecordingRoomVoice(true);
+      setStatus("Recording voice note. Tap the stop button to send it.");
+    } catch (err) {
+      roomVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+      roomVoiceStreamRef.current = null;
+      setIsRecordingRoomVoice(false);
+      setError(err?.name === "NotAllowedError" ? "Allow microphone access to record a voice note." : "Could not start the voice recorder.");
+    }
+  };
+
   const leaveCollaborationRoom = async () => {
     if (!activeRoomId || !activeRoom) return;
     if (activeRoom.is_owner) {
@@ -27505,7 +27784,9 @@ export default function App() {
         : resolvedItem.podcastData?.script ? "podcast"
           : resolvedItem.mindMapData?.root ? "mind_map"
             : resolvedItem.quizQuestions?.length ? "quiz"
-              : "study_guide";
+              : resolvedItem.flashcards?.length ? "flashcards"
+                : "study_guide";
+      const materialActiveTab = ({ presentation: "presentation", podcast: "podcast", mind_map: "mindmap", quiz: "quiz", flashcards: "flashcards" })[materialType] || "guide";
       const snapshot = {
         transcript: resolvedItem.transcript || "", summary: resolvedItem.summary || "", formula: resolvedItem.formula || "",
         example: resolvedItem.example || "", flashcards: resolvedItem.flashcards || [], quiz_questions: resolvedItem.quizQuestions || [],
@@ -27513,14 +27794,14 @@ export default function App() {
       };
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/material-items`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: resolvedItem.title || resolvedItem.fileName || "Mabaso study material", material_type: materialType, description: "Shared from saved Mabaso AI history.", source: { kind: "history", history_id: resolvedItem.id, active_tab: "guide", snapshot } }),
+        body: JSON.stringify({ title: resolvedItem.title || resolvedItem.fileName || "Mabaso study material", material_type: materialType, description: "Shared from saved Mabaso AI history.", source: { kind: "history", history_id: resolvedItem.id, active_tab: materialActiveTab, snapshot } }),
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not share this saved material.");
-      setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
+      const replacedIds = new Set(data.replaced_ids || []);
+      setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || []).filter((entry) => !replacedIds.has(entry.id))] } : room);
       setIsShareMaterialPickerOpen(false);
       setSelectedCollaborationMaterial(data.item);
-      await loadCollaborationRoom(activeRoomId, { silent: true });
       void refreshCollaborationRooms(true);
       setStatus(`${resolvedItem.title || "Material"} is now shared and open in this collaboration room.`);
     } catch (err) {
@@ -27532,6 +27813,27 @@ export default function App() {
 
   const openCollaborationMaterial = async (item) => {
     const source = item?.source || {};
+    const isUploadedCollaborationMedia = source.kind === "uploaded_media" && Boolean(source.media_id);
+    if (isUploadedCollaborationMedia) {
+      setSelectedCollaborationMediaItem(item);
+      setSelectedCollaborationMediaUrl("");
+      setIsLoadingCollaborationMedia(true);
+      setError("");
+      try {
+        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/media/${encodeURIComponent(source.media_id)}`, { timeoutMs: item.material_type === "video" ? 90000 : 30000 });
+        if (!response.ok) {
+          const data = await parseJsonSafe(response);
+          throw new Error(data.detail || `Could not open the ${item.material_type}.`);
+        }
+        const mediaBlob = await response.blob();
+        setSelectedCollaborationMediaUrl(URL.createObjectURL(mediaBlob));
+      } catch (err) {
+        setError(err.message || `Could not open the ${item.material_type}.`);
+      } finally {
+        setIsLoadingCollaborationMedia(false);
+      }
+      return;
+    }
     const snapshot = source.snapshot || {};
     if (snapshot && (snapshot.summary || snapshot.transcript || snapshot.formula || snapshot.example || snapshot.study_images?.length || snapshot.presentation?.slides?.length || snapshot.podcast?.script || snapshot.mind_map?.root || snapshot.quiz_questions?.length)) {
       startTransition(() => {
@@ -27612,7 +27914,6 @@ export default function App() {
       setBoardItemContent("");
       setBoardItemChecklist("");
       setIsBoardComposerOpen(false);
-      await loadCollaborationRoom(roomId, { silent: true });
       void refreshCollaborationRooms(true);
       setStatus("Added to the collaboration board.");
     } catch (err) {
@@ -27672,6 +27973,8 @@ export default function App() {
     }
   };
   const saveCollaborationProfile = async () => {
+    if (isSavingCollaborationProfile) return;
+    setIsSavingCollaborationProfile(true);
     setIsProfileLoading(true);
     setCollaborationProfileSaveState("saving");
     setError("");
@@ -27679,20 +27982,19 @@ export default function App() {
       const fields = ["subjects", "can_help", "needs_help"];
       const payload = { ...collaborationProfileDraft };
       fields.forEach((field) => { payload[field] = String(payload[field] || "").split(",").map((value) => value.trim()).filter(Boolean); });
-      const response = await authFetch("/collaboration/profile/me", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const response = await authFetch("/collaboration/profile/me", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), timeoutMs: 15000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not save your collaboration profile.");
-      const verificationResponse = await authFetch("/collaboration/profile/me", { cache: "no-store" });
-      const verificationData = await parseJsonSafe(verificationResponse);
-      if (!verificationResponse.ok || !verificationData.profile) throw new Error(verificationData.detail || "Your profile was saved but could not be verified.");
-      setCollaborationProfile(verificationData.profile);
-      setCollaborationProfileDraft({ ...verificationData.profile, subjects: (verificationData.profile.subjects || []).join(", "), can_help: (verificationData.profile.can_help || []).join(", "), needs_help: (verificationData.profile.needs_help || []).join(", ") });
+      if (!data.profile) throw new Error("The server did not return the saved profile.");
+      setCollaborationProfile(data.profile);
+      setCollaborationProfileDraft({ ...data.profile, subjects: (data.profile.subjects || []).join(", "), can_help: (data.profile.can_help || []).join(", "), needs_help: (data.profile.needs_help || []).join(", ") });
       setCollaborationProfileSaveState("saved");
       setStatus("Collaboration profile saved. You control what other students can discover.");
     } catch (err) {
       setCollaborationProfileSaveState("error");
       setError(err.message || "Could not save your collaboration profile.");
     } finally {
+      setIsSavingCollaborationProfile(false);
       setIsProfileLoading(false);
     }
   };
@@ -27707,9 +28009,9 @@ export default function App() {
       const response = await authFetch(`/collaboration/rooms/${roomId}/invite-profile/${encodeURIComponent(profile.public_id)}`, { method: "POST" });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not invite this student.");
-      setActiveRoom(data.room || activeRoom);
+      setActiveRoom((room) => room ? { ...room, members: data.members || room.members } : room);
       void refreshCollaborationRooms(true);
-      setStatus(`${profile.display_name || "Student"} was invited to ${activeRoom.title}.`);
+      setStatus(`${profile.display_name || "Student"} was invited to ${activeRoom.title}. Their in-app invitation is ready and the email was queued.`);
     } catch (err) {
       setError(err.message || "Could not invite this student.");
     } finally {

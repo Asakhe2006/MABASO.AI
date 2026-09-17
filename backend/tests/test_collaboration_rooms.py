@@ -42,7 +42,9 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                 );
                 CREATE TABLE collaboration_room_messages (
                     id TEXT PRIMARY KEY, room_id TEXT NOT NULL, author_email TEXT NOT NULL,
-                    content TEXT NOT NULL, created_at TEXT NOT NULL
+                    content TEXT NOT NULL, message_type TEXT NOT NULL DEFAULT 'text',
+                    media_id TEXT NOT NULL DEFAULT '', duration_seconds INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
                 );
                 CREATE TABLE collaboration_room_answers (
                     room_id TEXT NOT NULL, question_number TEXT NOT NULL, author_email TEXT NOT NULL,
@@ -67,11 +69,24 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     institution TEXT NOT NULL DEFAULT '', course TEXT NOT NULL DEFAULT '',
                     study_year TEXT NOT NULL DEFAULT '', subjects_json TEXT NOT NULL DEFAULT '[]',
                     can_help_json TEXT NOT NULL DEFAULT '[]', needs_help_json TEXT NOT NULL DEFAULT '[]',
+                    phone TEXT NOT NULL DEFAULT '',
                     discoverable INTEGER NOT NULL DEFAULT 0, show_institution INTEGER NOT NULL DEFAULT 0,
+                    show_email INTEGER NOT NULL DEFAULT 0, show_phone INTEGER NOT NULL DEFAULT 0,
                     allow_requests INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE collaboration_presence (
                     email TEXT PRIMARY KEY, last_seen_at TEXT NOT NULL
+                );
+                CREATE TABLE collaboration_room_invites (
+                    id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, room_id TEXT NOT NULL,
+                    inviter_email TEXT NOT NULL, invited_email TEXT NOT NULL, status TEXT NOT NULL,
+                    email_status TEXT NOT NULL, email_error TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE collaboration_notifications (
+                    id TEXT PRIMARY KEY, recipient_email TEXT NOT NULL, actor_email TEXT NOT NULL,
+                    room_id TEXT NOT NULL, notification_type TEXT NOT NULL, title TEXT NOT NULL,
+                    message TEXT NOT NULL, read_at TEXT NOT NULL, created_at TEXT NOT NULL
                 );
                 """
             )
@@ -149,7 +164,10 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                 course="Electrical Engineering",
                 subjects=["Communication Systems", "MATLAB"],
                 can_help=["MATLAB"],
+                phone="+27 63 000 0000",
                 discoverable=True,
+                show_email=True,
+                show_phone=True,
                 allow_requests=True,
             ),
             current_user="student2@example.com",
@@ -159,7 +177,8 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discovery["profiles"][0]["public_id"], student_profile["profile"]["public_id"])
         self.assertTrue(discovery["profiles"][0]["match_reasons"])
         self.assertTrue(discovery["profiles"][0]["is_online"])
-        self.assertNotIn("email", discovery["profiles"][0])
+        self.assertEqual(discovery["profiles"][0]["email"], "student2@example.com")
+        self.assertEqual(discovery["profiles"][0]["phone"], "+27 63 000 0000")
 
         invite_background_tasks = main.BackgroundTasks()
         invite_result = await main.invite_discovered_profile_to_room(
@@ -168,8 +187,14 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             background_tasks=invite_background_tasks,
             current_user=owner,
         )
-        self.assertIn("student2@example.com", {member["email"] for member in invite_result["room"]["members"]})
+        self.assertIn("student2@example.com", {member["email"] for member in invite_result["members"]})
+        self.assertTrue(invite_result["invited"])
         self.assertEqual(len(invite_background_tasks.tasks), 1)
+        with main.get_db_connection() as connection:
+            invitation = connection.execute("SELECT * FROM collaboration_room_invites WHERE id = ?", (invite_result["invitation_id"],)).fetchone()
+            notification = connection.execute("SELECT * FROM collaboration_notifications WHERE recipient_email = ?", ("student2@example.com",)).fetchone()
+        self.assertIsNotNone(invitation)
+        self.assertIsNotNone(notification)
 
         discovery_after_invite = await main.discover_collaboration_profiles("MATLAB", current_user=owner)
         self.assertTrue(discovery_after_invite["profiles"][0]["has_collaborated"])
@@ -208,12 +233,15 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             "student2@example.com",
             current_user=owner,
         )
-        self.assertNotIn("student2@example.com", {member["email"] for member in removed["room"]["members"]})
+        self.assertNotIn("student2@example.com", {member["email"] for member in removed["members"]})
         with self.assertRaises(main.HTTPException):
             await main.get_collaboration_room(room_id, current_user="student2@example.com")
 
     def test_invitation_email_contains_authenticated_room_link(self):
-        with patch.object(main, "get_smtp_settings", return_value={"from_email": "hello@mabaso.ai"}), patch.object(
+        with patch.object(main, "get_smtp_settings", return_value={
+            "from_email": "hello@mabaso.ai", "host": "smtp.gmail.com", "port": 587,
+            "use_tls": True, "use_ssl": False, "username": "hello@mabaso.ai",
+        }), patch.object(
             main,
             "send_smtp_message",
         ) as send_message:
@@ -222,12 +250,66 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                 "owner@example.com",
                 "Signals Study Group",
                 "room-123",
+                "secure-token",
             )
         message = send_message.call_args.args[0]
         self.assertEqual(message["To"], "student@gmail.com")
         plain_body = message.get_body(preferencelist=("plain",)).get_content()
         self.assertIn("/app/collaboration?room=room-123", plain_body)
+        self.assertIn("invitation=secure-token", plain_body)
         self.assertIn("sign in", plain_body.lower())
+
+    async def test_invitation_delivery_invokes_smtp_and_records_delivery(self):
+        now_iso = main.utc_now().isoformat()
+        with main.get_db_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO collaboration_room_invites (
+                    id, token_hash, room_id, inviter_email, invited_email, status,
+                    email_status, email_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("invite-1", "hash", "room-1", "owner@example.com", "student@example.com", "pending", "pending", "", now_iso, now_iso),
+            )
+        with patch.object(main, "send_collaboration_invite_email") as send_email, patch.object(main, "record_audit_log"):
+            await main.deliver_collaboration_invite_emails(
+                [{"id": "invite-1", "email": "student@example.com", "token": "secure-token"}],
+                "owner@example.com",
+                "Signals",
+                "room-1",
+            )
+        send_email.assert_called_once_with(
+            "student@example.com", "owner@example.com", "Signals", "room-1", "secure-token"
+        )
+        with main.get_db_connection() as connection:
+            row = connection.execute("SELECT email_status, email_error FROM collaboration_room_invites WHERE id = ?", ("invite-1",)).fetchone()
+        self.assertEqual(row["email_status"], "sent")
+        self.assertEqual(row["email_error"], "")
+
+    async def test_invitation_email_failure_keeps_invitation_and_records_safe_error(self):
+        now_iso = main.utc_now().isoformat()
+        with main.get_db_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO collaboration_room_invites (
+                    id, token_hash, room_id, inviter_email, invited_email, status,
+                    email_status, email_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("invite-failed", "hash-failed", "room-2", "owner@example.com", "student@example.com", "pending", "pending", "", now_iso, now_iso),
+            )
+        with patch.object(main, "send_collaboration_invite_email", side_effect=main.HTTPException(status_code=502, detail="SMTP login failed")), patch.object(main, "record_audit_log"):
+            await main.deliver_collaboration_invite_emails(
+                [{"id": "invite-failed", "email": "student@example.com", "token": "secure-token"}],
+                "owner@example.com",
+                "Signals",
+                "room-2",
+            )
+        with main.get_db_connection() as connection:
+            row = connection.execute("SELECT status, email_status, email_error FROM collaboration_room_invites WHERE id = ?", ("invite-failed",)).fetchone()
+        self.assertEqual(row["status"], "pending")
+        self.assertEqual(row["email_status"], "failed")
+        self.assertIn("SMTP login failed", row["email_error"])
 
 
 if __name__ == "__main__":
