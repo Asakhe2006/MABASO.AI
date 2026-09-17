@@ -6,6 +6,8 @@ const cssSource = await readFile(new URL("../src/index.css", import.meta.url), "
 const siteConfigSource = await readFile(new URL("../src/sitePageConfig.js", import.meta.url), "utf8");
 const siteShellSource = await readFile(new URL("../src/EnterpriseSiteShell.jsx", import.meta.url), "utf8");
 const publicGuideSource = await readFile(new URL("../src/content/collaboration-guide.md", import.meta.url), "utf8");
+const roomChatSource = await readFile(new URL("../src/components/CollaborationChat.jsx", import.meta.url), "utf8");
+const materialWorkspaceSource = await readFile(new URL("../src/components/CollaborationMaterialWorkspace.jsx", import.meta.url), "utf8");
 
 assert.doesNotMatch(appSource, /\/>\\n\\n\s*\{isProfileEditorOpen/, "Collaboration must not render literal newline text.");
 assert.doesNotMatch(appSource, /collaboration-upload-card/, "Collaboration must not display an upload allowance card.");
@@ -30,6 +32,17 @@ assert.match(appSource, /disabled=\{isSavingCollaborationProfile\}/, "Profile fi
 assert.match(appSource, /Show my account email in Discover/, "Profile privacy must include explicit email sharing consent.");
 assert.match(appSource, /Show my personal number in Discover/, "Profile privacy must include explicit phone sharing consent.");
 assert.match(appSource, /\/voice-notes`/, "Room chat must send recorded voice notes through the authenticated backend.");
+assert.match(appSource, /CollaborationChat/, "The room must render the shared responsive chat system.");
+assert.match(appSource, /const renderCollaborationChatSurface = \(\) => \(/, "Room chat rendering must be deferred until its message handlers are initialized.");
+assert.match(appSource, /CollaborationMaterialWorkspace/, "Shared materials must open inside the room workspace.");
+assert.match(roomChatSource, /event\.key === "Enter" && !event\.shiftKey/, "Room chat must send with Enter and retain Shift+Enter for new lines.");
+assert.match(roomChatSource, /VoiceMessage/, "Room chat must render reusable playable voice messages.");
+assert.match(roomChatSource, /showNewMessage/, "Room chat must not force-scroll users who are reading older messages.");
+assert.match(roomChatSource, /Load earlier messages/, "Long room chats must paginate older messages instead of loading everything at once.");
+assert.match(materialWorkspaceSource, /PresentationViewer/, "PowerPoints must render as real slides inside Collaboration.");
+assert.match(materialWorkspaceSource, /MediaViewer/, "Images and videos must load inside the material workspace.");
+assert.match(cssSource, /\.mabaso-room-chat\.is-desktop-expanded/, "Desktop chat must support an expanded conversation layout and room list.");
+assert.match(cssSource, /\.collaboration-desktop-workspace-tabs/, "Desktop collaboration must expose browser-style material and panel tabs.");
 assert.match(appSource, /\+ Add photo/, "The room Images tool must provide a working photo upload action.");
 assert.match(appSource, /\+ Add video/, "The room Videos tool must provide a working video upload action.");
 assert.match(appSource, /inviteDiscoveredProfileToRoom\(profile\)/, "Discovery results must offer privacy-safe room invitations.");

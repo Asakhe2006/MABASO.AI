@@ -7272,6 +7272,7 @@ class CollaborationProfileRequest(BaseModel):
 
 class CollaborationMessageRequest(BaseModel):
     content: str
+    reply_to_id: str = ""
 
 
 class CollaborationSharedNotesRequest(BaseModel):
@@ -7677,6 +7678,7 @@ def init_db():
                 message_type TEXT NOT NULL DEFAULT 'text',
                 media_id TEXT NOT NULL DEFAULT '',
                 duration_seconds INTEGER NOT NULL DEFAULT 0,
+                reply_to_id TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             )
             """
@@ -7689,6 +7691,7 @@ def init_db():
             "message_type": "TEXT NOT NULL DEFAULT 'text'",
             "media_id": "TEXT NOT NULL DEFAULT ''",
             "duration_seconds": "INTEGER NOT NULL DEFAULT 0",
+            "reply_to_id": "TEXT NOT NULL DEFAULT ''",
         }
         for column_name, column_definition in collaboration_message_column_defaults.items():
             if column_name not in collaboration_message_columns:
@@ -19695,10 +19698,14 @@ def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
-            FROM collaboration_room_messages
-            WHERE room_id = ?
-            ORDER BY created_at DESC
+            SELECT m.id, m.author_email, m.content, m.message_type, m.media_id,
+                   m.duration_seconds, m.reply_to_id, m.created_at,
+                   r.author_email AS reply_author_email, r.content AS reply_content
+            FROM collaboration_room_messages AS m
+            LEFT JOIN collaboration_room_messages AS r
+              ON r.id = m.reply_to_id AND r.room_id = m.room_id
+            WHERE m.room_id = ?
+            ORDER BY m.created_at DESC
             LIMIT ?
             """,
             (room_id, limit),
@@ -19713,6 +19720,11 @@ def get_collaboration_room_messages(room_id: str, limit: int = 80) -> list[dict[
             "message_type": compact_text(row["message_type"], "text"),
             "media_id": compact_text(row["media_id"]),
             "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
+            "reply_to_id": compact_text(row["reply_to_id"]),
+            "reply_preview": {
+                "author_name": compact_text(row["reply_author_email"]).split("@")[0],
+                "content": compact_text(row["reply_content"], "Voice note"),
+            } if row["reply_to_id"] and row["reply_author_email"] else None,
             "created_at": row["created_at"],
         }
         for row in ordered_rows
@@ -19723,10 +19735,14 @@ def get_latest_collaboration_room_message(room_id: str) -> dict[str, str] | None
     with get_db_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
-            FROM collaboration_room_messages
-            WHERE room_id = ?
-            ORDER BY created_at DESC
+            SELECT m.id, m.author_email, m.content, m.message_type, m.media_id,
+                   m.duration_seconds, m.reply_to_id, m.created_at,
+                   r.author_email AS reply_author_email, r.content AS reply_content
+            FROM collaboration_room_messages AS m
+            LEFT JOIN collaboration_room_messages AS r
+              ON r.id = m.reply_to_id AND r.room_id = m.room_id
+            WHERE m.room_id = ?
+            ORDER BY m.created_at DESC
             LIMIT 1
             """,
             (room_id,),
@@ -19742,6 +19758,11 @@ def get_latest_collaboration_room_message(room_id: str) -> dict[str, str] | None
         "message_type": compact_text(row["message_type"], "text"),
         "media_id": compact_text(row["media_id"]),
         "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
+        "reply_to_id": compact_text(row["reply_to_id"]),
+        "reply_preview": {
+            "author_name": compact_text(row["reply_author_email"]).split("@")[0],
+            "content": compact_text(row["reply_content"], "Voice note"),
+        } if row["reply_to_id"] and row["reply_author_email"] else None,
         "created_at": row["created_at"],
     }
 
@@ -19796,7 +19817,7 @@ def get_accessible_collaboration_room_access(room_id: str, current_user: str) ->
     with get_db_connection() as connection:
         row = connection.execute(
             """
-            SELECT DISTINCT r.id, r.owner_email, r.title, r.updated_at
+            SELECT DISTINCT r.id, r.owner_email, r.title, r.updated_at, m.role AS member_role
             FROM collaboration_rooms r
             LEFT JOIN collaboration_room_members m ON m.room_id = r.id
             WHERE r.id = ? AND (r.owner_email = ? OR m.email = ?)
@@ -19980,10 +20001,20 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
             "SELECT email, role, created_at FROM collaboration_room_members WHERE room_id = ? ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, email ASC",
             (room_id,),
         ).fetchall()
+        message_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(collaboration_room_messages)").fetchall()
+        }
+        if "reply_to_id" not in message_columns:
+            connection.execute("ALTER TABLE collaboration_room_messages ADD COLUMN reply_to_id TEXT NOT NULL DEFAULT ''")
         message_rows = connection.execute(
             """
-            SELECT id, author_email, content, message_type, media_id, duration_seconds, created_at
-            FROM collaboration_room_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 80
+            SELECT m.id, m.author_email, m.content, m.message_type, m.media_id,
+                   m.duration_seconds, m.reply_to_id, m.created_at,
+                   r.author_email AS reply_author_email, r.content AS reply_content
+            FROM collaboration_room_messages AS m
+            LEFT JOIN collaboration_room_messages AS r
+              ON r.id = m.reply_to_id AND r.room_id = m.room_id
+            WHERE m.room_id = ? ORDER BY m.created_at DESC LIMIT 80
             """,
             (room_id,),
         ).fetchall()
@@ -20014,7 +20045,13 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         {
             "id": row["id"], "author_email": row["author_email"], "content": row["content"],
             "message_type": compact_text(row["message_type"], "text"), "media_id": compact_text(row["media_id"]),
-            "duration_seconds": max(0, int(row["duration_seconds"] or 0)), "created_at": row["created_at"],
+            "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
+            "reply_to_id": compact_text(row["reply_to_id"]),
+            "reply_preview": {
+                "author_name": compact_text(row["reply_author_email"]).split("@")[0],
+                "content": compact_text(row["reply_content"], "Voice note"),
+            } if row["reply_to_id"] and row["reply_author_email"] else None,
+            "created_at": row["created_at"],
         }
         for row in reversed(message_rows)
     ]
@@ -38531,17 +38568,43 @@ async def send_collaboration_message(
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Type a collaboration message first.")
+    reply_to_id = compact_text(payload.reply_to_id)
+    reply_preview = None
+    if reply_to_id:
+        with get_db_connection() as connection:
+            reply_row = connection.execute(
+                "SELECT author_email, content FROM collaboration_room_messages WHERE id = ? AND room_id = ?",
+                (reply_to_id, room["id"]),
+            ).fetchone()
+        if not reply_row:
+            raise HTTPException(status_code=400, detail="The message you replied to is no longer available.")
+        reply_preview = {
+            "author_name": compact_text(reply_row["author_email"]).split("@")[0],
+            "content": compact_text(reply_row["content"], "Voice note"),
+        }
 
     now_iso = utc_now().isoformat()
     message_id = uuid4().hex
     with get_db_connection() as connection:
-        connection.execute(
-            """
-            INSERT INTO collaboration_room_messages (id, room_id, author_email, content, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (message_id, room["id"], current_user, content, now_iso),
-        )
+        try:
+            connection.execute(
+                """
+                INSERT INTO collaboration_room_messages (id, room_id, author_email, content, reply_to_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (message_id, room["id"], current_user, content, reply_to_id, now_iso),
+            )
+        except sqlite3.OperationalError as exc:
+            if "reply_to_id" not in str(exc):
+                raise
+            connection.execute("ALTER TABLE collaboration_room_messages ADD COLUMN reply_to_id TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                """
+                INSERT INTO collaboration_room_messages (id, room_id, author_email, content, reply_to_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (message_id, room["id"], current_user, content, reply_to_id, now_iso),
+            )
         connection.execute(
             "UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?",
             (now_iso, room["id"]),
@@ -38552,11 +38615,87 @@ async def send_collaboration_message(
             "id": message_id,
             "author_email": current_user,
             "content": content,
+            "message_type": "text",
+            "reply_to_id": reply_to_id,
+            "reply_preview": reply_preview,
             "created_at": now_iso,
         },
         "room_id": room["id"],
         "updated_at": now_iso,
     }
+
+
+@app.get("/collaboration/rooms/{room_id}/messages")
+async def list_collaboration_messages(
+    room_id: str,
+    before: str = Query(default="", max_length=80),
+    limit: int = Query(default=50, ge=10, le=100),
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    params: list[Any] = [room["id"]]
+    before_clause = ""
+    if compact_text(before):
+        before_clause = " AND m.created_at < ?"
+        params.append(compact_text(before))
+    params.append(limit + 1)
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT m.id, m.author_email, m.content, m.message_type, m.media_id,
+                   m.duration_seconds, m.reply_to_id, m.created_at,
+                   r.author_email AS reply_author_email, r.content AS reply_content
+            FROM collaboration_room_messages AS m
+            LEFT JOIN collaboration_room_messages AS r
+              ON r.id = m.reply_to_id AND r.room_id = m.room_id
+            WHERE m.room_id = ?{before_clause}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    has_more = len(rows) > limit
+    items = [
+        {
+            "id": row["id"], "author_email": row["author_email"], "content": row["content"],
+            "message_type": compact_text(row["message_type"], "text"), "media_id": compact_text(row["media_id"]),
+            "duration_seconds": max(0, int(row["duration_seconds"] or 0)),
+            "reply_to_id": compact_text(row["reply_to_id"]),
+            "reply_preview": {
+                "author_name": compact_text(row["reply_author_email"]).split("@")[0],
+                "content": compact_text(row["reply_content"], "Voice note"),
+            } if row["reply_to_id"] and row["reply_author_email"] else None,
+            "created_at": row["created_at"],
+        }
+        for row in reversed(rows[:limit])
+    ]
+    return {"items": items, "has_more": has_more}
+
+
+@app.delete("/collaboration/rooms/{room_id}/messages/{message_id}")
+async def delete_collaboration_message(
+    room_id: str,
+    message_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    with get_db_connection() as connection:
+        message = connection.execute(
+            "SELECT author_email, media_id FROM collaboration_room_messages WHERE id = ? AND room_id = ?",
+            (message_id, room["id"]),
+        ).fetchone()
+        if not message:
+            raise HTTPException(status_code=404, detail="Room message not found.")
+        can_manage = room["owner_email"] == current_user or compact_text(room["member_role"]) == "moderator"
+        if normalize_email(message["author_email"]) != normalize_email(current_user) and not can_manage:
+            raise HTTPException(status_code=403, detail="You can only delete your own messages.")
+        connection.execute(
+            "DELETE FROM collaboration_room_messages WHERE id = ? AND room_id = ?",
+            (message_id, room["id"]),
+        )
+        now_iso = utc_now().isoformat()
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {"ok": True, "message_id": message_id, "updated_at": now_iso}
 
 
 @app.post("/collaboration/rooms/{room_id}/members")

@@ -208,10 +208,14 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
 
         member_message = await main.send_collaboration_message(
             room_id,
-            main.CollaborationMessageRequest(content="I have added my revision task."),
+            main.CollaborationMessageRequest(
+                content="I have added my revision task.",
+                reply_to_id=message_result["message"]["id"],
+            ),
             current_user="student2@example.com",
         )
         self.assertEqual(member_message["message"]["author_email"], "student2@example.com")
+        self.assertEqual(member_message["message"]["reply_preview"]["content"], "Let us revise chapter three.")
 
         member_board_item = await main.create_collaboration_board_item(
             room_id,
@@ -225,8 +229,24 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
 
         reopened = await main.get_collaboration_room(room_id, current_user=owner)
         self.assertEqual(len(reopened["room"]["messages"]), 2)
+        self.assertEqual(reopened["room"]["messages"][1]["reply_to_id"], message_result["message"]["id"])
         self.assertEqual(len(reopened["room"]["materials"]), 1)
         self.assertEqual(len(reopened["room"]["board_items"]), 3)
+
+        message_page = await main.list_collaboration_messages(
+            room_id,
+            before="",
+            limit=50,
+            current_user=owner,
+        )
+        self.assertEqual([item["id"] for item in message_page["items"]], [message_result["message"]["id"], member_message["message"]["id"]])
+
+        deleted_message = await main.delete_collaboration_message(
+            room_id,
+            member_message["message"]["id"],
+            current_user=owner,
+        )
+        self.assertTrue(deleted_message["ok"])
 
         removed = await main.remove_collaboration_room_member(
             room_id,
