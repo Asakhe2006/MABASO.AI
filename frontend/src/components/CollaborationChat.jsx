@@ -74,6 +74,20 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
   );
 }
 
+function ChatImageMessage({ message, mediaUrl }) {
+  const [expanded, setExpanded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const source = mediaUrl(message.media_id);
+  return (
+    <>
+      <button type="button" className="collab-chat-photo" onClick={() => setExpanded(true)} aria-label="Enlarge room chat photo">
+        {failed ? <span>Photo unavailable</span> : <img src={source} alt="" loading="lazy" onError={() => setFailed(true)} />}
+      </button>
+      {expanded ? <div className="collab-chat-photo-viewer" role="dialog" aria-modal="true" aria-label="Room chat photo" onClick={() => setExpanded(false)}><button type="button" onClick={() => setExpanded(false)} aria-label="Close photo"><X aria-hidden="true" /></button><img src={source} alt="" onClick={(event) => event.stopPropagation()} /></div> : null}
+    </>
+  );
+}
+
 function MessageActions({ message, isOwn, onReply, onDelete, onClose }) {
   return (
     <div className="collab-message-actions" role="menu">
@@ -101,6 +115,8 @@ function MessageBubble({ message, previous, currentUserEmail, activeVoiceId, set
         {message.reply_preview ? <blockquote><b>{message.reply_preview.author_name || "Reply"}</b>{message.reply_preview.content}</blockquote> : null}
         {message.message_type === "audio" && message.media_id ? (
           <VoiceMessage message={message} mediaUrl={mediaUrl(message.media_id)} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} />
+        ) : message.message_type === "image" && message.media_id ? (
+          <ChatImageMessage message={message} mediaUrl={mediaUrl} />
         ) : <p>{message.content}</p>}
         <span className="mabaso-chat-meta">{formatMessageTime(message.created_at)} {isOwn ? <CheckCheck aria-label={message.pending ? "Sending" : "Sent"} /> : null}</span>
         <button type="button" className="mabaso-message-menu" aria-label="Message actions" onClick={() => setMenuOpen((current) => !current)}><Ellipsis aria-hidden="true" /></button>
@@ -202,7 +218,7 @@ export default function CollaborationChat({
           <button type="button" className="mabaso-chat-back" onClick={onBack} aria-label="Back to rooms">←</button>
           <span className="mabaso-chat-avatar">MA</span>
           <div><h2>{roomName}</h2><p>{room ? `${room.member_count || room.members?.length || 1} members` : "Open a room"}</p></div>
-          <button type="button" className="mabaso-chat-minimize" onClick={onToggleMinimized} aria-label={minimized ? "Restore room chat" : "Minimize room chat"}>{minimized ? "□" : "—"}</button>
+          <button type="button" className="mabaso-chat-minimize" onClick={onToggleMinimized} aria-label={minimized ? "Restore room chat" : "Minimize room chat"}>{minimized ? "Restore chat" : "—"}</button>
           <button type="button" className="mabaso-chat-expand" onClick={onToggleExpanded} aria-label={desktopExpanded ? "Restore collaboration panels" : "Expand room chat"}>{desktopExpanded ? <X aria-hidden="true" /> : <Ellipsis aria-hidden="true" />}</button>
         </header>
         <div ref={listRef} className="mabaso-chat-message-list" onScroll={(event) => { const node = event.currentTarget; if (node.scrollHeight - node.scrollTop - node.clientHeight < 100) setShowNewMessage(false); }}>

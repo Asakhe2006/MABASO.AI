@@ -23544,7 +23544,10 @@ def auth_me(request: Request, response: Response, authorization: str | None = He
     ).start()
     active_token = refreshed_token or token
     csrf_token = set_auth_cookies(response, active_token)
-    payload = build_auth_response(context["email"], active_token)
+    # Keep refresh session restoration on the critical path only. Billing,
+    # usage, payments and the larger account snapshot load immediately after
+    # the authenticated shell through their dedicated endpoints.
+    payload = build_auth_response(context["email"], active_token, include_account_snapshot=False)
     payload["token"] = refreshed_token if AUTH_RESPONSE_INCLUDE_TOKEN else ""
     payload["auth_transport"] = "cookie" if cookie_token else ("bearer" if bearer_token else "none")
     payload["cookie_session_active"] = bool(cookie_token)
@@ -38693,6 +38696,11 @@ async def delete_collaboration_message(
             "DELETE FROM collaboration_room_messages WHERE id = ? AND room_id = ?",
             (message_id, room["id"]),
         )
+        if compact_text(message["media_id"]):
+            connection.execute(
+                "DELETE FROM collaboration_media WHERE id = ? AND room_id = ?",
+                (compact_text(message["media_id"]), room["id"]),
+            )
         now_iso = utc_now().isoformat()
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
     return {"ok": True, "message_id": message_id, "updated_at": now_iso}
@@ -39100,6 +39108,73 @@ async def stream_collaboration_media(
     return Response(content=data, media_type=row["content_type"], headers=headers)
 
 
+@app.post("/collaboration/rooms/{room_id}/chat-images")
+async def upload_collaboration_chat_image(
+    room_id: str,
+    request: Request,
+    image: UploadFile = File(...),
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    filename = compact_text(image.filename, "chat-photo.jpg")
+    content_type = compact_text(image.content_type, mimetypes.guess_type(filename)[0] or "").lower()
+    ensure_allowed_image_upload(filename, content_type)
+    enforce_rate_limit(
+        scope="collaboration_chat_image_upload",
+        request=request,
+        limit=50,
+        window_seconds=60 * 60,
+        identity=current_user,
+    )
+    try:
+        image_bytes = await image.read()
+    finally:
+        await image.close()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="The chat photo is empty. Choose it again.")
+    if len(image_bytes) > MAX_COLLABORATION_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"This photo is too large. Keep it below {MAX_COLLABORATION_IMAGE_UPLOAD_BYTES / (1024 * 1024):.0f} MB.",
+        )
+    image_bytes, content_type, filename = optimize_collaboration_image_bytes(image_bytes, content_type, filename)
+    media_id = uuid4().hex
+    message_id = uuid4().hex
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO collaboration_media (
+                id, room_id, owner_email, media_kind, filename, content_type,
+                size_bytes, data_blob, created_at
+            ) VALUES (?, ?, ?, 'image', ?, ?, ?, ?, ?)
+            """,
+            (media_id, room["id"], current_user, filename, content_type, len(image_bytes), image_bytes, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_room_messages (
+                id, room_id, author_email, content, message_type, media_id, duration_seconds, created_at
+            ) VALUES (?, ?, ?, ?, 'image', ?, 0, ?)
+            """,
+            (message_id, room["id"], current_user, "", media_id, now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {
+        "message": {
+            "id": message_id,
+            "author_email": current_user,
+            "content": "",
+            "message_type": "image",
+            "media_id": media_id,
+            "duration_seconds": 0,
+            "created_at": now_iso,
+        },
+        "room_id": room["id"],
+        "updated_at": now_iso,
+    }
+
+
 @app.post("/collaboration/rooms/{room_id}/voice-notes")
 async def upload_collaboration_voice_note(
     room_id: str,
@@ -39218,6 +39293,44 @@ async def create_collaboration_board_item(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (item_id, room["id"], current_user, item_type, title, content, dump_json(checklist), compact_text(payload.due_at)[:64], compact_text(payload.material_id)[:96], 0, now_iso, now_iso),
+        )
+        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+    return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
+
+
+@app.patch("/collaboration/rooms/{room_id}/board-items/{item_id}")
+async def update_collaboration_board_item(
+    room_id: str,
+    item_id: str,
+    payload: CollaborationBoardItemCreateRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    with get_db_connection() as connection:
+        existing = connection.execute(
+            "SELECT owner_email, item_type FROM collaboration_board_items WHERE id = ? AND room_id = ?",
+            (compact_text(item_id), room["id"]),
+        ).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Board item not found.")
+        if normalize_email(existing["owner_email"]) != normalize_email(current_user) and not collaboration_room_can_manage(room, current_user):
+            raise HTTPException(status_code=403, detail="You cannot edit another member's board item.")
+        item_type = compact_text(payload.item_type, existing["item_type"]).lower()[:32]
+        if item_type not in {"note", "important", "quote", "task", "announcement", "material"}:
+            raise HTTPException(status_code=400, detail="That board item type is not supported.")
+        title = compact_text(payload.title)[:180]
+        content = compact_text(payload.content)[:5000]
+        checklist = [compact_text(item)[:240] for item in payload.checklist if compact_text(item)][:20]
+        if not title and not content and not checklist:
+            raise HTTPException(status_code=400, detail="A board item cannot be empty.")
+        now_iso = utc_now().isoformat()
+        connection.execute(
+            """
+            UPDATE collaboration_board_items
+            SET item_type = ?, title = ?, content = ?, checklist_json = ?, due_at = ?, updated_at = ?
+            WHERE id = ? AND room_id = ?
+            """,
+            (item_type, title, content, dump_json(checklist), compact_text(payload.due_at)[:64], now_iso, item_id, room["id"]),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from fastapi import Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -81,6 +82,28 @@ class SessionAuthenticationTests(unittest.TestCase):
         self.assertNotIn("one", main._session_context_cache)
         self.assertNotIn("two", main._session_context_cache)
         self.assertIn("other", main._session_context_cache)
+
+    def test_auth_me_restores_session_without_blocking_on_account_snapshot(self):
+        request = SimpleNamespace(cookies={}, state=SimpleNamespace())
+        response = Response()
+        context = {"email": "student@example.com", "mode": "user", "available_modes": ["user"]}
+        with (
+            patch.object(main, "get_verified_request_session", return_value=("session-token", context)),
+            patch.object(main, "should_refresh_session_token", return_value=False),
+            patch.object(main, "queue_session_maintenance"),
+            patch.object(main, "set_auth_cookies", return_value="csrf-token"),
+            patch.object(main, "build_auth_response", return_value={}) as build_response,
+            patch.object(main.threading, "Thread") as audit_thread,
+        ):
+            payload = main.auth_me(request, response, authorization=None)
+
+        build_response.assert_called_once_with(
+            "student@example.com",
+            "session-token",
+            include_account_snapshot=False,
+        )
+        audit_thread.return_value.start.assert_called_once()
+        self.assertEqual(payload["csrf_token"], "csrf-token")
 
 
 if __name__ == "__main__":

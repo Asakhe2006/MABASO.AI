@@ -223,6 +223,17 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             current_user="student2@example.com",
         )
         self.assertEqual(member_board_item["item"]["owner_email"], "student2@example.com")
+        updated_board_item = await main.update_collaboration_board_item(
+            room_id,
+            member_board_item["item"]["id"],
+            main.CollaborationBoardItemCreateRequest(
+                item_type="note",
+                title="Updated together",
+                content="This edit is saved for the next device.",
+            ),
+            current_user="student2@example.com",
+        )
+        self.assertEqual(updated_board_item["item"]["title"], "Updated together")
 
         with self.assertRaises(main.HTTPException):
             await main.get_collaboration_room(room_id, current_user="outsider@example.com")
