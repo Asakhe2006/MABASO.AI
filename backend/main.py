@@ -4,6 +4,7 @@ import binascii
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
+from email.utils import getaddresses, parseaddr
 import html
 from html.parser import HTMLParser
 import hashlib
@@ -10027,13 +10028,102 @@ def send_smtp_message(message: EmailMessage):
 
     raise HTTPException(status_code=502, detail="SMTP delivery failed for an unknown reason.")
 
+BREVO_TRANSACTIONAL_EMAIL_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+def get_transactional_email_settings() -> dict[str, Any]:
+    """Return the explicitly selected delivery provider without exposing secrets."""
+    configured_provider = compact_text(os.getenv("EMAIL_PROVIDER")).lower()
+    provider = configured_provider or ("brevo" if compact_text(os.getenv("BREVO_API_KEY")) else "smtp")
+    if provider not in {"brevo", "smtp"}:
+        raise HTTPException(status_code=500, detail="EMAIL_PROVIDER must be either 'brevo' or 'smtp'.")
+    if provider == "smtp":
+        smtp_settings = get_smtp_settings()
+        return {"provider": "smtp", "from_email": smtp_settings["from_email"], "from_name": "Mabaso AI"}
+    api_key = compact_text(os.getenv("BREVO_API_KEY"))
+    from_email = compact_text(os.getenv("EMAIL_FROM_ADDRESS"))
+    from_name = compact_text(os.getenv("EMAIL_FROM_NAME"), "Mabaso AI")
+    missing = []
+    if not api_key:
+        missing.append("BREVO_API_KEY")
+    if not from_email:
+        missing.append("EMAIL_FROM_ADDRESS")
+    if missing:
+        raise HTTPException(status_code=500, detail=f"Brevo email is not configured. Missing: {', '.join(missing)}.")
+    validate_email_address(from_email)
+    return {"provider": "brevo", "api_key": api_key, "from_email": from_email, "from_name": from_name}
+
+
+def _email_message_content(message: EmailMessage, subtype: str) -> str:
+    part = message.get_body(preferencelist=(subtype,))
+    return part.get_content() if part is not None else ""
+
+
+def send_brevo_message(message: EmailMessage, settings: dict[str, Any] | None = None):
+    settings = settings or get_transactional_email_settings()
+    if settings.get("provider") != "brevo":
+        raise HTTPException(status_code=500, detail="Brevo email was requested without a Brevo configuration.")
+    recipients = []
+    for display_name, recipient_email in getaddresses(message.get_all("To", [])):
+        normalized_recipient = validate_email_address(recipient_email)
+        recipients.append({"email": normalized_recipient, **({"name": display_name} if display_name else {})})
+    if not recipients:
+        raise HTTPException(status_code=400, detail="Email recipient is required.")
+    payload: dict[str, Any] = {
+        "sender": {"email": settings["from_email"], "name": settings["from_name"]},
+        "to": recipients,
+        "subject": compact_text(message.get("Subject"), "Mabaso AI notification"),
+    }
+    text_content = _email_message_content(message, "plain")
+    html_content = _email_message_content(message, "html")
+    if text_content:
+        payload["textContent"] = text_content
+    if html_content:
+        payload["htmlContent"] = html_content
+    reply_name, reply_email = parseaddr(message.get("Reply-To", ""))
+    if reply_email:
+        payload["replyTo"] = {"email": validate_email_address(reply_email), **({"name": reply_name} if reply_name else {})}
+    logger.info("Attempting Brevo transactional email recipients=%s", len(recipients))
+    try:
+        response = requests.post(
+            BREVO_TRANSACTIONAL_EMAIL_URL,
+            headers={"accept": "application/json", "api-key": settings["api_key"], "content-type": "application/json"},
+            json=payload,
+            timeout=8,
+        )
+    except requests.Timeout as exc:
+        logger.warning("Brevo transactional email timed out")
+        raise HTTPException(status_code=502, detail="Email provider timed out. Please try again shortly.") from exc
+    except requests.RequestException as exc:
+        logger.warning("Brevo transactional email network failure: %s", exc.__class__.__name__)
+        raise HTTPException(status_code=502, detail="Email provider could not be reached.") from exc
+    if 200 <= response.status_code < 300:
+        logger.info("Brevo transactional email accepted status=%s recipients=%s", response.status_code, len(recipients))
+        return
+    error_by_status = {
+        400: "Brevo rejected the email request. Check the recipient and sender configuration.",
+        401: "Brevo authentication failed. Check BREVO_API_KEY.",
+        403: "Brevo rejected the sender. Verify EMAIL_FROM_ADDRESS in Brevo.",
+        429: "Brevo is rate limiting email requests. Please try again shortly.",
+    }
+    logger.warning("Brevo transactional email failed status=%s", response.status_code)
+    raise HTTPException(status_code=502, detail=error_by_status.get(response.status_code, "Brevo email delivery is temporarily unavailable."))
+
+
+def send_transactional_message(message: EmailMessage):
+    settings = get_transactional_email_settings()
+    if settings["provider"] == "brevo":
+        return send_brevo_message(message, settings)
+    logger.info("Attempting SMTP transactional email")
+    return send_smtp_message(message)
+
 
 def send_verification_email(email: str, code: str):
-    smtp_settings = get_smtp_settings()
+    email_settings = get_transactional_email_settings()
 
     message = EmailMessage()
     message["Subject"] = "Your MABASO.AI verification code"
-    message["From"] = smtp_settings["from_email"]
+    message["From"] = email_settings["from_email"]
     message["To"] = email
     message.set_content(
         (
@@ -10042,7 +10132,7 @@ def send_verification_email(email: str, code: str):
             f"This code expires in {LOGIN_CODE_TTL_MINUTES} minutes."
         )
     )
-    send_smtp_message(message)
+    send_transactional_message(message)
 
 
 def safe_email_delivery_error(exc: Exception) -> str:
@@ -10058,22 +10148,14 @@ def send_collaboration_invite_email(
     room_id: str,
     invite_token: str = "",
 ):
-    smtp_settings = get_smtp_settings()
-    logger.info(
-        "SMTP configuration available host=%s port=%s tls=%s ssl=%s username_configured=%s from_configured=%s",
-        smtp_settings["host"],
-        smtp_settings["port"],
-        smtp_settings["use_tls"],
-        smtp_settings["use_ssl"],
-        bool(smtp_settings["username"]),
-        bool(smtp_settings["from_email"]),
-    )
+    email_settings = get_transactional_email_settings()
+    logger.info("Transactional email configuration available provider=%s from_configured=%s", email_settings["provider"], bool(email_settings["from_email"]))
     room_url = f"{APP_PUBLIC_URL.rstrip('/')}/app/collaboration?room={quote(room_id)}"
     if invite_token:
         room_url = f"{room_url}&invitation={quote(invite_token)}"
     message = EmailMessage()
     message["Subject"] = f"Join {room_title} on MABASO AI"
-    message["From"] = smtp_settings["from_email"]
+    message["From"] = email_settings["from_email"]
     message["To"] = invited_email
     message.set_content(
         (
@@ -10099,7 +10181,7 @@ def send_collaboration_invite_email(
         ),
         subtype="html",
     )
-    send_smtp_message(message)
+    send_transactional_message(message)
 
 
 async def deliver_collaboration_invite_emails(
@@ -10200,7 +10282,7 @@ async def deliver_collaboration_invite_emails(
 
 
 def send_payment_status_email(email: str, payment: dict[str, Any], status: str):
-    smtp_settings = get_smtp_settings()
+    email_settings = get_transactional_email_settings()
     normalized_status = normalize_payment_request_status(status)
     reference = compact_text(payment.get("payment_reference"))
     plan_name = compact_text(payment.get("plan_name"), "your subscription")
@@ -10223,10 +10305,10 @@ def send_payment_status_email(email: str, payment: dict[str, Any], status: str):
         )
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = smtp_settings["from_email"]
+    message["From"] = email_settings["from_email"]
     message["To"] = email
     message.set_content(body)
-    send_smtp_message(message)
+    send_transactional_message(message)
 
 
 async def deliver_payment_status_email(email: str, payment: dict[str, Any], status: str):
@@ -10289,11 +10371,11 @@ def send_support_email(
     if not cleaned_message:
         raise HTTPException(status_code=400, detail="Support message cannot be empty.")
 
-    smtp_settings = get_smtp_settings()
-    support_email = SUPPORT_EMAIL or smtp_settings["from_email"]
+    email_settings = get_transactional_email_settings()
+    support_email = SUPPORT_EMAIL or email_settings["from_email"]
     message = EmailMessage()
     message["Subject"] = f"MABASO support request from {reply_email}"
-    message["From"] = smtp_settings["from_email"]
+    message["From"] = email_settings["from_email"]
     message["To"] = support_email
     message["Reply-To"] = reply_email
     message.set_content(
@@ -10309,7 +10391,7 @@ def send_support_email(
             f"{message_text.strip()}\n"
         )
     )
-    send_smtp_message(message)
+    send_transactional_message(message)
 
 
 def normalize_client_request_id(value: Any) -> str:

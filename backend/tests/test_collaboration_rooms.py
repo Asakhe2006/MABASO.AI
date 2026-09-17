@@ -269,12 +269,11 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             await main.get_collaboration_room(room_id, current_user="student2@example.com")
 
     def test_invitation_email_contains_authenticated_room_link(self):
-        with patch.object(main, "get_smtp_settings", return_value={
-            "from_email": "hello@mabaso.ai", "host": "smtp.gmail.com", "port": 587,
-            "use_tls": True, "use_ssl": False, "username": "hello@mabaso.ai",
+        with patch.object(main, "get_transactional_email_settings", return_value={
+            "provider": "brevo", "from_email": "hello@mabaso.ai", "from_name": "Mabaso AI", "api_key": "test-key",
         }), patch.object(
             main,
-            "send_smtp_message",
+            "send_transactional_message",
         ) as send_message:
             main.send_collaboration_invite_email(
                 "student@gmail.com",

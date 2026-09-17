@@ -141,6 +141,15 @@ services:
         value: "youtube.com,www.youtube.com,m.youtube.com,music.youtube.com,youtu.be,vimeo.com,www.vimeo.com,player.vimeo.com"
       - key: MAX_HISTORY_ITEMS
         value: "24"
+      # Brevo is the production transactional email provider. Keep the key secret.
+      - key: EMAIL_PROVIDER
+        value: "brevo"
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: "Mabaso AI"
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
