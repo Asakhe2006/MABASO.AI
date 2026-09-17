@@ -19731,7 +19731,12 @@ def normalize_test_visibility(value: str) -> str:
 
 def sanitize_collaboration_tab(value: str) -> str:
     normalized = (value or "guide").strip().lower()
-    allowed_tabs = {"guide", "transcript", "formulas", "examples", "flashcards", "quiz", "chat"}
+    # These are workspace tool identifiers, not permissions.  The room still
+    # enforces ownership before the owner can change the shared focus.
+    allowed_tabs = {
+        "guide", "transcript", "formulas", "examples", "flashcards", "quiz", "chat",
+        "presentation", "podcast", "mindmap", "report", "quality",
+    }
     return normalized if normalized in allowed_tabs else "guide"
 
 
@@ -19884,7 +19889,7 @@ def get_accessible_collaboration_room(room_id: str, current_user: str) -> sqlite
             LEFT JOIN collaboration_room_members m
                 ON m.room_id = r.id
             WHERE r.id = ?
-              AND (r.owner_email = ? OR m.email = ?)
+              AND (lower(r.owner_email) = lower(?) OR lower(m.email) = lower(?))
             """,
             (room_id, current_user, current_user),
         ).fetchone()
@@ -19902,7 +19907,7 @@ def get_accessible_collaboration_room_access(room_id: str, current_user: str) ->
             SELECT DISTINCT r.id, r.owner_email, r.title, r.updated_at, m.role AS member_role
             FROM collaboration_rooms r
             LEFT JOIN collaboration_room_members m ON m.room_id = r.id
-            WHERE r.id = ? AND (r.owner_email = ? OR m.email = ?)
+            WHERE r.id = ? AND (lower(r.owner_email) = lower(?) OR lower(m.email) = lower(?))
             """,
             (room_id, current_user, current_user),
         ).fetchone()
@@ -38369,7 +38374,7 @@ async def list_collaboration_rooms(current_user: str = Depends(require_authentic
             FROM collaboration_rooms r
             LEFT JOIN collaboration_room_members m
                 ON m.room_id = r.id
-            WHERE r.owner_email = ? OR m.email = ?
+            WHERE lower(r.owner_email) = lower(?) OR lower(m.email) = lower(?)
             ORDER BY r.updated_at DESC
             """,
             (current_user, current_user),

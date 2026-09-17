@@ -41,7 +41,7 @@ export default function CollaborationBoardItemDialog({ item, canEdit, onClose, o
       } catch {
         setSaveState("error");
       }
-    }, 650);
+    }, 250);
     return () => window.clearTimeout(timer);
   }, [canEdit, draft.checklist, draft.content, draft.title, item?.id, item?.item_type]);
 

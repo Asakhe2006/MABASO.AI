@@ -15250,3 +15250,41 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
     min-height: 0;
   }
 }
+
+/* Collaboration room slide reader and compact material library. */
+.collaboration-dual-panels { align-items:start; }
+.collaboration-material-library { min-height:0; }
+.collaboration-material-library .collaboration-material-list:empty { display:none; }
+.collaboration-room-study-guide { max-height:none; overflow:visible; }
+.collaboration-guide-heading-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.collaboration-guide-heading-actions .is-secondary { display:inline-flex; align-items:center; gap:6px; border:1px solid rgba(95,225,160,.35); background:#092c22; color:#dcfff0; }
+.collaboration-guide-slide { min-height:340px; border:1px solid rgba(134,228,181,.2); border-radius:16px; background:linear-gradient(145deg,#0a2c22,#041711); padding:clamp(18px,3vw,38px); color:#edfff6; }
+.collaboration-guide-slide > p { margin:0 0 10px; color:#78e9b6; font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+.collaboration-guide-slide > h3 { margin:0 0 18px; color:#fff; font-size:clamp(24px,3vw,40px); line-height:1.14; }
+.collaboration-guide-slide-content { max-width:960px; overflow-wrap:anywhere; font-size:clamp(14px,1.35vw,18px); line-height:1.72; }
+.collaboration-guide-slide-content h1,.collaboration-guide-slide-content h2,.collaboration-guide-slide-content h3,.collaboration-guide-slide-content h4 { color:#f1fff8; }
+.collaboration-guide-slide-nav { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+.collaboration-guide-slide-nav button { display:inline-flex; min-height:42px; align-items:center; gap:7px; border:1px solid var(--mabaso-border); border-radius:999px; background:#0b2b23; padding:9px 14px; color:#edfff7; font-size:12px; font-weight:800; }
+.collaboration-guide-slide-nav button:disabled { cursor:not-allowed; opacity:.42; }
+.collaboration-guide-slide-nav strong { color:#bcebd5; font-size:12px; }
+.collaboration-guide-full-view { position:fixed; z-index:2100; inset:0; display:grid; grid-template-rows:auto minmax(0,1fr) auto auto; background:#03140f; color:#effff8; }
+.collaboration-guide-full-view > header { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid var(--mabaso-border); padding:16px clamp(18px,4vw,54px); background:rgba(4,28,20,.98); }
+.collaboration-guide-full-view > header small { color:#6fe4aa; font-size:10px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+.collaboration-guide-full-view > header h2 { margin:4px 0 0; font-size:clamp(18px,2.6vw,30px); }
+.collaboration-guide-full-view > header button { display:grid; width:42px; height:42px; place-items:center; border:1px solid var(--mabaso-border); border-radius:12px; background:#0a2a22; color:#fff; }
+.collaboration-guide-full-content { min-height:0; overflow:auto; padding:clamp(18px,4vw,56px); }
+.collaboration-guide-full-content .collaboration-guide-slide { min-height:calc(100dvh - 250px); max-width:1200px; margin:auto; }
+.collaboration-guide-slide-nav.is-full-view { max-width:1200px; width:100%; margin:0 auto; padding:12px clamp(18px,4vw,56px); }
+.collaboration-guide-slide-thumbnails { display:flex; gap:8px; overflow-x:auto; border-top:1px solid var(--mabaso-border); padding:12px clamp(18px,4vw,56px) calc(16px + env(safe-area-inset-bottom)); background:#061d17; }
+.collaboration-guide-slide-thumbnails button { display:grid; width:145px; min-height:68px; flex:none; gap:5px; overflow:hidden; border:1px solid var(--mabaso-border); border-radius:11px; background:#0a2821; padding:9px; color:#e9fff5; text-align:left; }
+.collaboration-guide-slide-thumbnails button.is-active { border-color:#28dc8b; background:#087548; }
+.collaboration-guide-slide-thumbnails span { color:#91e8be; font-size:10px; font-weight:800; }
+.collaboration-guide-slide-thumbnails strong { overflow:hidden; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:760px) {
+  .collaboration-guide-heading-actions { justify-content:flex-start; }
+  .collaboration-guide-slide { min-height:calc(100dvh - 300px); padding:20px 16px; }
+  .collaboration-guide-slide > h3 { font-size:26px; }
+  .collaboration-guide-full-content .collaboration-guide-slide { min-height:calc(100dvh - 244px); }
+  .collaboration-guide-full-view > header { padding:12px 14px; }
+  .collaboration-guide-slide-thumbnails { padding-right:14px; padding-left:14px; }
+}
