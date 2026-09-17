@@ -11855,7 +11855,7 @@ export default function App() {
       if (collaborationMaterialFilter === "study_guide") {
         return (
           <section className="collaboration-embedded-tool">
-            <div className="collaboration-embedded-tool-heading"><div><small>Study Guide</small><h3>Generate and read the room Study Guide</h3></div><button type="button" onClick={() => void generateStudyGuide(transcript)} disabled={isGenerating || !normalizeStudySourceText(transcript)}>{isGenerating ? "Generating..." : summary ? "Regenerate Study Guide" : "Generate Study Guide"}</button></div>
+            <div className="collaboration-embedded-tool-heading"><div><small>Study Guide</small><h3>Generate and read the room Study Guide</h3></div><button type="button" onClick={() => void generateStudyGuide(transcript)} disabled={isGeneratingSummary || !normalizeStudySourceText(transcript)}>{isGeneratingSummary ? "Generating..." : summary ? "Regenerate Study Guide" : "Generate Study Guide"}</button></div>
             {summary ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{summary}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">Add or share lecture material first, then generate the room Study Guide.</p>}
           </section>
         );
@@ -12783,6 +12783,21 @@ export default function App() {
     const activityLogs = dashboard.activity_logs || [];
     const failedJobs = aiGeneration.failed_jobs || [];
     const failedLoginCount = (security.failed_logins || []).length;
+    const activeTimeWindow = dashboard.time_window || {};
+    const availableAdminRanges = (dashboard.available_ranges || ADMIN_DASHBOARD_RANGE_OPTIONS).map((option) => ({
+      key: normalizeAdminDashboardRangeKey(option.key),
+      label: option.label || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.label || option.key,
+      shortLabel: option.short_label || option.shortLabel || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.shortLabel || option.key,
+      badgeLabel: option.badge_label || option.badgeLabel || ADMIN_DASHBOARD_RANGE_OPTIONS.find((item) => item.key === option.key)?.badgeLabel || option.key.toUpperCase(),
+    }));
+    const selectedAdminRange = availableAdminRanges.find((option) => option.key === adminDashboardRange)
+      || availableAdminRanges.find((option) => option.key === normalizeAdminDashboardRangeKey(activeTimeWindow.key || ""))
+      || availableAdminRanges[1]
+      || ADMIN_DASHBOARD_RANGE_OPTIONS[1];
+    const dashboardDateRangeLabel = activeTimeWindow.started_at && activeTimeWindow.ended_at
+      ? `${formatAdminDate(activeTimeWindow.started_at)} - ${formatAdminDate(activeTimeWindow.ended_at)}`
+      : selectedAdminRange.label;
+    const dashboardGeneratedAt = dashboard.generated_at ? formatAdminDateTime(dashboard.generated_at) : "Waiting for data";
     const normalizedSearchQuery = adminSearchQuery.toLowerCase();
     const filteredUsers = users.filter((user) => `${user.email} ${user.role} ${user.status} ${user.last_login_country || ""} ${user.last_login_city || ""}`.toLowerCase().includes(normalizedSearchQuery));
     const filteredLogs = activityLogs.filter((log) => `${log.user} ${log.action} ${log.resource} ${log.country || ""} ${log.city || ""}`.toLowerCase().includes(normalizedSearchQuery));
@@ -27356,7 +27371,7 @@ export default function App() {
         return;
       }
       if (videoUrl.trim()) {
-        await transcribeVideoUrl();
+        await transcribeVideoLink();
         if (isTeacherRealtimeConnected) await refreshTeacherRealtimeContext().catch(() => {});
         return;
       }
