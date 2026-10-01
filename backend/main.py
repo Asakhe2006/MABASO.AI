@@ -169,17 +169,24 @@ STUDY_GUIDE_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_MODEL")
 STUDY_GUIDE_FALLBACK_MODEL = normalize_standard_text_model(os.getenv("STUDY_GUIDE_FALLBACK_MODEL"), FALLBACK_OPENAI_CHAT_MODEL)
 VISION_MODEL = normalize_standard_text_model(os.getenv("VISION_MODEL"), ADVANCED_ACADEMIC_MODEL)
 STUDY_CHAT_MODEL = normalize_standard_text_model(os.getenv("STUDY_CHAT_MODEL"), STUDY_GUIDE_MODEL)
-AI_CHAT_MODE_MODELS = {
-    "quick": normalize_openai_model_name(os.getenv("AI_CHAT_QUICK_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
-    "study": normalize_openai_model_name(os.getenv("AI_CHAT_STUDY_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
-    "think_deeper": normalize_openai_model_name(os.getenv("AI_CHAT_THINK_DEEPER_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
-    "expert": normalize_openai_model_name(os.getenv("AI_CHAT_EXPERT_MODEL"), DEFAULT_OPENAI_CHAT_MODEL),
-    "maximum": normalize_openai_model_name(os.getenv("AI_CHAT_MAXIMUM_MODEL"), PREMIUM_OPENAI_CHAT_MODEL),
+AI_CHAT_MODE_CONFIG = {
+    "quick": {"model": "gpt-6-luna", "reasoning_effort": "none"},
+    "study": {"model": "gpt-6-luna", "reasoning_effort": "medium"},
+    "think_deeper": {"model": "gpt-6.1-sol", "reasoning_effort": "high"},
+    "expert": {"model": "gpt-6.1-sol", "reasoning_effort": "xhigh"},
+    "maximum": {"model": "gpt-6.1-sol", "reasoning_effort": "max"},
+    "astra": {"model": "gpt-6-astra", "reasoning_effort": "high"},
 }
+AI_CHAT_MODE_MODELS = {mode: str(config["model"]) for mode, config in AI_CHAT_MODE_CONFIG.items()}
 AI_CHAT_MODE_ACCESS = {
     "free": {"auto", "quick"},
     "pro_student": {"auto", "quick", "study", "think_deeper", "expert"},
-    "premium_student": {"auto", "quick", "study", "think_deeper", "expert", "maximum"},
+    "premium_student": {"auto", "quick", "study", "think_deeper", "expert", "maximum", "astra"},
+}
+AI_CHAT_CONVERSATION_LIMITS = {
+    "free": max(1, get_early_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5)),
+    "pro_student": max(1, get_early_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", 25)),
+    "premium_student": get_early_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", -1),
 }
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
@@ -515,6 +522,7 @@ BILLING_FEATURE_LABELS = {
     "voice_transcription": "Voice messages",
     "source_upload": "Audio/source processing",
     "study_chat_upload": "Study chat attachments",
+    "study_chat": "AI chat messages",
 }
 
 
@@ -548,6 +556,7 @@ BILLING_PLAN_QUOTAS = {
         "voice_transcription": get_int_env("FREE_PLAN_VOICE_MESSAGES_PER_DAY", 3),
         "source_upload": get_int_env("FREE_PLAN_SOURCE_UPLOADS_PER_DAY", 1),
         "study_chat_upload": get_int_env("FREE_PLAN_STUDY_CHAT_UPLOADS_PER_DAY", 3),
+        "study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15),
     },
     "pro_student": {
         "study_guide": get_int_env("PRO_STUDENT_STUDY_GUIDES_PER_DAY", 3),
@@ -564,6 +573,7 @@ BILLING_PLAN_QUOTAS = {
         "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
         "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 10),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
     },
     "premium_student": {
         "study_guide": -1,
@@ -580,6 +590,7 @@ BILLING_PLAN_QUOTAS = {
         "voice_transcription": -1,
         "source_upload": -1,
         "study_chat_upload": -1,
+        "study_chat": -1,
     },
 }
 HOSTING_COST_ESTIMATE_ZAR_PER_MONTH = get_float_env("HOSTING_COST_ESTIMATE_ZAR_PER_MONTH", 500)
@@ -7236,6 +7247,8 @@ class CollaborationRoomCreateRequest(BaseModel):
     invited_emails: list[str] = []
     active_tab: str = "guide"
     test_visibility: str = "private"
+    discoverable: bool = True
+    is_private: bool = False
 
 
 class CollaborationMaterialCreateRequest(BaseModel):
@@ -7282,6 +7295,14 @@ class CollaborationAdminControlRequest(BaseModel):
     material_id: str = ""
     page: int = 1
     allow_explore: bool | None = None
+
+
+class CollaborationRoomApprovalSettingsRequest(BaseModel):
+    allow_member_approvals: bool
+
+
+class CollaborationJoinRequestDecision(BaseModel):
+    decision: str
 
 
 class CollaborationSharedNotesRequest(BaseModel):
@@ -7655,6 +7676,9 @@ def init_db():
                 admin_control_bring_version INTEGER NOT NULL DEFAULT 0,
                 admin_control_updated_at TEXT NOT NULL DEFAULT '',
                 admin_control_heartbeat_at TEXT NOT NULL DEFAULT '',
+                allow_member_approvals INTEGER NOT NULL DEFAULT 0,
+                discoverable INTEGER NOT NULL DEFAULT 1,
+                is_private INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -7674,6 +7698,9 @@ def init_db():
             "admin_control_bring_version": "INTEGER NOT NULL DEFAULT 0",
             "admin_control_updated_at": "TEXT NOT NULL DEFAULT ''",
             "admin_control_heartbeat_at": "TEXT NOT NULL DEFAULT ''",
+            "allow_member_approvals": "INTEGER NOT NULL DEFAULT 0",
+            "discoverable": "INTEGER NOT NULL DEFAULT 1",
+            "is_private": "INTEGER NOT NULL DEFAULT 0",
         }
         for column_name, column_definition in collaboration_room_column_defaults.items():
             if column_name not in collaboration_room_columns:
@@ -7997,6 +8024,44 @@ def init_db():
         connection.execute("CREATE INDEX IF NOT EXISTS idx_collaboration_notifications_recipient ON collaboration_notifications (recipient_email, created_at DESC)")
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS collaboration_room_activity (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                actor_email TEXT NOT NULL,
+                activity_type TEXT NOT NULL,
+                action_text TEXT NOT NULL,
+                resource_type TEXT NOT NULL DEFAULT '',
+                resource_id TEXT NOT NULL DEFAULT '',
+                resource_title TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_collaboration_room_activity_room_created ON collaboration_room_activity (room_id, created_at DESC)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS collaboration_join_requests (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                requester_email TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                resolved_by TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (room_id, requester_email)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_collaboration_join_requests_room_status ON collaboration_join_requests (room_id, status, created_at DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_collaboration_join_requests_requester ON collaboration_join_requests (requester_email, updated_at DESC)"
+        )
+        connection.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_study_history_items_normalized_email_updated_at
             ON study_history_items (lower(email), updated_at DESC)
             """
@@ -8139,6 +8204,37 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_assistant_messages_conversation_timestamp
             ON assistant_messages (conversation_id, user_email, timestamp DESC, id DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assistant_conversation_usage (
+                user_email TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                pending_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_email, conversation_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assistant_conversation_turn_reservations (
+                id TEXT PRIMARY KEY,
+                user_email TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assistant_turn_reservations_conversation
+            ON assistant_conversation_turn_reservations (user_email, conversation_id, status)
             """
         )
         connection.execute(
@@ -17525,6 +17621,7 @@ def normalize_ai_chat_mode(value: Any = "auto") -> str:
         "expert": "expert",
         "maximum": "maximum",
         "max": "maximum",
+        "astra": "astra",
     }
     return aliases.get(normalized, "auto")
 
@@ -17538,24 +17635,28 @@ def get_ai_chat_plan_tier(plan_id: str = "") -> str:
     return "free"
 
 
+def get_ai_chat_conversation_limit(plan_id: str = "") -> int:
+    return int(AI_CHAT_CONVERSATION_LIMITS.get(get_ai_chat_plan_tier(plan_id), AI_CHAT_CONVERSATION_LIMITS["free"]))
+
+
 def can_use_ai_chat_mode(plan_id: str, requested_mode: str = "auto") -> bool:
-    # Chat modes are a learning preference, not a subscription entitlement.
-    # Keep this compatibility function so legacy callers stay safe while every
-    # signed-in learner can use each advertised Mabaso AI mode.
     mode = normalize_ai_chat_mode(requested_mode)
-    return mode == "auto" or mode in AI_CHAT_MODE_MODELS
+    return mode in AI_CHAT_MODE_ACCESS.get(get_ai_chat_plan_tier(plan_id), AI_CHAT_MODE_ACCESS["free"])
 
 
 def can_use_model(plan_id: str, requested_model: str = "", chat_scope: str = "global") -> bool:
     """Compatibility guard for legacy clients that still submit provider model IDs."""
     if compact_text(chat_scope, "global").lower() != "global":
         return True
+    normalized_model = compact_text(requested_model).lower()
+    if normalized_model == "gpt-6-astra":
+        return get_ai_chat_plan_tier(plan_id) == "premium_student"
     return True
 
 
 def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
     mode = normalize_ai_chat_mode(requested_mode)
-    if mode == "maximum":
+    if mode in {"maximum", "astra"}:
         return "Premium"
     if mode in {"study", "think_deeper", "expert"}:
         return "Pro"
@@ -17564,8 +17665,21 @@ def get_required_plan_for_ai_chat_mode(requested_mode: str = "auto") -> str:
 
 def route_auto_ai_chat_mode(question: str, plan_id: str) -> str:
     cleaned = compact_text(question).lower()
+    plan_tier = get_ai_chat_plan_tier(plan_id)
+    extreme = bool(re.search(r"\b(doctoral|publishable|formal verification|novel proof|research synthesis|complex architecture)\b", cleaned))
+    very_difficult = bool(re.search(r"\b(prove rigorously|advanced engineering|multi-document|nonlinear system|graduate level|research level)\b", cleaned))
     difficult = bool(re.search(r"\b(fourier|laplace|derive|proof|matrix|eigen|integral|differential|circuit|control system|transfer function|z[- ]?transform|statistics|probability|multi[- ]?step)\b", cleaned))
-    return "think_deeper" if difficult else "study"
+    if plan_tier == "premium_student":
+        if extreme:
+            return "astra"
+        if very_difficult:
+            return "maximum"
+        return "think_deeper" if difficult else "study"
+    if plan_tier == "pro_student":
+        if extreme or very_difficult:
+            return "expert"
+        return "think_deeper" if difficult else "study"
+    return "quick"
 
 
 def resolve_ai_chat_mode_and_model(requested_mode: str, question: str, plan_id: str) -> tuple[str, str]:
@@ -17578,6 +17692,7 @@ def resolve_ai_chat_mode_and_model(requested_mode: str, question: str, plan_id: 
 
 def apply_ai_chat_mode_model(attempts: list[dict[str, str]], model_name: str, mode: str) -> list[dict[str, str]]:
     model = normalize_openai_model_name(model_name, DEFAULT_OPENAI_CHAT_MODEL)
+    reasoning_effort = compact_text((AI_CHAT_MODE_CONFIG.get(mode) or {}).get("reasoning_effort"))
     next_attempts: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for attempt in attempts:
@@ -17586,6 +17701,7 @@ def apply_ai_chat_mode_model(attempts: list[dict[str, str]], model_name: str, mo
             adjusted["model"] = model
             adjusted["label"] = "Mabaso AI"
             adjusted["mode"] = mode
+            adjusted["reasoning_effort"] = reasoning_effort
         fingerprint = (compact_text(adjusted.get("provider")), compact_text(adjusted.get("model")))
         if fingerprint in seen:
             continue
@@ -20044,6 +20160,108 @@ def collaboration_room_can_manage(room: sqlite3.Row, current_user: str) -> bool:
     return bool(membership and membership["role"] == "moderator")
 
 
+def collaboration_room_can_manage_join_requests(room: sqlite3.Row, current_user: str) -> bool:
+    if collaboration_room_is_owner(room, current_user):
+        return True
+    if not bool(room["allow_member_approvals"]):
+        return False
+    with get_db_connection() as connection:
+        membership = connection.execute(
+            "SELECT 1 FROM collaboration_room_members WHERE room_id = ? AND lower(email) = ?",
+            (room["id"], normalize_email(current_user)),
+        ).fetchone()
+    return bool(membership)
+
+
+def collaboration_actor_name(email: str) -> str:
+    normalized = normalize_email(email)
+    with get_db_connection() as connection:
+        profile = connection.execute(
+            "SELECT display_name FROM collaboration_profiles WHERE lower(email) = ?",
+            (normalized,),
+        ).fetchone()
+    return compact_text(profile["display_name"] if profile else "", normalized.split("@")[0] or "Room member")[:80]
+
+
+def create_collaboration_room_activity(
+    connection: Any,
+    *,
+    room_id: str,
+    actor_email: str,
+    activity_type: str,
+    action_text: str,
+    resource_type: str = "",
+    resource_id: str = "",
+    resource_title: str = "",
+) -> dict[str, str]:
+    activity = {
+        "id": uuid4().hex,
+        "room_id": room_id,
+        "actor_email": normalize_email(actor_email),
+        "activity_type": compact_text(activity_type)[:64],
+        "action_text": compact_text(action_text)[:300],
+        "resource_type": compact_text(resource_type)[:64],
+        "resource_id": compact_text(resource_id)[:96],
+        "resource_title": compact_text(resource_title)[:180],
+        "created_at": utc_now().isoformat(),
+    }
+    connection.execute(
+        """
+        INSERT INTO collaboration_room_activity (
+            id, room_id, actor_email, activity_type, action_text,
+            resource_type, resource_id, resource_title, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        tuple(activity.values()),
+    )
+    return activity
+
+
+def get_collaboration_room_activity(room_id: str, limit: int = 25) -> list[dict[str, str]]:
+    safe_limit = max(1, min(int(limit or 25), 25))
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, room_id, actor_email, activity_type, action_text,
+                   resource_type, resource_id, resource_title, created_at
+            FROM collaboration_room_activity
+            WHERE room_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (room_id, safe_limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_collaboration_join_requests(room_id: str) -> list[dict[str, str]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, room_id, requester_email, status, resolved_by, created_at, updated_at
+            FROM collaboration_join_requests
+            WHERE room_id = ? AND status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 100
+            """,
+            (room_id,),
+        ).fetchall()
+        profiles = {
+            normalize_email(row["email"]): compact_text(row["display_name"])
+            for row in connection.execute(
+                "SELECT email, display_name FROM collaboration_profiles WHERE lower(email) IN (SELECT lower(requester_email) FROM collaboration_join_requests WHERE room_id = ? AND status = 'pending')",
+                (room_id,),
+            ).fetchall()
+        }
+    return [
+        {
+            **dict(row),
+            "display_name": profiles.get(normalize_email(row["requester_email"])) or normalize_email(row["requester_email"]).split("@")[0],
+        }
+        for row in rows
+    ]
+
+
 COLLABORATION_ADMIN_CONTROL_STALE_SECONDS = 45
 COLLABORATION_ADMIN_CONTROL_VIEWS = {"materials", "chat", "board"}
 COLLABORATION_ADMIN_CONTROL_FILTERS = {
@@ -20306,6 +20524,9 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "quiz_answers": quiz_answers,
         "is_owner": room_row["owner_email"] == current_user,
         "can_manage": room_row["owner_email"] == current_user or bool(membership and membership["role"] == "moderator"),
+        "allow_member_approvals": bool(room_row["allow_member_approvals"]),
+        "can_manage_join_requests": collaboration_room_can_manage_join_requests(room_row, current_user),
+        "pending_join_requests": get_collaboration_join_requests(room_id) if collaboration_room_can_manage_join_requests(room_row, current_user) else [],
         "admin_control": serialize_collaboration_admin_control(room_row),
     }
 
@@ -37639,6 +37860,172 @@ def chat_history_storage_mode() -> str:
     return "postgres" if isinstance(chat_history_store, DatabaseChatHistoryStore) else "supabase"
 
 
+def count_persisted_conversation_user_messages(email: str, conversation_id: str) -> int:
+    if not chat_history_store.available or not compact_text(conversation_id):
+        return 0
+    try:
+        messages = chat_history_store.fetch_all_messages(
+            email=normalize_email(email),
+            conversation_id=compact_text(conversation_id),
+            batch_size=200,
+            max_messages=2000,
+        )
+    except SupabaseChatHistoryError:
+        logger.exception("Could not count persisted conversation messages")
+        return 0
+    return sum(1 for message in messages if compact_text(message.get("role")).lower() == "user")
+
+
+def serialize_ai_chat_conversation_usage(used: int, limit: int, pending: int = 0) -> dict[str, Any]:
+    safe_used = max(0, int(used or 0))
+    safe_pending = max(0, int(pending or 0))
+    return {
+        "used": safe_used,
+        "limit": limit,
+        "pending": safe_pending,
+        "limit_reached": limit >= 0 and safe_used >= limit,
+    }
+
+
+def get_ai_chat_conversation_usage(email: str, conversation_id: str, plan_id: str = "") -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    normalized_conversation_id = compact_text(conversation_id)
+    limit = get_ai_chat_conversation_limit(plan_id or get_effective_plan_id(normalized_email))
+    if not normalized_conversation_id:
+        return serialize_ai_chat_conversation_usage(0, limit)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT used_count, pending_count FROM assistant_conversation_usage WHERE user_email = ? AND conversation_id = ?",
+            (normalized_email, normalized_conversation_id),
+        ).fetchone()
+    if row:
+        return serialize_ai_chat_conversation_usage(row["used_count"], limit, row["pending_count"])
+    return serialize_ai_chat_conversation_usage(
+        count_persisted_conversation_user_messages(normalized_email, normalized_conversation_id),
+        limit,
+    )
+
+
+def reserve_ai_chat_conversation_turn(
+    *,
+    email: str,
+    conversation_id: str,
+    client_request_id: str,
+    plan_id: str,
+) -> tuple[str, dict[str, Any]]:
+    normalized_email = normalize_email(email)
+    normalized_conversation_id = compact_text(conversation_id)
+    if not normalized_conversation_id:
+        return "", serialize_ai_chat_conversation_usage(0, get_ai_chat_conversation_limit(plan_id))
+    persisted_count = count_persisted_conversation_user_messages(normalized_email, normalized_conversation_id)
+    limit = get_ai_chat_conversation_limit(plan_id)
+    request_seed = compact_text(client_request_id, uuid4().hex)
+    reservation_id = hashlib.sha256(f"{normalized_email}:{normalized_conversation_id}:{request_seed}".encode("utf-8")).hexdigest()
+    now = utc_now()
+    now_iso = now.isoformat()
+    stale_cutoff = (now - timedelta(minutes=5)).isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO assistant_conversation_usage (user_email, conversation_id, used_count, pending_count, created_at, updated_at)
+            VALUES (?, ?, ?, 0, ?, ?)
+            ON CONFLICT(user_email, conversation_id) DO NOTHING
+            """,
+            (normalized_email, normalized_conversation_id, persisted_count, now_iso, now_iso),
+        )
+        connection.execute(
+            """
+            UPDATE assistant_conversation_turn_reservations
+            SET status = 'expired', updated_at = ?
+            WHERE user_email = ? AND conversation_id = ? AND status = 'pending' AND created_at < ?
+            """,
+            (now_iso, normalized_email, normalized_conversation_id, stale_cutoff),
+        )
+        pending_row = connection.execute(
+            """
+            SELECT COUNT(*) AS pending_count
+            FROM assistant_conversation_turn_reservations
+            WHERE user_email = ? AND conversation_id = ? AND status = 'pending'
+            """,
+            (normalized_email, normalized_conversation_id),
+        ).fetchone()
+        actual_pending = int(pending_row["pending_count"] or 0)
+        connection.execute(
+            """
+            UPDATE assistant_conversation_usage
+            SET used_count = CASE WHEN used_count < ? THEN ? ELSE used_count END,
+                pending_count = ?, updated_at = ?
+            WHERE user_email = ? AND conversation_id = ?
+            """,
+            (persisted_count, persisted_count, actual_pending, now_iso, normalized_email, normalized_conversation_id),
+        )
+        existing = connection.execute(
+            "SELECT status FROM assistant_conversation_turn_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        usage_row = connection.execute(
+            "SELECT used_count, pending_count FROM assistant_conversation_usage WHERE user_email = ? AND conversation_id = ?",
+            (normalized_email, normalized_conversation_id),
+        ).fetchone()
+        used = int(usage_row["used_count"] or 0)
+        pending = int(usage_row["pending_count"] or 0)
+        if existing or (limit >= 0 and used + pending >= limit):
+            return "", serialize_ai_chat_conversation_usage(used, limit, pending)
+        connection.execute(
+            """
+            INSERT INTO assistant_conversation_turn_reservations (id, user_email, conversation_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', ?, ?)
+            """,
+            (reservation_id, normalized_email, normalized_conversation_id, now_iso, now_iso),
+        )
+        connection.execute(
+            """
+            UPDATE assistant_conversation_usage
+            SET pending_count = pending_count + 1, updated_at = ?
+            WHERE user_email = ? AND conversation_id = ?
+            """,
+            (now_iso, normalized_email, normalized_conversation_id),
+        )
+    return reservation_id, serialize_ai_chat_conversation_usage(used, limit, pending + 1)
+
+
+def finalize_ai_chat_conversation_turn(reservation_id: str, *, completed: bool) -> dict[str, Any] | None:
+    normalized_id = compact_text(reservation_id)
+    if not normalized_id:
+        return None
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT user_email, conversation_id, status FROM assistant_conversation_turn_reservations WHERE id = ?",
+            (normalized_id,),
+        ).fetchone()
+        if not row:
+            return None
+        if compact_text(row["status"]) == "pending":
+            next_status = "completed" if completed else "failed"
+            connection.execute(
+                "UPDATE assistant_conversation_turn_reservations SET status = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+                (next_status, now_iso, normalized_id),
+            )
+            connection.execute(
+                """
+                UPDATE assistant_conversation_usage
+                SET pending_count = CASE WHEN pending_count > 0 THEN pending_count - 1 ELSE 0 END,
+                    used_count = used_count + ?, updated_at = ?
+                WHERE user_email = ? AND conversation_id = ?
+                """,
+                (1 if completed else 0, now_iso, row["user_email"], row["conversation_id"]),
+            )
+        usage_row = connection.execute(
+            "SELECT used_count, pending_count FROM assistant_conversation_usage WHERE user_email = ? AND conversation_id = ?",
+            (row["user_email"], row["conversation_id"]),
+        ).fetchone()
+    plan_id = get_effective_plan_id(row["user_email"])
+    return serialize_ai_chat_conversation_usage(usage_row["used_count"], get_ai_chat_conversation_limit(plan_id), usage_row["pending_count"])
+
+
 def load_persisted_lecture_assistant_context(current_user: str, payload: LectureAssistantRequest) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
     conversation_id = compact_text(payload.conversation_id)
     if not chat_history_store.available or not conversation_id:
@@ -37725,6 +38112,9 @@ def persist_lecture_assistant_turn(
                             "client_request_id": compact_text(payload.client_request_id),
                             "voice_mode": bool(payload.voice_mode),
                             "reference_image_count": len(reference_images),
+                            "requested_mode": normalize_ai_chat_mode(payload.requested_mode),
+                            "resolved_mode": compact_text((selected_attempt or {}).get("mode")),
+                            "reasoning_effort": compact_text((selected_attempt or {}).get("reasoning_effort")),
                         },
                     }
                 ],
@@ -37773,6 +38163,9 @@ def persist_lecture_assistant_turn(
                 "last_interaction_mode": compact_text(payload.interaction_mode, "text"),
                 "last_provider": compact_text((selected_attempt or {}).get("provider")),
                 "last_model": compact_text((selected_attempt or {}).get("model")),
+                "requested_mode": normalize_ai_chat_mode(payload.requested_mode),
+                "resolved_mode": compact_text((selected_attempt or {}).get("mode")),
+                "reasoning_effort": compact_text((selected_attempt or {}).get("reasoning_effort")),
             }
         )
         updated = chat_history_store.update_conversation(
@@ -37870,6 +38263,51 @@ def create_lecture_assistant_stream(
                 },
             )
         attempts = apply_ai_chat_mode_model(attempts, resolved_model, resolved_mode)
+
+    daily_usage = None
+    conversation_reservation_id = ""
+    conversation_usage = get_ai_chat_conversation_usage(current_user, payload.conversation_id, plan_id)
+    if bool(payload.append_user_message):
+        daily_usage = consume_plan_quota(
+            email=current_user,
+            feature="study_chat",
+            request=request,
+            metadata={
+                "route": "lecture_assistant_stream",
+                "conversation_id": compact_text(payload.conversation_id),
+                "requested_mode": requested_mode,
+                "resolved_mode": resolved_mode,
+            },
+        )
+        if compact_text(payload.conversation_id):
+            conversation_reservation_id, conversation_usage = reserve_ai_chat_conversation_turn(
+                email=current_user,
+                conversation_id=payload.conversation_id,
+                client_request_id=compact_text(payload.client_request_id, compact_text(payload.user_message_id)),
+                plan_id=plan_id,
+            )
+            if not conversation_reservation_id:
+                refund_usage_event(
+                    usage_event_id=compact_text(daily_usage.get("usage_event_id")),
+                    email=current_user,
+                    reason="conversation_message_limit",
+                )
+
+                def conversation_limit_event_stream():
+                    yield build_sse_event(
+                        "conversation_limit",
+                        {
+                            "status": "CONVERSATION_LIMIT_REACHED",
+                            "message": "You've reached the message limit for this chat.",
+                            "conversation_usage": conversation_usage,
+                        },
+                    )
+
+                return StreamingResponse(
+                    conversation_limit_event_stream(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+                )
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
@@ -37881,6 +38319,8 @@ def create_lecture_assistant_stream(
         fallback_count = 0
         terminal_error = ""
         generation_completed = False
+        turn_finalized = False
+        final_conversation_usage = conversation_usage
         terminal_provider = compact_text(forced_provider, compact_text(payload.preferred_provider)) or (attempts[0]["provider"] if attempts else "")
         streamed_answer_parts: list[str] = []
         generation_started_at = utc_now()
@@ -37967,6 +38407,7 @@ def create_lecture_assistant_stream(
                         temperature=generation_temperature,
                         max_output_tokens=max_output_tokens,
                         timeout_seconds=LECTURE_ASSISTANT_MODEL_TIMEOUT,
+                        reasoning_effort=compact_text(attempt.get("reasoning_effort")),
                     ):
                         if not token_started:
                             token_started = True
@@ -38003,13 +38444,33 @@ def create_lecture_assistant_stream(
 
                     assistant_text = "".join(streamed_answer_parts).strip()
                     generation_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
+                    if conversation_reservation_id:
+                        final_conversation_usage = finalize_ai_chat_conversation_turn(
+                            conversation_reservation_id,
+                            completed=True,
+                        ) or conversation_usage
+                        turn_finalized = True
                     generation_completed = True
+                    if daily_usage:
+                        update_usage_event_metadata(
+                            compact_text(daily_usage.get("usage_event_id")),
+                            status="completed",
+                            requested_mode=requested_mode,
+                            resolved_mode=resolved_mode,
+                            actual_model=compact_text(attempt.get("model")),
+                            reasoning_effort=compact_text(attempt.get("reasoning_effort")),
+                        )
+                        yield build_sse_event("usage", {key: value for key, value in daily_usage.items() if key != "account"})
                     yield build_sse_event(
                         "done",
                         {
                             "provider": attempt["provider"],
                             "label": attempt["label"],
                             "model": attempt["model"],
+                            "requested_mode": requested_mode,
+                            "resolved_mode": resolved_mode,
+                            "reasoning_effort": compact_text(attempt.get("reasoning_effort")),
+                            "conversation_usage": final_conversation_usage,
                             "fallback_count": fallback_count,
                             "characters": emitted_characters,
                             "trace_id": compact_text(payload.client_request_id),
@@ -38122,6 +38583,14 @@ def create_lecture_assistant_stream(
                     },
                 )
         finally:
+            if conversation_reservation_id and not turn_finalized:
+                finalize_ai_chat_conversation_turn(conversation_reservation_id, completed=False)
+            if daily_usage and not generation_completed:
+                refund_usage_event(
+                    usage_event_id=compact_text(daily_usage.get("usage_event_id")),
+                    email=current_user,
+                    reason="assistant_generation_failed",
+                )
             total_latency_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
             record_audit_log(
                 action="lecture_assistant.chat",
@@ -38302,6 +38771,7 @@ async def get_lecture_assistant_conversation(
         "has_more": bool(message_bundle.get("has_more")),
         "next_before": compact_text(message_bundle.get("next_before")),
         "total_messages": int(message_bundle.get("total") or 0),
+        "conversation_usage": get_ai_chat_conversation_usage(current_user, conversation_id),
         "storage_mode": chat_history_storage_mode(),
     }
 
@@ -38654,9 +39124,9 @@ async def create_collaboration_room(
                 id, owner_email, title, transcript, summary, formula, example,
                 lecture_notes, lecture_slides, shared_notes, study_images_json,
                 board_images_json, flashcards_json, quiz_questions_json, active_tab,
-                test_visibility, created_at, updated_at
+                test_visibility, discoverable, is_private, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 room_id,
@@ -38675,6 +39145,8 @@ async def create_collaboration_room(
                 dump_json(payload.quiz_questions or []),
                 sanitize_collaboration_tab(payload.active_tab),
                 normalize_test_visibility(payload.test_visibility),
+                int(bool(payload.discoverable)),
+                int(bool(payload.is_private)),
                 now_iso,
                 now_iso,
             ),
@@ -38716,6 +39188,233 @@ async def create_collaboration_room(
 async def get_collaboration_room(room_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room(room_id, current_user)
     return {"room": serialize_collaboration_room(room, current_user)}
+
+
+@app.get("/collaboration/discover/rooms")
+async def discover_collaboration_rooms(
+    query: str = "",
+    current_user: str = Depends(require_authenticated_user),
+):
+    needle = f"%{compact_text(query).lower()[:100]}%"
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT r.id, r.title, r.owner_email, r.updated_at,
+                   COUNT(DISTINCT m.email) AS member_count,
+                   mine.role AS current_role,
+                   jr.status AS request_status,
+                   CASE WHEN pending_invite.id IS NULL THEN 0 ELSE 1 END AS is_invited
+            FROM collaboration_rooms r
+            LEFT JOIN collaboration_room_members m ON m.room_id = r.id
+            LEFT JOIN collaboration_room_members mine
+              ON mine.room_id = r.id AND lower(mine.email) = ?
+            LEFT JOIN collaboration_join_requests jr
+              ON jr.room_id = r.id AND lower(jr.requester_email) = ?
+            LEFT JOIN collaboration_room_invites pending_invite
+              ON pending_invite.room_id = r.id
+             AND lower(pending_invite.invited_email) = ?
+             AND pending_invite.status = 'pending'
+            WHERE r.discoverable = 1 AND r.is_private = 0
+              AND (? = '%%' OR lower(r.title) LIKE ?)
+            GROUP BY r.id, r.title, r.owner_email, r.updated_at, mine.role, jr.status, pending_invite.id
+            ORDER BY r.updated_at DESC
+            LIMIT 50
+            """,
+            (normalize_email(current_user), normalize_email(current_user), normalize_email(current_user), needle, needle),
+        ).fetchall()
+    return {
+        "rooms": [
+            {
+                "id": row["id"], "title": row["title"], "member_count": int(row["member_count"] or 0),
+                "updated_at": row["updated_at"], "membership_status": "member" if row["current_role"] else compact_text(row["request_status"], "not_member"),
+                "is_invited": bool(row["is_invited"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/collaboration/rooms/{room_id}/join-requests")
+async def request_to_join_collaboration_room(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_collaboration_room_by_id(room_id)
+    if bool(room["is_private"]) or not bool(room["discoverable"]):
+        raise HTTPException(status_code=404, detail="Collaboration room not found.")
+    if collaboration_room_is_owner(room, current_user):
+        return {"status": "approved", "room_id": room_id}
+    now = utc_now()
+    now_iso = now.isoformat()
+    requester_name = collaboration_actor_name(current_user)
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        member = connection.execute(
+            "SELECT 1 FROM collaboration_room_members WHERE room_id = ? AND lower(email) = ?",
+            (room_id, normalize_email(current_user)),
+        ).fetchone()
+        if member:
+            return {"status": "approved", "room_id": room_id}
+        invite = connection.execute(
+            "SELECT id FROM collaboration_room_invites WHERE room_id = ? AND lower(invited_email) = ? AND status = 'pending'",
+            (room_id, normalize_email(current_user)),
+        ).fetchone()
+        if invite:
+            return {"status": "invited", "room_id": room_id}
+        existing = connection.execute(
+            "SELECT id, status, updated_at FROM collaboration_join_requests WHERE room_id = ? AND lower(requester_email) = ?",
+            (room_id, normalize_email(current_user)),
+        ).fetchone()
+        if existing and existing["status"] == "pending":
+            return {"status": "pending", "request_id": existing["id"], "room_id": room_id}
+        if existing and existing["status"] == "rejected":
+            rejected_at = parse_history_datetime(existing["updated_at"], now - timedelta(days=2))
+            if (now - rejected_at).total_seconds() < 24 * 60 * 60:
+                raise HTTPException(status_code=429, detail="You can request to join this room again after 24 hours.")
+        request_id = existing["id"] if existing else uuid4().hex
+        connection.execute(
+            """
+            INSERT INTO collaboration_join_requests (id, room_id, requester_email, status, resolved_by, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', '', ?, ?)
+            ON CONFLICT(room_id, requester_email) DO UPDATE SET
+                status = 'pending', resolved_by = '', created_at = excluded.created_at, updated_at = excluded.updated_at
+            """,
+            (request_id, room_id, normalize_email(current_user), now_iso, now_iso),
+        )
+        connection.execute(
+            """
+            INSERT INTO collaboration_notifications (
+                id, recipient_email, actor_email, room_id, notification_type, title, message, read_at, created_at
+            ) VALUES (?, ?, ?, ?, 'room_join_request', ?, ?, '', ?)
+            """,
+            (uuid4().hex, normalize_email(room["owner_email"]), normalize_email(current_user), room_id,
+             f"{requester_name} requested to join {room['title']}", "Review this request in Room Settings.", now_iso),
+        )
+    return {"status": "pending", "request_id": request_id, "room_id": room_id}
+
+
+@app.patch("/collaboration/rooms/{room_id}/approval-settings")
+async def update_collaboration_room_approval_settings(
+    room_id: str,
+    payload: CollaborationRoomApprovalSettingsRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can change member approval permissions.")
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE collaboration_rooms SET allow_member_approvals = ?, updated_at = ? WHERE id = ?",
+            (int(bool(payload.allow_member_approvals)), utc_now().isoformat(), room_id),
+        )
+    return {"allow_member_approvals": bool(payload.allow_member_approvals)}
+
+
+@app.get("/collaboration/rooms/{room_id}/join-requests")
+async def list_collaboration_room_join_requests(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_can_manage_join_requests(room, current_user):
+        raise HTTPException(status_code=403, detail="You cannot manage Room join requests.")
+    return {"requests": get_collaboration_join_requests(room_id)}
+
+
+@app.post("/collaboration/rooms/{room_id}/join-requests/{request_id}")
+async def decide_collaboration_room_join_request(
+    room_id: str,
+    request_id: str,
+    payload: CollaborationJoinRequestDecision,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_can_manage_join_requests(room, current_user):
+        raise HTTPException(status_code=403, detail="You cannot manage Room join requests.")
+    decision = compact_text(payload.decision).lower()
+    if decision not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Choose Approve or Decline.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        pending = connection.execute(
+            "SELECT * FROM collaboration_join_requests WHERE id = ? AND room_id = ? AND status = 'pending'",
+            (request_id, room_id),
+        ).fetchone()
+        if not pending:
+            current = connection.execute(
+                "SELECT status FROM collaboration_join_requests WHERE id = ? AND room_id = ?",
+                (request_id, room_id),
+            ).fetchone()
+            if current:
+                return {"status": current["status"], "room_id": room_id}
+            raise HTTPException(status_code=404, detail="Join request not found.")
+        updated = connection.execute(
+            "UPDATE collaboration_join_requests SET status = ?, resolved_by = ?, updated_at = ? WHERE id = ? AND room_id = ? AND status = 'pending'",
+            (decision, normalize_email(current_user), now_iso, request_id, room_id),
+        )
+        if updated.rowcount != 1:
+            raise HTTPException(status_code=409, detail="This request was already reviewed.")
+        if decision == "approved":
+            connection.execute(
+                "INSERT OR IGNORE INTO collaboration_room_members (room_id, email, role, created_at) VALUES (?, ?, 'member', ?)",
+                (room_id, pending["requester_email"], now_iso),
+            )
+        title = "Your Room request was approved" if decision == "approved" else "Your Room request was declined"
+        message = f"You can now open {room['title']}." if decision == "approved" else f"Your request to join {room['title']} was not approved."
+        connection.execute(
+            """
+            INSERT INTO collaboration_notifications (
+                id, recipient_email, actor_email, room_id, notification_type, title, message, read_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?)
+            """,
+            (uuid4().hex, pending["requester_email"], normalize_email(current_user), room_id,
+             f"room_join_{decision}", title, message, now_iso),
+        )
+    return {"status": decision, "room_id": room_id, "request_id": request_id}
+
+
+@app.get("/collaboration/rooms/{room_id}/activity")
+async def list_collaboration_room_activity(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    return {"room_id": room["id"], "activity": get_collaboration_room_activity(room["id"], 25)}
+
+
+@app.get("/collaboration/rooms/{room_id}/activity/events")
+async def stream_collaboration_room_activity(
+    room_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    get_accessible_collaboration_room_access(room_id, current_user)
+
+    async def activity_events():
+        last_signature = ""
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                get_accessible_collaboration_room_access(room_id, current_user)
+            except HTTPException:
+                yield f"event: access_revoked\ndata: {dump_json({'room_id': room_id})}\n\n"
+                break
+            activity = get_collaboration_room_activity(room_id, 25)
+            signature = activity[0]["id"] if activity else "empty"
+            if signature != last_signature:
+                last_signature = signature
+                yield f"event: activity\ndata: {dump_json({'room_id': room_id, 'activity': activity})}\n\n"
+            else:
+                yield ": keep-alive\n\n"
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        activity_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/collaboration/rooms/{room_id}/admin-control")
@@ -39302,6 +40001,7 @@ async def create_collaboration_material_item(
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
     safe_source = payload.source if isinstance(payload.source, dict) else {}
+    actor_name = collaboration_actor_name(current_user)
     replaced_ids: list[str] = []
     with get_db_connection() as connection:
         if compact_text(safe_source.get("kind")).lower() in {"history", "room_generation"}:
@@ -39330,6 +40030,11 @@ async def create_collaboration_material_item(
             (item_id, room["id"], current_user, title, material_type, compact_text(payload.description)[:2000], dump_json(safe_source), "room", now_iso, now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="material_shared", action_text=f'{actor_name} shared "{title}"',
+            resource_type=material_type, resource_id=item_id, resource_title=title,
+        )
     return {
         "item": {
             "id": item_id,
@@ -39405,6 +40110,7 @@ async def upload_collaboration_media(
     now_iso = utc_now().isoformat()
     material_type = "podcast" if requested_kind == "podcast" else resolved_kind
     safe_title = compact_text(display_name, Path(filename).stem or ("Room photo" if resolved_kind == "image" else "Room podcast" if material_type == "podcast" else "Room video"))[:180]
+    actor_name = collaboration_actor_name(current_user)
     snapshot = load_collaboration_json_object(snapshot_json)
     source = {
         "kind": "uploaded_media",
@@ -39446,6 +40152,11 @@ async def upload_collaboration_media(
             ),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type=f"{material_type}_shared", action_text=f'{actor_name} shared "{safe_title}"',
+            resource_type=material_type, resource_id=item_id, resource_title=safe_title,
+        )
     return {
         "item": {
             "id": item_id,
@@ -39680,6 +40391,7 @@ async def create_collaboration_board_item(
         raise HTTPException(status_code=400, detail="Add a title, message, checklist, or material before posting to the board.")
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
         connection.execute(
             """
@@ -39691,6 +40403,11 @@ async def create_collaboration_board_item(
             (item_id, room["id"], current_user, item_type, title, content, dump_json(checklist), compact_text(payload.due_at)[:64], compact_text(payload.material_id)[:96], 0, now_iso, now_iso),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="board_item_added", action_text=f"{actor_name} added a board {item_type}",
+            resource_type="board_item", resource_id=item_id, resource_title=title,
+        )
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
 
 
@@ -39702,6 +40419,7 @@ async def update_collaboration_board_item(
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_accessible_collaboration_room_access(room_id, current_user)
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
         existing = connection.execute(
             "SELECT owner_email, item_type FROM collaboration_board_items WHERE id = ? AND room_id = ?",
@@ -39729,6 +40447,11 @@ async def update_collaboration_board_item(
             (item_type, title, content, dump_json(checklist), compact_text(payload.due_at)[:64], now_iso, item_id, room["id"]),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="board_item_edited", action_text=f"{actor_name} edited a board item",
+            resource_type="board_item", resource_id=item_id, resource_title=title,
+        )
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
 
 

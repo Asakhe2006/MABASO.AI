@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Copy, WrapText } from "lucide-react";
 import MathMarkdown from "./MathMarkdown";
 import { getAcademicReadingCssVariables } from "../academicReadingTheme";
 
@@ -14,7 +14,31 @@ function cleanMarkdownProps({ node, ...props }) {
 
 function CopyableCodeBlock({ children, className = "", theme = "dark", ...props }) {
   const [copied, setCopied] = useState(false);
+  const [wordWrap, setWordWrap] = useState(() => {
+    try {
+      return window.localStorage.getItem("mabaso-ai-code-word-wrap") === "true";
+    } catch {
+      return false;
+    }
+  });
   const codeText = String(children || "").replace(/\n$/, "");
+
+  useEffect(() => {
+    const syncPreference = (event) => setWordWrap(Boolean(event?.detail));
+    window.addEventListener("mabaso-code-word-wrap", syncPreference);
+    return () => window.removeEventListener("mabaso-code-word-wrap", syncPreference);
+  }, []);
+
+  const toggleWordWrap = () => {
+    const next = !wordWrap;
+    setWordWrap(next);
+    try {
+      window.localStorage.setItem("mabaso-ai-code-word-wrap", String(next));
+    } catch {
+      // The current code block still updates if local preference storage is unavailable.
+    }
+    window.dispatchEvent(new CustomEvent("mabaso-code-word-wrap", { detail: next }));
+  };
 
   const copyCode = async () => {
     if (!codeText) return;
@@ -29,11 +53,16 @@ function CopyableCodeBlock({ children, className = "", theme = "dark", ...props 
 
   return (
     <div className="assistant-code-block">
-      <button type="button" className="assistant-code-copy" onClick={copyCode} aria-label={copied ? "Code copied" : "Copy code"}>
-        {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-        <span>{copied ? "Copied" : "Copy"}</span>
-      </button>
-      <code className={`block overflow-x-auto rounded-[22px] p-4 pr-24 font-mono text-[13px] ${themed(theme, "bg-[#0b1120] text-slate-100", "bg-slate-950 text-slate-100")} ${className || ""}`} {...props}>
+      <div className="assistant-code-actions">
+        <button type="button" className={`assistant-code-wrap ${wordWrap ? "is-active" : ""}`} onClick={toggleWordWrap} aria-label={wordWrap ? "Disable word wrap" : "Enable word wrap"} title={wordWrap ? "Disable word wrap" : "Enable word wrap"}>
+          <WrapText className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        <button type="button" className="assistant-code-copy" onClick={copyCode} aria-label={copied ? "Code copied" : "Copy code"}>
+          {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+          <span>{copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <code className={`assistant-code-content ${wordWrap ? "is-wrapped" : ""} block overflow-x-auto rounded-[22px] p-4 pr-24 font-mono text-[13px] ${themed(theme, "bg-[#0b1120] text-slate-100", "bg-slate-950 text-slate-100")} ${className || ""}`} {...props}>
         {children}
       </code>
     </div>

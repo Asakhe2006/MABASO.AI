@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 class PlanChatQuotaTests(unittest.TestCase):
-    def test_upload_defaults_match_product_plans_without_message_limits(self):
+    def test_upload_and_ai_chat_defaults_match_product_plans(self):
         source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
 
         expected_defaults = (
@@ -19,7 +19,10 @@ class PlanChatQuotaTests(unittest.TestCase):
         premium_source = source[premium_start:premium_end]
         self.assertIn('"study_chat_upload": -1', premium_source)
 
-        self.assertNotIn("AI_CHAT_MESSAGES_PER_DAY", source)
+        self.assertIn('"study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15)', source)
+        self.assertIn('"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25)', source)
+        self.assertIn('"study_chat": -1', premium_source)
+        self.assertIn('"free": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5)', source)
 
 
 if __name__ == "__main__":

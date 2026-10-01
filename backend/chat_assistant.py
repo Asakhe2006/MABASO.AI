@@ -297,6 +297,90 @@ def normalize_openai_message_content(value: Any) -> str | list[dict[str, Any]]:
     return compact_text(value)
 
 
+def normalize_responses_input_content(value: Any) -> list[dict[str, Any]]:
+    """Translate existing chat content into Responses API input parts."""
+    if isinstance(value, list):
+        parts: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            item_type = compact_text(item.get("type")).lower()
+            if item_type == "text":
+                text = compact_text(item.get("text"))
+                if text:
+                    parts.append({"type": "input_text", "text": text})
+            elif item_type == "image_url":
+                image_payload = item.get("image_url")
+                image_url = compact_text(image_payload.get("url")) if isinstance(image_payload, dict) else compact_text(image_payload)
+                if image_url:
+                    parts.append({"type": "input_image", "image_url": image_url})
+        return parts
+    text = compact_text(value)
+    return [{"type": "input_text", "text": text}] if text else []
+
+
+def iter_openai_responses_stream(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    model: str,
+    reasoning_effort: str,
+    max_output_tokens: int,
+    timeout_seconds: float,
+) -> Iterator[str]:
+    api_key = _resolve_provider_api_key("openai")
+    if not api_key:
+        raise ProviderStreamError("openai", "OpenAI is not configured on the backend.")
+    input_items: list[dict[str, Any]] = []
+    for message in messages:
+        role = "assistant" if compact_text(message.get("role")).lower() == "assistant" else "user"
+        content = normalize_responses_input_content(message.get("content"))
+        if content:
+            input_items.append({"role": role, "content": content})
+    payload: dict[str, Any] = {
+        "model": compact_text(model),
+        "instructions": compact_text(system_prompt),
+        "input": input_items,
+        "reasoning": {"effort": compact_text(reasoning_effort, "medium")},
+        "max_output_tokens": max_output_tokens,
+        "stream": True,
+        "store": False,
+    }
+    try:
+        with requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=timeout_seconds,
+            stream=True,
+        ) as response:
+            if not response.ok:
+                _raise_for_response("openai", response, "OpenAI could not answer right now.")
+            for raw_line in response.iter_lines(decode_unicode=True):
+                line = compact_text(raw_line)
+                if not line.startswith("data:"):
+                    continue
+                data = compact_text(line[5:])
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str) and delta:
+                        yield delta
+                elif event.get("type") in {"response.failed", "error"}:
+                    error_payload = event.get("error") or (event.get("response") or {}).get("error") or {}
+                    message = compact_text(error_payload.get("message") if isinstance(error_payload, dict) else error_payload, "OpenAI could not answer right now.")
+                    raise ProviderStreamError("openai", message)
+    except requests.Timeout as exc:
+        raise ProviderStreamError("openai", "OpenAI took too long to respond.") from exc
+    except requests.RequestException as exc:
+        raise ProviderStreamError("openai", "The backend could not reach OpenAI right now.") from exc
+
+
 def iter_openai_compatible_stream(
     *,
     provider: str,
@@ -378,6 +462,7 @@ def iter_provider_stream(
     system_prompt: str,
     messages: list[dict[str, Any]],
     model: str = "",
+    reasoning_effort: str = "",
     temperature: float = 0.55,
     max_output_tokens: int = 1200,
     timeout_seconds: float = 75,
@@ -393,6 +478,15 @@ def iter_provider_stream(
             timeout_seconds=timeout_seconds,
         )
     if normalized == "openai":
+        if compact_text(model).lower().startswith("gpt-6"):
+            return iter_openai_responses_stream(
+                system_prompt=system_prompt,
+                messages=messages,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=max_output_tokens,
+                timeout_seconds=timeout_seconds,
+            )
         return iter_openai_compatible_stream(
             provider="openai",
             base_url="https://api.openai.com/v1",

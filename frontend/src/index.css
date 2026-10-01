@@ -8262,11 +8262,16 @@ iframe {
   margin-bottom: 0.75rem;
 }
 
-.assistant-code-copy {
+.assistant-code-actions {
   position: absolute;
   top: 0.55rem;
   right: 0.55rem;
   z-index: 2;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.assistant-code-copy {
   display: inline-flex;
   min-height: 30px;
   align-items: center;
@@ -8280,6 +8285,42 @@ iframe {
   font-weight: 800;
   backdrop-filter: blur(10px);
 }
+
+.assistant-code-wrap {
+  display: inline-grid;
+  width: 31px;
+  min-height: 30px;
+  place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  background: rgba(2, 8, 23, 0.78);
+  color: #cbd5e1;
+}
+
+.assistant-code-wrap.is-active {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(5, 150, 105, 0.3);
+  color: #d1fae5;
+}
+
+.assistant-code-content { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.assistant-code-content.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+
+.study-chat-limit-card {
+  width: min(820px, calc(100% - 1.5rem));
+  margin: 0 auto 0.75rem;
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  border-radius: 22px;
+  background: #071d14;
+  padding: 16px;
+  color: #f0fdf4;
+  text-align: center;
+}
+.study-chat-limit-card strong,
+.study-chat-limit-card span { display: block; }
+.study-chat-limit-card span { margin-top: 4px; color: #a7c9ba; font-size: 12px; }
+.study-chat-limit-card button { min-height: 42px; margin-top: 13px; border-radius: 999px; background: #18c978; padding: 0 18px; color: #03150e; font-weight: 850; }
+.study-chat-conversation-counter { margin: -7px auto 8px; color: #86a99a; font-size: 10px; text-align: center; }
 
 .study-chat-composer,
 .study-chat-page-composer,
@@ -15387,3 +15428,45 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
   .collaboration-guide-full-view > header { padding:12px 14px; }
   .collaboration-guide-slide-thumbnails { padding-right:14px; padding-left:14px; }
 }
+
+@media (max-width:768px) {
+  .study-chat-page-composer .ai-chat-mode-trigger { width:auto !important; min-width:64px !important; max-width:92px !important; min-height:36px !important; padding:0 9px !important; border-radius:999px !important; }
+  .study-chat-page-composer .ai-chat-mode-trigger-label,
+  .study-chat-page-composer .ai-chat-mode-short-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .study-chat-page-composer .ai-chat-mode-full-label { display:none !important; }
+  .study-chat-page-composer .ai-chat-mode-short-label { display:block !important; }
+  .assistant-code-actions { top:.45rem; right:.45rem; }
+  .assistant-code-content { max-width:100%; overscroll-behavior-inline:contain; }
+  .study-chat-limit-card { width:calc(100% - 1rem); margin-bottom:calc(.5rem + env(safe-area-inset-bottom)); }
+}
+.mabaso-toggle {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: #334155;
+  transition: background-color 180ms ease, border-color 180ms ease, opacity 180ms ease;
+}
+
+.mabaso-toggle-sm { width: 40px; height: 22px; }
+.mabaso-toggle.is-on { background: #12c779; border-color: #20e596; }
+.mabaso-toggle-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f8fafc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+.mabaso-toggle-sm .mabaso-toggle-knob { width: 16px; height: 16px; }
+.mabaso-toggle.is-on .mabaso-toggle-knob { transform: translateX(20px); }
+.mabaso-toggle-sm.is-on .mabaso-toggle-knob { transform: translateX(18px); }
+.mabaso-toggle:focus-visible { outline: 3px solid rgba(52, 211, 153, 0.45); outline-offset: 3px; }
+.mabaso-toggle:disabled { cursor: not-allowed; opacity: 0.45; }
+.mabaso-setting-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; }
+.mabaso-setting-row > span { min-width: 0; }

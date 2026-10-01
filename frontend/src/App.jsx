@@ -22,6 +22,7 @@ import { useAuth } from "./auth/AuthContext";
 import CollaborationChat from "./components/CollaborationChat";
 import CollaborationBoardItemDialog from "./components/CollaborationBoardItemDialog";
 import CollaborationMaterialWorkspace from "./components/CollaborationMaterialWorkspace";
+import ToggleSwitch from "./components/ToggleSwitch";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
 
@@ -31,8 +32,15 @@ function BodyPortal({ active, children }) {
 }
 function CollaborationProfileContactPortal({ draft, setDraft, disabled, onSave, saveState }) {
   const setText = (field) => (event) => setDraft((current) => ({ ...current, [field]: event.target.value }));
-  const setFlag = (field) => (event) => setDraft((current) => ({ ...current, [field]: event.target.checked }));
-  return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose exactly what students can see. Your contact details stay private unless you allow them below.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Display name" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy"><label><span>Discoverable by academic interests</span><input type="checkbox" checked={Boolean(draft.discoverable)} onChange={setFlag("discoverable")} disabled={disabled} /></label><label><span>Show institution</span><input type="checkbox" checked={Boolean(draft.show_institution)} onChange={setFlag("show_institution")} disabled={disabled} /></label><label><span>Show my account email in Discover</span><input type="checkbox" checked={Boolean(draft.show_email)} onChange={setFlag("show_email")} disabled={disabled} /></label><label><span>Show my personal number in Discover</span><input type="checkbox" checked={Boolean(draft.show_phone)} onChange={setFlag("show_phone")} disabled={disabled} /></label><label><span>Allow collaboration requests</span><input type="checkbox" checked={Boolean(draft.allow_requests)} onChange={setFlag("allow_requests")} disabled={disabled} /></label></div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
+  const setFlag = (field) => (nextValue) => setDraft((current) => ({ ...current, [field]: nextValue }));
+  const privacySettings = [
+    ["discoverable", "Discoverable by academic interests"],
+    ["show_institution", "Show institution"],
+    ["show_email", "Show my account email in Discover"],
+    ["show_phone", "Show my personal number in Discover"],
+    ["allow_requests", "Allow collaboration requests"],
+  ];
+  return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose exactly what students can see. Your contact details stay private unless you allow them below.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Display name" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy">{privacySettings.map(([field, label]) => <div className="mabaso-setting-row" key={field}><span>{label}</span><ToggleSwitch checked={Boolean(draft[field])} onChange={setFlag(field)} disabled={disabled} aria-label={label} size="sm" /></div>)}</div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
 }
 function CollaborationRoomStudyGuide({ title, intro, sections, canGenerate, isGenerating, onGenerate, renderMarkdown }) {
   const [slideIndex, setSlideIndex] = useState(0);
@@ -200,32 +208,40 @@ const AI_CHAT_MODE_OPTIONS = [
     shortLabel: "Study",
     label: "Study",
     description: "Detailed explanations and academic help",
-    minimumPlan: "free",
-    planLabel: "",
+    minimumPlan: "pro",
+    planLabel: "Pro",
   },
   {
     id: "think_deeper",
     shortLabel: "Think",
     label: "Think Deeper",
     description: "More reasoning for difficult maths, engineering and multi-step problems",
-    minimumPlan: "free",
-    planLabel: "",
+    minimumPlan: "pro",
+    planLabel: "Pro",
   },
   {
     id: "expert",
     shortLabel: "Expert",
     label: "Expert",
     description: "Advanced reasoning for challenging work",
-    minimumPlan: "free",
-    planLabel: "",
+    minimumPlan: "pro",
+    planLabel: "Pro",
   },
   {
     id: "maximum",
     shortLabel: "Max",
     label: "Maximum",
     description: "Highest available reasoning capability",
-    minimumPlan: "free",
-    planLabel: "",
+    minimumPlan: "premium",
+    planLabel: "Premium",
+  },
+  {
+    id: "astra",
+    shortLabel: "Astra",
+    label: "Astra",
+    description: "Most powerful AI for highly complex work",
+    minimumPlan: "premium",
+    planLabel: "Premium",
   },
 ];
 const MAX_QUIZ_ANSWER_IMAGES = 6;
@@ -7194,6 +7210,7 @@ export default function App() {
   const [isMarkingRoomQuiz, setIsMarkingRoomQuiz] = useState(false);
   const [roomQuizSubmitted, setRoomQuizSubmitted] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
+  const [studyChatConversationUsage, setStudyChatConversationUsage] = useState({ used: 0, limit: null, limit_reached: false });
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
   const [studyChatHistoryMenuId, setStudyChatHistoryMenuId] = useState("");
   const [studyChatHistoryMenuAnchor, setStudyChatHistoryMenuAnchor] = useState(null);
@@ -7266,6 +7283,12 @@ export default function App() {
   const [collaborationDiscoverQuery, setCollaborationDiscoverQuery] = useState("");
   const [collaborationDiscoverProfiles, setCollaborationDiscoverProfiles] = useState([]);
   const [collaborationNotifications, setCollaborationNotifications] = useState([]);
+  const [collaborationDiscoverRooms, setCollaborationDiscoverRooms] = useState([]);
+  const [collaborationRoomActivity, setCollaborationRoomActivity] = useState([]);
+  const [isCollaborationActivityOpen, setIsCollaborationActivityOpen] = useState(false);
+  const [collaborationActivityReadId, setCollaborationActivityReadId] = useState("");
+  const [isUpdatingRoomApprovalSettings, setIsUpdatingRoomApprovalSettings] = useState(false);
+  const [decidingJoinRequestId, setDecidingJoinRequestId] = useState("");
   const [collaborationMobileView, setCollaborationMobileView] = useState("rooms");
   const [collaborationMaterialFilter, setCollaborationMaterialFilter] = useState("all");
   const [isCreateRoomPanelOpen, setIsCreateRoomPanelOpen] = useState(false);
@@ -11947,7 +11970,7 @@ export default function App() {
             <button type="button" className="is-bring" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })} disabled={isUpdatingAdminControl}>Bring Everyone Here</button>
             <button type="button" className="is-stop" onClick={() => void stopCollaborationAdminControl()} disabled={isUpdatingAdminControl}>Stop Control</button>
             <button type="button" className="is-menu" onClick={() => setIsAdminControlMenuOpen((value) => !value)} aria-label="Open Admin Control options">⌄</button>
-            {isAdminControlMenuOpen ? <div className="collaboration-admin-control-menu"><button type="button" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })}>Bring Everyone Here</button><label><input type="checkbox" checked={Boolean(control.allow_explore)} onChange={(event) => void updateCollaborationAdminControl({ allowExplore: event.target.checked })} /> Allow members to Explore</label><button type="button" className="is-danger" onClick={() => void stopCollaborationAdminControl()}>Stop Control</button></div> : null}
+            {isAdminControlMenuOpen ? <div className="collaboration-admin-control-menu"><button type="button" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })}>Bring Everyone Here</button><div className="mabaso-setting-row"><span>Allow members to Explore</span><ToggleSwitch checked={Boolean(control.allow_explore)} onChange={(checked) => void updateCollaborationAdminControl({ allowExplore: checked })} aria-label="Allow members to Explore" size="sm" /></div><button type="button" className="is-danger" onClick={() => void stopCollaborationAdminControl()}>Stop Control</button></div> : null}
           </div>
         );
       }
@@ -11958,7 +11981,18 @@ export default function App() {
         </div>
       );
     };
-    return (
+    const unreadActivityCount = collaborationRoomActivity.findIndex((item) => item.id === collaborationActivityReadId) < 0
+      ? collaborationRoomActivity.length
+      : collaborationRoomActivity.findIndex((item) => item.id === collaborationActivityReadId);
+    const renderRoomActivityControl = () => activeRoom ? (
+      <div className="collaboration-room-activity-control">
+        <button type="button" className="collaboration-activity-button" aria-label={"Room Activity" + (unreadActivityCount ? ", " + unreadActivityCount + " unread" : "")} onClick={() => { setIsCollaborationActivityOpen((open) => !open); setCollaborationActivityReadId(collaborationRoomActivity[0]?.id || ""); }}>
+          <Bell className="h-4 w-4" aria-hidden="true" />
+          {unreadActivityCount > 0 ? <span>{Math.min(unreadActivityCount, 25)}</span> : null}
+        </button>
+        {isCollaborationActivityOpen ? <section className="collaboration-activity-panel" aria-label="Room Activity"><header><strong>Room Activity</strong><small>Latest 25</small></header>{collaborationRoomActivity.length ? collaborationRoomActivity.map((item) => <button type="button" key={item.id} onClick={() => { const material = (activeRoom.materials || []).find((entry) => entry.id === item.resource_id); const boardItem = (activeRoom.board_items || []).find((entry) => entry.id === item.resource_id); if (material) void openCollaborationMaterial(material); else if (boardItem) setSelectedCollaborationBoardItem(boardItem); setIsCollaborationActivityOpen(false); }}><span>{item.action_text}</span><time>{formatRelativeTime(item.created_at)}</time></button>) : <p>No Room activity yet.</p>}</section> : null}
+      </div>
+    ) : null;    return (
       <section className={`collaboration-product-shell ${isCollaborationChatMinimized ? "is-chat-minimized" : ""}`}>
         <header className="collaboration-global-bar">
           <button type="button" onClick={() => openProtectedAppPage("capture")} className="collaboration-brand" aria-label="Back to Mabaso AI"><span className="collaboration-brand-mark">←</span><span className="collaboration-brand-copy"><strong>MABASO AI</strong><small>Learn Smarter. Go Further.</small></span></button>
@@ -11968,10 +12002,10 @@ export default function App() {
         <input ref={roomBoardImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { void uploadRoomBoardImages(event.target.files); event.target.value = ""; }} />
 
         {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} saveState={collaborationProfileSaveState} /> : null}
-        {isAdminControlConfirmOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => !isUpdatingAdminControl && setIsAdminControlConfirmOpen(false)}><section className="collaboration-admin-control-confirm" role="dialog" aria-modal="true" aria-label="Start Admin Control Mode" onMouseDown={(event) => event.stopPropagation()}><span>▣</span><h3>Start Admin Control Mode?</h3><p>Connected members who choose Follow Admin will move with your supported Room view. This never controls their device or browser outside Mabaso AI.</p><label><input type="checkbox" checked={collaborationAdminControl?.allow_explore ?? true} onChange={(event) => setCollaborationAdminControl((current) => ({ ...(current || {}), allow_explore: event.target.checked }))} /> Allow members to Explore independently</label><div><button type="button" onClick={() => setIsAdminControlConfirmOpen(false)} disabled={isUpdatingAdminControl}>Cancel</button><button type="button" className="is-primary" onClick={() => void startCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Starting..." : "Start Control"}</button></div></section></div> : null}
+        {isAdminControlConfirmOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => !isUpdatingAdminControl && setIsAdminControlConfirmOpen(false)}><section className="collaboration-admin-control-confirm" role="dialog" aria-modal="true" aria-label="Start Admin Control Mode" onMouseDown={(event) => event.stopPropagation()}><span>▣</span><h3>Start Admin Control Mode?</h3><p>Connected members who choose Follow Admin will move with your supported Room view. This never controls their device or browser outside Mabaso AI.</p><div className="mabaso-setting-row"><span>Allow members to Explore independently</span><ToggleSwitch checked={collaborationAdminControl?.allow_explore ?? true} onChange={(checked) => setCollaborationAdminControl((current) => ({ ...(current || {}), allow_explore: checked }))} aria-label="Allow members to Explore independently" /></div><div><button type="button" onClick={() => setIsAdminControlConfirmOpen(false)} disabled={isUpdatingAdminControl}>Cancel</button><button type="button" className="is-primary" onClick={() => void startCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Starting..." : "Start Control"}</button></div></section></div> : null}
         <div className="collaboration-room-header">
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
-          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
+          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderRoomActivityControl()}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
         </div>
         {collaborationAdminControl?.active ? <div className="collaboration-admin-control-status" role="status"><i /> <strong>Admin Control active</strong><span>•</span><span>{activeRoom?.is_owner ? "Members are following your Room view" : followRoomView ? "Following admin" : "You are in Explore mode"}</span></div> : null}
         {(error || status) ? <div className={`collaboration-feedback ${error ? "is-error" : "is-success"}`} role={error ? "alert" : "status"}>{error || status}</div> : null}
@@ -16189,6 +16223,7 @@ export default function App() {
       }).then(({ data }) => {
         if (cancelled) return;
         const serverMessages = Array.isArray(data?.conversation?.messages) ? data.conversation.messages : [];
+        if (data?.conversation_usage) setStudyChatConversationUsage(data.conversation_usage);
         if (!serverMessages.length) return;
         setChatMessages(serverMessages.map((message, index) => ({
           id: String(message.id || `server-study-chat-${index}`),
@@ -17840,7 +17875,13 @@ export default function App() {
     AI_CHAT_MODE_OPTIONS.find((option) => option.id === modeId) || AI_CHAT_MODE_OPTIONS[0]
   );
 
-  const canPlanUseAiChatMode = (_planTier, modeId) => Boolean(getAiChatModeOption(modeId));
+  const canPlanUseAiChatMode = (planTier, modeId) => {
+    const option = getAiChatModeOption(modeId);
+    if (!option) return false;
+    if (option.minimumPlan === "premium") return planTier === "premium";
+    if (option.minimumPlan === "pro") return ["pro", "premium"].includes(planTier);
+    return true;
+  };
 
   const canCurrentPlanUseAiChatMode = (modeId = selectedAiChatMode) => (
     canPlanUseAiChatMode(normalizeAiChatPlanTier(getResolvedCurrentPlanId()), modeId)
@@ -21723,18 +21764,32 @@ export default function App() {
     collaborationRoomRequestInFlightRef.current = roomId;
     if (!silent) setIsRoomLoading(true);
     try {
+      const materialsPromise = authFetch(`/collaboration/rooms/${roomId}/material-items`, { cache: "no-store", timeoutMs: 8000 })
+        .then(async (materialsResponse) => {
+          const materialsData = await parseJsonSafe(materialsResponse);
+          if (!materialsResponse.ok) throw new Error(materialsData.detail || "Could not load shared materials.");
+          if (collaborationRoomRequestInFlightRef.current === roomId) {
+            setActiveRoomId(roomId);
+            setActiveRoom((current) => current?.id === roomId
+              ? { ...current, materials: materialsData.items || [] }
+              : { id: roomId, title: "Opening room", materials: materialsData.items || [], members: [], messages: [], board_items: [], is_loading_shell: true });
+          }
+          return materialsData.items || [];
+        })
+        .catch(() => null);
       const response = await authFetch(`/collaboration/rooms/${roomId}`, { cache: "no-store", timeoutMs: 10000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
       if (collaborationRoomRequestInFlightRef.current !== roomId) return;
       handleCollaborationRoomActivity(data.room ? [data.room] : []);
       setActiveRoomId((current) => (current === roomId ? current : roomId));
+      void materialsPromise;
       const nextRoom = data.room || null;
       persistActiveCollaborationRoomId(nextRoom?.id || roomId);
       setActiveRoom((current) => (
         JSON.stringify(current) === JSON.stringify(nextRoom) ? current : nextRoom
       ));
-      syncRoomNotesDraftFromRoom(data.room, { force: resetNotesDraft });
+      syncRoomNotesDraftFromRoom(nextRoom, { force: resetNotesDraft });
       if (!silent) setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
     } catch (err) {
       if (!silent) setError(err.message || "Could not open the collaboration room.");
@@ -21754,6 +21809,78 @@ export default function App() {
     persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
     openCollaborationPage({ refresh: false });
     await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true, ...options });
+  };
+
+  const loadDiscoverableCollaborationRooms = async () => {
+    try {
+      const response = await authFetch(`/collaboration/discover/rooms?query=${encodeURIComponent(collaborationDiscoverQuery)}`, { cache: "no-store", timeoutMs: 8000 });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not discover Rooms.");
+      setCollaborationDiscoverRooms(data.rooms || []);
+    } catch (err) {
+      setError(err.message || "Could not discover Rooms.");
+    }
+  };
+
+  const requestToJoinCollaborationRoom = async (room) => {
+    if (!room?.id || room.membership_status === "pending") return;
+    try {
+      const response = await authFetch(`/collaboration/rooms/${room.id}/join-requests`, { method: "POST" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not request access to this Room.");
+      setCollaborationDiscoverRooms((current) => current.map((item) => item.id === room.id ? { ...item, membership_status: data.status } : item));
+      if (data.status === "approved" || data.status === "invited") {
+        await refreshCollaborationRooms(true);
+        if (data.status === "approved") await openCollaborationRoom(room.id);
+      } else {
+        setStatus("Request sent. The Room owner has been notified.");
+      }
+    } catch (err) {
+      setError(err.message || "Could not request access to this Room.");
+    }
+  };
+
+  const updateRoomMemberApprovalSetting = async (checked) => {
+    if (!activeRoom?.id || !activeRoom.is_owner || isUpdatingRoomApprovalSettings) return;
+    const previous = Boolean(activeRoom.allow_member_approvals);
+    setActiveRoom((room) => room ? { ...room, allow_member_approvals: checked } : room);
+    setIsUpdatingRoomApprovalSettings(true);
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoom.id}/approval-settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow_member_approvals: checked }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not save this Room setting.");
+      setStatus("Member approval permissions updated.");
+    } catch (err) {
+      setActiveRoom((room) => room ? { ...room, allow_member_approvals: previous } : room);
+      setError(err.message || "Could not save this Room setting.");
+    } finally {
+      setIsUpdatingRoomApprovalSettings(false);
+    }
+  };
+
+  const decideRoomJoinRequest = async (requestId, decision) => {
+    if (!activeRoom?.id || !requestId || decidingJoinRequestId) return;
+    setDecidingJoinRequestId(requestId);
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoom.id}/join-requests/${requestId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not review this request.");
+      setActiveRoom((room) => room ? { ...room, pending_join_requests: (room.pending_join_requests || []).filter((item) => item.id !== requestId) } : room);
+      setStatus(decision === "approved" ? "Student approved and added to the Room." : "Join request declined.");
+      void refreshCollaborationRooms(true);
+    } catch (err) {
+      setError(err.message || "Could not review this request.");
+    } finally {
+      setDecidingJoinRequestId("");
+    }
   };
 
   const getCurrentCollaborationControlState = () => ({
@@ -21952,6 +22079,30 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [activeRoomId, activeTab, authToken, currentPage, followRoomView]);
+  useEffect(() => {
+    const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+    if (!authToken || !activeRoomId || !isCollaborationVisible || typeof EventSource === "undefined") {
+      setCollaborationRoomActivity([]);
+      return undefined;
+    }
+    const source = new EventSource(`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/activity/events`, { withCredentials: true });
+    source.addEventListener("activity", (event) => {
+      try {
+        const payload = JSON.parse(event.data || "{}");
+        setCollaborationRoomActivity((payload.activity || []).slice(0, 25));
+      } catch {
+        // A later realtime event or normal Room refresh will recover the feed.
+      }
+    });
+    source.addEventListener("access_revoked", () => {
+      source.close();
+      setCollaborationRoomActivity([]);
+      setActiveRoom(null);
+      setActiveRoomId("");
+      setError("Your access to this Room has ended.");
+    });
+    return () => source.close();
+  }, [activeRoomId, activeTab, authToken, currentPage]);
 
   useEffect(() => {
     const roomControl = activeRoom?.admin_control;
@@ -25398,6 +25549,16 @@ export default function App() {
         savedConversation = data.conversation;
         return;
       }
+      if (event === "done" && data?.conversation_usage) {
+        setStudyChatConversationUsage(data.conversation_usage);
+        return;
+      }
+      if (event === "conversation_limit" || data?.status === "CONVERSATION_LIMIT_REACHED") {
+        if (data?.conversation_usage) setStudyChatConversationUsage(data.conversation_usage);
+        const limitError = new Error(data?.message || "You've reached the message limit for this chat.");
+        limitError.conversationLimit = true;
+        throw limitError;
+      }
       if (event === "usage") {
         applyStreamedChatUsage(data);
         return;
@@ -26040,6 +26201,11 @@ export default function App() {
       });
     } catch (err) {
       if (studyChatRequestRunRef.current !== requestRunId) return;
+      if (err?.conversationLimit) {
+        setChatMessages((current) => current.filter((message) => ![userMessage.id, pendingAssistantMessage.id].includes(message.id)));
+        setStatus("Chat limit reached. Start a new chat to continue.");
+        return;
+      }
       if (err?.blockedAccess) {
         setChatMessages((current) => current.filter((message) => ![userMessage.id, pendingAssistantMessage.id].includes(message.id)));
         showModelAccessBlock(err.blockedPayload || {});
@@ -26695,7 +26861,7 @@ export default function App() {
       </div>
     );
   };
-  const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
+  const renderUnlockedStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
       <div className="study-chat-composer-row">
         <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); chatImageInputRef.current?.click(); }} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
@@ -26755,6 +26921,27 @@ export default function App() {
     </div>
   );
 
+  const renderStudyChatComposer = ({ compact = false, fullPage = false } = {}) => {
+    const used = Number(studyChatConversationUsage?.used || 0);
+    const limit = Number(studyChatConversationUsage?.limit);
+    const hasFiniteLimit = Number.isFinite(limit) && limit >= 0;
+    const isLimitReached = Boolean(studyChatConversationUsage?.limit_reached || (hasFiniteLimit && used >= limit));
+    if (isLimitReached) {
+      return (
+        <section className={`study-chat-limit-card ${fullPage ? "is-full-page" : ""}`} role="status">
+          <strong>You've reached the message limit for this chat.</strong>
+          <span>Start a new chat to continue asking Mabaso AI.</span>
+          <button type="button" onClick={startNewStudyChat}><span aria-hidden="true">＋</span> New Chat</button>
+        </section>
+      );
+    }
+    return (
+      <>
+        {renderUnlockedStudyChatComposer({ compact, fullPage })}
+        {hasFiniteLimit ? <p className="study-chat-conversation-counter" aria-live="polite">{used} / {limit} messages</p> : null}
+      </>
+    );
+  };
   const renderStudyChatPanel = ({ compact = false } = {}) => (
     <div className={`study-chat-panel study-chat-embedded-panel ${compact ? "is-compact" : ""}`}>
       <div className="study-chat-embedded-head">
@@ -28981,6 +29168,7 @@ export default function App() {
     stopStudyChatVoiceCapture();
     setActiveStudyChatId(nextConversationId);
     setChatMessages([]);
+    setStudyChatConversationUsage({ used: 0, limit: null, limit_reached: false });
     setChatQuestion("");
     if (studyChatComposerInputRef.current) studyChatComposerInputRef.current.style.height = "auto";
     setChatReferenceImages([]);
@@ -29014,6 +29202,7 @@ export default function App() {
       setIsOpeningStudyChat(true);
     }
     setActiveStudyChatId(normalizedConversationId);
+    setStudyChatConversationUsage({ used: 0, limit: null, limit_reached: false });
     closeStudyChatSidebarAfterNavigation();
     currentPageRef.current = "voice";
     setCurrentPage("voice");
