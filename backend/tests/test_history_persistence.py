@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import sys
 import tempfile
@@ -67,6 +68,39 @@ class HistoryPersistenceTests(unittest.TestCase):
         self.assertIsNotNone(main.get_history_item_for_user(email, "keep"))
         self.assertTrue(main.delete_history_item_for_user(email, "keep"))
         self.assertIsNone(main.get_history_item_for_user(email, "keep"))
+
+    def test_history_returns_more_than_the_old_twenty_four_item_cap(self):
+        email = "student@example.com"
+        for index in range(35):
+            main.upsert_history_item_for_user(
+                email,
+                {
+                    "id": f"lecture-{index:02d}",
+                    "title": f"Lecture {index}",
+                    "createdAt": f"2026-09-{(index % 28) + 1:02d}T10:00:00+00:00",
+                    "updatedAt": f"2026-09-{(index % 28) + 1:02d}T10:00:00+00:00",
+                },
+            )
+
+        self.assertEqual(len(main.get_history_items_for_user(email)), 35)
+
+    def test_legacy_missing_timestamps_use_database_dates_instead_of_now(self):
+        email = "student@example.com"
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO study_history_items (email, id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    email,
+                    "legacy",
+                    json.dumps({"id": "legacy", "title": "Legacy lecture"}),
+                    "2025-01-02T10:00:00+00:00",
+                    "2025-01-03T10:00:00+00:00",
+                ),
+            )
+
+        item = main.get_history_item_for_user(email, "legacy")
+        self.assertEqual(item["createdAt"], "2025-01-02T10:00:00+00:00")
+        self.assertEqual(item["updatedAt"], "2025-01-03T10:00:00+00:00")
 
 
 if __name__ == "__main__":

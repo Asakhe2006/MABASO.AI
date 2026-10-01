@@ -34,13 +34,12 @@ function CollaborationProfileContactPortal({ draft, setDraft, disabled, onSave, 
   const setFlag = (field) => (event) => setDraft((current) => ({ ...current, [field]: event.target.checked }));
   return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose exactly what students can see. Your contact details stay private unless you allow them below.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Display name" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy"><label><span>Discoverable by academic interests</span><input type="checkbox" checked={Boolean(draft.discoverable)} onChange={setFlag("discoverable")} disabled={disabled} /></label><label><span>Show institution</span><input type="checkbox" checked={Boolean(draft.show_institution)} onChange={setFlag("show_institution")} disabled={disabled} /></label><label><span>Show my account email in Discover</span><input type="checkbox" checked={Boolean(draft.show_email)} onChange={setFlag("show_email")} disabled={disabled} /></label><label><span>Show my personal number in Discover</span><input type="checkbox" checked={Boolean(draft.show_phone)} onChange={setFlag("show_phone")} disabled={disabled} /></label><label><span>Allow collaboration requests</span><input type="checkbox" checked={Boolean(draft.allow_requests)} onChange={setFlag("allow_requests")} disabled={disabled} /></label></div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
 }
-function CollaborationRoomStudyGuide({ roomId, title, intro, sections, canGenerate, isGenerating, onGenerate, renderMarkdown }) {
+function CollaborationRoomStudyGuide({ title, intro, sections, canGenerate, isGenerating, onGenerate, renderMarkdown }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [isFullView, setIsFullView] = useState(false);
   const slides = [{ id: "intro", title, content: intro }, ...(sections || []).map((section, index) => ({ id: `${section.normalizedHeading || section.heading || "section"}-${index}`, title: section.displayHeading || section.heading || `Section ${index + 1}`, content: section.content }))];
   const activeIndex = Math.min(Math.max(slideIndex, 0), Math.max(slides.length - 1, 0));
   const activeSlide = slides[activeIndex] || slides[0];
-  useEffect(() => { setSlideIndex(0); setIsFullView(false); }, [roomId]);
   useEffect(() => {
     if (!isFullView) return undefined;
     const onKeyDown = (event) => { if (event.key === "Escape") setIsFullView(false); if (event.key === "ArrowLeft") setSlideIndex((current) => Math.max(0, current - 1)); if (event.key === "ArrowRight") setSlideIndex((current) => Math.min(slides.length - 1, current + 1)); };
@@ -115,7 +114,7 @@ const SUPPORT_CONTACT_CATEGORIES = [
   "Feature request",
   "General feedback",
 ];
-const ROOM_REFRESH_INTERVAL_MS = 5000;
+const ROOM_REFRESH_INTERVAL_MS = 3000;
 const ROOM_LIST_REFRESH_INTERVAL_MS = 30000;
 const ROOM_NOTES_AUTOSAVE_DELAY_MS = 900;
 const ROOM_NOTES_REMOTE_SYNC_GRACE_MS = 2200;
@@ -162,6 +161,7 @@ const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
 const WORKSPACE_CONTEXT_ID_STORAGE_KEY = "mabaso-workspace-context-id-v1";
 const STUDY_CHAT_CONTEXT_ID_STORAGE_KEY = "mabaso-study-chat-context-id-v1";
 const AUTH_SYNC_STORAGE_KEY = "mabaso-auth-sync-v1";
+const AUTH_MANUAL_LOGOUT_KEY = "mabaso-manual-logout-v1";
 const EXPLICIT_PROTECTED_PREVIEW_PATH_KEY = "mabaso-explicit-protected-preview-path";
 const ROOM_INVITE_STORAGE_KEY = "mabaso-collaboration-invite-v1";
 const ROOM_INVITE_DISMISSALS_STORAGE_KEY = "mabaso-collaboration-invite-dismissals-v1";
@@ -175,7 +175,7 @@ let runtimeCsrfToken = "";
 let csrfRefreshPromise = null;
 const RECOVERED_RECORDING_STORE_KEY = "lecture-recording";
 const BRAND_ART_URL = "/mabaso-social.svg";
-const MAX_HISTORY_ITEMS = 24;
+const MAX_HISTORY_ITEMS = 250;
 const MAX_CHAT_REFERENCE_ATTACHMENTS = 15;
 const MAX_CHAT_REFERENCE_IMAGES = 4;
 const AI_CHAT_MODE_OPTIONS = [
@@ -4020,7 +4020,10 @@ function normalizeHistoryItems(items = []) {
     const itemId = String(nextItem.id || "").trim();
     if (!itemId) continue;
     nextItem.id = itemId;
-    nextItem.createdAt = nextItem.createdAt || new Date().toISOString();
+    // Legacy records occasionally have one timestamp missing. Giving those
+    // records the current time made old lectures jump ahead of recent work on
+    // every refresh. Use the other durable timestamp (or epoch) instead.
+    nextItem.createdAt = nextItem.createdAt || nextItem.updatedAt || "1970-01-01T00:00:00.000Z";
     nextItem.updatedAt = nextItem.updatedAt || nextItem.createdAt;
 
     const existingItem = byId.get(itemId);
@@ -8814,10 +8817,6 @@ export default function App() {
     const rightIsHighlighted = right.id === highlightedInviteRoomId ? 1 : 0;
     if (leftIsHighlighted !== rightIsHighlighted) return rightIsHighlighted - leftIsHighlighted;
 
-    const leftIsInvited = left.owner_email !== normalizedAuthEmail ? 1 : 0;
-    const rightIsInvited = right.owner_email !== normalizedAuthEmail ? 1 : 0;
-    if (leftIsInvited !== rightIsInvited) return rightIsInvited - leftIsInvited;
-
     return new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime();
   });
   const invitedCollaborationRooms = sortedCollaborationRooms.filter((room) => room.owner_email !== normalizedAuthEmail);
@@ -11870,7 +11869,7 @@ export default function App() {
         );
       }
       if (collaborationMaterialFilter === "study_guide") {
-        return <CollaborationRoomStudyGuide roomId={activeRoom.id} title={activeRoomGuideTopic} intro={activeRoomGuideSummarySection?.content || activeRoomFormattedGuide || ""} sections={activeRoomVisibleGuideSections} canGenerate={activeRoom.is_owner} isGenerating={generatingRoomMaterial === "guide"} onGenerate={() => void generateCollaborationMaterial("guide")} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} />;
+        return <CollaborationRoomStudyGuide key={activeRoom.id} title={activeRoomGuideTopic} intro={activeRoomGuideSummarySection?.content || activeRoomFormattedGuide || ""} sections={activeRoomVisibleGuideSections} canGenerate={activeRoom.is_owner} isGenerating={generatingRoomMaterial === "guide"} onGenerate={() => void generateCollaborationMaterial("guide")} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} />;
       }
       if (collaborationMaterialFilter === "formulas") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Formulas</small><h3>Shared formula sheet</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("formulas")} disabled={generatingRoomMaterial === "formulas"}>{generatingRoomMaterial === "formulas" ? "Generating..." : activeRoomFormattedFormula ? "Regenerate" : "Generate formulas"}</button> : null}</div>{activeRoomFormattedFormula ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedFormula}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated a shared formula sheet yet.</p>}</section>;
       if (collaborationMaterialFilter === "examples") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Worked Examples</small><h3>Shared step-by-step practice</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("examples")} disabled={generatingRoomMaterial === "examples"}>{generatingRoomMaterial === "examples" ? "Generating..." : activeRoomFormattedExample ? "Regenerate" : "Generate examples"}</button> : null}</div>{activeRoomFormattedExample ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedExample}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated shared worked examples yet.</p>}</section>;
@@ -11947,7 +11946,7 @@ export default function App() {
 
           <main className={`collaboration-center-stage ${selectedCollaborationMaterial ? "has-open-material" : ""} ${isCollaborationBoardMinimized ? "is-board-minimized" : ""}`}>
             {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">←</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} onClick={() => { if (isCollaborationBoardMinimized) { setIsCollaborationBoardMinimized(false); setSelectedCollaborationMaterial(null); } else setIsCollaborationBoardMinimized(true); }}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore panels" : "Expand Chat"}</button></div> : null}
-            {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} /> : null}
+            {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} /> : null}
             {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload photos and open them in a large viewer." : "Upload videos and watch them inside Mabaso AI."}</small></div><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
             <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">No materials have been shared yet.</p> : null}</div></section>
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
@@ -16752,22 +16751,24 @@ export default function App() {
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Google sign-in failed.");
       applyAuthResponse(data, data.email || previewEmail || "", { promptForMode: false });
-      const confirmation = await checkSharedSession({
+      // The login response already established the secure cookie. Do not keep
+      // the user behind a workspace loader while the session endpoint performs a second
+      // network round trip; verify it independently in the background.
+      void checkSharedSession({
         force: false,
         background: true,
         retryUnauthorizedOnce: true,
+      }).then((confirmation) => {
+        if (confirmation.status === "unauthenticated") {
+          clearSession("Google sign-in could not establish a secure session. Please try again.");
+        } else if (confirmation.status === "unknown") {
+          setAuthMessage("Signed in. We are reconnecting securely in the background.");
+        }
       });
-      if (confirmation.status === "unauthenticated") {
-        throw new Error("Google sign-in could not establish a secure session. Please try again.");
-      }
       setStatus("Signed in successfully.");
-      setAuthMessage(
-        confirmation.status === "unknown"
-          ? "Signed in. We are reconnecting securely in the background."
-          : data?.available_modes?.includes("admin")
-            ? "Choose user mode or protected mode to continue."
-            : "You are signed in.",
-      );
+      setAuthMessage(data?.available_modes?.includes("admin")
+        ? "Choose user mode or protected mode to continue."
+        : "You are signed in.");
     } catch (err) {
       setAuthMessage(getReadableRequestError(err) || "Google sign-in failed.");
     } finally {
@@ -21564,13 +21565,18 @@ export default function App() {
         const localItems = loadHistoryItems(authEmail)
           .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
           .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
-        const shouldImportLocalItems = serverItems.length === 0 && localItems.length > 0;
         const localItemsById = new Map(localItems.map((item) => [item.id, item]));
         const hydratedIndexItems = serverItems.map((item) => {
           const cachedItem = localItemsById.get(item.id);
           return cachedItem && cachedItem.updatedAt === item.updatedAt ? cachedItem : item;
         });
-        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(localItems) : hydratedIndexItems;
+        // Preserve locally saved work that did not reach the server during a
+        // slow/offline request. Server timestamps still win when both copies
+        // exist, while local-only lectures are uploaded instead of disappearing.
+        const mergedAccountItems = mergeHistoryItems(hydratedIndexItems, localItems);
+        const localOnlyItemsExist = localItems.some((item) => !serverItems.some((serverItem) => serverItem.id === item.id));
+        const shouldImportLocalItems = localItems.length > 0 && (serverItems.length === 0 || localOnlyItemsExist);
+        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(mergedAccountItems) : mergedAccountItems;
         if (cancelled) return;
         historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
         skipNextHistorySyncRef.current = true;
@@ -22276,6 +22282,13 @@ export default function App() {
   const confirmLogout = async () => {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
+    // A device-level tombstone prevents a stale HttpOnly cookie from silently
+    // restoring an account when the logout request is interrupted.
+    try {
+      window.localStorage.setItem(AUTH_MANUAL_LOGOUT_KEY, "true");
+    } catch {
+      // Continue with server logout even if storage is unavailable.
+    }
     try {
       if (authToken) await authFetch("/auth/logout", { method: "POST", timeoutMs: 3500 });
     } catch {
@@ -29572,7 +29585,6 @@ export default function App() {
     && !activeSitePage
     && (
       Boolean(activeProtectedWorkspaceRoute)
-      || hasRestorableSessionState
       || !["/", "/signin", "/register", "/payment-success"].includes(browserPath)
     );
 

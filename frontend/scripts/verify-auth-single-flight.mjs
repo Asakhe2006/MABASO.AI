@@ -20,6 +20,10 @@ assert.match(authSource, /requestRevision !== sessionStateRevision/, "Stale sess
 assert.match(authSource, /status:\s*"unknown"/, "AuthContext must classify timeout, network, and 5xx session checks as unknown.");
 assert.match(authSource, /response\.status === 401 \|\| response\.status === 403/, "Only definite 401/403 responses should mark the session unauthenticated.");
 assert.match(authSource, /retryUnauthorizedOnce/, "Fresh sign-ins must tolerate one cookie-propagation delay before becoming unauthenticated.");
+assert.match(authSource, /AUTH_MANUAL_LOGOUT_KEY/, "Auth bootstrap must honor an explicit device logout marker.");
+assert.match(authSource, /hasManualLogoutMarker\(\)/, "A manually logged-out browser must not silently restore a stale cookie session.");
+assert.match(authSource, /removeItem\(AUTH_MANUAL_LOGOUT_KEY\)/, "A new explicit login must clear the manual logout marker.");
+assert.match(appSource, /setItem\(AUTH_MANUAL_LOGOUT_KEY, "true"\)/, "Confirmed logout must persist the device logout marker before the network request.");
 assert.match(authSource, /\["checking", "unknown", "authenticated"\]/, "Transient verification failures must keep retrying without logging out an authenticated user.");
 assert.match(appSource, /sharedAuthStatus === "unknown"/, "App.jsx must keep restorable sessions available while auth is unknown.");
 assert.match(appSource, /loadPersistedAuthStateToken/, "App.jsx must restore the cookie-backed local auth marker before the background session check finishes.");

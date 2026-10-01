@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 const AuthContext = createContext(null);
 const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
+const AUTH_MANUAL_LOGOUT_KEY = "mabaso-manual-logout-v1";
 const SESSION_CHECK_TIMEOUT_MS = 6500;
 const SESSION_RETRY_DELAYS_MS = Object.freeze([800, 1600, 3000, 5000, 5000]);
 const SESSION_UNKNOWN_MESSAGE = "Session check is still restoring. We will retry in the background.";
@@ -9,6 +10,14 @@ const SESSION_UNKNOWN_MESSAGE = "Session check is still restoring. We will retry
 let startupSessionPromise = null;
 let startupSessionResult = null;
 let sessionStateRevision = 0;
+
+function hasManualLogoutMarker() {
+  try {
+    return window.localStorage.getItem(AUTH_MANUAL_LOGOUT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -42,6 +51,9 @@ async function parseJsonSafe(response) {
 }
 
 async function requestSession({ retryUnauthorizedOnce = false } = {}) {
+  if (hasManualLogoutMarker()) {
+    return { status: "unauthenticated", session: null, error: "" };
+  }
   const startedAt = performance.now();
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), SESSION_CHECK_TIMEOUT_MS);
@@ -110,11 +122,10 @@ function getSessionSingleFlight({ force = false, retryUnauthorizedOnce = false }
 
 export function AuthProvider({ children }) {
   const retryAttemptRef = useRef(0);
-  const [authState, setAuthState] = useState(() => startupSessionResult || {
-    status: "checking",
-    session: null,
-    error: "",
-  });
+  const lastBackgroundCheckAtRef = useRef(0);
+  const [authState, setAuthState] = useState(() => startupSessionResult || (hasManualLogoutMarker()
+    ? { status: "unauthenticated", session: null, error: "" }
+    : { status: "checking", session: null, error: "" }));
 
   const checkSession = useCallback(async ({ force = false, background = false, retryUnauthorizedOnce = false } = {}) => {
     if (!background) {
@@ -139,6 +150,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   const acceptSession = useCallback((session) => {
+    try {
+      window.localStorage.removeItem(AUTH_MANUAL_LOGOUT_KEY);
+    } catch {
+      // The authenticated in-memory state is still valid if storage is unavailable.
+    }
     const nextState = { status: "authenticated", session, error: "" };
     sessionStateRevision += 1;
     startupSessionResult = nextState;
@@ -154,6 +170,11 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (startupSessionResult) return;
+    if (hasManualLogoutMarker()) {
+      const result = { status: "unauthenticated", session: null, error: "" };
+      startupSessionResult = result;
+      return;
+    }
     let active = true;
     void getSessionSingleFlight().then((result) => {
       if (!active) return;
@@ -189,6 +210,23 @@ export function AuthProvider({ children }) {
     }, delay);
     return () => window.clearTimeout(timer);
   }, [authState.error, authState.status]);
+
+  useEffect(() => {
+    if (authState.status !== "authenticated") return undefined;
+    const verifyWhenActive = () => {
+      if (document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (now - lastBackgroundCheckAtRef.current < 60_000) return;
+      lastBackgroundCheckAtRef.current = now;
+      void checkSession({ force: true, background: true });
+    };
+    window.addEventListener("focus", verifyWhenActive);
+    document.addEventListener("visibilitychange", verifyWhenActive);
+    return () => {
+      window.removeEventListener("focus", verifyWhenActive);
+      document.removeEventListener("visibilitychange", verifyWhenActive);
+    };
+  }, [authState.status, checkSession]);
 
   const value = useMemo(() => ({
     ...authState,

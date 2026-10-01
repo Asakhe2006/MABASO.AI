@@ -13,6 +13,73 @@ function PresentationViewer({ presentation, renderVisual }) {
   return <div className="collab-presentation-viewer"><div className="collab-slide-stage"><div className="collab-slide-copy"><small>Slide {index + 1} of {slides.length}</small><h2>{slide.title || `Slide ${index + 1}`}</h2>{slide.subtitle ? <p>{slide.subtitle}</p> : null}<ul>{(slide.bullets || slide.points || []).map((bullet, bulletIndex) => <li key={bulletIndex}>{typeof bullet === "string" ? bullet : bullet.text || bullet.title}</li>)}</ul>{slide.speakerNotes ? <details><summary>Speaker notes</summary><p>{slide.speakerNotes}</p></details> : null}</div>{renderVisual ? <div className="collab-slide-visual">{renderVisual(slide)}</div> : null}</div><div className="collab-slide-controls"><button type="button" onClick={() => setIndex((current) => Math.max(0, current - 1))} disabled={index === 0}>Previous</button><span>{index + 1} / {slides.length}</span><button type="button" onClick={() => setIndex((current) => Math.min(slides.length - 1, current + 1))} disabled={index >= slides.length - 1}>Next</button></div></div>;
 }
 
+function buildStudyGuideSlides(snapshot = {}, fallbackTitle = "Study Guide") {
+  const source = String(snapshot.summary || snapshot.transcript || "").trim();
+  const slides = [];
+  const headingPattern = /^#{1,4}\s+(.+)$/gm;
+  const matches = [...source.matchAll(headingPattern)];
+  if (!matches.length && source) {
+    slides.push({ id: "overview", title: fallbackTitle, content: source });
+  } else if (source) {
+    const introduction = source.slice(0, matches[0]?.index || 0).trim();
+    if (introduction) slides.push({ id: "overview", title: fallbackTitle, content: introduction });
+    matches.forEach((match, index) => {
+      const start = Number(match.index || 0) + match[0].length;
+      const end = index + 1 < matches.length ? Number(matches[index + 1].index || source.length) : source.length;
+      slides.push({ id: `section-${index}`, title: match[1].trim(), content: source.slice(start, end).trim() });
+    });
+  }
+  if (snapshot.formula) slides.push({ id: "formulas", title: "Formula Sheet", content: snapshot.formula });
+  if (snapshot.example) slides.push({ id: "examples", title: "Worked Examples", content: snapshot.example });
+  return slides.filter((slide) => slide.title || slide.content);
+}
+
+function StudyGuideViewer({ snapshot, title, renderMarkdown }) {
+  const slides = useMemo(() => buildStudyGuideSlides(snapshot, title), [snapshot, title]);
+  const [index, setIndex] = useState(0);
+  const [fullView, setFullView] = useState(false);
+  const activeIndex = Math.min(index, Math.max(0, slides.length - 1));
+  const slide = slides[activeIndex];
+
+  useEffect(() => {
+    if (!fullView) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setFullView(false);
+      if (event.key === "ArrowLeft") setIndex((current) => Math.max(0, current - 1));
+      if (event.key === "ArrowRight") setIndex((current) => Math.min(slides.length - 1, current + 1));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullView, slides.length]);
+
+  if (!slide) return <p className="collab-material-empty">This shared Study Guide has no readable slide content.</p>;
+  const renderSlide = (isFull = false) => (
+    <article className={`collab-study-guide-slide ${isFull ? "is-full" : ""}`}>
+      <small>Study Guide · Slide {activeIndex + 1}</small>
+      <h2>{slide.title}</h2>
+      <div>{renderMarkdown(slide.content)}</div>
+      {slide.id === "overview" && (snapshot.study_images || []).length ? (
+        <div className="collab-study-guide-figures">
+          {snapshot.study_images.slice(0, 2).map((image, imageIndex) => (
+            <figure key={image.id || image.image_url || imageIndex}>
+              <img src={image.image_url || image.url} alt={image.title || image.caption || `Study figure ${imageIndex + 1}`} loading="lazy" />
+              <figcaption>{image.title || image.caption || `Figure ${imageIndex + 1}`}</figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+  const controls = (className = "") => (
+    <div className={`collab-slide-controls ${className}`}>
+      <button type="button" onClick={() => setIndex((current) => Math.max(0, current - 1))} disabled={activeIndex === 0}>Previous</button>
+      <span>{activeIndex + 1} / {slides.length}</span>
+      <button type="button" onClick={() => setIndex((current) => Math.min(slides.length - 1, current + 1))} disabled={activeIndex >= slides.length - 1}>Next</button>
+    </div>
+  );
+  return <div className="collab-study-guide-viewer"><button type="button" className="collab-study-guide-expand" onClick={() => setFullView(true)}><Maximize2 aria-hidden="true" /> Full view</button>{renderSlide()}{controls()}{fullView ? <div className="collab-study-guide-fullscreen" role="dialog" aria-modal="true" aria-label={`${title} full view`}><header><div><small>Shared Study Guide</small><h2>{title}</h2></div><button type="button" onClick={() => setFullView(false)} aria-label="Close full view"><X aria-hidden="true" /></button></header><main>{renderSlide(true)}</main>{controls("is-full-view")}<nav aria-label="Study Guide slides">{slides.map((item, slideIndex) => <button key={item.id} type="button" className={slideIndex === activeIndex ? "is-active" : ""} onClick={() => setIndex(slideIndex)}><span>{slideIndex + 1}</span>{item.title}</button>)}</nav></div> : null}</div>;
+}
+
 function PodcastViewer({ podcast }) {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
@@ -29,7 +96,7 @@ function MediaViewer({ item, url }) {
 }
 
 export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderMarkdown, renderPresentationVisual, renderMindMap, noteQualityPanel }) {
-  const snapshot = item?.source?.snapshot || {};
+  const snapshot = useMemo(() => item?.source?.snapshot || {}, [item?.source?.snapshot]);
   const type = item?.material_type || "study_guide";
   const body = useMemo(() => snapshot.summary || snapshot.transcript || "", [snapshot]);
   useEffect(() => { window.requestAnimationFrame(() => document.querySelector(".collab-material-document")?.scrollTo?.({ top: 0 })); }, [item?.id]);
@@ -42,7 +109,7 @@ export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderM
     {type === "mind_map" ? <article className="collab-mind-map"><h3>{snapshot.mind_map?.title || snapshot.mind_map?.root?.title || "Shared mind map"}</h3>{snapshot.mind_map?.root && renderMindMap ? renderMindMap(snapshot.mind_map.root) : <p className="collab-material-empty">This shared mind map has no visual data.</p>}</article> : null}
     {type === "flashcards" ? <div className="collab-flashcard-grid">{(snapshot.flashcards || []).map((card, index) => <article key={index}><small>Card {index + 1}</small><h3>{card.front || card.question || card.term}</h3><p>{card.back || card.answer || card.definition}</p></article>)}</div> : null}
     {type === "quiz" ? <div className="collab-quiz-list">{(snapshot.quiz_questions || []).map((question, index) => <article key={index}><small>Question {index + 1}</small><h3>{question.question || question.prompt || question}</h3>{question.answer ? <details><summary>Show answer</summary><p>{question.answer}</p></details> : null}</article>)}</div> : null}
-    {["study_guide", "material"].includes(type) && body ? <article className="collab-study-guide-document">{renderMarkdown(body)}{snapshot.formula ? <section><h2>Formulas</h2>{renderMarkdown(snapshot.formula)}</section> : null}{snapshot.example ? <section><h2>Worked examples</h2>{renderMarkdown(snapshot.example)}</section> : null}{(snapshot.study_images || []).length ? <section className="collab-study-images"><h2>Study images</h2>{snapshot.study_images.map((image, index) => <figure key={image.id || image.image_url || index}><img src={image.image_url || image.url} alt={image.title || image.caption || `Study figure ${index + 1}`} loading="lazy" /><figcaption><strong>{image.title || `Figure ${index + 1}`}</strong>{image.caption ? <span>{image.caption}</span> : null}</figcaption></figure>)}</section> : null}</article> : null}
+    {["study_guide", "material"].includes(type) && body ? <StudyGuideViewer snapshot={snapshot} title={item.title || "Study Guide"} renderMarkdown={renderMarkdown} /> : null}
     {!["video", "image", "presentation", "note", "podcast", "mind_map", "flashcards", "quiz", "study_guide", "material"].includes(type) && body ? <article>{renderMarkdown(body)}</article> : null}
     {!body && !snapshot.presentation?.slides?.length && !snapshot.podcast && !snapshot.mind_map && !(snapshot.flashcards || []).length && !(snapshot.quiz_questions || []).length && !["video", "image", "note"].includes(type) ? <p className="collab-material-empty">This shared item has no preview data. Its owner may need to share it again.</p> : null}
   </div></section>;

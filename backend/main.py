@@ -340,7 +340,7 @@ LECTURE_ASSISTANT_VOICE_SYSTEM_PROMPT = (
     )
     or ""
 ).strip()
-MAX_HISTORY_ITEMS = int(os.getenv("MAX_HISTORY_ITEMS", "24"))
+MAX_HISTORY_ITEMS = max(24, min(500, int(os.getenv("MAX_HISTORY_ITEMS", "250"))))
 ADMIN_DASHBOARD_AUDIT_LOG_LIMIT = int(os.getenv("ADMIN_DASHBOARD_AUDIT_LOG_LIMIT", "8000"))
 ADMIN_DASHBOARD_HISTORY_LIMIT = int(os.getenv("ADMIN_DASHBOARD_HISTORY_LIMIT", "1200"))
 ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT = int(os.getenv("ADMIN_DASHBOARD_SUPPORT_MESSAGE_LIMIT", "240"))
@@ -10778,7 +10778,7 @@ def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT payload_json
+            SELECT payload_json, created_at, updated_at
             FROM study_history_items
             WHERE lower(email) = ?
             ORDER BY updated_at DESC
@@ -10790,7 +10790,11 @@ def get_history_items_for_user(email: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for row in rows:
         try:
-            item = normalize_history_item_payload(json.loads(row["payload_json"]))
+            raw_item = json.loads(row["payload_json"])
+            if isinstance(raw_item, dict):
+                raw_item.setdefault("createdAt", compact_text(row["created_at"]))
+                raw_item.setdefault("updatedAt", compact_text(row["updated_at"]) or compact_text(row["created_at"]))
+            item = normalize_history_item_payload(raw_item)
             item["ownerEmail"] = normalized_email
             items.append(item)
         except (json.JSONDecodeError, HTTPException):
@@ -10806,7 +10810,7 @@ def get_history_item_for_user(email: str, item_id: str) -> dict[str, Any] | None
     with get_db_connection() as connection:
         row = connection.execute(
             """
-            SELECT payload_json
+            SELECT payload_json, created_at, updated_at
             FROM study_history_items
             WHERE lower(email) = ? AND id = ?
             LIMIT 1
@@ -10816,7 +10820,11 @@ def get_history_item_for_user(email: str, item_id: str) -> dict[str, Any] | None
     if not row:
         return None
     try:
-        item = normalize_history_item_payload(json.loads(row["payload_json"]))
+        raw_item = json.loads(row["payload_json"])
+        if isinstance(raw_item, dict):
+            raw_item.setdefault("createdAt", compact_text(row["created_at"]))
+            raw_item.setdefault("updatedAt", compact_text(row["updated_at"]) or compact_text(row["created_at"]))
+        item = normalize_history_item_payload(raw_item)
     except (json.JSONDecodeError, HTTPException):
         return None
     item["ownerEmail"] = normalized_email
