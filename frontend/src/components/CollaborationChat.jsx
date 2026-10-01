@@ -55,7 +55,7 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
     <div className="collab-voice-player">
       <audio
         ref={audioRef}
-        src={mediaUrl}
+        src={message.local_url || mediaUrl}
         crossOrigin="use-credentials"
         preload="metadata"
         onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : duration)}
@@ -77,7 +77,7 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
 function ChatImageMessage({ message, mediaUrl }) {
   const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const source = mediaUrl(message.media_id);
+  const source = message.local_url || mediaUrl(message.media_id);
   return (
     <>
       <button type="button" className="collab-chat-photo" onClick={() => setExpanded(true)} aria-label="Enlarge room chat photo">
@@ -113,9 +113,9 @@ function MessageBubble({ message, previous, currentUserEmail, activeVoiceId, set
       <div className="mabaso-chat-bubble">
         {startsGroup ? <strong>{displaySender(message, currentUserEmail)}</strong> : null}
         {message.reply_preview ? <blockquote><b>{message.reply_preview.author_name || "Reply"}</b>{message.reply_preview.content}</blockquote> : null}
-        {message.message_type === "audio" && message.media_id ? (
-          <VoiceMessage message={message} mediaUrl={mediaUrl(message.media_id)} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} />
-        ) : message.message_type === "image" && message.media_id ? (
+        {message.message_type === "audio" && (message.media_id || message.local_url) ? (
+          <VoiceMessage message={message} mediaUrl={message.local_url || mediaUrl(message.media_id)} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} />
+        ) : message.message_type === "image" && (message.media_id || message.local_url) ? (
           <ChatImageMessage message={message} mediaUrl={mediaUrl} />
         ) : <p>{message.content}</p>}
         <span className="mabaso-chat-meta">{formatMessageTime(message.created_at)} {isOwn ? <CheckCheck aria-label={message.pending ? "Sending" : "Sent"} /> : null}</span>

@@ -7277,6 +7277,7 @@ export default function App() {
   const [selectedCollaborationMediaUrl, setSelectedCollaborationMediaUrl] = useState("");
   const [isLoadingCollaborationMedia, setIsLoadingCollaborationMedia] = useState(false);
   const [isUploadingCollaborationMedia, setIsUploadingCollaborationMedia] = useState(false);
+  const [collaborationMediaNameDraft, setCollaborationMediaNameDraft] = useState("");
   const [selectedCollaborationBoardItem, setSelectedCollaborationBoardItem] = useState(null);
   const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
   const [isCollaborationSettingsOpen, setIsCollaborationSettingsOpen] = useState(false);
@@ -7290,6 +7291,15 @@ export default function App() {
   const [isCollaborationChatExpanded, setIsCollaborationChatExpanded] = useState(false);
   const [isCollaborationChatMinimized, setIsCollaborationChatMinimized] = useState(false);
   const [isCollaborationBoardMinimized, setIsCollaborationBoardMinimized] = useState(false);
+  const [collaborationAdminControl, setCollaborationAdminControl] = useState(null);
+  const [isAdminControlConfirmOpen, setIsAdminControlConfirmOpen] = useState(false);
+  const [isAdminControlMenuOpen, setIsAdminControlMenuOpen] = useState(false);
+  const [isUpdatingAdminControl, setIsUpdatingAdminControl] = useState(false);
+  const [adminControlPage, setAdminControlPage] = useState(1);
+
+  useEffect(() => {
+    activeRoomRef.current = activeRoom;
+  }, [activeRoom]);
 
   useEffect(() => {
     if (!isSavingCollaborationProfile || typeof document === "undefined") return undefined;
@@ -7417,6 +7427,10 @@ export default function App() {
   const roomVoiceChunksRef = useRef([]);
   const roomVoiceStartedAtRef = useRef(0);
   const roomVoiceCancelRef = useRef(false);
+  const collaborationAdminEventSourceRef = useRef(null);
+  const collaborationAdminPublishTimerRef = useRef(0);
+  const collaborationAdminLastBringVersionRef = useRef(0);
+  const activeRoomRef = useRef(null);
   const collaborationRoomsRequestInFlightRef = useRef(false);
   const collaborationRoomRequestInFlightRef = useRef("");
   useEffect(() => () => {
@@ -7866,13 +7880,13 @@ export default function App() {
 
         <div className="mt-6 flex flex-wrap justify-end gap-3">
           <button type="button" onClick={() => setIsReportConfigOpen(false)} className="rounded-full border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white">Cancel</button>
-          <button type="button" onClick={() => generateReport({ closePanel: true })} disabled={isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Now..." : reportData.body?.trim() ? "↻ Regenerate Now" : "Generate Now"}</button>
+          <button type="button" onClick={onGenerate} disabled={isGeneratingReport} className="rounded-full bg-[linear-gradient(135deg,#10b981,#059669)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingReport ? "Generating Now..." : reportData.body?.trim() ? "↻ Regenerate Now" : "Generate Now"}</button>
         </div>
       </div>
     </div>
   );
 
-  const renderReportPanel = () => {
+  const renderReportPanel = (onGenerate = () => generateReport({ closePanel: true })) => {
     const hasReport = Boolean(reportData && (reportData.body || "").trim());
     const getReportActionClassName = (label) => (
       label === "EXPAND REPORT"
@@ -8201,7 +8215,7 @@ export default function App() {
     </div>
   );
 
-  const renderMindMapPanel = () => {
+  const renderMindMapPanel = (onGenerate = generateMindMap) => {
     const hasMindMap = Boolean(mindMapData.root);
     const selectedNode = selectedMindMapNode || mindMapData.root;
     const flattenedNodes = flattenMindMapNodes(mindMapData.root);
@@ -8215,7 +8229,7 @@ export default function App() {
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">Detects concepts, hierarchy, relationships, definitions, formulas, examples, processes, and source locations from your study material.</p>
             </div>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={generateMindMap} disabled={isGeneratingMindMap} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-[0_12px_30px_rgba(15,23,42,0.16)] ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(15,23,42,0.22)] disabled:translate-y-0 disabled:opacity-50">{isGeneratingMindMap ? "Generating Mind Map..." : hasMindMap ? "↻ Regenerate Mind Map" : "Generate Mind Map"}</button>
+              <button type="button" onClick={onGenerate} disabled={isGeneratingMindMap} className="rounded-full bg-white px-5 py-3 text-sm font-bold text-black shadow-[0_12px_30px_rgba(15,23,42,0.16)] ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:shadow-[0_16px_34px_rgba(15,23,42,0.22)] disabled:translate-y-0 disabled:opacity-50">{isGeneratingMindMap ? "Generating Mind Map..." : hasMindMap ? "↻ Regenerate Mind Map" : "Generate Mind Map"}</button>
               <button type="button" onClick={downloadMindMapJson} disabled={!hasMindMap} className="rounded-full border border-slate-200 bg-slate-950 px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">Export JSON</button>
             </div>
           </div>
@@ -8263,7 +8277,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={openMindMapFullscreen} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">Fullscreen</button>
                   {isMindMapFullscreen ? <button type="button" onClick={closeMindMapFullscreen} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white">Minimize</button> : null}
-                  <button type="button" onClick={generateMindMap} disabled={isGeneratingMindMap} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{isGeneratingMindMap ? "Generating..." : "↻ Regenerate"}</button>
+                  <button type="button" onClick={onGenerate} disabled={isGeneratingMindMap} className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{isGeneratingMindMap ? "Generating..." : "↻ Regenerate"}</button>
                   <button type="button" onClick={downloadMindMapPng} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PNG</button>
                   <button type="button" onClick={downloadMindMapSvg} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">SVG</button>
                   <button type="button" onClick={downloadMindMapPdf} className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-800">PDF</button>
@@ -8382,11 +8396,12 @@ export default function App() {
   const focusRoomReplyComposer = () => {
     if (typeof window === "undefined") return;
     const focusInput = () => {
-      if (!roomMessageInputRef.current) return;
-      roomMessageInputRef.current.focus();
-      const valueLength = roomMessageInputRef.current.value?.length || 0;
-      if (typeof roomMessageInputRef.current.setSelectionRange === "function") {
-        roomMessageInputRef.current.setSelectionRange(valueLength, valueLength);
+      const input = document.querySelector(".mabaso-room-chat.is-mobile-active .mabaso-chat-composer textarea, .mabaso-room-chat .mabaso-chat-composer textarea") || roomMessageInputRef.current;
+      if (!input) return;
+      input.focus();
+      const valueLength = input.value?.length || 0;
+      if (typeof input.setSelectionRange === "function") {
+        input.setSelectionRange(valueLength, valueLength);
       }
     };
     window.requestAnimationFrame(focusInput);
@@ -8517,6 +8532,9 @@ export default function App() {
 
     pendingCollaborationReplyRoomIdRef.current = normalizedRoomId;
     setCollaborationMessagePrompt(null);
+    setCollaborationMobileView("chat");
+    setIsCollaborationChatMinimized(false);
+    setIsCollaborationChatExpanded(false);
 
     if (!authToken) {
       persistPendingRoomInviteId(normalizedRoomId);
@@ -11874,10 +11892,10 @@ export default function App() {
       if (collaborationMaterialFilter === "formulas") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Formulas</small><h3>Shared formula sheet</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("formulas")} disabled={generatingRoomMaterial === "formulas"}>{generatingRoomMaterial === "formulas" ? "Generating..." : activeRoomFormattedFormula ? "Regenerate" : "Generate formulas"}</button> : null}</div>{activeRoomFormattedFormula ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedFormula}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated a shared formula sheet yet.</p>}</section>;
       if (collaborationMaterialFilter === "examples") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Worked Examples</small><h3>Shared step-by-step practice</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("examples")} disabled={generatingRoomMaterial === "examples"}>{generatingRoomMaterial === "examples" ? "Generating..." : activeRoomFormattedExample ? "Regenerate" : "Generate examples"}</button> : null}</div>{activeRoomFormattedExample ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedExample}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated shared worked examples yet.</p>}</section>;
       if (collaborationMaterialFilter === "note") return <section className="collaboration-embedded-tool">{renderNoteQualityPanel()}</section>;
-      if (collaborationMaterialFilter === "presentation") return <section className="collaboration-embedded-tool">{renderPresentationPanel()}</section>;
-      if (collaborationMaterialFilter === "mind_map") return <section className="collaboration-embedded-tool">{renderMindMapPanel()}</section>;
-      if (collaborationMaterialFilter === "podcast") return <section className="collaboration-embedded-tool">{renderPodcastPanel()}</section>;
-      if (collaborationMaterialFilter === "report") return <section className="collaboration-embedded-tool">{renderReportPanel()}</section>;
+      if (collaborationMaterialFilter === "presentation") return <section className="collaboration-embedded-tool">{renderPresentationPanel(() => generateCollaborationMaterial("presentation"))}</section>;
+      if (collaborationMaterialFilter === "mind_map") return <section className="collaboration-embedded-tool">{renderMindMapPanel(() => generateCollaborationMaterial("mind_map"))}</section>;
+      if (collaborationMaterialFilter === "podcast") return <section className="collaboration-embedded-tool">{renderPodcastPanel(() => generateCollaborationMaterial("podcast"))}</section>;
+      if (collaborationMaterialFilter === "report") return <section className="collaboration-embedded-tool">{renderReportPanel(() => generateCollaborationMaterial("report"))}</section>;
       if (collaborationMaterialFilter === "flashcards") {
         return (
           <section className="collaboration-embedded-tool">
@@ -11915,6 +11933,31 @@ export default function App() {
       }
       setCollaborationMobileView(view);
     };
+    const renderAdminControlActions = () => {
+      if (!activeRoom) return null;
+      const control = collaborationAdminControl || activeRoom.admin_control;
+      if (activeRoom.is_owner && !control?.active) {
+        return <button type="button" className="collaboration-admin-control-button" onClick={() => setIsAdminControlConfirmOpen(true)} title="Admin Control">▣ <span>Admin Control</span></button>;
+      }
+      if (!control?.active) return null;
+      if (activeRoom.is_owner) {
+        return (
+          <div className="collaboration-admin-control-actions">
+            <button type="button" className="is-controlling" onClick={() => setIsAdminControlMenuOpen((value) => !value)} title="Admin Control active">▣ <span>Controlling</span></button>
+            <button type="button" className="is-bring" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })} disabled={isUpdatingAdminControl}>Bring Everyone Here</button>
+            <button type="button" className="is-stop" onClick={() => void stopCollaborationAdminControl()} disabled={isUpdatingAdminControl}>Stop Control</button>
+            <button type="button" className="is-menu" onClick={() => setIsAdminControlMenuOpen((value) => !value)} aria-label="Open Admin Control options">⌄</button>
+            {isAdminControlMenuOpen ? <div className="collaboration-admin-control-menu"><button type="button" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })}>Bring Everyone Here</button><label><input type="checkbox" checked={Boolean(control.allow_explore)} onChange={(event) => void updateCollaborationAdminControl({ allowExplore: event.target.checked })} /> Allow members to Explore</label><button type="button" className="is-danger" onClick={() => void stopCollaborationAdminControl()}>Stop Control</button></div> : null}
+          </div>
+        );
+      }
+      return (
+        <div className="collaboration-admin-control-actions is-member">
+          <button type="button" onClick={() => control.allow_explore && setIsAdminControlMenuOpen((value) => !value)}>{followRoomView ? "✓ Following Admin" : "◉ Explore"} {control.allow_explore ? "⌄" : ""}</button>
+          {isAdminControlMenuOpen && control.allow_explore ? <div className="collaboration-admin-control-menu"><button type="button" className={followRoomView ? "is-selected" : ""} onClick={() => { setFollowRoomView(true); setIsAdminControlMenuOpen(false); applyCollaborationAdminControl(control, true); }}>✓ Following Admin<small>Automatically follow the owner's view</small></button><button type="button" className={!followRoomView ? "is-selected" : ""} onClick={() => { setFollowRoomView(false); setIsAdminControlMenuOpen(false); }}>◉ Explore<small>Browse Room materials independently</small></button></div> : null}
+        </div>
+      );
+    };
     return (
       <section className={`collaboration-product-shell ${isCollaborationChatMinimized ? "is-chat-minimized" : ""}`}>
         <header className="collaboration-global-bar">
@@ -11925,12 +11968,14 @@ export default function App() {
         <input ref={roomBoardImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { void uploadRoomBoardImages(event.target.files); event.target.value = ""; }} />
 
         {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} saveState={collaborationProfileSaveState} /> : null}
+        {isAdminControlConfirmOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => !isUpdatingAdminControl && setIsAdminControlConfirmOpen(false)}><section className="collaboration-admin-control-confirm" role="dialog" aria-modal="true" aria-label="Start Admin Control Mode" onMouseDown={(event) => event.stopPropagation()}><span>▣</span><h3>Start Admin Control Mode?</h3><p>Connected members who choose Follow Admin will move with your supported Room view. This never controls their device or browser outside Mabaso AI.</p><label><input type="checkbox" checked={collaborationAdminControl?.allow_explore ?? true} onChange={(event) => setCollaborationAdminControl((current) => ({ ...(current || {}), allow_explore: event.target.checked }))} /> Allow members to Explore independently</label><div><button type="button" onClick={() => setIsAdminControlConfirmOpen(false)} disabled={isUpdatingAdminControl}>Cancel</button><button type="button" className="is-primary" onClick={() => void startCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Starting..." : "Start Control"}</button></div></section></div> : null}
         <div className="collaboration-room-header">
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
-          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}<button type="button" onClick={() => setFollowRoomView((value) => !value)} className="collaboration-dark-button">{followRoomView ? "Following shared view" : "Follow shared view"}</button>{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
+          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
         </div>
+        {collaborationAdminControl?.active ? <div className="collaboration-admin-control-status" role="status"><i /> <strong>Admin Control active</strong><span>•</span><span>{activeRoom?.is_owner ? "Members are following your Room view" : followRoomView ? "Following admin" : "You are in Explore mode"}</span></div> : null}
         {(error || status) ? <div className={`collaboration-feedback ${error ? "is-error" : "is-success"}`} role={error ? "alert" : "status"}>{error || status}</div> : null}
-        {collaborationNotifications[0] ? <button type="button" className="collaboration-in-app-notification" onClick={() => { const roomId = collaborationNotifications[0]?.room_id; if (roomId) void openCollaborationRoom(roomId); }}><Bell className="h-4 w-4" aria-hidden="true" /><span><strong>{collaborationNotifications[0].title}</strong><small>{collaborationNotifications[0].message}</small></span></button> : null}
+        {collaborationNotifications[0] ? <button type="button" className="collaboration-in-app-notification" onClick={() => { const roomId = collaborationNotifications[0]?.room_id; if (roomId) void openCollaborationReplyComposer(roomId); }}><Bell className="h-4 w-4" aria-hidden="true" /><span><strong>{collaborationNotifications[0].title}</strong><small>{collaborationNotifications[0].message}</small></span></button> : null}
         {activeRoom ? <div className="collaboration-room-utility-actions" aria-label="Room controls"><button type="button" onClick={() => setIsCollaborationMembersOpen(true)}><UsersRound className="h-4 w-4" aria-hidden="true" />Members ({activeRoom.member_count || activeRoom.members?.length || 1})</button><button type="button" onClick={() => setIsCollaborationSettingsOpen(true)}><Settings className="h-4 w-4" aria-hidden="true" />Room settings</button></div> : null}
 
         <div className="collaboration-main-grid">
@@ -11946,9 +11991,9 @@ export default function App() {
 
           <main className={`collaboration-center-stage ${selectedCollaborationMaterial ? "has-open-material" : ""} ${isCollaborationBoardMinimized ? "is-board-minimized" : ""}`}>
             {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">←</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} onClick={() => { if (isCollaborationBoardMinimized) { setIsCollaborationBoardMinimized(false); setSelectedCollaborationMaterial(null); } else setIsCollaborationBoardMinimized(true); }}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore panels" : "Expand Chat"}</button></div> : null}
-            {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} /> : null}
-            {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload photos and open them in a large viewer." : "Upload videos and watch them inside Mabaso AI."}</small></div><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
-            <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">No materials have been shared yet.</p> : null}</div></section>
+            {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} page={adminControlPage} onPageChange={setAdminControlPage} /> : null}
+            {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload the photo itself; add a name only if you want one." : "Upload videos and watch them inside Mabaso AI."}</small></div><input value={collaborationMediaNameDraft} onChange={(event) => setCollaborationMediaNameDraft(event.target.value)} placeholder={collaborationMaterialFilter === "image" ? "Photo name (optional)" : "Video name (optional)"} maxLength={180} /><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
+            <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "image" && item.source?.media_id ? <img src={`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(item.source.media_id)}`} alt="" loading="lazy" /> : item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.material_type === "image" ? (item.title || "") : <>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</>}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">No materials have been shared yet.</p> : null}</div></section>
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
             {(activeRoom?.board_images || []).length ? <section className="collaboration-board-uploads"><p>Board photos</p><div>{activeRoom.board_images.map((image) => <figure key={image.id}><img src={image.image_url} alt={image.name || "Board upload"} /><figcaption>{image.name || "Board photo"}</figcaption>{(image.uploaded_by === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={() => deleteRoomBoardImage(image.id)}>Remove</button> : null}</figure>)}</div></section> : null}          </main>
 
@@ -12338,7 +12383,7 @@ export default function App() {
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
             <p className="text-sm leading-7 text-sky-50">Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Generate below, then review the deck view as soon as the progress reaches 100%.</p>
             <div className="force-mobile-stack flex flex-wrap gap-3">
-              <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
+              <button type="button" onClick={onGenerate} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
               <button type="button" onClick={downloadPresentationFile} disabled={!presentationData.jobId} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-5 py-3 text-sm font-semibold text-sky-50 disabled:opacity-50">Download PowerPoint</button>
             </div>
           </div>
@@ -12355,7 +12400,7 @@ export default function App() {
                 <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{presentationData.subtitle || "A concise lecture deck is ready for download."}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-50 disabled:opacity-50">{isGeneratingPresentation ? "Generating..." : "↻ Regenerate"}</button>
+                <button type="button" onClick={onGenerate} disabled={isGeneratingPresentation} className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-2 text-xs font-bold text-sky-50 disabled:opacity-50">{isGeneratingPresentation ? "Generating..." : "↻ Regenerate"}</button>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{presentationData.slides.length} slides</div>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{activePresentationDesign.name}</div>
                 <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{outputLanguage}</div>
@@ -12435,7 +12480,7 @@ export default function App() {
 
   */
 
-  const renderPresentationPanel = () => {
+  const renderPresentationPanel = (onGenerate = generatePresentation) => {
     const showSetupView = presentationView === "setup";
     const showStatusView = presentationView === "status";
     const showViewerView = presentationView === "viewer" && presentationData.slides.length;
@@ -12528,7 +12573,7 @@ export default function App() {
               </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-sky-300/15 bg-sky-300/10 px-4 py-4">
                 <p className="text-sm leading-7 text-sky-50">{selectedPresentationTemplateName ? <>Preview style: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. The download will use <span className="font-semibold text-white">{selectedPresentationTemplateName}</span> while matching the generated slide order shown here.</> : <>Template selected: <span className="font-semibold text-white">{activePresentationDesign.name}</span>. Press generate to move to the presentation progress page.</>}</p>
-                <button type="button" onClick={generatePresentation} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
+                <button type="button" onClick={onGenerate} disabled={isGeneratingPresentation} className="rounded-full bg-[linear-gradient(135deg,#2563eb,#0ea5e9)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPresentation ? "Generating Slides..." : presentationData.slides.length ? "↻ Regenerate Presentation" : "Generate Presentation"}</button>
               </div>
             </div>
           </div>
@@ -12619,7 +12664,7 @@ export default function App() {
     );
   };
 
-  const renderPodcastPanel = () => (
+  const renderPodcastPanel = (onGenerate = generatePodcast) => (
     <div className="space-y-5">
       <div className="rounded-[24px] border border-amber-300/15 bg-[linear-gradient(180deg,rgba(120,53,15,0.28),rgba(12,10,9,0.92))] p-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -12629,7 +12674,7 @@ export default function App() {
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-200">Full podcast audio, exam-focused turns, and named voices.</p>
           </div>
           <div className="force-mobile-stack flex flex-wrap gap-3">
-            <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : podcastData.script ? "↻ Regenerate Podcast" : "Generate Podcast"}</button>
+            <button type="button" onClick={onGenerate} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full bg-[linear-gradient(135deg,#f59e0b,#f97316)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isGeneratingPodcast ? "Generating Podcast..." : podcastData.script ? "↻ Regenerate Podcast" : "Generate Podcast"}</button>
             <button type="button" onClick={downloadPodcastAudio} disabled={!podcastData.jobId} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-5 py-3 text-sm font-semibold text-amber-50 disabled:opacity-50">Download Audio</button>
           </div>
         </div>
@@ -12706,7 +12751,7 @@ export default function App() {
                   <p className="phone-safe-copy mt-3 text-sm leading-7 text-slate-300">{podcastData.overview || "The overview will appear here once the podcast is ready."}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={generatePodcast} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-50 disabled:opacity-50">{isGeneratingPodcast ? "Generating..." : "↻ Regenerate"}</button>
+                  <button type="button" onClick={onGenerate} disabled={isGeneratingPodcast || isLoadingPodcastAudio} className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-xs font-bold text-amber-50 disabled:opacity-50">{isGeneratingPodcast ? "Generating..." : "↻ Regenerate"}</button>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">About {podcastEstimatedMinutes} min</div>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.speakerCount || podcastSpeakerCount} voices</div>
                   <div className="rounded-full border border-white/10 bg-slate-950 px-3 py-2 text-xs text-slate-200">{podcastData.segments.length} debate turns</div>
@@ -21702,9 +21747,108 @@ export default function App() {
   const openCollaborationRoom = async (roomId, options = {}) => {
     const normalizedRoomId = normalizeCollaborationRoomId(roomId);
     if (!normalizedRoomId) return;
+    const previousRoom = activeRoomRef.current;
+    if (previousRoom?.id && previousRoom.id !== normalizedRoomId && previousRoom.is_owner && previousRoom.admin_control?.active) {
+      authFetch(`/collaboration/rooms/${previousRoom.id}/admin-control`, { method: "DELETE", keepalive: true }).catch(() => undefined);
+    }
     persistDismissedRoomInviteList(dismissedRoomInviteIds.filter((item) => item !== normalizedRoomId));
     openCollaborationPage({ refresh: false });
     await loadCollaborationRoom(normalizedRoomId, { resetNotesDraft: true, ...options });
+  };
+
+  const getCurrentCollaborationControlState = () => ({
+    view: ["materials", "chat", "board"].includes(collaborationMobileView) ? collaborationMobileView : "materials",
+    material_filter: collaborationMaterialFilter || "all",
+    material_id: selectedCollaborationMaterial?.id || "",
+    page: Math.max(1, Number(adminControlPage || 1)),
+    allow_explore: collaborationAdminControl?.allow_explore ?? true,
+  });
+
+  const applyCollaborationAdminControl = (control, forceFollow = false) => {
+    const normalizedControl = control && typeof control === "object" ? control : null;
+    setCollaborationAdminControl(normalizedControl);
+    setActiveRoom((room) => room ? { ...room, admin_control: normalizedControl } : room);
+    if (!normalizedControl?.active || activeRoomRef.current?.is_owner) return;
+    const bringVersion = Number(normalizedControl.bring_version || 0);
+    const wasBroughtHere = bringVersion > collaborationAdminLastBringVersionRef.current;
+    collaborationAdminLastBringVersionRef.current = Math.max(collaborationAdminLastBringVersionRef.current, bringVersion);
+    if (wasBroughtHere || !normalizedControl.allow_explore) setFollowRoomView(true);
+    if (!forceFollow && !wasBroughtHere && normalizedControl.allow_explore && !followRoomView) return;
+    const nextState = normalizedControl.state || {};
+    const nextView = ["materials", "chat", "board"].includes(nextState.view) ? nextState.view : "materials";
+    setCollaborationMobileView(nextView);
+    setCollaborationMaterialFilter(nextState.material_filter || "all");
+    setAdminControlPage(Math.max(1, Number(nextState.page || 1)));
+    if (nextView === "chat") setIsCollaborationChatMinimized(false);
+    const nextMaterial = (activeRoomRef.current?.materials || []).find((item) => item.id === nextState.material_id);
+    setSelectedCollaborationMaterial(nextMaterial || null);
+  };
+
+  const startCollaborationAdminControl = async () => {
+    if (!activeRoom?.id || !activeRoom.is_owner || isUpdatingAdminControl) return;
+    setIsUpdatingAdminControl(true);
+    setError("");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoom.id}/admin-control/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(getCurrentCollaborationControlState()),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not start Admin Control Mode.");
+      applyCollaborationAdminControl(data.control);
+      setIsAdminControlConfirmOpen(false);
+      setStatus("Admin Control Mode started. Connected members are following your Room view.");
+    } catch (err) {
+      setError(err.message || "Could not start Admin Control Mode.");
+    } finally {
+      setIsUpdatingAdminControl(false);
+    }
+  };
+
+  const stopCollaborationAdminControl = async () => {
+    if (!activeRoom?.id || !activeRoom.is_owner || isUpdatingAdminControl) return;
+    setIsUpdatingAdminControl(true);
+    try {
+      const response = await authFetch(`/collaboration/rooms/${activeRoom.id}/admin-control`, { method: "DELETE" });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not stop Admin Control Mode.");
+      applyCollaborationAdminControl(data.control);
+      setIsAdminControlMenuOpen(false);
+      setStatus("Admin Control Mode stopped. Members can navigate independently.");
+    } catch (err) {
+      setError(err.message || "Could not stop Admin Control Mode.");
+    } finally {
+      setIsUpdatingAdminControl(false);
+    }
+  };
+
+  const updateCollaborationAdminControl = async ({ bringEveryone = false, allowExplore } = {}) => {
+    if (!activeRoom?.id || !activeRoom.is_owner || !collaborationAdminControl?.active || isUpdatingAdminControl) return;
+    setIsUpdatingAdminControl(true);
+    setError("");
+    try {
+      const payload = {
+        ...getCurrentCollaborationControlState(),
+        allow_explore: typeof allowExplore === "boolean" ? allowExplore : collaborationAdminControl.allow_explore,
+      };
+      const response = await authFetch(
+        `/collaboration/rooms/${activeRoom.id}/admin-control/${bringEveryone ? "bring" : "state"}`,
+        {
+          method: bringEveryone ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not update Admin Control Mode.");
+      applyCollaborationAdminControl(data.control);
+      if (bringEveryone) setStatus("Connected members were brought to your current Room view.");
+    } catch (err) {
+      setError(err.message || "Could not update Admin Control Mode.");
+    } finally {
+      setIsUpdatingAdminControl(false);
+    }
   };
 
   const joinCollaborationRequest = async (roomId) => {
@@ -21808,6 +21952,74 @@ export default function App() {
       window.clearInterval(interval);
     };
   }, [activeRoomId, activeTab, authToken, currentPage, followRoomView]);
+
+  useEffect(() => {
+    const roomControl = activeRoom?.admin_control;
+    if (!roomControl) {
+      setCollaborationAdminControl(null);
+      return;
+    }
+    if (
+      Number(roomControl.version || 0) !== Number(collaborationAdminControl?.version || 0)
+      || Number(roomControl.bring_version || 0) !== Number(collaborationAdminControl?.bring_version || 0)
+      || Boolean(roomControl.active) !== Boolean(collaborationAdminControl?.active)
+    ) {
+      applyCollaborationAdminControl(roomControl);
+    }
+  }, [activeRoom?.admin_control, collaborationAdminControl?.active, collaborationAdminControl?.bring_version, collaborationAdminControl?.version]);
+
+  useEffect(() => {
+    const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+    if (!authToken || !activeRoomId || !isCollaborationVisible || typeof EventSource === "undefined") return undefined;
+    collaborationAdminEventSourceRef.current?.close();
+    const source = new EventSource(`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/admin-control/events`, { withCredentials: true });
+    collaborationAdminEventSourceRef.current = source;
+    source.addEventListener("control", (event) => {
+      try {
+        applyCollaborationAdminControl(JSON.parse(event.data || "{}"));
+      } catch {
+        // Periodic authenticated room refresh remains the fallback transport.
+      }
+    });
+    return () => {
+      source.close();
+      if (collaborationAdminEventSourceRef.current === source) collaborationAdminEventSourceRef.current = null;
+    };
+  }, [activeRoomId, activeTab, authToken, currentPage, followRoomView]);
+
+  useEffect(() => {
+    if (!activeRoomId || !activeRoom?.is_owner || !collaborationAdminControl?.active) return undefined;
+    const heartbeat = () => authFetch(`/collaboration/rooms/${activeRoomId}/admin-control/heartbeat`, { method: "POST", timeoutMs: 7000 })
+      .catch(() => undefined);
+    const interval = window.setInterval(heartbeat, 12000);
+    return () => window.clearInterval(interval);
+  }, [activeRoom?.is_owner, activeRoomId, collaborationAdminControl?.active]);
+
+  useEffect(() => {
+    if (!activeRoomId || !activeRoom?.is_owner || !collaborationAdminControl?.active) return undefined;
+    window.clearTimeout(collaborationAdminPublishTimerRef.current);
+    collaborationAdminPublishTimerRef.current = window.setTimeout(() => {
+      const payload = getCurrentCollaborationControlState();
+      authFetch(`/collaboration/rooms/${activeRoomId}/admin-control/state`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        timeoutMs: 7000,
+      }).then(parseJsonSafe).then((data) => {
+        if (data?.control) applyCollaborationAdminControl(data.control);
+      }).catch(() => undefined);
+    }, 180);
+    return () => window.clearTimeout(collaborationAdminPublishTimerRef.current);
+  }, [activeRoom?.is_owner, activeRoomId, adminControlPage, collaborationAdminControl?.active, collaborationAdminControl?.allow_explore, collaborationMaterialFilter, collaborationMobileView, selectedCollaborationMaterial?.id]);
+
+  useEffect(() => {
+    if (!activeRoomId || !activeRoom?.is_owner || !collaborationAdminControl?.active) return undefined;
+    const releaseControl = () => {
+      authFetch(`/collaboration/rooms/${activeRoomId}/admin-control`, { method: "DELETE", keepalive: true, timeoutMs: 5000 }).catch(() => undefined);
+    };
+    window.addEventListener("pagehide", releaseControl);
+    return () => window.removeEventListener("pagehide", releaseControl);
+  }, [activeRoom?.is_owner, activeRoomId, collaborationAdminControl?.active]);
 
   useEffect(() => {
     if (currentPage !== "collaboration") return undefined;
@@ -27617,6 +27829,7 @@ export default function App() {
         const formData = new FormData();
         formData.append("media", selectedFile);
         formData.append("media_kind", mediaKind);
+        formData.append("display_name", fileList.length === 1 ? collaborationMediaNameDraft.trim() : "");
         const response = await authFetch(`/collaboration/rooms/${activeRoomId}/media`, {
           method: "POST",
           body: formData,
@@ -27629,6 +27842,7 @@ export default function App() {
         setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
       }
       setCollaborationMaterialFilter(mediaKind);
+      setCollaborationMediaNameDraft("");
       void refreshCollaborationRooms(true);
       setStatus(`${uploadedItems.length} ${mediaKind}${uploadedItems.length === 1 ? "" : "s"} uploaded to the room.`);
       if (uploadedItems.length === 1) void openCollaborationMaterial(uploadedItems[0]);
@@ -27805,8 +28019,21 @@ export default function App() {
   const uploadRoomChatImage = async (selectedFile) => {
     const roomId = activeRoom?.id || activeRoomId;
     if (!roomId || !selectedFile) return;
+    const optimisticId = `pending-photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const previewUrl = URL.createObjectURL(selectedFile);
+    const optimisticMessage = {
+      id: optimisticId,
+      author_email: normalizedAuthEmail,
+      content: "",
+      message_type: "image",
+      media_id: "",
+      local_url: previewUrl,
+      created_at: new Date().toISOString(),
+      pending: true,
+    };
     setIsSendingRoomMessage(true);
     setError("");
+    setActiveRoom((room) => room ? { ...room, messages: [...(room.messages || []), optimisticMessage] } : room);
     try {
       const formData = new FormData();
       formData.append("image", selectedFile);
@@ -27821,13 +28048,15 @@ export default function App() {
       setActiveRoom((room) => room ? {
         ...room,
         updated_at: data.updated_at || room.updated_at,
-        messages: [...(room.messages || []), data.message],
+        messages: (room.messages || []).map((message) => message.id === optimisticId ? data.message : message),
       } : room);
       void refreshCollaborationRooms(true);
       setStatus("Photo sent to room chat.");
     } catch (err) {
+      setActiveRoom((room) => room ? { ...room, messages: (room.messages || []).filter((message) => message.id !== optimisticId) } : room);
       setError(err.message || "Could not send the room photo.");
     } finally {
+      window.setTimeout(() => URL.revokeObjectURL(previewUrl), 1000);
       setIsSendingRoomMessage(false);
     }
   };
@@ -28022,6 +28251,7 @@ export default function App() {
   };
 
   const openCollaborationMaterial = async (item) => {
+    setAdminControlPage(1);
     const source = item?.source || {};
     const isUploadedCollaborationMedia = source.kind === "uploaded_media" && Boolean(source.media_id);
     if (isUploadedCollaborationMedia) {
@@ -28504,12 +28734,165 @@ export default function App() {
     }
   };
 
+  const saveGeneratedCollaborationTool = async ({ toolId, title, description, snapshot }) => {
+    const response = await authFetch(`/collaboration/rooms/${activeRoomId}/material-items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title,
+        material_type: toolId,
+        description,
+        source: { kind: "room_generation", snapshot },
+      }),
+    });
+    const data = await parseJsonSafe(response);
+    if (!response.ok) throw new Error(data.detail || `Could not share the generated ${toolId.replaceAll("_", " ")} with the Room.`);
+    const replacedIds = new Set(data.replaced_ids || []);
+    setActiveRoom((room) => room ? {
+      ...room,
+      materials: [data.item, ...(room.materials || []).filter((item) => !replacedIds.has(item.id) && !(item.material_type === toolId && item.source?.kind === "room_generation"))],
+    } : room);
+    setCollaborationOpenMaterialTabs((current) => [data.item, ...current.filter((item) => item.id !== data.item.id && item.material_type !== toolId)].slice(0, 8));
+    setSelectedCollaborationMaterial(data.item);
+    return data.item;
+  };
+
+  const generateCollaborationAdvancedMaterial = async (toolId) => {
+    if (!activeRoom?.id || !activeRoom.is_owner) {
+      setError("Only the Room owner can generate shared study tools.");
+      return false;
+    }
+    const roomContext = {
+      transcript: activeRoom.transcript || "",
+      summary: activeRoom.summary || "",
+      lectureNotes: activeRoom.lecture_notes || "",
+      lectureSlides: activeRoom.lecture_slides || "",
+      pastQuestionPapers: "",
+      hasContent: Boolean(activeRoom.transcript || activeRoom.summary || activeRoom.lecture_notes || activeRoom.lecture_slides),
+      sourceLabel: activeRoom.title || "Collaboration Room",
+    };
+    if (!roomContext.hasContent && !(toolId === "report" && reportConfig.reportTitle.trim()) && !(toolId === "mind_map" && mindMapTopic.trim())) {
+      setError("Share lecture material in the Room before generating this study tool.");
+      return false;
+    }
+    if (toolId === "presentation" && !isPresentationTemplateAllowed(selectedPresentationDesign)) {
+      return blockLockedPlanOption("This PowerPoint template", "a higher presentation plan");
+    }
+    if (toolId === "mind_map" && !isMindMapDepthAllowed(mindMapDepth)) {
+      return blockLockedPlanOption(`Mind map ${mindMapDepth} depth`, mindMapDepth === "Research" ? "Premium" : "Pro");
+    }
+    if (toolId === "podcast" && !isPodcastSpeakerCountAllowed(podcastSpeakerCount)) {
+      return blockLockedPlanOption("3-speaker podcasts", "Pro");
+    }
+    if (toolId === "report" && !validateReportPlanAccess(reportConfig)) return false;
+    const featureLabels = { presentation: "Presentations", podcast: "Podcasts", report: "Reports", mind_map: "Mind maps" };
+    if (!(await ensurePremiumFeatureAvailable(toolId, featureLabels[toolId]))) return false;
+
+    setGeneratingRoomMaterial(toolId);
+    setCurrentJobType(toolId);
+    setProgress(0);
+    setError("");
+    setStatus(`Generating the Room ${featureLabels[toolId].toLowerCase()}...`);
+    try {
+      let itemConfig = null;
+      if (toolId === "presentation") {
+        setIsGeneratingPresentation(true);
+        setPresentationView("status");
+        const formData = new FormData();
+        formData.append("transcript", roomContext.transcript);
+        formData.append("summary", roomContext.summary);
+        formData.append("lecture_notes", roomContext.lectureNotes);
+        formData.append("lecture_slides", roomContext.lectureSlides);
+        formData.append("past_question_papers", "");
+        formData.append("design_id", selectedPresentationDesign);
+        formData.append("language", outputLanguage);
+        (activeRoom.study_images || []).map((image) => image.image_url).filter(Boolean).slice(0, 8).forEach((url) => formData.append("reference_images", url));
+        if (presentationTemplateFile) formData.append("template_file", presentationTemplateFile);
+        const response = await authFetch("/generate-presentation/", { method: "POST", body: formData, timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Room presentation generation failed.");
+        const job = await pollJob(data.job_id, "presentation");
+        const generated = normalizePresentationData({ jobId: data.job_id, title: job.presentation_title, subtitle: job.presentation_subtitle, designId: job.presentation_design_id, templateName: job.presentation_template_name, slides: job.presentation_slides });
+        setPresentationData(generated);
+        setSelectedPresentationSlideIndex(0);
+        setPresentationView("viewer");
+        itemConfig = { title: generated.title || `${activeRoom.title} presentation`, description: `${generated.slides.length} generated Room slides`, snapshot: { summary: roomContext.summary, transcript: roomContext.transcript, presentation: sanitizePresentationForHistory(generated) } };
+      } else if (toolId === "podcast") {
+        setIsGeneratingPodcast(true);
+        const speakerCount = Math.min(podcastSpeakerCount, getAllowedPodcastSpeakerCount());
+        const speakerProfiles = normalizePodcastSpeakerProfiles(podcastSpeakerProfiles, speakerCount);
+        const response = await authFetch("/generate-podcast/", { method: "POST", headers: withDeviceHeaders({ "Content-Type": "application/json" }), timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, body: JSON.stringify({ transcript: roomContext.transcript, summary: roomContext.summary, lecture_notes: roomContext.lectureNotes, lecture_slides: roomContext.lectureSlides, past_question_papers: "", speaker_count: speakerCount, speaker_profiles: speakerProfiles, target_minutes: podcastTargetMinutes, language: outputLanguage }) });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Room podcast generation failed.");
+        const job = await pollJob(data.job_id, "podcast");
+        const generated = normalizePodcastData({ jobId: data.job_id, title: job.podcast_title, overview: job.podcast_overview, script: job.podcast_script, segments: job.podcast_segments, speakerCount, targetMinutes: podcastTargetMinutes, speakerProfiles });
+        setPodcastData(generated);
+        await loadPodcastAudioTrack(data.job_id, job.podcast_segments || []);
+        itemConfig = { title: generated.title || `${activeRoom.title} podcast`, description: "Generated Room study podcast", snapshot: { summary: roomContext.summary, podcast: sanitizePodcastForHistory(generated) } };
+      } else if (toolId === "report") {
+        setIsGeneratingReport(true);
+        const response = await authFetch("/generate-report/", { method: "POST", headers: withDeviceHeaders({ "Content-Type": "application/json" }), timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, body: JSON.stringify(buildReportRequestPayload(reportConfig, roomContext)) });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Room report generation failed.");
+        const job = await pollJob(data.job_id, "report");
+        const generated = { jobId: data.job_id, title: job.report_title || reportConfig.reportTitle || `${activeRoom.title} report`, body: job.report_body || "", sections: job.report_sections || [], configuration: job.report_configuration || {} };
+        setReportData(generated);
+        itemConfig = { title: generated.title, description: "Generated academic Room report", snapshot: { summary: generated.body, report: sanitizeReportForHistory(generated) } };
+      } else if (toolId === "mind_map") {
+        setIsGeneratingMindMap(true);
+        const response = await authFetch("/generate-mind-map/", { method: "POST", headers: { "Content-Type": "application/json" }, timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, body: JSON.stringify({ transcript: roomContext.transcript, summary: roomContext.summary, lecture_notes: roomContext.lectureNotes, lecture_slides: roomContext.lectureSlides, past_question_papers: "", report_body: "", chat_context: "", topic: mindMapTopic, depth_level: mindMapDepth, language: outputLanguage }) });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Room mind map generation failed.");
+        const job = await pollJob(data.job_id, "mind_map");
+        const generated = { jobId: data.job_id, title: job.mind_map_title || job.mind_map_root?.title || "Mind Map", root: job.mind_map_root || null, depth: job.mind_map_depth || mindMapDepth, nodeCount: Number(job.mind_map_node_count || 0) };
+        setMindMapData(generated);
+        setSelectedMindMapNode(generated.root);
+        itemConfig = { title: generated.title, description: `${generated.nodeCount || "Generated"} Room mind-map nodes`, snapshot: { summary: roomContext.summary, mind_map: sanitizeMindMapForHistory(generated) } };
+      }
+      if (!itemConfig) throw new Error("That Room generator is not available.");
+      if (toolId === "podcast" && itemConfig.snapshot?.podcast?.jobId) {
+        const audioResponse = await authFetch(`/jobs/${itemConfig.snapshot.podcast.jobId}/podcast-download`, { timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
+        if (!audioResponse.ok) throw new Error("The podcast was generated, but its Room audio could not be saved.");
+        const audioBlob = await audioResponse.blob();
+        const formData = new FormData();
+        formData.append("media", audioBlob, `${sanitizeFileName(itemConfig.title || "room-podcast")}.mp3`);
+        formData.append("media_kind", "podcast");
+        formData.append("display_name", itemConfig.title);
+        formData.append("snapshot_json", JSON.stringify(itemConfig.snapshot));
+        const mediaResponse = await authFetch(`/collaboration/rooms/${activeRoomId}/media`, { method: "POST", body: formData, timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
+        const mediaData = await parseJsonSafe(mediaResponse);
+        if (!mediaResponse.ok || !mediaData.item) throw new Error(mediaData.detail || "The Room podcast audio could not be shared.");
+        setActiveRoom((room) => room ? { ...room, materials: [mediaData.item, ...(room.materials || []).filter((item) => item.material_type !== "podcast")] } : room);
+        setSelectedCollaborationMaterial(mediaData.item);
+        setCollaborationOpenMaterialTabs((current) => [mediaData.item, ...current.filter((item) => item.material_type !== "podcast")].slice(0, 8));
+      } else {
+        await saveGeneratedCollaborationTool({ toolId, ...itemConfig });
+      }
+      setProgress(100);
+      setStatus(`${featureLabels[toolId]} generated and shared with the Room.`);
+      void refreshCollaborationRooms(true);
+      return true;
+    } catch (err) {
+      setError(err.message || "The Room study tool could not be generated.");
+      setStatus("Room generation failed.");
+      return false;
+    } finally {
+      setGeneratingRoomMaterial("");
+      setIsGeneratingPresentation(false);
+      setIsGeneratingPodcast(false);
+      setIsGeneratingReport(false);
+      setIsGeneratingMindMap(false);
+      setCurrentJobType("");
+      setProgress(0);
+    }
+  };
   const generateCollaborationMaterial = async (toolId) => {
     if (["guide", "formulas", "examples"].includes(toolId)) {
       return generateCollaborationStudyGuide(toolId);
     }
     if (toolId === "flashcards") return generateCollaborationFlashcards();
     if (toolId === "quiz") return generateCollaborationQuiz();
+    if (["presentation", "mind_map", "podcast", "report"].includes(toolId)) return generateCollaborationAdvancedMaterial(toolId);
     return false;
   };
 

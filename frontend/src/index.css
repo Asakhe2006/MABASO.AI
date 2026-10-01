@@ -558,6 +558,77 @@ body > .study-guide-focus-stage {
   .collaboration-embedded-tool { max-height:none; padding:10px; }
   .collaboration-embedded-tool-heading { align-items:flex-start; flex-direction:column; }
 }
+
+/* Collaboration Admin Control: synchronized Room state, never device control. */
+.collaboration-admin-control-button,
+.collaboration-admin-control-actions > button {
+  min-height: 42px;
+  border: 1px solid rgba(31, 229, 137, .55);
+  border-radius: 10px;
+  background: rgba(4, 39, 27, .9);
+  padding: 0 14px;
+  color: #edfff6;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.collaboration-admin-control-button:hover,
+.collaboration-admin-control-actions > button:hover { background: rgba(8, 92, 56, .82); }
+.collaboration-admin-control-actions { position: relative; display: flex; align-items: center; gap: 8px; }
+.collaboration-admin-control-actions .is-controlling { box-shadow: inset 0 -2px #23df8c; }
+.collaboration-admin-control-actions .is-stop { border-color: rgba(248, 113, 113, .72); color: #fecaca; }
+.collaboration-admin-control-actions .is-menu { display: none; width: 40px; padding: 0; }
+.collaboration-admin-control-menu {
+  position: absolute;
+  z-index: 1100;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  width: min(280px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid rgba(93, 225, 157, .28);
+  border-radius: 13px;
+  background: #071b17;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, .45);
+  padding: 7px;
+}
+.collaboration-admin-control-menu button,
+.collaboration-admin-control-menu label { display: grid; min-height: 44px; align-items: center; border-radius: 9px; padding: 9px 11px; color: #eafff5; font-size: 12px; font-weight: 750; text-align: left; }
+.collaboration-admin-control-menu button:hover,
+.collaboration-admin-control-menu button.is-selected { background: rgba(23, 201, 111, .14); color: #70efb4; }
+.collaboration-admin-control-menu button.is-danger { color: #fca5a5; }
+.collaboration-admin-control-menu label { grid-template-columns: 20px 1fr; cursor: pointer; }
+.collaboration-admin-control-menu small { display: block; margin-top: 3px; color: #9ab7ac; font-size: 10px; font-weight: 500; }
+.collaboration-admin-control-status { display: flex; min-height: 30px; align-items: center; gap: 10px; margin: 0 28px 8px; border: 1px solid rgba(34, 226, 137, .5); border-radius: 8px; background: rgba(5, 91, 55, .35); padding: 5px 14px; color: #dcfff0; font-size: 11px; }
+.collaboration-admin-control-status i { width: 9px; height: 9px; flex: none; border-radius: 50%; background: #26e58f; box-shadow: 0 0 12px rgba(38, 229, 143, .55); }
+.collaboration-admin-control-confirm { width: min(440px, calc(100vw - 24px)); margin: auto; border: 1px solid rgba(82, 231, 154, .32); border-radius: 20px; background: #071c17; padding: 24px; color: #effff8; box-shadow: 0 28px 80px rgba(0, 0, 0, .6); }
+.collaboration-admin-control-confirm > span { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 13px; background: rgba(28, 217, 128, .16); color: #5cf1ae; font-size: 22px; }
+.collaboration-admin-control-confirm h3 { margin: 16px 0 7px; font-size: 21px; }
+.collaboration-admin-control-confirm p { color: #b8d0c6; font-size: 13px; line-height: 1.65; }
+.collaboration-admin-control-confirm label { display: flex; align-items: center; gap: 10px; margin-top: 15px; color: #dcfff0; font-size: 12px; }
+.collaboration-admin-control-confirm > div { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
+.collaboration-admin-control-confirm button { min-height: 42px; border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 0 15px; color: #edfdf6; }
+.collaboration-admin-control-confirm button.is-primary { border-color: #19ce76; background: #0eb967; color: #03150e; }
+.collaboration-media-upload-bar > input { min-width: 160px; flex: 1 1 190px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; background: rgba(3,23,17,.86); padding: 10px 12px; color: #effff8; font-size: 12px; }
+.collaboration-material-icon.is-image { overflow: hidden; padding: 0; background: #031711; }
+.collaboration-material-icon.is-image img { width: 100%; height: 100%; object-fit: cover; }
+
+@media (max-width: 1180px) {
+  .collaboration-admin-control-actions .is-bring,
+  .collaboration-admin-control-actions .is-stop { display: none; }
+  .collaboration-admin-control-actions .is-menu { display: block; }
+}
+@media (max-width: 760px) {
+  .collaboration-room-actions { display: flex; position: absolute; top: 61px; right: 10px; z-index: 85; }
+  .collaboration-room-actions > .collaboration-avatar-stack,
+  .collaboration-room-actions > .collaboration-outline-button,
+  .collaboration-room-actions > .collaboration-primary-button { display: none; }
+  .collaboration-admin-control-button,
+  .collaboration-admin-control-actions > button { min-height: 36px; padding: 0 10px; font-size: 10px; }
+  .collaboration-admin-control-actions > button span { display: none; }
+  .collaboration-admin-control-status { margin: 0 10px 8px; padding: 5px 9px; font-size: 10px; }
+  .collaboration-admin-control-status span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 @media (prefers-reduced-motion:reduce) { .mabaso-recording-dot { animation:none; } }
 
 /* Tail override: this must remain after every older workspace/chat rule. */

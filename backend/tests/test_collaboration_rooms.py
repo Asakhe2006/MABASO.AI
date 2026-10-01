@@ -34,7 +34,15 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     shared_notes TEXT NOT NULL, study_images_json TEXT NOT NULL DEFAULT '[]',
                     board_images_json TEXT NOT NULL DEFAULT '[]', flashcards_json TEXT NOT NULL,
                     quiz_questions_json TEXT NOT NULL, active_tab TEXT NOT NULL,
-                    test_visibility TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                    test_visibility TEXT NOT NULL,
+                    admin_control_active INTEGER NOT NULL DEFAULT 0,
+                    admin_control_allow_explore INTEGER NOT NULL DEFAULT 1,
+                    admin_control_state_json TEXT NOT NULL DEFAULT '{}',
+                    admin_control_version INTEGER NOT NULL DEFAULT 0,
+                    admin_control_bring_version INTEGER NOT NULL DEFAULT 0,
+                    admin_control_updated_at TEXT NOT NULL DEFAULT '',
+                    admin_control_heartbeat_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
                 );
                 CREATE TABLE collaboration_room_members (
                     room_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL,
@@ -267,6 +275,86 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("student2@example.com", {member["email"] for member in removed["members"]})
         with self.assertRaises(main.HTTPException):
             await main.get_collaboration_room(room_id, current_user="student2@example.com")
+
+    async def test_admin_control_is_owner_authorized_and_reconnects_to_latest_state(self):
+        owner = "owner@example.com"
+        member_a = "member-a@example.com"
+        member_b = "member-b@example.com"
+        room_result = await main.create_collaboration_room(
+            main.CollaborationRoomCreateRequest(
+                title="Live Signals Room",
+                invited_emails=[member_a, member_b],
+            ),
+            background_tasks=main.BackgroundTasks(),
+            current_user=owner,
+        )
+        room_id = room_result["room"]["id"]
+        material = await main.create_collaboration_material_item(
+            room_id,
+            main.CollaborationMaterialCreateRequest(
+                title="Engineering Notes",
+                material_type="study_guide",
+                source={"kind": "room_generation", "snapshot": {"summary": "Notes"}},
+            ),
+            current_user=owner,
+        )
+
+        with self.assertRaises(main.HTTPException) as denied:
+            await main.start_collaboration_room_admin_control(
+                room_id,
+                main.CollaborationAdminControlRequest(view="materials"),
+                current_user=member_a,
+            )
+        self.assertEqual(denied.exception.status_code, 403)
+
+        started = await main.start_collaboration_room_admin_control(
+            room_id,
+            main.CollaborationAdminControlRequest(
+                view="materials",
+                material_filter="study_guide",
+                material_id=material["item"]["id"],
+                page=1,
+                allow_explore=True,
+            ),
+            current_user=owner,
+        )
+        self.assertTrue(started["control"]["active"])
+
+        updated = await main.update_collaboration_room_admin_control(
+            room_id,
+            main.CollaborationAdminControlRequest(
+                view="materials",
+                material_filter="study_guide",
+                material_id=material["item"]["id"],
+                page=17,
+                allow_explore=True,
+            ),
+            current_user=owner,
+        )
+        self.assertEqual(updated["control"]["state"]["page"], 17)
+
+        _, reconnect_state = main.get_collaboration_admin_control(room_id, member_b)
+        self.assertEqual(reconnect_state["state"]["material_id"], material["item"]["id"])
+        self.assertEqual(reconnect_state["state"]["page"], 17)
+
+        with self.assertRaises(main.HTTPException) as forged:
+            await main.update_collaboration_room_admin_control(
+                room_id,
+                main.CollaborationAdminControlRequest(view="chat"),
+                current_user=member_b,
+            )
+        self.assertEqual(forged.exception.status_code, 403)
+
+        brought = await main.bring_collaboration_room_members_to_admin(
+            room_id,
+            main.CollaborationAdminControlRequest(view="chat", page=1),
+            current_user=owner,
+        )
+        self.assertGreater(brought["control"]["bring_version"], 0)
+        self.assertEqual(brought["control"]["state"]["view"], "chat")
+
+        stopped = await main.stop_collaboration_room_admin_control(room_id, current_user=owner)
+        self.assertFalse(stopped["control"]["active"])
 
     def test_invitation_email_contains_authenticated_room_link(self):
         with patch.object(main, "get_transactional_email_settings", return_value={

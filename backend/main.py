@@ -7276,6 +7276,14 @@ class CollaborationMessageRequest(BaseModel):
     reply_to_id: str = ""
 
 
+class CollaborationAdminControlRequest(BaseModel):
+    view: str = "materials"
+    material_filter: str = "all"
+    material_id: str = ""
+    page: int = 1
+    allow_explore: bool | None = None
+
+
 class CollaborationSharedNotesRequest(BaseModel):
     shared_notes: str = ""
 
@@ -7640,6 +7648,13 @@ def init_db():
                 quiz_questions_json TEXT NOT NULL,
                 active_tab TEXT NOT NULL,
                 test_visibility TEXT NOT NULL,
+                admin_control_active INTEGER NOT NULL DEFAULT 0,
+                admin_control_allow_explore INTEGER NOT NULL DEFAULT 1,
+                admin_control_state_json TEXT NOT NULL DEFAULT '{}',
+                admin_control_version INTEGER NOT NULL DEFAULT 0,
+                admin_control_bring_version INTEGER NOT NULL DEFAULT 0,
+                admin_control_updated_at TEXT NOT NULL DEFAULT '',
+                admin_control_heartbeat_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -7652,6 +7667,13 @@ def init_db():
         collaboration_room_column_defaults = {
             "study_images_json": "TEXT NOT NULL DEFAULT '[]'",
             "board_images_json": "TEXT NOT NULL DEFAULT '[]'",
+            "admin_control_active": "INTEGER NOT NULL DEFAULT 0",
+            "admin_control_allow_explore": "INTEGER NOT NULL DEFAULT 1",
+            "admin_control_state_json": "TEXT NOT NULL DEFAULT '{}'",
+            "admin_control_version": "INTEGER NOT NULL DEFAULT 0",
+            "admin_control_bring_version": "INTEGER NOT NULL DEFAULT 0",
+            "admin_control_updated_at": "TEXT NOT NULL DEFAULT ''",
+            "admin_control_heartbeat_at": "TEXT NOT NULL DEFAULT ''",
         }
         for column_name, column_definition in collaboration_room_column_defaults.items():
             if column_name not in collaboration_room_columns:
@@ -20022,6 +20044,90 @@ def collaboration_room_can_manage(room: sqlite3.Row, current_user: str) -> bool:
     return bool(membership and membership["role"] == "moderator")
 
 
+COLLABORATION_ADMIN_CONTROL_STALE_SECONDS = 45
+COLLABORATION_ADMIN_CONTROL_VIEWS = {"materials", "chat", "board"}
+COLLABORATION_ADMIN_CONTROL_FILTERS = {
+    "all", "study_guide", "notes", "presentation", "mind_map", "podcast",
+    "flashcards", "quiz", "practice_test", "report", "formulas", "examples",
+    "image", "video", "timetable",
+}
+
+
+def collaboration_room_is_owner(room: sqlite3.Row, current_user: str) -> bool:
+    return normalize_email(room["owner_email"]) == normalize_email(current_user)
+
+
+def sanitize_collaboration_admin_control_state(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+) -> dict[str, Any]:
+    view = compact_text(payload.view, "materials").lower()
+    if view not in COLLABORATION_ADMIN_CONTROL_VIEWS:
+        raise HTTPException(status_code=400, detail="That Room view cannot be controlled.")
+    material_filter = compact_text(payload.material_filter, "all").lower()
+    if material_filter not in COLLABORATION_ADMIN_CONTROL_FILTERS:
+        material_filter = "all"
+    material_id = compact_text(payload.material_id)[:96]
+    if material_id:
+        with get_db_connection() as connection:
+            material = connection.execute(
+                "SELECT id FROM collaboration_materials WHERE id = ? AND room_id = ?",
+                (material_id, room_id),
+            ).fetchone()
+        if not material:
+            raise HTTPException(status_code=400, detail="The selected Room material is no longer available.")
+    return {
+        "view": view,
+        "material_filter": material_filter,
+        "material_id": material_id,
+        "page": max(1, min(int(payload.page or 1), 5000)),
+    }
+
+
+def serialize_collaboration_admin_control(room: sqlite3.Row) -> dict[str, Any]:
+    state = load_collaboration_json_object(room["admin_control_state_json"])
+    return {
+        "active": bool(room["admin_control_active"]),
+        "allow_explore": bool(room["admin_control_allow_explore"]),
+        "state": {
+            "view": compact_text(state.get("view"), "materials"),
+            "material_filter": compact_text(state.get("material_filter"), "all"),
+            "material_id": compact_text(state.get("material_id")),
+            "page": max(1, int(state.get("page") or 1)),
+        },
+        "version": max(0, int(room["admin_control_version"] or 0)),
+        "bring_version": max(0, int(room["admin_control_bring_version"] or 0)),
+        "controller_email": room["owner_email"] if bool(room["admin_control_active"]) else "",
+        "updated_at": compact_text(room["admin_control_updated_at"]),
+    }
+
+
+def get_collaboration_admin_control(
+    room_id: str,
+    current_user: str,
+    *,
+    release_stale: bool = True,
+) -> tuple[sqlite3.Row, dict[str, Any]]:
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if release_stale and bool(room["admin_control_active"]):
+        heartbeat_at = parse_history_datetime(compact_text(room["admin_control_heartbeat_at"]), utc_now() - timedelta(days=1))
+        if (utc_now() - heartbeat_at).total_seconds() > COLLABORATION_ADMIN_CONTROL_STALE_SECONDS:
+            now_iso = utc_now().isoformat()
+            with get_db_connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE collaboration_rooms
+                    SET admin_control_active = 0,
+                        admin_control_version = admin_control_version + 1,
+                        admin_control_updated_at = ?
+                    WHERE id = ? AND admin_control_active = 1 AND admin_control_heartbeat_at = ?
+                    """,
+                    (now_iso, room_id, compact_text(room["admin_control_heartbeat_at"])),
+                )
+            room = get_accessible_collaboration_room(room_id, current_user)
+    return room, serialize_collaboration_admin_control(room)
+
+
 def load_collaboration_json_object(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(value or "{}") if isinstance(value, str) else value
@@ -20200,6 +20306,7 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "quiz_answers": quiz_answers,
         "is_owner": room_row["owner_email"] == current_user,
         "can_manage": room_row["owner_email"] == current_user or bool(membership and membership["role"] == "moderator"),
+        "admin_control": serialize_collaboration_admin_control(room_row),
     }
 
 
@@ -38611,6 +38718,181 @@ async def get_collaboration_room(room_id: str, current_user: str = Depends(requi
     return {"room": serialize_collaboration_room(room, current_user)}
 
 
+@app.get("/collaboration/rooms/{room_id}/admin-control")
+async def get_collaboration_room_admin_control(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    _, control = get_collaboration_admin_control(room_id, current_user)
+    return {"control": control}
+
+
+@app.post("/collaboration/rooms/{room_id}/admin-control/start")
+async def start_collaboration_room_admin_control(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can start Admin Control Mode.")
+    state = sanitize_collaboration_admin_control_state(room_id, payload)
+    now_iso = utc_now().isoformat()
+    allow_explore = True if payload.allow_explore is None else bool(payload.allow_explore)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET admin_control_active = 1,
+                admin_control_allow_explore = ?,
+                admin_control_state_json = ?,
+                admin_control_version = admin_control_version + 1,
+                admin_control_updated_at = ?,
+                admin_control_heartbeat_at = ?
+            WHERE id = ?
+            """,
+            (int(allow_explore), dump_json(state), now_iso, now_iso, room_id),
+        )
+    _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
+    return {"control": control}
+
+
+@app.patch("/collaboration/rooms/{room_id}/admin-control/state")
+async def update_collaboration_room_admin_control(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can control members' Room view.")
+    if not bool(room["admin_control_active"]):
+        raise HTTPException(status_code=409, detail="Admin Control Mode is not active.")
+    state = sanitize_collaboration_admin_control_state(room_id, payload)
+    now_iso = utc_now().isoformat()
+    allow_explore = bool(room["admin_control_allow_explore"]) if payload.allow_explore is None else bool(payload.allow_explore)
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET admin_control_allow_explore = ?, admin_control_state_json = ?,
+                admin_control_version = admin_control_version + 1,
+                admin_control_updated_at = ?, admin_control_heartbeat_at = ?
+            WHERE id = ? AND admin_control_active = 1
+            """,
+            (int(allow_explore), dump_json(state), now_iso, now_iso, room_id),
+        )
+    _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
+    return {"control": control}
+
+
+@app.post("/collaboration/rooms/{room_id}/admin-control/bring")
+async def bring_collaboration_room_members_to_admin(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can bring members to the current view.")
+    if not bool(room["admin_control_active"]):
+        raise HTTPException(status_code=409, detail="Admin Control Mode is not active.")
+    state = sanitize_collaboration_admin_control_state(room_id, payload)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET admin_control_state_json = ?, admin_control_version = admin_control_version + 1,
+                admin_control_bring_version = admin_control_bring_version + 1,
+                admin_control_updated_at = ?, admin_control_heartbeat_at = ?
+            WHERE id = ? AND admin_control_active = 1
+            """,
+            (dump_json(state), now_iso, now_iso, room_id),
+        )
+    _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
+    return {"control": control}
+
+
+@app.post("/collaboration/rooms/{room_id}/admin-control/heartbeat")
+async def heartbeat_collaboration_room_admin_control(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can maintain Admin Control Mode.")
+    if not bool(room["admin_control_active"]):
+        raise HTTPException(status_code=409, detail="Admin Control Mode is not active.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE collaboration_rooms SET admin_control_heartbeat_at = ? WHERE id = ? AND admin_control_active = 1",
+            (now_iso, room_id),
+        )
+    return {"active": True, "heartbeat_at": now_iso}
+
+
+@app.delete("/collaboration/rooms/{room_id}/admin-control")
+async def stop_collaboration_room_admin_control(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    room = get_accessible_collaboration_room(room_id, current_user)
+    if not collaboration_room_is_owner(room, current_user):
+        raise HTTPException(status_code=403, detail="Only the Room owner can stop Admin Control Mode.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE collaboration_rooms
+            SET admin_control_active = 0,
+                admin_control_version = admin_control_version + 1,
+                admin_control_updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso, room_id),
+        )
+    _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
+    return {"control": control}
+
+
+@app.get("/collaboration/rooms/{room_id}/admin-control/events")
+async def stream_collaboration_room_admin_control(
+    room_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    get_accessible_collaboration_room(room_id, current_user)
+
+    async def control_events():
+        last_signature = ""
+        last_keepalive = utc_now()
+        while not await request.is_disconnected():
+            try:
+                _, control = get_collaboration_admin_control(room_id, current_user)
+            except HTTPException:
+                yield build_sse_event("control", {"active": False, "removed": True})
+                return
+            signature = f"{control['version']}:{control['bring_version']}:{int(control['active'])}:{int(control['allow_explore'])}"
+            if signature != last_signature:
+                last_signature = signature
+                yield build_sse_event("control", control)
+            elif (utc_now() - last_keepalive).total_seconds() >= 15:
+                last_keepalive = utc_now()
+                yield ": keepalive\n\n"
+            await asyncio.sleep(0.8)
+
+    return StreamingResponse(
+        control_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 @app.post("/collaboration/invitations/{room_id}/accept")
 async def accept_collaboration_invitation(
     room_id: str,
@@ -39012,7 +39294,7 @@ async def create_collaboration_material_item(
     room = get_accessible_collaboration_room_access(room_id, current_user)
     title = compact_text(payload.title)[:180]
     material_type = compact_text(payload.material_type, "note").lower()[:48]
-    allowed_types = {"study_guide", "note", "presentation", "mind_map", "podcast", "image", "video", "quiz", "flashcards", "practice_test", "timetable", "document"}
+    allowed_types = {"study_guide", "note", "presentation", "mind_map", "podcast", "image", "video", "quiz", "flashcards", "practice_test", "timetable", "report", "formulas", "examples", "document"}
     if not title:
         raise HTTPException(status_code=400, detail="A material title is required.")
     if material_type not in allowed_types:
@@ -39022,14 +39304,14 @@ async def create_collaboration_material_item(
     safe_source = payload.source if isinstance(payload.source, dict) else {}
     replaced_ids: list[str] = []
     with get_db_connection() as connection:
-        if compact_text(safe_source.get("kind")).lower() == "history":
+        if compact_text(safe_source.get("kind")).lower() in {"history", "room_generation"}:
             replaced_rows = connection.execute(
                 """
                 SELECT id FROM collaboration_materials
                 WHERE room_id = ? AND material_type = ?
                   AND source_json LIKE ?
                 """,
-                (room["id"], material_type, '%"kind": "history"%'),
+                (room["id"], material_type, f'%"kind": "{compact_text(safe_source.get("kind")).lower()}"%'),
             ).fetchall()
             replaced_ids = [compact_text(row["id"]) for row in replaced_rows if compact_text(row["id"])]
             if replaced_ids:
@@ -39071,6 +39353,8 @@ async def upload_collaboration_media(
     request: Request,
     media: UploadFile = File(...),
     media_kind: str = Form(""),
+    display_name: str = Form(""),
+    snapshot_json: str = Form(""),
     current_user: str = Depends(require_authenticated_user),
 ):
     room = get_accessible_collaboration_room_access(room_id, current_user)
@@ -39086,8 +39370,9 @@ async def upload_collaboration_media(
     )
     content_type = compact_text(media.content_type, mimetypes.guess_type(filename)[0] or "").lower()
     requested_kind = compact_text(media_kind).lower()
-    resolved_kind = "image" if content_type.startswith("image/") else "video" if content_type.startswith("video/") else ""
-    if requested_kind in {"image", "video"} and requested_kind != resolved_kind:
+    resolved_kind = "image" if content_type.startswith("image/") else "video" if content_type.startswith("video/") else "audio" if content_type.startswith("audio/") else ""
+    expected_kind = "audio" if requested_kind == "podcast" else requested_kind
+    if expected_kind in {"image", "video", "audio"} and expected_kind != resolved_kind:
         raise HTTPException(status_code=400, detail=f"Choose a valid {requested_kind} file.")
     if resolved_kind == "image":
         ensure_allowed_image_upload(filename, content_type)
@@ -39095,6 +39380,9 @@ async def upload_collaboration_media(
     elif resolved_kind == "video":
         ensure_allowed_audio_video_upload(filename, content_type)
         max_bytes = MAX_COLLABORATION_VIDEO_UPLOAD_BYTES
+    elif resolved_kind == "audio" and requested_kind == "podcast":
+        ensure_allowed_audio_video_upload(filename, content_type)
+        max_bytes = MAX_VOICE_TRANSCRIPTION_UPLOAD_BYTES
     else:
         raise HTTPException(status_code=400, detail="Only supported image and video files can be shared here.")
 
@@ -39115,14 +39403,27 @@ async def upload_collaboration_media(
     media_id = uuid4().hex
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
-    safe_title = compact_text(Path(filename).stem, "Room photo" if resolved_kind == "image" else "Room video")[:180]
+    material_type = "podcast" if requested_kind == "podcast" else resolved_kind
+    safe_title = compact_text(display_name, Path(filename).stem or ("Room photo" if resolved_kind == "image" else "Room podcast" if material_type == "podcast" else "Room video"))[:180]
+    snapshot = load_collaboration_json_object(snapshot_json)
     source = {
         "kind": "uploaded_media",
         "media_id": media_id,
         "content_type": content_type,
         "size_bytes": len(file_bytes),
+        "snapshot": snapshot,
     }
     with get_db_connection() as connection:
+        if material_type == "podcast":
+            existing_podcasts = connection.execute(
+                "SELECT source_json FROM collaboration_materials WHERE room_id = ? AND material_type = 'podcast'",
+                (room["id"],),
+            ).fetchall()
+            for existing in existing_podcasts:
+                existing_media_id = compact_text(load_collaboration_json_object(existing["source_json"]).get("media_id"))
+                if existing_media_id:
+                    connection.execute("DELETE FROM collaboration_media WHERE id = ? AND room_id = ?", (existing_media_id, room["id"]))
+            connection.execute("DELETE FROM collaboration_materials WHERE room_id = ? AND material_type = 'podcast'", (room["id"],))
         connection.execute(
             """
             INSERT INTO collaboration_media (
@@ -39140,8 +39441,8 @@ async def upload_collaboration_media(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                item_id, room["id"], current_user, safe_title, resolved_kind,
-                f"Uploaded {resolved_kind} shared with this room.", dump_json(source), "room", now_iso, now_iso,
+                item_id, room["id"], current_user, safe_title, material_type,
+                "" if resolved_kind == "image" else "Generated room podcast" if material_type == "podcast" else "Room video", dump_json(source), "room", now_iso, now_iso,
             ),
         )
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
@@ -39151,8 +39452,8 @@ async def upload_collaboration_media(
             "room_id": room["id"],
             "owner_email": current_user,
             "title": safe_title,
-            "material_type": resolved_kind,
-            "description": f"Uploaded {resolved_kind} shared with this room.",
+            "material_type": material_type,
+            "description": "" if resolved_kind == "image" else "Generated room podcast" if material_type == "podcast" else "Room video",
             "source": source,
             "visibility": "room",
             "created_at": now_iso,

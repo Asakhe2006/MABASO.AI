@@ -20,6 +20,8 @@ assert.match(appSource, /if \(view !== "rooms" && !activeRoom\)/, "Chat and Boar
 assert.match(appSource, /aria-label="Open room materials"/, "The mobile centre action must open the room materials workspace.");
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{roomId\}\/messages`/, "Chat send must call the authenticated room-message endpoint.");
 assert.match(appSource, /const optimisticMessage = \{/, "Room chat must render messages optimistically instead of waiting for a full room reload.");
+assert.match(appSource, /pending-photo-/, "Room chat photos must render an immediate local preview while upload continues.");
+assert.match(roomChatSource, /message\.local_url/, "The shared room chat renderer must support optimistic local photo and voice URLs.");
 assert.match(appSource, /event\.nativeEvent\?\.isComposing/, "Desktop Enter-to-send must preserve IME composition.");
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{roomId\}\/board-items`/, "Board post must call the authenticated board endpoint.");
 assert.match(appSource, /setSelectedCollaborationBoardItem\(item\)/, "Board cards must open a clear reading view.");
@@ -39,6 +41,13 @@ assert.match(appSource, /\/voice-notes`/, "Room chat must send recorded voice no
 assert.match(appSource, /CollaborationChat/, "The room must render the shared responsive chat system.");
 assert.match(appSource, /const renderCollaborationChatSurface = \(\) => \(/, "Room chat rendering must be deferred until its message handlers are initialized.");
 assert.match(appSource, /CollaborationMaterialWorkspace/, "Shared materials must open inside the room workspace.");
+assert.match(appSource, /Admin Control Mode started/, "Room owners must have a wired Admin Control activation flow.");
+assert.match(appSource, /bringEveryone \? "bring" : "state"/, "Bring Everyone Here must publish the owner's current supported Room state.");
+assert.match(appSource, /new EventSource\(`\$\{API_BASE_URL\}\/collaboration\/rooms/, "Admin Control must receive lightweight realtime Room state events.");
+assert.match(appSource, /Following Admin/, "Members must be able to follow the Room owner.");
+assert.match(appSource, /Browse Room materials independently/, "Members must have an Explore mode when the owner allows it.");
+assert.match(appSource, /setCollaborationMobileView\("chat"\)/, "Reply notifications must switch directly to the Room chat.");
+assert.match(appSource, /generateCollaborationAdvancedMaterial/, "Advanced Room generator buttons must use the Room-aware generation pipeline.");
 assert.match(roomChatSource, /event\.key === "Enter" && !event\.shiftKey/, "Room chat must send with Enter and retain Shift+Enter for new lines.");
 assert.match(roomChatSource, /VoiceMessage/, "Room chat must render reusable playable voice messages.");
 assert.match(roomChatSource, /showNewMessage/, "Room chat must not force-scroll users who are reading older messages.");
