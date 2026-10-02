@@ -18999,6 +18999,7 @@ def consume_plan_quota(
     request: Request | None = None,
     quantity: int = 1,
     metadata: dict[str, Any] | None = None,
+    include_account_snapshot: bool = True,
 ) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     normalized_feature = normalize_billing_plan_id(feature)
@@ -19074,7 +19075,7 @@ def consume_plan_quota(
                 now_iso,
             ),
         )
-    account_snapshot = sync_user_account_snapshot(normalized_email)
+    account_snapshot = sync_user_account_snapshot(normalized_email) if include_account_snapshot else None
     logger.info(
         "Usage consumed id=%s email=%s plan=%s feature=%s quantity=%s period=%s remaining=%s",
         usage_event_id,
@@ -20262,7 +20263,7 @@ def get_collaboration_join_requests(room_id: str) -> list[dict[str, str]]:
     ]
 
 
-COLLABORATION_ADMIN_CONTROL_STALE_SECONDS = 45
+COLLABORATION_ADMIN_CONTROL_STALE_SECONDS = 90
 COLLABORATION_ADMIN_CONTROL_VIEWS = {"materials", "chat", "board"}
 COLLABORATION_ADMIN_CONTROL_FILTERS = {
     "all", "study_guide", "notes", "presentation", "mind_map", "podcast",
@@ -20498,6 +20499,7 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         for row in answer_rows
     ]
 
+    can_manage_join_requests = collaboration_room_can_manage_join_requests(room_row, current_user)
     return {
         "id": room_id,
         "title": room_row["title"],
@@ -20525,8 +20527,8 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
         "is_owner": room_row["owner_email"] == current_user,
         "can_manage": room_row["owner_email"] == current_user or bool(membership and membership["role"] == "moderator"),
         "allow_member_approvals": bool(room_row["allow_member_approvals"]),
-        "can_manage_join_requests": collaboration_room_can_manage_join_requests(room_row, current_user),
-        "pending_join_requests": get_collaboration_join_requests(room_id) if collaboration_room_can_manage_join_requests(room_row, current_user) else [],
+        "can_manage_join_requests": can_manage_join_requests,
+        "pending_join_requests": get_collaboration_join_requests(room_id) if can_manage_join_requests else [],
         "admin_control": serialize_collaboration_admin_control(room_row),
     }
 
@@ -38278,6 +38280,7 @@ def create_lecture_assistant_stream(
                 "requested_mode": requested_mode,
                 "resolved_mode": resolved_mode,
             },
+            include_account_snapshot=False,
         )
         if compact_text(payload.conversation_id):
             conversation_reservation_id, conversation_usage = reserve_ai_chat_conversation_turn(
@@ -40353,8 +40356,9 @@ async def upload_collaboration_voice_note(
 @app.delete("/collaboration/rooms/{room_id}/material-items/{item_id}")
 async def delete_collaboration_material_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room_access(room_id, current_user)
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
-        item = connection.execute("SELECT owner_email, source_json FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
+        item = connection.execute("SELECT owner_email, source_json, title, material_type FROM collaboration_materials WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
         if not item:
             raise HTTPException(status_code=404, detail="Collaboration material not found.")
         if item["owner_email"] != current_user and not collaboration_room_can_manage(room, current_user):
@@ -40365,6 +40369,11 @@ async def delete_collaboration_material_item(room_id: str, item_id: str, current
         if media_id:
             connection.execute("DELETE FROM collaboration_media WHERE id = ? AND room_id = ?", (media_id, room["id"]))
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (utc_now().isoformat(), room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="material_removed", action_text=f'{actor_name} removed "{compact_text(item["title"], "a material")}"',
+            resource_type=compact_text(item["material_type"]), resource_id=item_id, resource_title=compact_text(item["title"]),
+        )
     return {"deleted": True, "id": item_id}
 
 
@@ -40458,14 +40467,20 @@ async def update_collaboration_board_item(
 @app.delete("/collaboration/rooms/{room_id}/board-items/{item_id}")
 async def delete_collaboration_board_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room_access(room_id, current_user)
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
-        item = connection.execute("SELECT owner_email FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
+        item = connection.execute("SELECT owner_email, title, item_type FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"])).fetchone()
         if not item:
             raise HTTPException(status_code=404, detail="Board item not found.")
         if item["owner_email"] != current_user and not collaboration_room_can_manage(room, current_user):
             raise HTTPException(status_code=403, detail="You cannot remove another member's board item.")
         connection.execute("DELETE FROM collaboration_board_items WHERE id = ? AND room_id = ?", (item_id, room["id"]))
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (utc_now().isoformat(), room["id"]))
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="board_item_removed", action_text=f"{actor_name} removed a board {compact_text(item['item_type'], 'item')}",
+            resource_type="board_item", resource_id=item_id, resource_title=compact_text(item["title"]),
+        )
     return {"deleted": True, "id": item_id}
 
 
@@ -40782,6 +40797,7 @@ async def upload_collaboration_board_image(
             "created_at": now_iso,
         }
         current_images.append(uploaded_image)
+        actor_name = collaboration_actor_name(current_user)
 
         with get_db_connection() as connection:
             connection.execute(
@@ -40791,6 +40807,11 @@ async def upload_collaboration_board_image(
                 WHERE id = ?
                 """,
                 (dump_json(current_images), now_iso, room["id"]),
+            )
+            create_collaboration_room_activity(
+                connection, room_id=room["id"], actor_email=current_user,
+                activity_type="board_photo_added", action_text=f'{actor_name} added "{uploaded_image["name"]}" to the board',
+                resource_type="board_image", resource_id=uploaded_image["id"], resource_title=uploaded_image["name"],
             )
     finally:
         await image.close()
@@ -40810,6 +40831,8 @@ async def delete_collaboration_board_image(
     if len(remaining_images) == len(current_images):
         raise HTTPException(status_code=404, detail="That board image was not found in this room.")
 
+    removed_image = next((item for item in current_images if compact_text(item.get("id")) == compact_text(image_id)), {})
+    actor_name = collaboration_actor_name(current_user)
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
         connection.execute(
@@ -40819,6 +40842,11 @@ async def delete_collaboration_board_image(
             WHERE id = ?
             """,
             (dump_json(remaining_images), now_iso, room["id"]),
+        )
+        create_collaboration_room_activity(
+            connection, room_id=room["id"], actor_email=current_user,
+            activity_type="board_photo_removed", action_text=f"{actor_name} removed a board photo",
+            resource_type="board_image", resource_id=compact_text(image_id), resource_title=compact_text(removed_image.get("name")),
         )
 
     return {"deleted": True, "id": compact_text(image_id), "room_id": room["id"], "updated_at": now_iso}

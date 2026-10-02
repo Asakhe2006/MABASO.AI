@@ -35,6 +35,9 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     board_images_json TEXT NOT NULL DEFAULT '[]', flashcards_json TEXT NOT NULL,
                     quiz_questions_json TEXT NOT NULL, active_tab TEXT NOT NULL,
                     test_visibility TEXT NOT NULL,
+                    discoverable INTEGER NOT NULL DEFAULT 1,
+                    is_private INTEGER NOT NULL DEFAULT 0,
+                    allow_member_approvals INTEGER NOT NULL DEFAULT 0,
                     admin_control_active INTEGER NOT NULL DEFAULT 0,
                     admin_control_allow_explore INTEGER NOT NULL DEFAULT 1,
                     admin_control_state_json TEXT NOT NULL DEFAULT '{}',
@@ -95,6 +98,18 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
                     id TEXT PRIMARY KEY, recipient_email TEXT NOT NULL, actor_email TEXT NOT NULL,
                     room_id TEXT NOT NULL, notification_type TEXT NOT NULL, title TEXT NOT NULL,
                     message TEXT NOT NULL, read_at TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE TABLE collaboration_room_activity (
+                    id TEXT PRIMARY KEY, room_id TEXT NOT NULL, actor_email TEXT NOT NULL,
+                    activity_type TEXT NOT NULL, action_text TEXT NOT NULL,
+                    resource_type TEXT NOT NULL DEFAULT '', resource_id TEXT NOT NULL DEFAULT '',
+                    resource_title TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+                );
+                CREATE TABLE collaboration_join_requests (
+                    id TEXT PRIMARY KEY, room_id TEXT NOT NULL, requester_email TEXT NOT NULL,
+                    status TEXT NOT NULL, resolved_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(room_id, requester_email)
                 );
                 """
             )
@@ -355,6 +370,71 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
 
         stopped = await main.stop_collaboration_room_admin_control(room_id, current_user=owner)
         self.assertFalse(stopped["control"]["active"])
+
+    async def test_discovered_room_requires_approval_and_records_activity(self):
+        owner = "owner@example.com"
+        trusted_member = "trusted@example.com"
+        external_user = "external@example.com"
+        room_result = await main.create_collaboration_room(
+            main.CollaborationRoomCreateRequest(
+                title="Signals Study Group",
+                invited_emails=[trusted_member],
+                discoverable=True,
+                is_private=False,
+            ),
+            background_tasks=main.BackgroundTasks(),
+            current_user=owner,
+        )
+        room_id = room_result["room"]["id"]
+
+        discovered = await main.discover_collaboration_rooms(current_user=external_user)
+        discovered_room = next(room for room in discovered["rooms"] if room["id"] == room_id)
+        self.assertEqual(discovered_room["membership_status"], "not_member")
+        with self.assertRaises(main.HTTPException) as private_access:
+            await main.get_collaboration_room(room_id, current_user=external_user)
+        self.assertEqual(private_access.exception.status_code, 404)
+
+        pending = await main.request_to_join_collaboration_room(room_id, current_user=external_user)
+        self.assertEqual(pending["status"], "pending")
+        duplicate = await main.request_to_join_collaboration_room(room_id, current_user=external_user)
+        self.assertEqual(duplicate["request_id"], pending["request_id"])
+
+        with self.assertRaises(main.HTTPException) as member_denied:
+            await main.decide_collaboration_room_join_request(
+                room_id,
+                pending["request_id"],
+                main.CollaborationJoinRequestDecision(decision="approved"),
+                current_user=trusted_member,
+            )
+        self.assertEqual(member_denied.exception.status_code, 403)
+
+        await main.update_collaboration_room_approval_settings(
+            room_id,
+            main.CollaborationRoomApprovalSettingsRequest(allow_member_approvals=True),
+            current_user=owner,
+        )
+        approved = await main.decide_collaboration_room_join_request(
+            room_id,
+            pending["request_id"],
+            main.CollaborationJoinRequestDecision(decision="approved"),
+            current_user=trusted_member,
+        )
+        self.assertEqual(approved["status"], "approved")
+        opened = await main.get_collaboration_room(room_id, current_user=external_user)
+        self.assertEqual(opened["room"]["id"], room_id)
+
+        material = await main.create_collaboration_material_item(
+            room_id,
+            main.CollaborationMaterialCreateRequest(
+                title="Fourier Notes",
+                material_type="study_guide",
+                source={"kind": "room_generation", "snapshot": {"summary": "Notes"}},
+            ),
+            current_user=external_user,
+        )
+        activity = await main.list_collaboration_room_activity(room_id, current_user=owner)
+        self.assertEqual(activity["activity"][0]["resource_id"], material["item"]["id"])
+        self.assertIn("shared", activity["activity"][0]["action_text"])
 
     def test_invitation_email_contains_authenticated_room_link(self):
         with patch.object(main, "get_transactional_email_settings", return_value={

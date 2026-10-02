@@ -567,33 +567,6 @@ export function EnterpriseSiteShell({
               <h1 className="mt-4 text-3xl font-semibold text-white sm:text-4xl xl:text-5xl">{page.hero?.headline || page.title}</h1>
               <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{page.hero?.description || page.metadata?.description}</p>
               <p className="enterprise-document-updated">Last updated {page.updatedAt || "6 August 2026"}</p>
-              <div className="mt-7 flex flex-wrap gap-3">
-                {(page.hero?.ctas || []).map((cta) => (
-                  <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
-                    if (item.action === "route") {
-                      onNavigate(item.target);
-                      return;
-                    }
-                    if (item.action === "open-signin") {
-                      onPrepareSignIn?.(page.route);
-                      onOpenSignIn();
-                      return;
-                    }
-                    if (item.action === "open-app") {
-                      onOpenApp(item.target);
-                      return;
-                    }
-                    onNavigate("/");
-                  }} />
-                ))}
-              </div>
-              <div className="enterprise-document-metadata mt-7 flex flex-wrap gap-x-6 gap-y-2">
-                {(page.hero?.metrics || []).map((metric) => (
-                  <div key={`${page.route}-${metric.label}`}>
-                    <span>{metric.label}: </span><strong>{metric.value}</strong>
-                  </div>
-                ))}
-              </div>
             </Motion.div>
           </div>
         </section>
@@ -797,6 +770,38 @@ export function EnterpriseSiteShell({
             />
           ) : null}
         </div>
+
+        {(page.hero?.ctas?.length || page.hero?.metrics?.length) ? (
+          <section className="enterprise-document-next-actions" aria-label="Recommended next actions">
+            <div className="enterprise-document-metadata flex flex-wrap gap-x-6 gap-y-2">
+              {(page.hero?.metrics || []).map((metric) => (
+                <div key={`${page.route}-${metric.label}`}>
+                  <span>{metric.label}: </span><strong>{metric.value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex flex-wrap gap-3">
+              {(page.hero?.ctas || []).map((cta) => (
+                <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
+                  if (item.action === "route") {
+                    onNavigate(item.target);
+                    return;
+                  }
+                  if (item.action === "open-signin") {
+                    onPrepareSignIn?.(page.route);
+                    onOpenSignIn();
+                    return;
+                  }
+                  if (item.action === "open-app") {
+                    onOpenApp(item.target);
+                    return;
+                  }
+                  onNavigate("/");
+                }} />
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <RelatedPageRail routes={page.relatedPages} onNavigate={onNavigate} />
         <FooterCrossLinks routes={page.footerCrossLinks} onNavigate={onNavigate} />

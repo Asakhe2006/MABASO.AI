@@ -16,14 +16,16 @@ class ChatStreamHandshakeTests(unittest.TestCase):
         self.assertLess(ready_event, context_load)
         self.assertLess(context_load, context_event)
 
-    def test_stream_does_not_meter_chat_messages(self):
+    def test_stream_meters_successful_user_chat_requests(self):
         source = Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8")
         function_start = source.index("def create_lecture_assistant_stream(")
         function_end = source.index('\n\n@app.post("/api/chat/stream")', function_start)
         function_source = source[function_start:function_end]
 
-        self.assertNotIn("consume_plan_quota(", function_source)
-        self.assertNotIn('yield build_sse_event(\n            "usage"', function_source)
+        self.assertIn("consume_plan_quota(", function_source)
+        self.assertIn("reserve_ai_chat_conversation_turn(", function_source)
+        self.assertIn("refund_usage_event(", function_source)
+        self.assertIn('yield build_sse_event("usage"', function_source)
 
 
 if __name__ == "__main__":

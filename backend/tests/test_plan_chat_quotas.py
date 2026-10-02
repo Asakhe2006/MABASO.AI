@@ -22,7 +22,7 @@ class PlanChatQuotaTests(unittest.TestCase):
         self.assertIn('"study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15)', source)
         self.assertIn('"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25)', source)
         self.assertIn('"study_chat": -1', premium_source)
-        self.assertIn('"free": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5)', source)
+        self.assertIn('"free": max(1, get_early_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5))', source)
 
 
 if __name__ == "__main__":

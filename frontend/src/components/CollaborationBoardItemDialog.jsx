@@ -11,8 +11,38 @@ export default function CollaborationBoardItemDialog({ item, canEdit, onClose, o
   const readyRef = useRef(false);
   const saveRef = useRef(onSave);
   const itemRef = useRef(item);
+  const saveInFlightRef = useRef(false);
+  const queuedDraftRef = useRef(null);
+  const mountedRef = useRef(true);
   saveRef.current = onSave;
   itemRef.current = item;
+
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  const persistDraft = async (nextDraft) => {
+    if (saveInFlightRef.current) {
+      queuedDraftRef.current = nextDraft;
+      return;
+    }
+    saveInFlightRef.current = true;
+    if (mountedRef.current) setSaveState("saving");
+    try {
+      await saveRef.current({
+        ...itemRef.current,
+        title: nextDraft.title,
+        content: nextDraft.content,
+        checklist: nextDraft.checklist.split("\n").map((entry) => entry.trim()).filter(Boolean),
+      });
+      if (mountedRef.current) setSaveState("saved");
+    } catch {
+      if (mountedRef.current) setSaveState("error");
+    } finally {
+      saveInFlightRef.current = false;
+      const queuedDraft = queuedDraftRef.current;
+      queuedDraftRef.current = null;
+      if (queuedDraft) void persistDraft(queuedDraft);
+    }
+  };
 
   useEffect(() => {
     setDraft({
@@ -28,20 +58,9 @@ export default function CollaborationBoardItemDialog({ item, canEdit, onClose, o
 
   useEffect(() => {
     if (!canEdit || !readyRef.current) return undefined;
-    setSaveState("saving");
-    const timer = window.setTimeout(async () => {
-      try {
-        await saveRef.current({
-          ...itemRef.current,
-          title: draft.title,
-          content: draft.content,
-          checklist: draft.checklist.split("\n").map((entry) => entry.trim()).filter(Boolean),
-        });
-        setSaveState("saved");
-      } catch {
-        setSaveState("error");
-      }
-    }, 250);
+    const timer = window.setTimeout(() => {
+      void persistDraft({ ...draft });
+    }, 700);
     return () => window.clearTimeout(timer);
   }, [canEdit, draft.checklist, draft.content, draft.title, item?.id, item?.item_type]);
 
