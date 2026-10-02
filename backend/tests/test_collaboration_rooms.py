@@ -148,6 +148,21 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             current_user=owner,
         )
         self.assertEqual(material_result["item"]["source"]["snapshot"]["summary"], "Shared guide content")
+        newer_material = await main.create_collaboration_material_item(
+            room_id,
+            main.CollaborationMaterialCreateRequest(
+                title="Ethics Study Guide - Revision 2",
+                material_type="study_guide",
+                source={"kind": "room_generation", "snapshot": {"summary": "A later revision"}},
+            ),
+            current_user=owner,
+        )
+        self.assertEqual(newer_material["replaced_ids"], [])
+        persisted_materials = await main.list_collaboration_material_items(room_id, current_user=owner)
+        self.assertEqual(
+            {material_result["item"]["id"], newer_material["item"]["id"]},
+            {item["id"] for item in persisted_materials["items"]},
+        )
 
         board_result = await main.create_collaboration_board_item(
             room_id,
@@ -264,7 +279,7 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         reopened = await main.get_collaboration_room(room_id, current_user=owner)
         self.assertEqual(len(reopened["room"]["messages"]), 2)
         self.assertEqual(reopened["room"]["messages"][1]["reply_to_id"], message_result["message"]["id"])
-        self.assertEqual(len(reopened["room"]["materials"]), 1)
+        self.assertEqual(len(reopened["room"]["materials"]), 2)
         self.assertEqual(len(reopened["room"]["board_items"]), 3)
 
         message_page = await main.list_collaboration_messages(
@@ -334,6 +349,8 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
             current_user=owner,
         )
         self.assertTrue(started["control"]["active"])
+        started_activity = await main.list_collaboration_room_activity(room_id, current_user=member_a)
+        self.assertEqual(started_activity["activity"][0]["activity_type"], "admin_control_started")
 
         updated = await main.update_collaboration_room_admin_control(
             room_id,
@@ -370,6 +387,8 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
 
         stopped = await main.stop_collaboration_room_admin_control(room_id, current_user=owner)
         self.assertFalse(stopped["control"]["active"])
+        stopped_activity = await main.list_collaboration_room_activity(room_id, current_user=member_b)
+        self.assertEqual(stopped_activity["activity"][0]["activity_type"], "admin_control_stopped")
 
     async def test_discovered_room_requires_approval_and_records_activity(self):
         owner = "owner@example.com"

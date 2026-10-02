@@ -15584,3 +15584,100 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
   .collaboration-activity-panel { position: fixed; top: auto; right: 10px; bottom: calc(76px + env(safe-area-inset-bottom)); left: 10px; width: auto; max-height: 60dvh; }
   .collaboration-board-uploads { max-height: none; overflow: visible; }
 }
+
+/* Focused public documentation: useful prose without marketing-card clutter. */
+.enterprise-public-prose-list {
+  display: grid;
+  max-width: 880px;
+  gap: 0;
+}
+.enterprise-public-prose-item {
+  padding: 1.35rem 0;
+  border-bottom: 1px solid rgba(148, 163, 184, .14);
+}
+.enterprise-public-prose-item h2 { color: #f8fafc; font-size: clamp(1.1rem, 2vw, 1.35rem); font-weight: 700; }
+.enterprise-public-prose-item p { margin-top: .55rem; color: #cbd5e1; font-size: .95rem; line-height: 1.8; }
+
+.collaboration-tool-prerequisite {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 16px;
+  border: 1px dashed rgba(52, 211, 153, .26);
+  border-radius: 14px;
+  background: rgba(5, 36, 27, .55);
+  color: #d1fae5;
+}
+.collaboration-tool-prerequisite > svg { flex: none; color: #34d399; }
+.collaboration-tool-prerequisite > div { min-width: 0; flex: 1; }
+.collaboration-tool-prerequisite strong { display: block; color: #f0fdf4; font-size: .88rem; }
+.collaboration-tool-prerequisite p { margin-top: 3px; color: #9fbeb2; font-size: .76rem; line-height: 1.55; }
+.collaboration-tool-prerequisite > button {
+  flex: none;
+  border-radius: 10px;
+  background: #10b981;
+  padding: 9px 12px;
+  color: #031710;
+  font-size: .75rem;
+  font-weight: 800;
+}
+
+/* Compact ChatGPT-style response controls. */
+.study-chat-message-actions {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.study-chat-message-action {
+  display: inline-grid;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: #94a3b8;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.study-chat-message-action:hover,
+.study-chat-message-action:focus-visible { background: rgba(148, 163, 184, .12); color: #e2e8f0; }
+.study-chat-message-action:focus-visible { outline: 2px solid rgba(52, 211, 153, .75); outline-offset: 2px; }
+.study-chat-message-action.is-copied,
+.study-chat-message-action.is-reading { background: rgba(16, 185, 129, .12); color: #6ee7b7; }
+.study-chat-message-action > svg { width: 18px; height: 18px; }
+.study-chat-message-action > span { display: none; }
+
+.collaboration-activity-entry { grid-template-columns: 32px minmax(0, 1fr); column-gap: 9px; }
+.collaboration-activity-entry-avatar {
+  grid-row: 1 / span 2;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, .16);
+  color: #a7f3d0;
+  font-size: 10px;
+  font-weight: 900;
+}
+.collaboration-activity-entry-copy { display: grid; gap: 2px; overflow-wrap: anywhere; font-size: .78rem; line-height: 1.45; }
+.collaboration-activity-entry-copy > strong { color: #effff7; font-size: .78rem; font-weight: 700; }
+.collaboration-activity-entry-copy > small { color: #afc9bf; font-size: .69rem; line-height: 1.4; }
+
+@media (min-width: 600px) and (max-width: 1023px) {
+  .study-chat-message-action > svg { width: 17px; height: 17px; }
+  .collaboration-tool-prerequisite { align-items: flex-start; }
+}
+
+@media (max-width: 599px) {
+  .study-chat-message-action { width: 34px; min-width: 34px; height: 34px; min-height: 34px; }
+  .study-chat-message-action > svg { width: 16px; height: 16px; }
+  .collaboration-tool-prerequisite { align-items: flex-start; flex-wrap: wrap; }
+  .collaboration-tool-prerequisite > button { width: 100%; }
+}

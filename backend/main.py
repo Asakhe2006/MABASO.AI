@@ -20195,6 +20195,27 @@ def create_collaboration_room_activity(
     resource_id: str = "",
     resource_title: str = "",
 ) -> dict[str, str]:
+    # Board edits autosave while a student types. Keep the activity feed useful by
+    # replacing the immediately preceding edit event for the same item instead of
+    # filling all 25 rows with one person's keystrokes.
+    if activity_type == "board_item_edited" and compact_text(resource_id):
+        previous = connection.execute(
+            """
+            SELECT id, created_at
+            FROM collaboration_room_activity
+            WHERE room_id = ? AND actor_email = ? AND activity_type = ? AND resource_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (room_id, normalize_email(actor_email), activity_type, compact_text(resource_id)[:96]),
+        ).fetchone()
+        if previous:
+            previous_at = parse_history_datetime(previous["created_at"], utc_now() - timedelta(days=1))
+            if (utc_now() - previous_at).total_seconds() <= 45:
+                connection.execute(
+                    "DELETE FROM collaboration_room_activity WHERE id = ? AND room_id = ?",
+                    (previous["id"], room_id),
+                )
     activity = {
         "id": uuid4().hex,
         "room_id": room_id,
@@ -20266,7 +20287,7 @@ def get_collaboration_join_requests(room_id: str) -> list[dict[str, str]]:
 COLLABORATION_ADMIN_CONTROL_STALE_SECONDS = 90
 COLLABORATION_ADMIN_CONTROL_VIEWS = {"materials", "chat", "board"}
 COLLABORATION_ADMIN_CONTROL_FILTERS = {
-    "all", "study_guide", "notes", "presentation", "mind_map", "podcast",
+    "all", "study_guide", "note", "notes", "presentation", "mind_map", "podcast",
     "flashcards", "quiz", "practice_test", "report", "formulas", "examples",
     "image", "video", "timetable",
 }
@@ -38958,7 +38979,9 @@ async def list_collaboration_rooms(current_user: str = Depends(require_authentic
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT DISTINCT r.*
+            SELECT DISTINCT
+                r.id, r.title, r.owner_email, r.created_at, r.updated_at,
+                r.active_tab, r.test_visibility, r.board_images_json
             FROM collaboration_rooms r
             LEFT JOIN collaboration_room_members m
                 ON m.room_id = r.id
@@ -39441,6 +39464,7 @@ async def start_collaboration_room_admin_control(
     state = sanitize_collaboration_admin_control_state(room_id, payload)
     now_iso = utc_now().isoformat()
     allow_explore = True if payload.allow_explore is None else bool(payload.allow_explore)
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
         connection.execute(
             """
@@ -39454,6 +39478,16 @@ async def start_collaboration_room_admin_control(
             WHERE id = ?
             """,
             (int(allow_explore), dump_json(state), now_iso, now_iso, room_id),
+        )
+        create_collaboration_room_activity(
+            connection,
+            room_id=room_id,
+            actor_email=current_user,
+            activity_type="admin_control_started",
+            action_text=f"{actor_name} started Admin Control Mode",
+            resource_type="admin_control",
+            resource_id=room_id,
+            resource_title=room["title"],
         )
     _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
     return {"control": control}
@@ -39544,6 +39578,7 @@ async def stop_collaboration_room_admin_control(
     if not collaboration_room_is_owner(room, current_user):
         raise HTTPException(status_code=403, detail="Only the Room owner can stop Admin Control Mode.")
     now_iso = utc_now().isoformat()
+    actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
         connection.execute(
             """
@@ -39554,6 +39589,16 @@ async def stop_collaboration_room_admin_control(
             WHERE id = ?
             """,
             (now_iso, room_id),
+        )
+        create_collaboration_room_activity(
+            connection,
+            room_id=room_id,
+            actor_email=current_user,
+            activity_type="admin_control_stopped",
+            action_text=f"{actor_name} stopped Admin Control Mode",
+            resource_type="admin_control",
+            resource_id=room_id,
+            resource_title=room["title"],
         )
     _, control = get_collaboration_admin_control(room_id, current_user, release_stale=False)
     return {"control": control}
@@ -40005,24 +40050,7 @@ async def create_collaboration_material_item(
     now_iso = utc_now().isoformat()
     safe_source = payload.source if isinstance(payload.source, dict) else {}
     actor_name = collaboration_actor_name(current_user)
-    replaced_ids: list[str] = []
     with get_db_connection() as connection:
-        if compact_text(safe_source.get("kind")).lower() in {"history", "room_generation"}:
-            replaced_rows = connection.execute(
-                """
-                SELECT id FROM collaboration_materials
-                WHERE room_id = ? AND material_type = ?
-                  AND source_json LIKE ?
-                """,
-                (room["id"], material_type, f'%"kind": "{compact_text(safe_source.get("kind")).lower()}"%'),
-            ).fetchall()
-            replaced_ids = [compact_text(row["id"]) for row in replaced_rows if compact_text(row["id"])]
-            if replaced_ids:
-                placeholders = ",".join("?" for _ in replaced_ids)
-                connection.execute(
-                    f"DELETE FROM collaboration_materials WHERE room_id = ? AND id IN ({placeholders})",
-                    tuple([room["id"], *replaced_ids]),
-                )
         connection.execute(
             """
             INSERT INTO collaboration_materials (
@@ -40051,7 +40079,9 @@ async def create_collaboration_material_item(
             "created_at": now_iso,
             "updated_at": now_iso,
         },
-        "replaced_ids": replaced_ids,
+        # Kept for older frontends. New uploads/generations append to the Room
+        # resource history, like a course resource library, and replace nothing.
+        "replaced_ids": [],
     }
 
 

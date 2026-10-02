@@ -29,7 +29,9 @@ assert.match(appSource, /sharedAuthStatus === "unknown"/, "App.jsx must keep res
 assert.match(appSource, /loadPersistedAuthStateToken/, "App.jsx must restore the cookie-backed local auth marker before the background session check finishes.");
 assert.match(appSource, /const isAuthReady = authChecked && authServerStateReady;/, "A local browser marker must not bypass server session verification.");
 assert.match(appSource, /Opening your workspace\.\.\./, "Protected workspace authentication must show the opening state.");
-assert.match(appSource, /\{isOpeningAuthenticatedWorkspace\s*\? "Opening your workspace\.\.\."/m, "Routine refresh must reserve the opening-workspace message for an explicit sign-in/open action.");
+assert.match(appSource, /shouldBlockForAuthBootstrap && !isOpeningAuthenticatedWorkspace/, "Routine refresh must verify access without displaying a blocking status page.");
+assert.match(appSource, /<span className="sr-only">Verifying secure access<\/span>/, "Background auth verification must remain accessible to screen readers.");
+assert.doesNotMatch(appSource, /Checking your session\.\.\./, "Routine refresh must not display a session-check page.");
 assert.doesNotMatch(appSource, /isOpeningAuthenticatedWorkspace \|\| activeProtectedWorkspaceRoute \|\| hasRestorableSessionState/, "A routine refresh must not be labelled as opening a workspace.");
 assert.match(appSource, /setIsGoogleSigningIn\(true\);\s*setIsOpeningAuthenticatedWorkspace\(true\);/, "Google sign-in must show the full opening workspace state immediately.");
 assert.match(appSource, /setIsSigningInWithPassword\(true\);\s*setIsOpeningAuthenticatedWorkspace\(true\);/, "Password sign-in must show the same opening workspace state immediately.");

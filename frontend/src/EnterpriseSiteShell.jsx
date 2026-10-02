@@ -520,10 +520,10 @@ export function EnterpriseSiteShell({
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
   const visibleContains = isProseOnlyGuide ? [] : (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
-  const visibleModules = (isProseOnlyGuide ? [] : (page.modules || []))
-    .filter((module) => isUsefulPublicCopy(module.title))
-    .map((module) => ({ ...module, items: (module.items || []).filter(isUsefulPublicCopy) }))
-    .filter((module) => module.items.length);
+  // Public product pages should read like useful documentation, not a wall of
+  // short marketing capability labels. Detailed tools remain available in the
+  // authenticated workspace and in the page's full prose/FAQ sections.
+  const visibleModules = [];
   const visibleWorkflow = isProseOnlyGuide ? [] : (page.workflow || []).filter(isUsefulPublicCopy);
   const visibleFileGroups = (page.fileGroups || [])
     .map((group) => ({ ...group, items: (group.items || []).filter(isUsefulPublicCopy) }))
@@ -608,18 +608,15 @@ export function EnterpriseSiteShell({
         <div className="relative mt-8">
           <div className={`${isLocked ? "pointer-events-none select-none blur-[12px] saturate-[0.65] opacity-45" : ""}`}>
             {visibleContains.length ? (
-              <section id="key-information" className="enterprise-information-list">
+              <section id="key-information" className="enterprise-public-prose-list">
                 {visibleContains.map((item) => (
                   <Motion.div
                     key={`${page.route}-contains-${item.title}`}
                     {...cardMotion}
-                    className="enterprise-information-item"
+                    className="enterprise-public-prose-item"
                   >
-                    <div className="enterprise-information-icon">
-                      <SiteIcon name={item.icon} />
-                    </div>
-                    <h2 className="mt-5 text-xl font-semibold text-white">{item.title}</h2>
-                    <p className="mt-3 text-sm leading-7 text-slate-300">{item.description}</p>
+                    <h2>{item.title}</h2>
+                    <p>{item.description}</p>
                   </Motion.div>
                 ))}
               </section>
@@ -771,16 +768,9 @@ export function EnterpriseSiteShell({
           ) : null}
         </div>
 
-        {(page.hero?.ctas?.length || page.hero?.metrics?.length) ? (
+        {page.hero?.ctas?.length ? (
           <section className="enterprise-document-next-actions" aria-label="Recommended next actions">
-            <div className="enterprise-document-metadata flex flex-wrap gap-x-6 gap-y-2">
-              {(page.hero?.metrics || []).map((metric) => (
-                <div key={`${page.route}-${metric.label}`}>
-                  <span>{metric.label}: </span><strong>{metric.value}</strong>
-                </div>
-              ))}
-            </div>
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3">
               {(page.hero?.ctas || []).map((cta) => (
                 <CtaButton key={`${page.route}-${cta.label}`} cta={cta} onAction={(item) => {
                   if (item.action === "route") {

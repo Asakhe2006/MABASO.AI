@@ -23,6 +23,10 @@ import CollaborationChat from "./components/CollaborationChat";
 import CollaborationBoardItemDialog from "./components/CollaborationBoardItemDialog";
 import CollaborationMaterialWorkspace from "./components/CollaborationMaterialWorkspace";
 import ToggleSwitch from "./components/ToggleSwitch";
+import SafeCollaborationRoomStudyGuide from "./components/CollaborationRoomStudyGuide";
+import StudyChatResponseActions from "./components/StudyChatResponseActions";
+import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivityPanel";
+import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
 
@@ -41,21 +45,6 @@ function CollaborationProfileContactPortal({ draft, setDraft, disabled, onSave, 
     ["allow_requests", "Allow collaboration requests"],
   ];
   return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><button type="button" className="collaboration-profile-close" onClick={onClose} disabled={disabled} aria-label="Close profile editor"><X className="h-4 w-4" aria-hidden="true" /></button><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose exactly what students can see. Your contact details stay private unless you allow them below.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Display name" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy">{privacySettings.map(([field, label]) => <div className="mabaso-setting-row" key={field}><span>{label}</span><ToggleSwitch checked={Boolean(draft[field])} onChange={setFlag(field)} disabled={disabled} aria-label={label} size="sm" /></div>)}</div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
-}
-function CollaborationRoomStudyGuide({ title, intro, sections, canGenerate, isGenerating, onGenerate, renderMarkdown }) {
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [isFullView, setIsFullView] = useState(false);
-  const slides = [{ id: "intro", title, content: intro }, ...(sections || []).map((section, index) => ({ id: `${section.normalizedHeading || section.heading || "section"}-${index}`, title: section.displayHeading || section.heading || `Section ${index + 1}`, content: section.content }))];
-  const activeIndex = Math.min(Math.max(slideIndex, 0), Math.max(slides.length - 1, 0));
-  const activeSlide = slides[activeIndex] || slides[0];
-  useEffect(() => {
-    if (!isFullView) return undefined;
-    const onKeyDown = (event) => { if (event.key === "Escape") setIsFullView(false); if (event.key === "ArrowLeft") setSlideIndex((current) => Math.max(0, current - 1)); if (event.key === "ArrowRight") setSlideIndex((current) => Math.min(slides.length - 1, current + 1)); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isFullView, slides.length]);
-  const renderSlide = (fullView = false) => <article className={`collaboration-guide-slide ${fullView ? "is-full-view" : ""}`}><p>{activeSlide.id === "intro" ? "Shared Study Guide" : `Slide ${activeIndex + 1}`}</p><h3>{activeSlide.title}</h3><div className="collaboration-guide-slide-content">{activeSlide.content ? renderMarkdown(activeSlide.content) : <span>This room study guide is ready for its first section.</span>}</div></article>;
-  return <><section className="collaboration-embedded-tool collaboration-room-study-guide"><div className="collaboration-embedded-tool-heading"><div><small>Study Guide</small><h3>Shared room slide reader</h3></div><div className="collaboration-guide-heading-actions">{canGenerate ? <button type="button" onClick={onGenerate} disabled={isGenerating}>{isGenerating ? "Generating..." : "Regenerate"}</button> : null}<button type="button" className="is-secondary" onClick={() => setIsFullView(true)} aria-label="Open the room study guide in full view"><Maximize2 className="h-4 w-4" aria-hidden="true" />Full view</button></div></div>{renderSlide()}<div className="collaboration-guide-slide-nav" aria-label="Room study guide slide navigation"><button type="button" onClick={() => setSlideIndex((current) => Math.max(0, current - 1))} disabled={activeIndex <= 0}><ArrowLeft className="h-4 w-4" aria-hidden="true" />Previous</button><strong>{activeIndex + 1} / {slides.length}</strong><button type="button" onClick={() => setSlideIndex((current) => Math.min(slides.length - 1, current + 1))} disabled={activeIndex >= slides.length - 1}>Next<ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" /></button></div></section>{isFullView ? <div className="collaboration-guide-full-view" role="dialog" aria-modal="true" aria-label="Room study guide full view"><header><div><small>Shared Study Guide</small><h2>{title}</h2></div><button type="button" onClick={() => setIsFullView(false)} aria-label="Close full view"><X className="h-5 w-5" aria-hidden="true" /></button></header><div className="collaboration-guide-full-content">{renderSlide(true)}</div><div className="collaboration-guide-slide-nav is-full-view" aria-label="Room study guide full view navigation"><button type="button" onClick={() => setSlideIndex((current) => Math.max(0, current - 1))} disabled={activeIndex <= 0}><ArrowLeft className="h-4 w-4" aria-hidden="true" />Previous</button><strong>{activeIndex + 1} / {slides.length}</strong><button type="button" onClick={() => setSlideIndex((current) => Math.min(slides.length - 1, current + 1))} disabled={activeIndex >= slides.length - 1}>Next<ArrowLeft className="h-4 w-4 rotate-180" aria-hidden="true" /></button></div><div className="collaboration-guide-slide-thumbnails" aria-label="Room study guide slide thumbnails">{slides.map((slide, index) => <button key={slide.id} type="button" onClick={() => setSlideIndex(index)} className={index === activeIndex ? "is-active" : ""}><span>{index + 1}</span><strong>{slide.title}</strong></button>)}</div></div> : null}</>;
 }
 const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
 const EnterpriseFooter = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseFooter })));
@@ -3694,22 +3683,6 @@ function sanitizeStoredImageUrlList(values = [], options = {}) {
     .slice(0, 6);
 }
 
-function getStudyChatClipboardText(content = "") {
-  const text = String(content || "").trim();
-  if (!text) return "";
-  return text
-    .replace(/```[\s\S]*?```/g, (block) => block.replace(/^```[a-z0-9_-]*\s*/i, "").replace(/```\s*$/i, "").trim())
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s{0,3}>\s?/gm, "")
-    .replace(/(\*\*|__)(.*?)\1/g, "$2")
-    .replace(/(\*|_)(.*?)\1/g, "$2")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function deriveStudyChatTopicTitle(question = "") {
   const cleaned = String(question || "")
     .replace(/[^a-zA-Z0-9'/-]+/g, " ")
@@ -7233,7 +7206,6 @@ export default function App() {
   const [studyChatResponseMode, setStudyChatResponseMode] = useState("text");
   const [inlineVoicePicker, setInlineVoicePicker] = useState("");
   const [inlineVoicePickerAnchor, setInlineVoicePickerAnchor] = useState(null);
-  const [copiedStudyChatMessageId, setCopiedStudyChatMessageId] = useState("");
   const [noteQualityDraft, setNoteQualityDraft] = useState("");
   const [noteQualityResult, setNoteQualityResult] = useState("");
   const [isRatingNoteQuality, setIsRatingNoteQuality] = useState(false);
@@ -7478,7 +7450,6 @@ export default function App() {
   const studyChatVoiceAnswerRunRef = useRef(0);
   const studyChatRequestRunRef = useRef(0);
   const studyChatAttachmentRunRef = useRef(0);
-  const studyChatCopyTimerRef = useRef(null);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
   const activeStudyMotivationTimerRef = useRef(null);
@@ -7759,7 +7730,7 @@ export default function App() {
       const nextPublicPage = normalized === PUBLIC_TERMS_PATH ? "terms" : "auth";
       return current === nextPublicPage ? current : nextPublicPage;
     });
-    if (resetScroll && pathChanged && typeof window !== "undefined") {
+    if (resetScroll && typeof window !== "undefined") {
       window.requestAnimationFrame(() => {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       });
@@ -8633,10 +8604,7 @@ export default function App() {
       window.clearTimeout(siteRatingPromptTimerRef.current);
       siteRatingPromptTimerRef.current = null;
     }
-    if (studyChatCopyTimerRef.current) {
-      window.clearTimeout(studyChatCopyTimerRef.current);
-      studyChatCopyTimerRef.current = null;
-    }
+
   }, []);
 
   useEffect(() => {
@@ -8892,6 +8860,7 @@ export default function App() {
   const roomToolLabel = tabs.find((tab) => tab.id === activeRoom?.active_tab)?.label || "Study Guide";
   const showCollaborationInvitePrompt = ["capture", "workspace"].includes(currentPage) && Boolean(collaborationInvitePromptRoom);
   const isCollaborationSurfaceActive = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
+
   const canExportCurrent = activeTab === "quiz"
     ? Boolean(selectedQuizQuestions.length)
     : hasResults || ["chat"].includes(activeTab);
@@ -11895,6 +11864,7 @@ export default function App() {
       { id: "image", label: "Images" }, { id: "video", label: "Videos" },
     ];
     const visibleMaterials = (activeRoom?.materials || []).filter((item) => collaborationMaterialFilter === "all" || item.material_type === collaborationMaterialFilter);
+    const activeRoomSourceContext = getCollaborationRoomSourceContext(activeRoom);
     const selectedMaterialSnapshot = selectedCollaborationMaterial?.source?.snapshot || {};
     const selectedCollaborationMediaUrl = selectedCollaborationMaterial?.source?.media_id && activeRoomId
       ? `${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(selectedCollaborationMaterial.source.media_id)}`
@@ -11911,7 +11881,10 @@ export default function App() {
         );
       }
       if (collaborationMaterialFilter === "study_guide") {
-        return <CollaborationRoomStudyGuide key={activeRoom.id} title={activeRoomGuideTopic} intro={activeRoomGuideSummarySection?.content || activeRoomFormattedGuide || ""} sections={activeRoomVisibleGuideSections} canGenerate={activeRoom.is_owner} isGenerating={generatingRoomMaterial === "guide"} onGenerate={() => void generateCollaborationMaterial("guide")} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} />;
+        return <SafeCollaborationRoomStudyGuide key={activeRoom.id} title={activeRoomGuideTopic} intro={activeRoomGuideSummarySection?.content || activeRoomFormattedGuide || ""} sections={activeRoomVisibleGuideSections} canGenerate={activeRoom.is_owner} isGenerating={generatingRoomMaterial === "guide"} onGenerate={() => void generateCollaborationMaterial("guide")} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} hasSourceMaterial={activeRoomSourceContext.hasContent} />;
+      }
+      if (!activeRoomSourceContext.hasContent) {
+        return <div className="collaboration-tool-prerequisite"><UploadCloud aria-hidden="true" /><div><strong>Add course material first</strong><p>Share a saved Mabaso material or upload a document before using this Room tool. Existing Room resources will remain available.</p></div><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom}>Share material</button></div>;
       }
       if (collaborationMaterialFilter === "formulas") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Formulas</small><h3>Shared formula sheet</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("formulas")} disabled={generatingRoomMaterial === "formulas"}>{generatingRoomMaterial === "formulas" ? "Generating..." : activeRoomFormattedFormula ? "Regenerate" : "Generate formulas"}</button> : null}</div>{activeRoomFormattedFormula ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedFormula}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated a shared formula sheet yet.</p>}</section>;
       if (collaborationMaterialFilter === "examples") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Worked Examples</small><h3>Shared step-by-step practice</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("examples")} disabled={generatingRoomMaterial === "examples"}>{generatingRoomMaterial === "examples" ? "Generating..." : activeRoomFormattedExample ? "Regenerate" : "Generate examples"}</button> : null}</div>{activeRoomFormattedExample ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedExample}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated shared worked examples yet.</p>}</section>;
@@ -11991,7 +11964,7 @@ export default function App() {
           <Bell className="h-4 w-4" aria-hidden="true" />
           {unreadActivityCount > 0 ? <span>{Math.min(unreadActivityCount, 25)}</span> : null}
         </button>
-        {isCollaborationActivityOpen ? <><button type="button" className="collaboration-activity-dismiss-layer" aria-label="Close Room Activity" onClick={() => setIsCollaborationActivityOpen(false)} /><section className="collaboration-activity-panel" aria-label="Room Activity" onMouseDown={(event) => event.stopPropagation()}><header><strong>Room Activity</strong><small>Latest 25</small></header>{collaborationRoomActivity.length ? collaborationRoomActivity.map((item) => <button type="button" key={item.id} onClick={() => { const material = (activeRoom.materials || []).find((entry) => entry.id === item.resource_id); const boardItem = (activeRoom.board_items || []).find((entry) => entry.id === item.resource_id); if (material) void openCollaborationMaterial(material); else if (boardItem) setSelectedCollaborationBoardItem(boardItem); setIsCollaborationActivityOpen(false); }}><span>{item.action_text}</span><time>{new Date(item.created_at).toLocaleString()}</time></button>) : <p>No Room activity yet.</p>}</section></> : null}
+        {isCollaborationActivityOpen ? <CollaborationRoomActivityPanel activity={collaborationRoomActivity} onClose={() => setIsCollaborationActivityOpen(false)} onOpen={(item) => { const material = (activeRoom.materials || []).find((entry) => entry.id === item.resource_id); const boardItem = (activeRoom.board_items || []).find((entry) => entry.id === item.resource_id); if (material) void openCollaborationMaterial(material); else if (boardItem) setSelectedCollaborationBoardItem(boardItem); setIsCollaborationActivityOpen(false); }} /> : null}
       </div>
     ) : null;    return (
       <section className={`collaboration-product-shell ${isCollaborationChatMinimized ? "is-chat-minimized" : ""}`}>
@@ -12026,7 +11999,7 @@ export default function App() {
           </aside>
 
           <main className={`collaboration-center-stage ${selectedCollaborationMaterial ? "has-open-material" : ""} ${isCollaborationBoardMinimized ? "is-board-minimized" : ""}`}>
-            {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">←</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} onClick={() => { if (isCollaborationBoardMinimized) { setIsCollaborationBoardMinimized(false); setSelectedCollaborationMaterial(null); } else setIsCollaborationBoardMinimized(true); }}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore panels" : "Expand Chat"}</button></div> : null}
+            {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">← Materials</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} aria-pressed={!isCollaborationBoardMinimized} onClick={() => setIsCollaborationBoardMinimized((current) => !current)}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} aria-pressed={isCollaborationChatExpanded} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore workspace" : "Expand Chat"}</button></div> : null}
             {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} page={adminControlPage} onPageChange={setAdminControlPage} /> : null}
             {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload the photo itself; add a name only if you want one." : "Upload videos and watch them inside Mabaso AI."}</small></div><input value={collaborationMediaNameDraft} onChange={(event) => setCollaborationMediaNameDraft(event.target.value)} placeholder={collaborationMaterialFilter === "image" ? "Photo name (optional)" : "Video name (optional)"} maxLength={180} /><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
             <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom} disabled={!activeRoom || isSharingRoomMaterial}>{isSharingRoomMaterial ? "Sharing..." : "Share material"}</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "image" && item.source?.media_id ? <img src={`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(item.source.media_id)}`} alt="" loading="lazy" /> : item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.material_type === "image" ? (item.title || "") : <>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</>}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">No materials have been shared yet.</p> : null}</div></section>
@@ -16114,7 +16087,7 @@ export default function App() {
       setShowStudyChatJumpToLatest(false);
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [chatMessages.length]);
+  }, [activeStudyChatId, chatMessages.length]);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -21888,7 +21861,7 @@ export default function App() {
   const getCurrentCollaborationControlState = () => ({
     view: ["materials", "chat", "board"].includes(collaborationMobileView) ? collaborationMobileView : "materials",
     material_filter: collaborationMaterialFilter || "all",
-    material_id: selectedCollaborationMaterial?.id || "",
+    material_id: (activeRoom?.materials || []).some((item) => item.id === selectedCollaborationMaterial?.id) ? selectedCollaborationMaterial.id : "",
     page: Math.max(1, Number(adminControlPage || 1)),
     allow_explore: collaborationAdminControl?.allow_explore ?? true,
   });
@@ -21915,8 +21888,20 @@ export default function App() {
 
   const startCollaborationAdminControl = async () => {
     if (!activeRoom?.id || !activeRoom.is_owner || isUpdatingAdminControl) return;
+    const previousControl = collaborationAdminControl;
+    const optimisticControl = {
+      ...(previousControl || {}),
+      active: true,
+      allow_explore: previousControl?.allow_explore ?? true,
+      state: getCurrentCollaborationControlState(),
+      version: Number(previousControl?.version || 0) + 1,
+      controller_email: authEmail,
+    };
     setIsUpdatingAdminControl(true);
     setError("");
+    applyCollaborationAdminControl(optimisticControl);
+    setIsAdminControlConfirmOpen(false);
+    setStatus("Admin Control Mode started. Connecting Room members now.");
     try {
       const response = await authFetch(`/collaboration/rooms/${activeRoom.id}/admin-control/start`, {
         method: "POST",
@@ -21929,6 +21914,7 @@ export default function App() {
       setIsAdminControlConfirmOpen(false);
       setStatus("Admin Control Mode started. Connected members are following your Room view.");
     } catch (err) {
+      applyCollaborationAdminControl(previousControl);
       setError(err.message || "Could not start Admin Control Mode.");
     } finally {
       setIsUpdatingAdminControl(false);
@@ -26648,23 +26634,6 @@ export default function App() {
     </div>
   );
 
-  const copyStudyChatAssistantMessage = async (message) => {
-    const textToCopy = getStudyChatClipboardText(message?.content || "");
-    if (!textToCopy) return;
-    try {
-      await navigator.clipboard.writeText(textToCopy);
-      setCopiedStudyChatMessageId(message.id || "");
-      setStatus("Answer copied.");
-      if (studyChatCopyTimerRef.current) window.clearTimeout(studyChatCopyTimerRef.current);
-      studyChatCopyTimerRef.current = window.setTimeout(() => {
-        setCopiedStudyChatMessageId("");
-        studyChatCopyTimerRef.current = null;
-      }, 1800);
-    } catch {
-      setError("Copy failed. Your browser may be blocking clipboard access.");
-    }
-  };
-
   const handleStudyChatQuestionChange = (event) => {
     const nextValue = event.target.value;
     setChatQuestion(nextValue);
@@ -26721,19 +26690,7 @@ export default function App() {
               ? renderStreamingDots()
               : null}
           </div>
-          {message.role === "assistant" && message.content !== "Thinking..." ? (
-            <div className="study-chat-message-actions">
-              <button
-                type="button"
-                className={`study-chat-message-action ${copiedStudyChatMessageId === message.id ? "is-copied" : ""}`}
-                onClick={() => copyStudyChatAssistantMessage(message)}
-                aria-label={copiedStudyChatMessageId === message.id ? "Answer copied" : "Copy answer"}
-              >
-                {copiedStudyChatMessageId === message.id ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-                <span>{copiedStudyChatMessageId === message.id ? "Copied" : "Copy"}</span>
-              </button>
-            </div>
-          ) : null}
+          {message.role === "assistant" && message.content !== "Thinking..." ? <StudyChatResponseActions messageId={message.id || `assistant-${index}`} content={message.content} language={outputLanguage} preferredVoice={selectedTeacherVoiceName} onError={setError} /> : null}
         </div>
       )) : (fullPage ? null : (
         <div className="study-chat-empty">Start a study question when you are ready.</div>
@@ -28417,6 +28374,7 @@ export default function App() {
       const snapshot = {
         transcript: resolvedItem.transcript || "", summary: resolvedItem.summary || "", formula: resolvedItem.formula || "",
         example: resolvedItem.example || "", flashcards: resolvedItem.flashcards || [], quiz_questions: resolvedItem.quizQuestions || [],
+        lecture_notes: resolvedItem.lectureNotes || "", lecture_slides: resolvedItem.lectureSlides || "",
         study_images: resolvedItem.studyImages || [], presentation: resolvedItem.presentationData || null, podcast: resolvedItem.podcastData || null, mind_map: resolvedItem.mindMapData || null,
       };
       const response = await authFetch(`/collaboration/rooms/${activeRoomId}/material-items`, {
@@ -28425,8 +28383,7 @@ export default function App() {
       });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not share this saved material.");
-      const replacedIds = new Set(data.replaced_ids || []);
-      setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || []).filter((entry) => !replacedIds.has(entry.id))] } : room);
+      setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || []).filter((entry) => entry.id !== data.item.id)] } : room);
       setIsShareMaterialPickerOpen(false);
       setSelectedCollaborationMaterial(data.item);
       rememberOpenCollaborationMaterial(data.item);
@@ -28767,12 +28724,8 @@ export default function App() {
       setError("Only the room owner can generate shared room materials.");
       return false;
     }
-    const hasRoomSource = Boolean(
-      (roomSnapshot.transcript || "").trim()
-      || (roomSnapshot.lecture_notes || "").trim()
-      || (roomSnapshot.lecture_slides || "").trim()
-    );
-    if (!hasRoomSource) {
+    const roomContext = getCollaborationRoomSourceContext(roomSnapshot);
+    if (!roomContext.hasContent) {
       setError("This room needs a transcript, notes, or slides before the owner can generate materials.");
       return false;
     }
@@ -28787,12 +28740,12 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transcript: roomSnapshot.transcript || "",
-          lecture_notes: roomSnapshot.lecture_notes || "",
-          lecture_slides: roomSnapshot.lecture_slides || "",
+          transcript: roomContext.transcript,
+          lecture_notes: roomContext.lectureNotes,
+          lecture_slides: roomContext.lectureSlides,
           past_question_papers: "",
           language: outputLanguage,
-          reference_images: getSafeAiReferenceImageUrls(roomSnapshot.study_images || []),
+          reference_images: getSafeAiReferenceImageUrls(roomContext.studyImages),
         }),
         timeoutMs: STUDY_GUIDE_JOB_REQUEST_TIMEOUT_MS,
       });
@@ -28800,13 +28753,13 @@ export default function App() {
       if (!response.ok) throw new Error(data.detail || "Room study guide generation failed.");
       const job = await pollJob(data.job_id, "study_guide");
       await updateActiveRoomMaterials({
-        transcript: job.transcript || roomSnapshot.transcript || "",
+        transcript: job.transcript || roomContext.transcript,
         summary: job.summary || "",
         formula: job.formula || "",
         example: job.worked_example || "",
-        lecture_notes: roomSnapshot.lecture_notes || "",
-        lecture_slides: roomSnapshot.lecture_slides || "",
-        study_images: Array.isArray(job.study_images) ? job.study_images : roomSnapshot.study_images || [],
+        lecture_notes: roomContext.lectureNotes,
+        lecture_slides: roomContext.lectureSlides,
+        study_images: Array.isArray(job.study_images) ? job.study_images : roomContext.studyImages,
         flashcards: job.flashcards || roomSnapshot.flashcards || [],
         active_tab: targetTab,
       });
@@ -28829,7 +28782,8 @@ export default function App() {
       setError("Only the room owner can generate shared room flashcards.");
       return false;
     }
-    if (!((roomSnapshot.summary || "").trim() || (roomSnapshot.transcript || "").trim() || (roomSnapshot.lecture_notes || "").trim() || (roomSnapshot.lecture_slides || "").trim())) {
+    const roomContext = getCollaborationRoomSourceContext(roomSnapshot);
+    if (!roomContext.hasContent) {
       setError("Generate the room study guide or add room source material before creating shared flashcards.");
       return false;
     }
@@ -28846,10 +28800,10 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript: roomSnapshot.transcript || "",
-          summary: roomSnapshot.summary || "",
-          lecture_notes: roomSnapshot.lecture_notes || "",
-          lecture_slides: roomSnapshot.lecture_slides || "",
+          transcript: roomContext.transcript,
+          summary: roomContext.summary,
+          lecture_notes: roomContext.lectureNotes,
+          lecture_slides: roomContext.lectureSlides,
           past_question_papers: "",
           language: outputLanguage,
           count: requestedCount,
@@ -28882,7 +28836,8 @@ export default function App() {
       setError("Only the room owner can generate the shared room test.");
       return false;
     }
-    if (!((roomSnapshot.summary || "").trim() || (roomSnapshot.transcript || "").trim() || (roomSnapshot.lecture_notes || "").trim() || (roomSnapshot.lecture_slides || "").trim())) {
+    const roomContext = getCollaborationRoomSourceContext(roomSnapshot);
+    if (!roomContext.hasContent) {
       setError("Generate the room study guide or add room source material before creating the shared test.");
       return false;
     }
@@ -28898,10 +28853,10 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS,
         body: JSON.stringify({
-          transcript: roomSnapshot.transcript || "",
-          summary: roomSnapshot.summary || "",
-          lecture_notes: roomSnapshot.lecture_notes || "",
-          lecture_slides: roomSnapshot.lecture_slides || "",
+          transcript: roomContext.transcript,
+          summary: roomContext.summary,
+          lecture_notes: roomContext.lectureNotes,
+          lecture_slides: roomContext.lectureSlides,
           past_question_papers: "",
           language: outputLanguage,
         }),
@@ -28945,12 +28900,11 @@ export default function App() {
     });
     const data = await parseJsonSafe(response);
     if (!response.ok) throw new Error(data.detail || `Could not share the generated ${toolId.replaceAll("_", " ")} with the Room.`);
-    const replacedIds = new Set(data.replaced_ids || []);
     setActiveRoom((room) => room ? {
       ...room,
-      materials: [data.item, ...(room.materials || []).filter((item) => !replacedIds.has(item.id) && !(item.material_type === toolId && item.source?.kind === "room_generation"))],
+      materials: [data.item, ...(room.materials || []).filter((item) => item.id !== data.item.id)],
     } : room);
-    setCollaborationOpenMaterialTabs((current) => [data.item, ...current.filter((item) => item.id !== data.item.id && item.material_type !== toolId)].slice(0, 8));
+    setCollaborationOpenMaterialTabs((current) => [data.item, ...current.filter((item) => item.id !== data.item.id)].slice(0, 8));
     setSelectedCollaborationMaterial(data.item);
     return data.item;
   };
@@ -28960,20 +28914,11 @@ export default function App() {
       setError("Only the Room owner can generate shared study tools.");
       return false;
     }
-    const roomContext = {
-      transcript: activeRoom.transcript || "",
-      summary: activeRoom.summary || "",
-      lectureNotes: activeRoom.lecture_notes || "",
-      lectureSlides: activeRoom.lecture_slides || "",
-      pastQuestionPapers: "",
-      hasContent: Boolean(activeRoom.transcript || activeRoom.summary || activeRoom.lecture_notes || activeRoom.lecture_slides),
-      sourceLabel: activeRoom.title || "Collaboration Room",
-    };
-    if (!roomContext.hasContent && !(toolId === "report" && reportConfig.reportTitle.trim()) && !(toolId === "mind_map" && mindMapTopic.trim())) {
+    const roomContext = getCollaborationRoomSourceContext(activeRoom);
+    if (!roomContext.hasContent) {
       setError("Share lecture material in the Room before generating this study tool.");
       return false;
-    }
-    if (toolId === "presentation" && !isPresentationTemplateAllowed(selectedPresentationDesign)) {
+    }    if (toolId === "presentation" && !isPresentationTemplateAllowed(selectedPresentationDesign)) {
       return blockLockedPlanOption("This PowerPoint template", "a higher presentation plan");
     }
     if (toolId === "mind_map" && !isMindMapDepthAllowed(mindMapDepth)) {
@@ -29060,9 +29005,9 @@ export default function App() {
         const mediaResponse = await authFetch(`/collaboration/rooms/${activeRoomId}/media`, { method: "POST", body: formData, timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS });
         const mediaData = await parseJsonSafe(mediaResponse);
         if (!mediaResponse.ok || !mediaData.item) throw new Error(mediaData.detail || "The Room podcast audio could not be shared.");
-        setActiveRoom((room) => room ? { ...room, materials: [mediaData.item, ...(room.materials || []).filter((item) => item.material_type !== "podcast")] } : room);
+        setActiveRoom((room) => room ? { ...room, materials: [mediaData.item, ...(room.materials || []).filter((item) => item.id !== mediaData.item.id)] } : room);
         setSelectedCollaborationMaterial(mediaData.item);
-        setCollaborationOpenMaterialTabs((current) => [mediaData.item, ...current.filter((item) => item.material_type !== "podcast")].slice(0, 8));
+        setCollaborationOpenMaterialTabs((current) => [mediaData.item, ...current.filter((item) => item.id !== mediaData.item.id)].slice(0, 8));
       } else {
         await saveGeneratedCollaborationTool({ toolId, ...itemConfig });
       }
@@ -29196,6 +29141,7 @@ export default function App() {
   const openSavedStudyChat = (conversationId = "") => {
     const normalizedConversationId = String(conversationId || "").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 96);
     if (!normalizedConversationId) return;
+    pendingStudyChatAnchorIdRef.current = normalizedConversationId;
     let restoredFromCache = false;
     try {
       const cachedMessages = JSON.parse(window.localStorage.getItem(
@@ -30172,16 +30118,22 @@ export default function App() {
       || !["/", "/signin", "/register", "/payment-success"].includes(browserPath)
     );
 
-  if (isOpeningAuthenticatedWorkspace || shouldBlockForAuthBootstrap) {
+  if (shouldBlockForAuthBootstrap && !isOpeningAuthenticatedWorkspace) {
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)]" aria-busy="true">
+        <span className="sr-only">Verifying secure access</span>
+      </div>
+    );
+  }
+
+  if (isOpeningAuthenticatedWorkspace) {
     return (
       <div className="min-h-screen bg-[var(--page-bg)] text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
           <div className="px-8 py-10 text-center">
             <p className="brand-mark text-2xl font-black sm:text-4xl">Mabaso AI</p>
             <div className="mx-auto mt-5 h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/20 border-t-emerald-300" />
-            <p className="mt-4 text-sm text-slate-300">
-              {isOpeningAuthenticatedWorkspace ? "Opening your workspace..." : "Checking your session..."}
-            </p>
+            <p className="mt-4 text-sm text-slate-300">Opening your workspace...</p>
           </div>
         </div>
       </div>
@@ -30195,7 +30147,7 @@ export default function App() {
           page={activeSitePage}
           currentRoute={activeSitePage.route}
           isAuthenticated={false}
-          onNavigate={(route) => navigateToPath(route)}
+          onNavigate={(route) => navigateToPath(route, { resetScroll: true })}
           onOpenApp={(target) => openProtectedAppRoute(target)}
           onOpenSignIn={() => startDirectGoogleSignIn(activeSitePage.route)}
           onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeSitePage.route)}
@@ -30224,7 +30176,7 @@ export default function App() {
       return (
         <ProtectedWorkspacePreview
           route={activeProtectedWorkspaceRoute}
-          onNavigate={(route) => navigateToPath(route)}
+          onNavigate={(route) => navigateToPath(route, { resetScroll: true })}
           onOpenApp={(target) => openProtectedAppRoute(target)}
           onOpenSignIn={() => startDirectGoogleSignIn(activeProtectedWorkspaceRoute.route)}
           onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeProtectedWorkspaceRoute.route)}
@@ -30245,7 +30197,7 @@ export default function App() {
           outputLanguage={outputLanguage}
           outputLanguageOptions={outputLanguageOptions}
           onLanguageChange={setOutputLanguage}
-          onNavigate={navigateToPath}
+          onNavigate={(route) => navigateToPath(route, { resetScroll: true })}
           onStartGoogle={startDirectGoogleSignIn}
           onPrepareGoogle={prepareGoogleRedirect}
           rememberedEmail={authEmailInput}
@@ -30386,7 +30338,7 @@ export default function App() {
               })}
             </div>
           </section>
-          <EnterpriseFooter currentRoute={browserPath} onNavigate={(route) => navigateToPath(route)} />
+          <EnterpriseFooter currentRoute={browserPath} onNavigate={(route) => navigateToPath(route, { resetScroll: true })} />
         </main>
       </div>
     );
@@ -30438,7 +30390,7 @@ export default function App() {
         currentRoute={activeSitePage.route}
         isAuthenticated
         adminBlocked={activeSitePage.access === "admin" && authSessionMode !== "admin"}
-        onNavigate={(route) => navigateToPath(route)}
+        onNavigate={(route) => navigateToPath(route, { resetScroll: true })}
         onOpenApp={(target) => openProtectedAppRoute(target)}
         onOpenSignIn={() => startDirectGoogleSignIn(activeSitePage.route)}
         onPrepareSignIn={(route) => prepareGoogleRedirect(route || activeSitePage.route)}

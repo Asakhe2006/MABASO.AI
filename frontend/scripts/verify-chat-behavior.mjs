@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const assistantHookSource = await readFile(new URL("../src/useLectureAssistant.js", import.meta.url), "utf8");
 const assistantPanelSource = await readFile(new URL("../src/components/LectureAssistantPanel.jsx", import.meta.url), "utf8");
+const assistantMarkdownSource = await readFile(new URL("../src/components/AssistantMarkdown.jsx", import.meta.url), "utf8");
+const responseActionsSource = await readFile(new URL("../src/components/StudyChatResponseActions.jsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
 
 assert.doesNotMatch(
@@ -28,6 +30,12 @@ assert.equal(
 );
 assert.match(cssSource, /\.ai-streaming-dots > span[\s\S]*width:\s*5px[\s\S]*height:\s*5px/, "Chat loading dots must remain compact.");
 assert.match(cssSource, /@media \(prefers-reduced-motion: reduce\)/, "Chat motion must respect reduced-motion preferences.");
+assert.match(responseActionsSource, /navigator\.clipboard\.writeText\(toPlainText\(content\)\)/, "Assistant Copy must copy plain response text.");
+assert.match(responseActionsSource, /window\.speechSynthesis\.cancel\(\)/, "Read Aloud must cancel active speech before switching responses.");
+assert.match(responseActionsSource, /aria-label=\{isReading \? "Stop reading response" : "Read response aloud"\}/, "Read Aloud must expose its active state accessibly.");
+assert.match(assistantMarkdownSource, /mabaso-ai-code-word-wrap/, "Code Word Wrap preference must persist locally.");
+assert.match(cssSource, /\.assistant-code-content\.is-wrapped\s*\{[^}]*white-space:\s*pre-wrap/s, "Enabled Word Wrap must wrap visually without changing source code.");
+assert.match(cssSource, /\.assistant-code-content\s*\{[^}]*white-space:\s*pre;/s, "Disabled Word Wrap must preserve horizontal scrolling.");
 assert.match(
   appSource,
   /queueStudySourceFiles[\s\S]*Press Generate Study Guide to read and process/,
