@@ -232,8 +232,9 @@ class SupabaseChatHistoryStore:
     ) -> dict[str, Any]:
         normalized_email = compact_text(email).lower()
         search_query = compact_text(search)
+        base_select = "id,title,preview_text,last_message_preview,memory_summary,lecture_label,context_key,message_count,is_pinned,is_archived,metadata_json,last_message_at,created_at,updated_at"
         params: dict[str, Any] = {
-            "select": "id,title,preview_text,last_message_preview,memory_summary,lecture_label,context_key,message_count,is_pinned,is_archived,metadata_json,last_message_at,created_at,updated_at",
+            "select": f"{base_select},messages(count)",
             "user_email": f"eq.{normalized_email}",
             "order": "is_pinned.desc,updated_at.desc",
             "limit": str(max(1, min(limit, 100))),
@@ -244,13 +245,29 @@ class SupabaseChatHistoryStore:
         if search_query:
             params["search_document"] = f"ilike.*{search_query.replace('*', ' ').replace('%', ' ')}*"
 
-        data, response = self._request(
-            "GET",
-            "conversations",
-            params=params,
-            prefer="count=exact,return=representation",
-        )
+        try:
+            data, response = self._request(
+                "GET",
+                "conversations",
+                params=params,
+                prefer="count=exact,return=representation",
+            )
+        except SupabaseChatHistoryError:
+            # Older PostgREST relationship caches may not expose the embedded
+            # messages count immediately after migration. Keep history usable
+            # while the schema cache catches up.
+            params["select"] = base_select
+            data, response = self._request(
+                "GET",
+                "conversations",
+                params=params,
+                prefer="count=exact,return=representation",
+            )
         items = data if isinstance(data, list) else []
+        for item in items:
+            embedded_count = item.pop("messages", None) if isinstance(item, dict) else None
+            if isinstance(embedded_count, list) and embedded_count:
+                item["message_count"] = int(embedded_count[0].get("count") or 0)
         total = parse_content_range_total(response.headers.get("Content-Range", "")) or len(items)
         return {"items": items, "total": total}
 

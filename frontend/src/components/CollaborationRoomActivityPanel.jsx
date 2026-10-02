@@ -1,18 +1,29 @@
+import { useEffect, useRef } from "react";
 import { formatRoomActivityTime } from "../collaborationRoomUtils";
 
 export default function CollaborationRoomActivityPanel({ activity = [], onOpen, onClose }) {
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    const closeOnOutsideInteraction = (event) => {
+      if (panelRef.current?.contains(event.target)) return;
+      if (event.target?.closest?.(".collaboration-activity-button")) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", closeOnOutsideInteraction);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideInteraction);
+  }, [onClose]);
+
   return (
-    <>
-      <button type="button" className="collaboration-activity-dismiss-layer" aria-label="Close Room Activity" onClick={onClose} />
-      <section className="collaboration-activity-panel" aria-label="Room Activity" onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={panelRef} className="collaboration-activity-panel" aria-label="Room Activity" onMouseDown={(event) => event.stopPropagation()}>
         <header><strong>Room Activity</strong><small>Latest 25 meaningful updates</small></header>
         {activity.length ? activity.map((item) => {
           const actor = String(item.actor_email || item.action_text || "Mabaso member").split("@")[0].trim() || "M";
           const context = item.resource_title || ({
             admin_control_started: "Members can now follow the owner's Room view.",
             admin_control_stopped: "Independent Room navigation has resumed.",
-            board_item_edited: "The shared board was updated.",
-            board_item_added: "A new item is available on the shared board.",
+            board_item_edited: "Board item updated",
+            board_item_added: "New board item",
           }[item.activity_type]) || "Open this update in the Room.";
           return (
             <button type="button" key={item.id} className="collaboration-activity-entry" onClick={() => onOpen(item)}>
@@ -26,6 +37,5 @@ export default function CollaborationRoomActivityPanel({ activity = [], onOpen, 
           );
         }) : <p>No Room activity yet. Shared materials, board changes, and Admin Control updates will appear here.</p>}
       </section>
-    </>
   );
 }

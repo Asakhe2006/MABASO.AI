@@ -21,6 +21,10 @@ assert.match(appSource, /aria-label="Open room materials"/, "The mobile centre a
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{roomId\}\/messages`/, "Chat send must call the authenticated room-message endpoint.");
 assert.match(appSource, /const optimisticMessage = \{/, "Room chat must render messages optimistically instead of waiting for a full room reload.");
 assert.match(appSource, /pending-photo-/, "Room chat photos must render an immediate local preview while upload continues.");
+assert.match(appSource, /suppressLoader: Boolean\(immediateRoom\)/, "Recent Rooms must open cached room state immediately while refreshing in the background.");
+assert.match(appSource, /setIsShareMaterialPickerOpen\(true\);[\s\S]{0,240}loadHistoryFromServer/, "Share Material must open its picker before refreshing remote history.");
+assert.match(appSource, /timeoutMs: mediaKind === "video" \? 0/, "Large collaboration video uploads must not be cancelled by a short client timeout.");
+assert.match(appSource, /playCollaborationNotificationVoice/, "Voice-note notifications must expose authenticated inline playback.");
 assert.match(roomChatSource, /message\.local_url/, "The shared room chat renderer must support optimistic local photo and voice URLs.");
 assert.match(appSource, /event\.nativeEvent\?\.isComposing/, "Desktop Enter-to-send must preserve IME composition.");
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{roomId\}\/board-items`/, "Board post must call the authenticated board endpoint.");
@@ -62,6 +66,7 @@ assert.match(appSource, /inviteDiscoveredProfileToRoom\(profile\)/, "Discovery r
 assert.match(appSource, /role=\{error \? "alert" : "status"\}/, "Collaboration API failures must be visible in the page.");
 assert.match(cssSource, /\.collaboration-chat-panel\.is-mobile-active \.collaboration-chat-composer \{ position:fixed;/, "Mobile room chat composer must stay above the bottom navigation.");
 assert.match(cssSource, /\.collaboration-board-reader \{/, "Expanded board items need a responsive reader surface.");
+assert.doesNotMatch(cssSource, /\.collaboration-activity-dismiss-layer/, "Room Activity must close through click-outside handling without covering the workspace.");
 assert.match(cssSource, /\.study-chat-page-composer \.ai-chat-mode-full-label \{ display:none !important;/, "The mobile model picker must use the compact non-overlapping label.");
 assert.match(siteConfigSource, /route: "\/collaboration\/shared-study-rooms"[\s\S]*?access: "public"/, "The Collaboration guide must be readable without signing in.");
 assert.match(siteConfigSource, /markdown: collaborationGuideMarkdown/, "The public Collaboration route must render the complete guide.");

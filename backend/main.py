@@ -10974,6 +10974,70 @@ def compact_history_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def get_compact_history_items_for_user(email: str) -> list[dict[str, Any]]:
+    """Read history metadata without decoding every complete workspace."""
+    normalized_email = normalize_email(email)
+    if not normalized_email:
+        return []
+    if DATABASE_BACKEND == "postgres":
+        compact_query = """
+            SELECT
+                id, created_at, updated_at,
+                payload_json::jsonb ->> 'title' AS title,
+                payload_json::jsonb ->> 'fileName' AS file_name,
+                substr(COALESCE(payload_json::jsonb ->> 'summary', ''), 1, 420) AS summary,
+                COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(payload_json::jsonb -> 'quizQuestions') = 'array' THEN payload_json::jsonb -> 'quizQuestions' ELSE '[]'::jsonb END), 0) AS quiz_count,
+                CASE WHEN length(trim(COALESCE(payload_json::jsonb ->> 'lectureNotes', ''))) > 0 THEN 1 ELSE 0 END AS has_notes,
+                COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(payload_json::jsonb -> 'lectureSlideFileNames') = 'array' THEN payload_json::jsonb -> 'lectureSlideFileNames' ELSE '[]'::jsonb END), 0) AS slide_count,
+                COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(payload_json::jsonb -> 'pastQuestionPaperFileNames') = 'array' THEN payload_json::jsonb -> 'pastQuestionPaperFileNames' ELSE '[]'::jsonb END), 0) AS paper_count
+            FROM study_history_items
+            WHERE lower(email) = ?
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+        """
+    else:
+        compact_query = """
+            SELECT
+                id, created_at, updated_at,
+                json_extract(payload_json, '$.title') AS title,
+                json_extract(payload_json, '$.fileName') AS file_name,
+                substr(COALESCE(json_extract(payload_json, '$.summary'), ''), 1, 420) AS summary,
+                COALESCE(json_array_length(json_extract(payload_json, '$.quizQuestions')), 0) AS quiz_count,
+                CASE WHEN length(trim(COALESCE(json_extract(payload_json, '$.lectureNotes'), ''))) > 0 THEN 1 ELSE 0 END AS has_notes,
+                COALESCE(json_array_length(json_extract(payload_json, '$.lectureSlideFileNames')), 0) AS slide_count,
+                COALESCE(json_array_length(json_extract(payload_json, '$.pastQuestionPaperFileNames')), 0) AS paper_count
+            FROM study_history_items
+            WHERE lower(email) = ? AND json_valid(payload_json) = 1
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+        """
+    try:
+        with get_db_connection() as connection:
+            rows = connection.execute(compact_query, (normalized_email, MAX_HISTORY_ITEMS)).fetchall()
+    except (sqlite3.OperationalError, ValueError, TypeError):
+        return [compact_history_item(item) for item in get_history_items_for_user(normalized_email)]
+    return [
+        {
+            "id": compact_text(row["id"]),
+            "title": compact_text(row["title"], "Saved study guide"),
+            "fileName": compact_text(row["file_name"], "Saved lecture"),
+            "createdAt": compact_text(row["created_at"]),
+            "updatedAt": compact_text(row["updated_at"], compact_text(row["created_at"])),
+            "ownerEmail": normalized_email,
+            "summary": compact_text(row["summary"]),
+            "quizQuestions": [{} for _ in range(max(0, int(row["quiz_count"] or 0)))],
+            "lectureNotes": "Available" if bool(row["has_notes"]) else "",
+            "lectureSlideFileNames": ["Slide source"] * max(0, int(row["slide_count"] or 0)),
+            "pastQuestionPaperFileNames": ["Past paper"] * max(0, int(row["paper_count"] or 0)),
+            "quizQuestionCount": max(0, int(row["quiz_count"] or 0)),
+            "hasLectureNotes": bool(row["has_notes"]),
+            "lectureSlideFileCount": max(0, int(row["slide_count"] or 0)),
+            "pastQuestionPaperFileCount": max(0, int(row["paper_count"] or 0)),
+            "isCompactHistoryItem": True,
+        }
+        for row in rows
+    ]
+
 def merge_history_items_for_user(email: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge browser history into the account without deleting unseen server records.
 
@@ -20442,13 +20506,7 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
             "SELECT email, role, created_at FROM collaboration_room_members WHERE room_id = ? ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, email ASC",
             (room_id,),
         ).fetchall()
-        message_columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(collaboration_room_messages)").fetchall()
-        }
-        if "reply_to_id" not in message_columns:
-            connection.execute("ALTER TABLE collaboration_room_messages ADD COLUMN reply_to_id TEXT NOT NULL DEFAULT ''")
-        message_rows = connection.execute(
-            """
+        message_query = """
             SELECT m.id, m.author_email, m.content, m.message_type, m.media_id,
                    m.duration_seconds, m.reply_to_id, m.created_at,
                    r.author_email AS reply_author_email, r.content AS reply_content
@@ -20456,9 +20514,14 @@ def serialize_collaboration_room(room_row: sqlite3.Row, current_user: str) -> di
             LEFT JOIN collaboration_room_messages AS r
               ON r.id = m.reply_to_id AND r.room_id = m.room_id
             WHERE m.room_id = ? ORDER BY m.created_at DESC LIMIT 80
-            """,
-            (room_id,),
-        ).fetchall()
+        """
+        try:
+            message_rows = connection.execute(message_query, (room_id,)).fetchall()
+        except sqlite3.OperationalError as error:
+            if "reply_to_id" not in str(error):
+                raise
+            connection.execute("ALTER TABLE collaboration_room_messages ADD COLUMN reply_to_id TEXT NOT NULL DEFAULT ''")
+            message_rows = connection.execute(message_query, (room_id,)).fetchall()
         material_rows = connection.execute(
             """
             SELECT id, room_id, owner_email, title, material_type, description,
@@ -24517,8 +24580,9 @@ async def get_study_history(
     compact: bool = Query(False),
     current_user: str = Depends(require_authenticated_user),
 ):
-    items = get_history_items_for_user(current_user)
-    return {"items": [compact_history_item(item) for item in items] if compact else items}
+    if compact:
+        return {"items": get_compact_history_items_for_user(current_user)}
+    return {"items": get_history_items_for_user(current_user)}
 
 
 @app.get("/history/{item_id}")
@@ -37573,10 +37637,14 @@ class DatabaseChatHistoryStore:
             ).fetchone()
             rows = connection.execute(
                 f"""
-                SELECT id,title,preview_text,last_message_preview,memory_summary,lecture_label,context_key,
-                       message_count,is_pinned,is_archived,metadata_json,last_message_at,created_at,updated_at
-                FROM assistant_conversations
-                WHERE {where_sql}
+                SELECT c.id,c.title,c.preview_text,c.last_message_preview,c.memory_summary,c.lecture_label,c.context_key,
+                       COALESCE((
+                           SELECT COUNT(*) FROM assistant_messages m
+                           WHERE m.conversation_id = c.id AND m.user_email = c.user_email
+                       ), c.message_count, 0) AS message_count,
+                       c.is_pinned,c.is_archived,c.metadata_json,c.last_message_at,c.created_at,c.updated_at
+                FROM assistant_conversations c
+                WHERE {where_sql.replace('user_email', 'c.user_email').replace('is_archived', 'c.is_archived').replace('search_document', 'c.search_document')}
                 ORDER BY is_pinned DESC, updated_at DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -38786,9 +38854,10 @@ async def get_lecture_assistant_conversation(
         )
     except SupabaseChatHistoryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    conversation_with_count = {**conversation, "message_count": int(message_bundle.get("total") or 0)}
     return {
         "conversation": format_chat_history_conversation(
-            conversation,
+            conversation_with_count,
             include_messages=True,
             messages=message_bundle.get("items", []),
         ),
@@ -40063,7 +40132,7 @@ async def create_collaboration_material_item(
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
         create_collaboration_room_activity(
             connection, room_id=room["id"], actor_email=current_user,
-            activity_type="material_shared", action_text=f'{actor_name} shared "{title}"',
+            activity_type="material_shared", action_text=f'{actor_name} shared {material_type.replace("_", " ")} "{title}"',
             resource_type=material_type, resource_id=item_id, resource_title=title,
         )
     return {
@@ -40187,7 +40256,7 @@ async def upload_collaboration_media(
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
         create_collaboration_room_activity(
             connection, room_id=room["id"], actor_email=current_user,
-            activity_type=f"{material_type}_shared", action_text=f'{actor_name} shared "{safe_title}"',
+            activity_type=f"{material_type}_shared", action_text=(f'{actor_name} added photo "{safe_title}"' if material_type == "image" else f'{actor_name} uploaded video "{safe_title}"' if material_type == "video" else f'{actor_name} shared podcast "{safe_title}"'),
             resource_type=material_type, resource_id=item_id, resource_title=safe_title,
         )
     return {
@@ -40444,7 +40513,7 @@ async def create_collaboration_board_item(
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
         create_collaboration_room_activity(
             connection, room_id=room["id"], actor_email=current_user,
-            activity_type="board_item_added", action_text=f"{actor_name} added a board {item_type}",
+            activity_type="board_item_added", action_text=f"{actor_name} added {item_type}",
             resource_type="board_item", resource_id=item_id, resource_title=title,
         )
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
@@ -40488,7 +40557,7 @@ async def update_collaboration_board_item(
         connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
         create_collaboration_room_activity(
             connection, room_id=room["id"], actor_email=current_user,
-            activity_type="board_item_edited", action_text=f"{actor_name} edited a board item",
+            activity_type="board_item_edited", action_text=f"{actor_name} updated {item_type}",
             resource_type="board_item", resource_id=item_id, resource_title=title,
         )
     return {"item": next(item for item in get_collaboration_board_items(room["id"]) if item["id"] == item_id)}
@@ -40840,7 +40909,7 @@ async def upload_collaboration_board_image(
             )
             create_collaboration_room_activity(
                 connection, room_id=room["id"], actor_email=current_user,
-                activity_type="board_photo_added", action_text=f'{actor_name} added "{uploaded_image["name"]}" to the board',
+                activity_type="board_photo_added", action_text=f'{actor_name} added board photo "{uploaded_image["name"]}"',
                 resource_type="board_image", resource_id=uploaded_image["id"], resource_title=uploaded_image["name"],
             )
     finally:
