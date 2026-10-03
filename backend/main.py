@@ -7159,6 +7159,12 @@ class AssistantConversationUpdateRequest(BaseModel):
     is_pinned: bool | None = None
 
 
+class AssistantConversationBranchRequest(BaseModel):
+    source_message_id: str
+    edited_content: str
+    new_conversation_id: str
+
+
 class AssistantConversationListResponse(BaseModel):
     items: list[dict[str, Any]]
     total: int = 0
@@ -38939,6 +38945,88 @@ async def update_lecture_assistant_conversation(
     return {"conversation": format_chat_history_conversation(updated), "storage_mode": chat_history_storage_mode()}
 
 
+@app.post("/api/assistant/conversations/{conversation_id}/branches")
+async def create_lecture_assistant_conversation_branch(
+    conversation_id: str,
+    payload: AssistantConversationBranchRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    """Create a durable edit branch without consuming an AI attempt."""
+    ensure_chat_history_store_configured()
+    source_id = compact_text(conversation_id)[:96]
+    source_message_id = compact_text(payload.source_message_id)[:160]
+    branch_id = re.sub(r"[^A-Za-z0-9_-]+", "", compact_text(payload.new_conversation_id))[:96]
+    edited_content = compact_text(payload.edited_content)[:24000]
+    if not source_id or not source_message_id or not branch_id or not edited_content:
+        raise HTTPException(status_code=400, detail="A conversation, question, and branch id are required.")
+    if branch_id == source_id:
+        raise HTTPException(status_code=400, detail="The edited branch needs a new conversation id.")
+    try:
+        source_conversation = chat_history_store.get_conversation(current_user, source_id)
+        if not source_conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        if chat_history_store.get_conversation(current_user, branch_id):
+            raise HTTPException(status_code=409, detail="That edited branch already exists.")
+        source_messages = chat_history_store.fetch_all_messages(
+            email=current_user, conversation_id=source_id, batch_size=200, max_messages=2000,
+        )
+        source_index = next((index for index, message in enumerate(source_messages)
+            if compact_text(message.get("id")) == source_message_id), -1)
+        if source_index < 0 or compact_text(source_messages[source_index].get("role")).lower() != "user":
+            raise HTTPException(status_code=404, detail="The question to edit was not found in this conversation.")
+        source_metadata = normalize_chat_history_json(source_conversation.get("metadata_json"))
+        root_id = compact_text(source_metadata.get("branch_root_id"), source_id)
+        branch_children = [compact_text(value) for value in source_metadata.get("branch_child_ids", []) if compact_text(value)]
+        if branch_id not in branch_children:
+            branch_children.append(branch_id)
+        chat_history_store.update_conversation(
+            email=current_user, conversation_id=source_id,
+            updates={"metadata_json": {**source_metadata, "branch_root_id": root_id, "branch_child_ids": branch_children[-40:]}},
+        )
+        branch_title = cleanup_generated_conversation_title(
+            edited_content, compact_text(source_conversation.get("title"), "Edited Study Chat"),
+        )
+        branch_metadata = {
+            "branch_root_id": root_id, "branch_parent_id": source_id,
+            "branch_source_message_id": source_message_id, "branch_edited_question": edited_content,
+        }
+        branch = chat_history_store.ensure_conversation(
+            email=current_user, conversation_id=branch_id, title=branch_title,
+            lecture_label=compact_text(source_conversation.get("lecture_label")),
+            context_key=compact_text(source_conversation.get("context_key")), metadata=branch_metadata,
+        )
+        copied_messages: list[dict[str, Any]] = []
+        for index, message in enumerate(source_messages[:source_index]):
+            metadata = normalize_chat_history_json(message.get("metadata_json"))
+            copied_messages.append({
+                "id": f"{branch_id}-copied-{index}-{uuid4().hex[:10]}",
+                "role": compact_text(message.get("role")), "content": compact_text(message.get("content")),
+                "timestamp": compact_text(message.get("timestamp"), utc_now().isoformat()),
+                "interaction_mode": compact_text(message.get("interaction_mode"), "text"),
+                "provider": compact_text(message.get("provider")), "model": compact_text(message.get("model")),
+                "metadata_json": {**metadata, "branched_from_message_id": compact_text(message.get("id"))},
+            })
+        if copied_messages:
+            chat_history_store.insert_messages(email=current_user, conversation_id=branch_id, messages=copied_messages)
+        now_iso = utc_now().isoformat()
+        branch = chat_history_store.update_conversation(
+            email=current_user, conversation_id=branch_id,
+            updates={
+                "message_count": len(copied_messages), "preview_text": edited_content[:240],
+                "last_message_preview": edited_content[:240],
+                "search_document": compact_text(f"{branch_title} {edited_content}"),
+                "metadata_json": branch_metadata, "updated_at": now_iso, "last_message_at": now_iso,
+            },
+        ) or branch
+    except SupabaseChatHistoryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "conversation": format_chat_history_conversation(branch, include_messages=True, messages=copied_messages),
+        "source_conversation_id": source_id,
+        "conversation_usage": get_ai_chat_conversation_usage(current_user, branch_id),
+        "storage_mode": chat_history_storage_mode(),
+    }
+
 @app.delete("/api/assistant/conversations/{conversation_id}")
 async def delete_lecture_assistant_conversation(
     conversation_id: str,
@@ -39752,6 +39840,48 @@ async def accept_collaboration_invitation(
         resource_name=room_id,
     )
     return {"room": serialize_collaboration_room(updated_room, current_user)}
+
+
+@app.get("/collaboration/rooms/{room_id}/messages/events")
+async def stream_collaboration_room_messages(
+    room_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    """Stream the latest bounded message window to authorized Room members."""
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+
+    async def message_events():
+        last_signature = ""
+        last_keepalive = utc_now()
+        while not await request.is_disconnected():
+            try:
+                get_accessible_collaboration_room_access(room["id"], current_user)
+            except HTTPException:
+                yield build_sse_event("access_revoked", {"room_id": room["id"]})
+                return
+            messages = get_collaboration_room_messages(room["id"], 80)
+            signature = ":".join(
+                f"{compact_text(message.get('id'))}@{compact_text(message.get('created_at'))}"
+                for message in messages[-2:]
+            ) or "empty"
+            if signature != last_signature:
+                last_signature = signature
+                yield build_sse_event("messages", {"room_id": room["id"], "messages": messages})
+            elif (utc_now() - last_keepalive).total_seconds() >= 15:
+                last_keepalive = utc_now()
+                yield ": keepalive\n\n"
+            await asyncio.sleep(0.65)
+
+    return StreamingResponse(
+        message_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/collaboration/rooms/{room_id}/messages")

@@ -192,5 +192,103 @@ class ChatHistoryCountTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["message_count"], 2)
 
 
+class ChatEditBranchTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "chat-branches.db"
+        self.connections = []
+
+        def connect():
+            connection = sqlite3.connect(self.db_path)
+            connection.row_factory = sqlite3.Row
+            self.connections.append(connection)
+            return connection
+
+        self.connection_patch = patch.object(main, "get_db_connection", side_effect=connect)
+        self.store_patch = patch.object(main, "chat_history_store", main.DatabaseChatHistoryStore())
+        self.plan_patch = patch.object(main, "get_effective_plan_id", return_value="free")
+        self.connection_patch.start()
+        self.store_patch.start()
+        self.plan_patch.start()
+        with connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE users (
+                    email TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE assistant_conversations (
+                    id TEXT PRIMARY KEY, user_email TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                    preview_text TEXT NOT NULL DEFAULT '', last_message_preview TEXT NOT NULL DEFAULT '',
+                    memory_summary TEXT NOT NULL DEFAULT '', lecture_label TEXT NOT NULL DEFAULT '',
+                    context_key TEXT NOT NULL DEFAULT '', search_document TEXT NOT NULL DEFAULT '',
+                    message_count INTEGER NOT NULL DEFAULT 0, is_pinned INTEGER NOT NULL DEFAULT 0,
+                    is_archived INTEGER NOT NULL DEFAULT 0, metadata_json TEXT NOT NULL DEFAULT '{}',
+                    last_message_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
+                CREATE TABLE assistant_messages (
+                    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, user_email TEXT NOT NULL,
+                    role TEXT NOT NULL, content TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'text',
+                    provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}', timestamp TEXT NOT NULL
+                );
+                CREATE TABLE assistant_conversation_usage (
+                    user_email TEXT NOT NULL, conversation_id TEXT NOT NULL,
+                    used_count INTEGER NOT NULL DEFAULT 0, pending_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_email, conversation_id)
+                );
+                """
+            )
+        store = main.chat_history_store
+        store.ensure_conversation(email="student@example.com", conversation_id="source-chat", title="Signals")
+        store.insert_messages(
+            email="student@example.com",
+            conversation_id="source-chat",
+            messages=[
+                {"id": "q1", "role": "user", "content": "Explain signals", "timestamp": "2026-10-01T10:00:00+00:00"},
+                {"id": "a1", "role": "assistant", "content": "A signal carries information.", "timestamp": "2026-10-01T10:00:01+00:00"},
+                {"id": "q2", "role": "user", "content": "Give an example", "timestamp": "2026-10-01T10:00:02+00:00"},
+                {"id": "a2", "role": "assistant", "content": "A sine wave is one example.", "timestamp": "2026-10-01T10:00:03+00:00"},
+            ],
+        )
+
+    def tearDown(self):
+        self.plan_patch.stop()
+        self.store_patch.stop()
+        self.connection_patch.stop()
+        for connection in self.connections:
+            connection.close()
+        self.temp_dir.cleanup()
+
+    async def test_edit_creates_owned_persistent_branch_with_only_preceding_context(self):
+        result = await main.create_lecture_assistant_conversation_branch(
+            "source-chat",
+            main.AssistantConversationBranchRequest(
+                source_message_id="q2",
+                edited_content="Give a sampled-signal example",
+                new_conversation_id="branch-chat",
+            ),
+            current_user="student@example.com",
+        )
+        self.assertEqual([message["id"].split("-copied-")[1].split("-")[0] for message in result["conversation"]["messages"]], ["0", "1"])
+        self.assertEqual([message["content"] for message in result["conversation"]["messages"]], ["Explain signals", "A signal carries information."])
+        self.assertEqual(result["conversation_usage"]["used"], 1)
+        reopened = main.chat_history_store.fetch_all_messages(email="student@example.com", conversation_id="branch-chat")
+        self.assertEqual(len(reopened), 2)
+
+    async def test_edit_cannot_branch_another_users_conversation(self):
+        with self.assertRaises(main.HTTPException) as denied:
+            await main.create_lecture_assistant_conversation_branch(
+                "source-chat",
+                main.AssistantConversationBranchRequest(
+                    source_message_id="q2",
+                    edited_content="Unauthorized edit",
+                    new_conversation_id="attacker-branch",
+                ),
+                current_user="attacker@example.com",
+            )
+        self.assertEqual(denied.exception.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

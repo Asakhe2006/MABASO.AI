@@ -20,6 +20,8 @@ assert.match(appSource, /if \(view !== "rooms" && !activeRoom\)/, "Chat and Boar
 assert.match(appSource, /aria-label="Open room materials"/, "The mobile centre action must open the room materials workspace.");
 assert.match(appSource, /authFetch\(`\/collaboration\/rooms\/\$\{roomId\}\/messages`/, "Chat send must call the authenticated room-message endpoint.");
 assert.match(appSource, /const optimisticMessage = \{/, "Room chat must render messages optimistically instead of waiting for a full room reload.");
+assert.match(appSource, /messages\/events/, "Room chat must subscribe to the authenticated realtime message stream.");
+assert.match(appSource, /loadCachedCollaborationRooms/, "Recent Rooms must restore lightweight cached cards immediately after session verification.");
 assert.match(appSource, /pending-photo-/, "Room chat photos must render an immediate local preview while upload continues.");
 assert.match(appSource, /suppressLoader: Boolean\(immediateRoom\)/, "Recent Rooms must open cached room state immediately while refreshing in the background.");
 assert.match(appSource, /setIsShareMaterialPickerOpen\(true\);[\s\S]{0,240}loadHistoryFromServer/, "Share Material must open its picker before refreshing remote history.");
@@ -54,6 +56,8 @@ assert.match(appSource, /setCollaborationMobileView\("chat"\)/, "Reply notificat
 assert.match(appSource, /generateCollaborationAdvancedMaterial/, "Advanced Room generator buttons must use the Room-aware generation pipeline.");
 assert.match(roomChatSource, /event\.key === "Enter" && !event\.shiftKey/, "Room chat must send with Enter and retain Shift+Enter for new lines.");
 assert.match(roomChatSource, /VoiceMessage/, "Room chat must render reusable playable voice messages.");
+assert.match(roomChatSource, /cyclePlaybackRate/, "Voice notes must support 1x, 1.5x, and 2x playback.");
+assert.match(roomChatSource, /voiceDraft/, "Recorded voice notes must be previewed before upload.");
 assert.match(roomChatSource, /showNewMessage/, "Room chat must not force-scroll users who are reading older messages.");
 assert.match(roomChatSource, /Load earlier messages/, "Long room chats must paginate older messages instead of loading everything at once.");
 assert.match(materialWorkspaceSource, /PresentationViewer/, "PowerPoints must render as real slides inside Collaboration.");

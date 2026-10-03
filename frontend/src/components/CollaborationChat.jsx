@@ -24,6 +24,7 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
   const audioRef = useRef(null);
   const [duration, setDuration] = useState(Number(message.duration_seconds || 0));
   const [currentTime, setCurrentTime] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [failed, setFailed] = useState(false);
   const bars = useMemo(() => waveformFor(message), [message]);
   const isPlaying = activeVoiceId === message.id;
@@ -51,6 +52,19 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
   };
 
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  const seek = (event) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+    audio.currentTime = ratio * duration;
+    setCurrentTime(audio.currentTime);
+  };
+  const cyclePlaybackRate = () => {
+    const nextRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
+    setPlaybackRate(nextRate);
+    if (audioRef.current) audioRef.current.playbackRate = nextRate;
+  };
   return (
     <div className="collab-voice-player">
       <audio
@@ -66,10 +80,11 @@ function VoiceMessage({ message, mediaUrl, activeVoiceId, setActiveVoiceId }) {
       <button type="button" onClick={toggle} aria-label={isPlaying ? "Pause voice message" : "Play voice message"}>
         {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
       </button>
-      <div className="collab-waveform" aria-hidden="true">
+      <button type="button" className="collab-waveform" onClick={seek} aria-label="Seek voice message" aria-valuemin="0" aria-valuemax={Math.round(duration)} aria-valuenow={Math.round(currentTime)} role="slider">
         {bars.map((height, index) => <i key={index} className={index / bars.length <= progress ? "is-played" : ""} style={{ height: `${height}%` }} />)}
-      </div>
+      </button>
       <small>{failed ? "Unavailable" : `${Math.floor(duration / 60)}:${String(Math.round(duration % 60)).padStart(2, "0")}`}</small>
+      <button type="button" className="collab-voice-speed" onClick={cyclePlaybackRate} aria-label={`Playback speed ${playbackRate} times`}>{playbackRate}×</button>
     </div>
   );
 }
@@ -141,7 +156,13 @@ export default function CollaborationChat({
   onStartRecording,
   onStopRecording,
   onCancelRecording,
+  onPauseRecording,
+  onResumeRecording,
+  voiceDraft,
+  onSendVoiceDraft,
+  onDeleteVoiceDraft,
   isRecording = false,
+  isRecordingPaused = false,
   isUploadingVoice = false,
   isSending = false,
   mediaUrl,
@@ -161,19 +182,18 @@ export default function CollaborationChat({
   const [activeVoiceId, setActiveVoiceId] = useState("");
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [search, setSearch] = useState("");
-  const [olderExhausted, setOlderExhausted] = useState(false);
+  const [olderState, setOlderState] = useState({ roomId: "", exhausted: false });
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const messages = room?.messages || [];
+  const messages = useMemo(() => room?.messages || [], [room?.messages]);
+  const olderExhausted = olderState.roomId === room?.id && olderState.exhausted;
 
-  useEffect(() => setOlderExhausted(false), [room?.id]);
   useEffect(() => {
-    if (!isRecording) {
-      setRecordingSeconds(0);
-      return undefined;
-    }
+    if (!isRecording) return undefined;
     const startedAt = Date.now();
-    const timer = window.setInterval(() => setRecordingSeconds(Math.floor((Date.now() - startedAt) / 1000)), 250);
-    return () => window.clearInterval(timer);
+    const update = () => setRecordingSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    const frame = window.requestAnimationFrame(update);
+    const timer = window.setInterval(update, 250);
+    return () => { window.cancelAnimationFrame(frame); window.clearInterval(timer); };
   }, [isRecording]);
 
   useEffect(() => {
@@ -182,10 +202,13 @@ export default function CollaborationChat({
     previousCountRef.current = messages.length;
     if (!list || !countChanged) return;
     const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 140;
-    if (nearBottom || messages[messages.length - 1]?.author_email === currentUserEmail) {
-      window.requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
-      setShowNewMessage(false);
-    } else setShowNewMessage(true);
+    const frame = window.requestAnimationFrame(() => {
+      if (nearBottom || messages[messages.length - 1]?.author_email === currentUserEmail) {
+        list.scrollTop = list.scrollHeight;
+        setShowNewMessage(false);
+      } else setShowNewMessage(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [currentUserEmail, messages]);
 
   const send = () => {
@@ -222,13 +245,19 @@ export default function CollaborationChat({
           <button type="button" className="mabaso-chat-expand" onClick={onToggleExpanded} aria-label={desktopExpanded ? "Restore collaboration panels" : "Expand room chat"}>{desktopExpanded ? <X aria-hidden="true" /> : <Ellipsis aria-hidden="true" />}</button>
         </header>
         <div ref={listRef} className="mabaso-chat-message-list" onScroll={(event) => { const node = event.currentTarget; if (node.scrollHeight - node.scrollTop - node.clientHeight < 100) setShowNewMessage(false); }}>
-          {messages.length >= 50 && !olderExhausted ? <button type="button" className="mabaso-load-older" disabled={isLoadingOlder} onClick={async () => { const loaded = await onLoadOlder?.(); if (!loaded) setOlderExhausted(true); }}>{isLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button> : null}
+          {messages.length >= 50 && !olderExhausted ? <button type="button" className="mabaso-load-older" disabled={isLoadingOlder} onClick={async () => { const loaded = await onLoadOlder?.(); if (!loaded) setOlderState({ roomId: room?.id || "", exhausted: true }); }}>{isLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button> : null}
           {messages.length ? messages.map((message, index) => <MessageBubble key={message.id} message={message} previous={messages[index - 1]} currentUserEmail={currentUserEmail} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} mediaUrl={mediaUrl} onReply={(item) => { setReplyingTo(item); textareaRef.current?.focus(); }} onDelete={onDeleteMessage} />) : <div className="mabaso-chat-empty"><span>MA</span><h3>Start the conversation.</h3><p>Share questions, lecture discussions, voice notes and study ideas with your classmates.</p></div>}
         </div>
         {showNewMessage ? <button type="button" className="mabaso-new-message" onClick={() => { const list = listRef.current; if (list) list.scrollTop = list.scrollHeight; setShowNewMessage(false); }}><ArrowDown aria-hidden="true" /> New message</button> : null}
         <footer className="mabaso-chat-composer-shell">
           {replyingTo ? <div className="mabaso-replying"><div><strong>Replying to {displaySender(replyingTo, currentUserEmail)}</strong><span>{replyingTo.content || "Voice note"}</span></div><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancel reply"><X aria-hidden="true" /></button></div> : null}
-          {isRecording ? <div className="mabaso-recording-state"><span className="mabaso-recording-dot" /> <strong>Recording voice note {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</strong><button type="button" className="is-cancel" onClick={onCancelRecording}>Cancel</button><button type="button" onClick={onStopRecording}>Stop and send</button></div> : (
+          {isRecording ? <div className="mabaso-recording-state"><span className={`mabaso-recording-dot ${isRecordingPaused ? "is-paused" : ""}`} /> <strong>{isRecordingPaused ? "Paused" : "Recording voice note"} {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}</strong><button type="button" onClick={isRecordingPaused ? onResumeRecording : onPauseRecording}>{isRecordingPaused ? "Resume" : "Pause"}</button><button type="button" className="is-cancel" onClick={onCancelRecording}>Delete</button><button type="button" onClick={onStopRecording}>Review</button></div> : voiceDraft ? (
+            <div className="mabaso-voice-draft" role="status">
+              <audio src={voiceDraft.url} controls preload="metadata" />
+              <button type="button" className="is-cancel" onClick={onDeleteVoiceDraft} disabled={isUploadingVoice}><Trash2 aria-hidden="true" /><span>Delete</span></button>
+              <button type="button" className="is-primary" onClick={onSendVoiceDraft} disabled={isUploadingVoice}>{isUploadingVoice ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}<span>{voiceDraft.failed ? "Retry" : "Send"}</span></button>
+            </div>
+          ) : (
             <div className="mabaso-chat-composer">
               <button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Open emoji picker"><Smile aria-hidden="true" /></button>
               <textarea ref={textareaRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} rows={1} placeholder="Type a message…" aria-label="Room message" />

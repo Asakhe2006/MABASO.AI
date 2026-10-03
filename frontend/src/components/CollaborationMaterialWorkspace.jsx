@@ -1,5 +1,5 @@
 import { LoaderCircle, Maximize2, Pause, Play, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 function titleForType(type = "material") {
   return String(type).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -9,7 +9,10 @@ function PresentationViewer({ presentation, renderVisual, page, onPageChange }) 
   const slides = presentation?.slides || [];
   const [index, setIndex] = useState(0);
   const activeIndex = Number.isFinite(Number(page)) ? Math.min(slides.length - 1, Math.max(0, Number(page) - 1)) : index;
-  const setPageIndex = (next) => { setIndex(next); onPageChange?.(next + 1); };
+  const setPageIndex = useCallback((next) => {
+    setIndex(next);
+    onPageChange?.(next + 1);
+  }, [onPageChange]);
   const slide = slides[activeIndex];
   if (!slide) return <p className="collab-material-empty">No presentation slides are stored with this material.</p>;
   return <div className="collab-presentation-viewer"><div className="collab-slide-stage"><div className="collab-slide-copy"><small>Slide {activeIndex + 1} of {slides.length}</small><h2>{slide.title || `Slide ${activeIndex + 1}`}</h2>{slide.subtitle ? <p>{slide.subtitle}</p> : null}<ul>{(slide.bullets || slide.points || []).map((bullet, bulletIndex) => <li key={bulletIndex}>{typeof bullet === "string" ? bullet : bullet.text || bullet.title}</li>)}</ul>{slide.speakerNotes ? <details><summary>Speaker notes</summary><p>{slide.speakerNotes}</p></details> : null}</div>{renderVisual ? <div className="collab-slide-visual">{renderVisual(slide)}</div> : null}</div><div className="collab-slide-controls"><button type="button" onClick={() => setPageIndex(Math.max(0, activeIndex - 1))} disabled={activeIndex === 0}>Previous</button><span>{activeIndex + 1} / {slides.length}</span><button type="button" onClick={() => setPageIndex(Math.min(slides.length - 1, activeIndex + 1))} disabled={activeIndex >= slides.length - 1}>Next</button></div></div>;
@@ -41,7 +44,10 @@ function StudyGuideViewer({ snapshot, title, renderMarkdown, page, onPageChange 
   const [index, setIndex] = useState(0);
   const [fullView, setFullView] = useState(false);
   const activeIndex = Number.isFinite(Number(page)) ? Math.min(Math.max(0, slides.length - 1), Math.max(0, Number(page) - 1)) : Math.min(index, Math.max(0, slides.length - 1));
-  const setPageIndex = (next) => { setIndex(next); onPageChange?.(next + 1); };
+  const setPageIndex = useCallback((next) => {
+    setIndex(next);
+    onPageChange?.(next + 1);
+  }, [onPageChange]);
   const slide = slides[activeIndex];
 
   useEffect(() => {
@@ -53,7 +59,7 @@ function StudyGuideViewer({ snapshot, title, renderMarkdown, page, onPageChange 
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, fullView, slides.length]);
+  }, [activeIndex, fullView, setPageIndex, slides.length]);
 
   if (!slide) return <p className="collab-material-empty">This shared Study Guide has no readable slide content.</p>;
   const renderSlide = (isFull = false) => (
@@ -100,8 +106,11 @@ function MediaViewer({ item, url }) {
 
 export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderMarkdown, renderPresentationVisual, renderMindMap, noteQualityPanel, page, onPageChange }) {
   const snapshot = useMemo(() => item?.source?.snapshot || {}, [item?.source?.snapshot]);
-  const type = item?.material_type || "study_guide";
   const body = useMemo(() => snapshot.summary || snapshot.transcript || "", [snapshot]);
+  // Older room shares were labelled by the last generated tool (often quiz),
+  // even though the record represented a complete Study Workspace. Preserve
+  // those records and restore their Study Guide as the primary room material.
+  const type = body ? "study_guide" : (item?.material_type || "study_guide");
   useEffect(() => { window.requestAnimationFrame(() => document.querySelector(".collab-material-document")?.scrollTo?.({ top: 0 })); }, [item?.id]);
   if (!item) return null;
   return <section className="collab-material-workspace" aria-label={`${item.title} workspace`}><header><div><small>{titleForType(type)}</small><h2>{item.title}</h2><p>Shared by {item.owner_email || "a room member"}</p></div></header><div className="collab-material-document">

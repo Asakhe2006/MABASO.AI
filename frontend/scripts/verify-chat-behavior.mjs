@@ -6,6 +6,7 @@ const assistantHookSource = await readFile(new URL("../src/useLectureAssistant.j
 const assistantPanelSource = await readFile(new URL("../src/components/LectureAssistantPanel.jsx", import.meta.url), "utf8");
 const assistantMarkdownSource = await readFile(new URL("../src/components/AssistantMarkdown.jsx", import.meta.url), "utf8");
 const responseActionsSource = await readFile(new URL("../src/components/StudyChatResponseActions.jsx", import.meta.url), "utf8");
+const userActionsSource = await readFile(new URL("../src/components/StudyChatUserActions.jsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
 
 assert.doesNotMatch(
@@ -14,6 +15,10 @@ assert.doesNotMatch(
   "Study Chat must not auto-scroll on every streamed token.",
 );
 assert.match(appSource, /pendingStudyChatAnchorIdRef/, "Study Chat must anchor the start of a new assistant response once.");
+assert.match(appSource, /isOpeningStudyChat \|\| !chatMessages\.length/, "Saved chats must wait for persisted messages before scrolling to the bottom.");
+assert.match(appSource, /\/branches`/, "Editing a saved question must create a durable backend conversation branch.");
+assert.match(userActionsSource, /Copy question/, "User questions must expose an accessible compact Copy action.");
+assert.match(userActionsSource, /Edit question/, "User questions must expose an accessible compact Edit action.");
 assert.match(appSource, /study-chat-jump-latest/, "Study Chat must offer a user-controlled jump-to-latest action.");
 assert.match(appSource, /active-study-chat-messages/, "Current Subject chat must use its own bounded scroll surface.");
 assert.match(appSource, /onDelta:\s*\(streamedAnswer\)/, "Current Subject chat must stream into its assistant message.");
