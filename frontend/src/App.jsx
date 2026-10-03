@@ -26,6 +26,8 @@ import ToggleSwitch from "./components/ToggleSwitch";
 import SafeCollaborationRoomStudyGuide from "./components/CollaborationRoomStudyGuide";
 import StudyChatResponseActions from "./components/StudyChatResponseActions";
 import StudyChatUserActions from "./components/StudyChatUserActions";
+import ChatActivityTimeline from "./components/ChatActivityTimeline";
+import AdminDiagnosticsPanel from "./components/AdminDiagnosticsPanel";
 import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivityPanel";
 import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
@@ -98,6 +100,7 @@ function normalizePostAuthRedirectPath(path = "") {
 }
 
 const API_BASE_URL = resolveApiBaseUrl();
+const ACTIVE_CHAT_GENERATION_STORAGE_KEY = "mabaso.active-chat-generation.v1";
 const PUBLIC_TERMS_PATH = "/company/terms";
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 const APPLE_CLIENT_ID = (import.meta.env.VITE_APPLE_CLIENT_ID || "").trim();
@@ -7069,6 +7072,13 @@ export default function App() {
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [paymentRequests, setPaymentRequests] = useState([]);
+  const [paymentHistory, setPaymentHistory] = useState([]);
+  const [billingCountry, setBillingCountry] = useState("");
+  const [refundPayment, setRefundPayment] = useState(null);
+  const [refundReason, setRefundReason] = useState("accidental_purchase");
+  const [refundExplanation, setRefundExplanation] = useState("");
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
+  const [showCancelSubscriptionConfirm, setShowCancelSubscriptionConfirm] = useState(false);
   const [manualPaymentDetails, setManualPaymentDetails] = useState(null);
   const [manualPaymentRequest, setManualPaymentRequest] = useState(null);
   const [confirmingPaymentId, setConfirmingPaymentId] = useState("");
@@ -7230,6 +7240,9 @@ export default function App() {
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
   const [isAskingChat, setIsAskingChat] = useState(false);
+  const [studyChatActivities, setStudyChatActivities] = useState({});
+  const [unseenStudyChatIds, setUnseenStudyChatIds] = useState(() => new Set());
+  const [chatCompletionToast, setChatCompletionToast] = useState(null);
   const [isStudyChatVoiceListening, setIsStudyChatVoiceListening] = useState(false);
   const [isStudyChatVoicePaused, setIsStudyChatVoicePaused] = useState(false);
   const [isStudyChatVoiceAnswering, setIsStudyChatVoiceAnswering] = useState(false);
@@ -7257,6 +7270,10 @@ export default function App() {
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState(() => loadCachedCollaborationRooms(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
+  const [isCollaborationRoomsLoading, setIsCollaborationRoomsLoading] = useState(false);
+  const [isCollaborationMaterialsLoading, setIsCollaborationMaterialsLoading] = useState(false);
+  const [collaborationError, setCollaborationError] = useState("");
+  const [collaborationStatus, setCollaborationStatus] = useState("");
   const [activeRoomId, setActiveRoomId] = useState("");
   const [activeRoom, setActiveRoom] = useState(null);
   const [generatingRoomMaterial, setGeneratingRoomMaterial] = useState("");
@@ -7294,9 +7311,11 @@ export default function App() {
   const [collaborationDiscoverQuery, setCollaborationDiscoverQuery] = useState("");
   const [collaborationDiscoverProfiles, setCollaborationDiscoverProfiles] = useState([]);
   const [collaborationNotifications, setCollaborationNotifications] = useState([]);
+  const [isCollaborationNotificationsLoading, setIsCollaborationNotificationsLoading] = useState(false);
   const [collaborationDiscoverRooms, setCollaborationDiscoverRooms] = useState([]);
   const [collaborationRoomActivity, setCollaborationRoomActivity] = useState([]);
   const [isCollaborationActivityOpen, setIsCollaborationActivityOpen] = useState(false);
+  const [isCollaborationActivityLoading, setIsCollaborationActivityLoading] = useState(false);
   const [collaborationActivityReadId, setCollaborationActivityReadId] = useState("");
   const [isUpdatingRoomApprovalSettings, setIsUpdatingRoomApprovalSettings] = useState(false);
   const [decidingJoinRequestId, setDecidingJoinRequestId] = useState("");
@@ -7502,7 +7521,91 @@ export default function App() {
   const studyChatVoiceStopModeRef = useRef("");
   const studyChatVoiceAnswerRunRef = useRef(0);
   const studyChatRequestRunRef = useRef(0);
+  const activeStudyChatIdRef = useRef(activeStudyChatId);
   const studyChatAttachmentRunRef = useRef(0);
+  useEffect(() => { activeStudyChatIdRef.current = activeStudyChatId; }, [activeStudyChatId]);
+  useEffect(() => {
+    if (!chatCompletionToast) return undefined;
+    const timeoutId = window.setTimeout(() => setChatCompletionToast((current) => current?.generationId === chatCompletionToast.generationId ? null : current), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [chatCompletionToast]);
+  useEffect(() => {
+    if (!authToken) { setUnseenStudyChatIds(new Set()); return undefined; }
+    let cancelled = false;
+    const loadUnseen = async () => {
+      try {
+        const response = await authFetch("/api/chat/generations?unseen_only=true&limit=100", { cache: "no-store", timeoutMs: 10000 });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not load response notifications.");
+        if (!cancelled) setUnseenStudyChatIds(new Set((data.generations || []).map((item) => String(item.conversation_id || "")).filter(Boolean)));
+      } catch {
+        // Conversation history remains usable if notification metadata is temporarily unavailable.
+      }
+    };
+    void loadUnseen();
+    return () => { cancelled = true; };
+  }, [authToken]);
+  const handledChatCompletionIdsRef = useRef(new Set());
+  useEffect(() => {
+    if (!authToken || !authEmail) return undefined;
+    let cancelled = false;
+    let pollTimer = 0;
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("mabaso-chat-generations") : null;
+    const showCompletion = (generation) => {
+      const generationId = String(generation?.generation_id || "");
+      const conversationId = String(generation?.conversation_id || "");
+      if (!generationId || !conversationId || handledChatCompletionIdsRef.current.has(generationId)) return;
+      handledChatCompletionIdsRef.current.add(generationId);
+      const isViewing = currentPageRef.current === "voice" && activeStudyChatIdRef.current === conversationId;
+      if (isViewing) {
+        void authFetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}/seen`, { method: "POST", timeoutMs: 8000 }).catch(() => undefined);
+      } else {
+        setUnseenStudyChatIds((current) => new Set([...current, conversationId]));
+        const chatTitle = studyChatHistoryIndex.find((item) => item.id === conversationId)?.title || "Study Chat";
+        setChatCompletionToast({ conversationId, assistantMessageId: String(generation?.assistant_message_id || ""), title: chatTitle, generationId, type: generation?.status === "failed" ? "failed" : "completed" });
+      }
+      channel?.postMessage({ type: "generation-completed", generation, userEmail: authEmail });
+    };
+    const poll = async () => {
+      if (cancelled) return;
+      let active = null;
+      try {
+        active = JSON.parse(window.localStorage.getItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY) || "null");
+      } catch {
+        window.localStorage.removeItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY);
+      }
+      if (!active || active.userEmail !== authEmail || !active.generationId) return;
+      try {
+        const response = await authFetch(`/api/chat/generations/${encodeURIComponent(active.generationId)}`, { cache: "no-store", timeoutMs: 10000 });
+        const payload = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(payload.detail || "Could not restore generation state.");
+        const generation = payload.generation || payload;
+        if (generation?.activity && active.assistantMessageId) {
+          setStudyChatActivities((current) => ({
+            ...current,
+            [active.assistantMessageId]: [...(current[active.assistantMessageId] || []).filter((item) => item.activity_type !== generation.activity.activity_type), generation.activity],
+          }));
+        }
+        if (["completed", "failed", "cancelled"].includes(String(generation?.status || ""))) {
+          window.localStorage.removeItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY);
+          showCompletion(generation);
+          return;
+        }
+      } catch {
+        // Keep the generation record for the next reconnect unless the user signs out.
+      }
+      if (!cancelled) pollTimer = window.setTimeout(poll, 1800);
+    };
+    channel && (channel.onmessage = (event) => {
+      if (event.data?.type === "generation-completed" && event.data?.userEmail === authEmail) showCompletion(event.data.generation);
+    });
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(pollTimer);
+      channel?.close();
+    };
+  }, [authToken, authEmail]);
   const timetableDismissedTransitionPromptKeyRef = useRef("");
   const activeStudySessionSaveTimerRef = useRef(null);
   const activeStudyMotivationTimerRef = useRef(null);
@@ -8087,6 +8190,19 @@ export default function App() {
               </div>
               <button type="button" onClick={() => setSelectedBillingPlan(null)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Change plan</button>
             </div>
+            <label className="mt-4 block max-w-sm">
+              <span className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-100/80">Billing country</span>
+              <input
+                value={billingCountry}
+                onChange={(event) => setBillingCountry(event.target.value.replace(/[^a-z]/gi, "").slice(0, 2).toUpperCase())}
+                placeholder="ZA"
+                inputMode="text"
+                autoComplete="country"
+                aria-label="Two-letter billing country"
+                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm font-semibold uppercase text-white outline-none focus:border-emerald-400"
+              />
+              <span className="mt-1 block text-xs text-slate-400">Use the country for this payment. It is saved with the transaction and cannot be changed later.</span>
+            </label>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
@@ -8154,9 +8270,9 @@ export default function App() {
                     disabled={Boolean(billingCheckoutPlanId)}
                     className="w-full rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-emerald-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-70"
                   >
-                    {billingCheckoutPlanId === "payfast:trial:pro_student" ? "Opening PayFast..." : "Start 7-day free trial"}
+                    {billingCheckoutPlanId === "trial:pro_student" ? "Starting trial..." : "Start 7-day free trial"}
                   </button>
-                  <p className="mt-2 text-xs leading-5 text-slate-300">Card required. R0 today, then R50 monthly after seven days unless cancelled. One trial per account.</p>
+                  <p className="mt-2 text-xs leading-5 text-slate-300">No card required. Pro access starts immediately for seven days. One trial per account.</p>
                 </div>
               ) : null}
               {plan.billingOptions?.length ? (
@@ -8214,6 +8330,50 @@ export default function App() {
               </span>
             </div>
             {billingSubscription.message ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">{billingSubscription.message}</p> : null}
+            {billingSubscription.active && billingSubscription.provider === "payfast" ? (
+              <div className="mt-4">
+                {showCancelSubscriptionConfirm ? (
+                  <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-3 text-sm text-rose-50">
+                    <p className="font-semibold">Cancel future recurring charges?</p>
+                    <p className="mt-1 text-xs leading-5 text-rose-100/80">Your paid access remains until the current paid period ends. This does not automatically request a refund.</p>
+                    <div className="mt-3 flex gap-2">
+                      <button type="button" onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-400 px-4 py-2 text-xs font-bold text-rose-950">Confirm cancellation</button>
+                      <button type="button" onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold">Keep subscription</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">Cancel subscription</button>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {paymentHistory.length ? (
+          <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
+            <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Payment History</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">Cancellation stops future charges. A refund request applies to one completed transaction and is checked by the backend and PayFast.</p>
+            <div className="mt-4 space-y-2">
+              {paymentHistory.map((payment) => (
+                <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0 text-sm text-slate-200">
+                    <p className="font-semibold text-white">{String(payment.plan_id || "plan").replaceAll("_", " ")} · R{payment.amount_zar}</p>
+                    <p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at)} · {payment.payment_status} · {payment.billing_country_at_purchase || "country unknown"}</p>
+                    {payment.refund?.status && payment.refund.status !== "eligible" ? <p className="mt-1 text-xs text-amber-200">Refund: {String(payment.refund.status).replaceAll("_", " ")}</p> : null}
+                  </div>
+                  {payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="shrink-0 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}
+                </div>
+              ))}
+            </div>
+            {refundPayment ? (
+              <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4">
+                <div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><p className="mt-1 text-xs leading-5 text-emerald-100/80">South African customers receive Mabaso AI's extended 14-day refund-request window. Eligibility also depends on payment status, usage and applicable consumer law.</p></div><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund request" className="rounded-full p-2 hover:bg-white/10"><X className="h-4 w-4" /></button></div>
+                <select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white">
+                  <option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option>
+                </select>
+                <textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white" />
+                <button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950 disabled:opacity-60">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button>
+              </div>
+            ) : null}
           </div>
         ) : null}
         {billingUsage?.features?.length ? (
@@ -8819,9 +8979,10 @@ export default function App() {
   const deferredSummary = useDeferredValue(summary);
   const deferredFormula = useDeferredValue(formula);
   const deferredExample = useDeferredValue(example);
-  const deferredActiveRoomSummary = useDeferredValue(activeRoom?.summary || "");
-  const deferredActiveRoomFormula = useDeferredValue(activeRoom?.formula || "");
-  const deferredActiveRoomExample = useDeferredValue(activeRoom?.example || "");
+  const activeRoomResolvedContext = getCollaborationRoomSourceContext(activeRoom);
+  const deferredActiveRoomSummary = useDeferredValue(activeRoom?.summary || activeRoomResolvedContext.summary || "");
+  const deferredActiveRoomFormula = useDeferredValue(activeRoom?.formula || activeRoomResolvedContext.formula || "");
+  const deferredActiveRoomExample = useDeferredValue(activeRoom?.example || activeRoomResolvedContext.example || "");
   const formattedGuide = normalizeRenderedMathText(prettifyMathText(deferredSummary));
   const formattedFormula = normalizeRenderedMathText(prettifyMathText(deferredFormula));
   const formattedExample = normalizeRenderedMathText(prettifyMathText(deferredExample));
@@ -9273,7 +9434,7 @@ export default function App() {
     : isTeacherRealtimeMicActive || isTeacherListening
     ? "Listening..."
     : isTeacherQuestionLoading
-      ? "Thinking..."
+      ? "Preparing your explanation..."
       : isTeacherAnswering
         ? "Explaining..."
         : isTeacherPlaying
@@ -11098,8 +11259,9 @@ export default function App() {
                   className={`active-study-chat-message ${message.role === "assistant" ? "is-assistant" : "is-user"}`}
                 >
                   <div className="mabaso-ai-response">
-                    {message.content === "Thinking..." ? renderStreamingDots() : <AssistantMarkdown content={message.content} theme="dark" />}
-                    {isAskingActiveStudySession && message.role === "assistant" && message.id === [...messages].reverse().find((item) => item.role === "assistant")?.id && message.content !== "Thinking..." ? renderStreamingDots() : null}
+                    {message.role === "assistant" && (message.pending || (studyChatActivities[message.id] || []).length) ? <ChatActivityTimeline activities={studyChatActivities[message.id] || []} compact /> : null}
+                    {message.content ? <AssistantMarkdown content={message.content} theme="dark" /> : null}
+                    {isAskingActiveStudySession && message.role === "assistant" && message.id === [...messages].reverse().find((item) => item.role === "assistant")?.id && !message.pending && !message.content ? renderStreamingDots() : null}
                   </div>
                   {Array.isArray(message.referenceImages) && message.referenceImages.length ? (
                     <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -12064,7 +12226,7 @@ export default function App() {
           <Bell className="h-4 w-4" aria-hidden="true" />
           {unreadActivityCount > 0 ? <span>{Math.min(unreadActivityCount, 25)}</span> : null}
         </button>
-        {isCollaborationActivityOpen ? <CollaborationRoomActivityPanel activity={collaborationRoomActivity} onClose={() => setIsCollaborationActivityOpen(false)} onOpen={(item) => { const material = (activeRoom.materials || []).find((entry) => entry.id === item.resource_id); const boardItem = (activeRoom.board_items || []).find((entry) => entry.id === item.resource_id); if (material) void openCollaborationMaterial(material); else if (boardItem) setSelectedCollaborationBoardItem(boardItem); setIsCollaborationActivityOpen(false); }} /> : null}
+        {isCollaborationActivityOpen ? <CollaborationRoomActivityPanel activity={collaborationRoomActivity} loading={isCollaborationActivityLoading} onClose={() => setIsCollaborationActivityOpen(false)} onOpen={(item) => { const material = (activeRoom.materials || []).find((entry) => entry.id === item.resource_id); const boardItem = (activeRoom.board_items || []).find((entry) => entry.id === item.resource_id); if (material) void openCollaborationMaterial(material); else if (boardItem) setSelectedCollaborationBoardItem(boardItem); setIsCollaborationActivityOpen(false); }} /> : null}
       </div>
     ) : null;    return (
       <section className={`collaboration-product-shell ${isCollaborationChatMinimized ? "is-chat-minimized" : ""}`}>
@@ -12082,7 +12244,7 @@ export default function App() {
           {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
         </div>
         {collaborationAdminControl?.active ? <div className="collaboration-admin-control-status" role="status"><i /> <strong>Admin Control active</strong><span>•</span><span>{activeRoom?.is_owner ? "Members are following your Room view" : followRoomView ? "Following admin" : "You are in Explore mode"}</span></div> : null}
-        {(error || status) ? <div className={`collaboration-feedback ${error ? "is-error" : "is-success"}`} role={error ? "alert" : "status"}>{error || status}</div> : null}
+        {(collaborationError || collaborationStatus) ? <div className={`collaboration-feedback ${collaborationError ? "is-error" : "is-success"}`} role={collaborationError ? "alert" : "status"}>{collaborationError || collaborationStatus}</div> : null}
         {activeRoom ? <div className="collaboration-room-utility-actions" aria-label="Room controls">{renderRoomActivityControl()}<button type="button" onClick={() => setIsCollaborationMembersOpen(true)}><UsersRound className="h-4 w-4" aria-hidden="true" />Members ({activeRoom.member_count || activeRoom.members?.length || 1})</button><button type="button" onClick={() => setIsCollaborationSettingsOpen(true)}><Settings className="h-4 w-4" aria-hidden="true" />Room settings</button></div> : null}
 
         <div className="collaboration-main-grid">
@@ -12090,7 +12252,7 @@ export default function App() {
             <button type="button" onClick={() => setIsCreateRoomPanelOpen((value) => !value)} className="collaboration-create-room">＋ Create New Room</button>
             <div className="collaboration-sidebar-actions"><button type="button" className="is-active" onClick={() => setCollaborationMobileView("rooms")}>♙ My Rooms</button><button type="button" onClick={() => { setIsCollaborationDiscoverOpen(true); void discoverCollaborationProfiles(); void loadDiscoverableCollaborationRooms(); window.requestAnimationFrame(() => document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}>⌕ Discover</button></div>
             {isCreateRoomPanelOpen ? <div className="collaboration-create-form"><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} placeholder="Room title" /><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={2} placeholder="Invite emails (optional)" /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={newRoomVisibility === "private" ? "is-active" : ""}>Private</button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={newRoomVisibility === "shared" ? "is-active" : ""}>Shared test</button></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom}>{isCreatingRoom ? "Creating..." : "Create Room"}</button></div> : null}
-            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.member_count} members</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">You have not joined any collaboration rooms yet.</p>}</div>
+            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.member_count} members</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">{isCollaborationRoomsLoading ? "Loading recent rooms..." : "You have not joined any collaboration rooms yet."}</p>}</div>
             <div id="collaboration-discover" className="collaboration-discover-panel"><div className="flex items-center justify-between gap-2"><strong>Discover students</strong><button type="button" onClick={openProfilePopover}>{collaborationProfile ? "Edit profile" : "Create profile"}</button></div>{collaborationProfile ? <div className="collaboration-profile-summary"><b>✓ {collaborationProfile.display_name || "Profile saved"}</b><span>{[collaborationProfile.course, ...(collaborationProfile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic profile active"}</span></div> : <p className="collaboration-discovery-help">Create a profile to let academically relevant students find you.</p>}<div className="mt-3 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void discoverCollaborationProfiles(); }} placeholder="MATLAB, signals..." /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading}>{isProfileLoading ? "Searching..." : "Search"}</button></div>{isCollaborationDiscoverOpen ? <div className="mt-3 space-y-2">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 20).map((profile) => <article key={profile.public_id} className="collaboration-discovery-result"><div><strong className="collaboration-discovery-name">{profile.display_name || "Mabaso student"}{profile.is_online ? <i className="collaboration-presence-dot" aria-label="Online now" title="Online now" /> : null}</strong><span>{[profile.course, ...(profile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic collaborator"}</span>{(profile.match_reasons || []).length ? <small>{profile.match_reasons.slice(0, 2).join(" • ")}</small> : null}</div><button type="button" onClick={() => void inviteDiscoveredProfileToRoom(profile)} disabled={!activeRoom?.can_manage || invitingCollaborationProfileId === profile.public_id}>{invitingCollaborationProfileId === profile.public_id ? "Inviting..." : activeRoom?.can_manage ? "Invite" : "Open your room"}</button></article>) : <p className="collaboration-empty-copy">No matching students found. Try a subject, module, course, or skill.</p>}</div> : null}</div>
             {isCollaborationDiscoverOpen && collaborationDiscoverProfiles.some((profile) => profile.email || profile.phone) ? <div className="collaboration-discover-contacts" aria-label="Student shared contact details">{collaborationDiscoverProfiles.filter((profile) => profile.email || profile.phone).map((profile) => <div key={`contact-${profile.public_id}`}><strong>{profile.display_name || "Student"}</strong>{profile.email ? <a href={`mailto:${profile.email}`}>{profile.email}</a> : null}{profile.phone ? <a href={`tel:${String(profile.phone).replace(/[^+\d]/g, "")}`}>{profile.phone}</a> : null}</div>)}</div> : null}
             {isCollaborationDiscoverOpen ? <section className="collaboration-discover-rooms" aria-label="Discover Rooms"><div className="collaboration-discover-rooms-title"><strong>Discover Rooms</strong><button type="button" onClick={() => void loadDiscoverableCollaborationRooms()}>Refresh</button></div>{collaborationDiscoverRooms.length ? collaborationDiscoverRooms.map((room) => <article key={`discover-room-${room.id}`}><div><strong>{room.title}</strong><span>{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.is_private ? "Private" : "Public Room"}</span></div>{["member", "owner", "invited"].includes(room.membership_status) ? <button type="button" onClick={() => void openCollaborationRoom(room.id)}>Open</button> : room.membership_status === "pending" ? <button type="button" disabled>Request Pending</button> : <button type="button" onClick={() => void requestToJoinCollaborationRoom(room)}>Request to Join</button>}</article>) : <p className="collaboration-empty-copy">No matching public Rooms found.</p>}</section> : null}
@@ -12100,7 +12262,7 @@ export default function App() {
             {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">← Materials</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} aria-pressed={!isCollaborationBoardMinimized} onClick={() => setIsCollaborationBoardMinimized((current) => !current)}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} aria-pressed={isCollaborationChatExpanded} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore workspace" : "Expand Chat"}</button></div> : null}
             {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} page={adminControlPage} onPageChange={setAdminControlPage} /> : null}
             {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload the photo itself; add a name only if you want one." : "Upload videos and watch them inside Mabaso AI."}</small></div><input value={collaborationMediaNameDraft} onChange={(event) => setCollaborationMediaNameDraft(event.target.value)} placeholder={collaborationMaterialFilter === "image" ? "Photo name (optional)" : "Video name (optional)"} maxLength={180} /><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
-            <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={() => void shareCurrentWorkspaceMaterialToRoom()} disabled={!activeRoom}>Share material</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "image" && item.source?.media_id ? <img src={`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(item.source.media_id)}`} alt="" loading="lazy" /> : item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.material_type === "image" ? (item.title || "") : <>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</>}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">No materials have been shared yet.</p> : null}</div></section>
+            <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={() => void shareCurrentWorkspaceMaterialToRoom()} disabled={!activeRoom}>Share material</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "image" && item.source?.media_id ? <img src={`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(item.source.media_id)}`} alt="" loading="lazy" /> : item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.material_type === "image" ? (item.title || "") : <>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</>}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">{isCollaborationMaterialsLoading ? "Loading shared materials..." : "No materials have been shared yet."}</p> : null}</div></section>
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
             {(activeRoom?.board_images || []).length ? <section className="collaboration-board-uploads"><p>Board photos</p><div>{activeRoom.board_images.map((image) => <figure key={image.id} role="button" tabIndex={0} onClick={() => setSelectedRoomBoardImageId(image.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedRoomBoardImageId(image.id); }}><img src={image.image_url} alt={image.name || "Board upload"} /><figcaption>{image.name || "Board photo"}</figcaption>{(image.uploaded_by === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void deleteRoomBoardImage(image.id); }}>Remove</button> : null}</figure>)}</div></section> : null}          </main>
 
@@ -13965,6 +14127,7 @@ export default function App() {
       { id: "security", label: "Security", group: "Operations", icon: ShieldCheck },
       { id: "feedback", label: "Feedback", group: "Operations", icon: MessageCircle },
       { id: "health", label: "System Health", group: "Operations", icon: Gauge },
+      { id: "diagnostics", label: "Diagnostics", group: "Operations", icon: Activity },
       { id: "audit", label: "Admin Audit Log", group: "Administration", icon: History },
       { id: "settings", label: "Settings", group: "Administration", icon: Settings },
     ];
@@ -15622,6 +15785,10 @@ export default function App() {
         );
       }
 
+      if (adminSidebarTab === "diagnostics") {
+        return <AdminDiagnosticsPanel authFetch={authFetch} />;
+      }
+
       if (adminSidebarTab === "settings") {
         return (
           <div className="grid gap-5 xl:grid-cols-2">
@@ -15949,6 +16116,9 @@ export default function App() {
     setStudyImages([]);
     setChatMessages([]);
     setStudyChatHistoryIndex([]);
+    setStudyChatActivities({});
+    setUnseenStudyChatIds(new Set());
+    setChatCompletionToast(null);
     setChatQuestion("");
     setChatReferenceImages([]);
     setIsWorkspaceEditMode(false);
@@ -15958,6 +16128,7 @@ export default function App() {
     setBillingUsage(null);
     setBillingSubscription(null);
     setPaymentRequests([]);
+    setPaymentHistory([]);
     setManualPaymentDetails(null);
     setManualPaymentRequest(null);
     setSelectedBillingPlan(null);
@@ -16181,7 +16352,11 @@ export default function App() {
     if (typeof window === "undefined" || !pendingStudyChatAnchorIdRef.current || isOpeningStudyChat || !chatMessages.length) return undefined;
     const frameId = window.requestAnimationFrame(() => {
       const container = studyChatScrollRef.current;
-      if (container) {
+      const anchorId = pendingStudyChatAnchorIdRef.current;
+      const exactMessage = anchorId ? container?.querySelector?.(`[data-message-id="${window.CSS?.escape ? window.CSS.escape(anchorId) : anchorId}"]`) : null;
+      if (exactMessage) {
+        exactMessage.scrollIntoView({ block: "center", behavior: "auto" });
+      } else if (container) {
         container.scrollTo({ top: container.scrollHeight, behavior: "auto" });
       } else {
         studyChatEndRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
@@ -16337,7 +16512,7 @@ export default function App() {
     if (typeof window === "undefined") return;
     try {
       const persistableMessages = chatMessages
-        .filter((message) => message && ["user", "assistant"].includes(message.role) && message.content !== "Thinking...")
+        .filter((message) => message && ["user", "assistant"].includes(message.role) && String(message.content || "").trim() && !message.pending)
         .slice(-60)
         .map((message) => ({
           id: message.id,
@@ -17780,6 +17955,7 @@ export default function App() {
       setBillingUsage(null);
       setBillingSubscription(null);
       setPaymentRequests([]);
+      setPaymentHistory([]);
       setManualPaymentDetails(null);
       setManualPaymentRequest(null);
       setSelectedBillingPlan(null);
@@ -17795,10 +17971,12 @@ export default function App() {
       const nextUsage = data.usage || null;
       const nextSubscription = data.subscription || null;
       const nextPaymentRequests = data.payment_requests || data.account?.payment_requests || [];
+      const nextPaymentHistory = data.payment_history || data.account?.payment_history || [];
       const nextManualPaymentDetails = data.manual_payment?.payment_details || data.account?.manual_payment?.payment_details || null;
       setBillingUsage(nextUsage);
       setBillingSubscription(nextSubscription);
       setPaymentRequests(Array.isArray(nextPaymentRequests) ? nextPaymentRequests : []);
+      setPaymentHistory(Array.isArray(nextPaymentHistory) ? nextPaymentHistory : []);
       setManualPaymentDetails(nextManualPaymentDetails);
       saveBillingStatusCache(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "", {
         usage: nextUsage,
@@ -19102,7 +19280,7 @@ export default function App() {
     const selectedReferenceImages = activeStudySessionReferenceImages.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const turnId = `active-study-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${turnId}-user`, role: "user", content: question, referenceImages: selectedReferenceImages };
-    const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "Thinking..." };
+    const pendingAssistantMessage = { id: `${turnId}-assistant`, role: "assistant", content: "", pending: true };
     pendingActiveStudySessionAnchorIdRef.current = pendingAssistantMessage.id;
     const pendingMessages = [...existingMessages, userMessage, pendingAssistantMessage].slice(-20);
     setActiveStudySessionQuestion("");
@@ -19128,14 +19306,21 @@ export default function App() {
             ...item,
             studyMessages: (item.studyMessages || []).map((message) => (
               message.id === pendingAssistantMessage.id
-                ? { ...message, content: streamedAnswer || "Thinking..." }
+                ? { ...message, content: streamedAnswer || "", pending: true }
                 : message
             )),
           }), { save: false });
         },
+        onActivity: (activity) => {
+          if (!activity?.activity_type) return;
+          setStudyChatActivities((current) => ({
+            ...current,
+            [pendingAssistantMessage.id]: [...(current[pendingAssistantMessage.id] || []).filter((item) => item.activity_type !== activity.activity_type), activity],
+          }));
+        },
       });
       const completedMessages = pendingMessages.map((message) => (
-        message.id === pendingAssistantMessage.id ? { ...message, content: answer } : message
+        message.id === pendingAssistantMessage.id ? { ...message, content: answer, pending: false } : message
       ));
       updateActiveStudySessionRecord(session.id, (item) => ({
         ...item,
@@ -20120,15 +20305,30 @@ export default function App() {
       setSelectedBillingPlan(null);
       setManualPaymentRequest(null);
     }
-    setBillingCheckoutMessage(trial ? "Opening the secure PayFast trial setup..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
-    const checkoutKey = `${provider}:${trial ? "trial:" : ""}${plan.id}`;
+    setBillingCheckoutMessage(trial ? "Starting your free trial..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
+    const checkoutKey = trial ? `trial:${plan.id}` : `${provider}:${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
     try {
+      if (trial) {
+        const response = await authFetch("/api/billing/trial/start", {
+          method: "POST",
+          timeoutMs: 15000,
+        });
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not start the free trial.");
+        setBillingCheckoutMessage(data.message || "Your Pro trial is active.");
+        await refreshBillingStatus();
+        return;
+      }
       if (provider === "payfast") {
+        const normalizedBillingCountry = billingCountry.trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(normalizedBillingCountry)) {
+          throw new Error("Enter the two-letter billing country used for this payment, for example ZA.");
+        }
         const response = await authFetch("/api/billing/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ plan_id: plan.id, trial }),
+          body: JSON.stringify({ plan_id: plan.id, trial, billing_country: billingCountry.trim().toUpperCase() }),
           timeoutMs: 30000,
         });
         const data = await parseJsonSafe(response);
@@ -20162,6 +20362,49 @@ export default function App() {
       setBillingCheckoutMessage(getReadableRequestError(err));
     } finally {
       setBillingCheckoutPlanId("");
+    }
+  };
+
+  const submitRefundRequest = async () => {
+    if (!refundPayment?.id || isSubmittingRefund) return;
+    setIsSubmittingRefund(true);
+    setBillingCheckoutMessage("");
+    try {
+      const response = await authFetch("/billing/refund-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_id: refundPayment.id, reason_code: refundReason, reason_text: refundExplanation }),
+        timeoutMs: 20000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not submit the refund request.");
+      setBillingCheckoutMessage(data.message || "Refund request received.");
+      setRefundPayment(null);
+      setRefundExplanation("");
+      await refreshBillingStatus();
+    } catch (err) {
+      setBillingCheckoutMessage(getReadableRequestError(err));
+    } finally {
+      setIsSubmittingRefund(false);
+    }
+  };
+
+  const cancelActiveSubscription = async () => {
+    setBillingCheckoutMessage("");
+    try {
+      const response = await authFetch("/billing/subscription/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Customer requested cancellation" }),
+        timeoutMs: 25000,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "Could not cancel the subscription.");
+      setBillingCheckoutMessage(data.message || "Future recurring charges are cancelled.");
+      setShowCancelSubscriptionConfirm(false);
+      await refreshBillingStatus();
+    } catch (err) {
+      setBillingCheckoutMessage(getReadableRequestError(err));
     }
   };
 
@@ -20214,6 +20457,7 @@ export default function App() {
       setBillingUsage(null);
       setBillingSubscription(null);
       setPaymentRequests([]);
+      setPaymentHistory([]);
       setManualPaymentDetails(null);
       setManualPaymentRequest(null);
       return undefined;
@@ -20884,7 +21128,7 @@ export default function App() {
       teacherRealtimeAssistantDraftRef.current = "";
       setIsTeacherQuestionLoading(true);
       setIsTeacherAnswering(false);
-      setTeacherQuestionStatus("Thinking...");
+      setTeacherQuestionStatus("Preparing your explanation...");
       return;
     }
     if (
@@ -21834,6 +22078,7 @@ export default function App() {
   const refreshCollaborationRooms = async (silent = false) => {
     if (!authToken || collaborationRoomsRequestInFlightRef.current) return;
     collaborationRoomsRequestInFlightRef.current = true;
+    if (!collaborationRooms.length) setIsCollaborationRoomsLoading(true);
     try {
       const response = await authFetch("/collaboration/rooms", { cache: "no-store", timeoutMs: 10000 });
       const data = await parseJsonSafe(response);
@@ -21853,8 +22098,9 @@ export default function App() {
         void loadCollaborationRoom(roomIdToOpen, { silent: true, resetNotesDraft: !activeRoom });
       }
     } catch (err) {
-      if (!silent) setError(err.message || "Could not load collaboration rooms.");
+      if (!silent) setCollaborationError(err.message || "Could not load collaboration rooms.");
     } finally {
+      setIsCollaborationRoomsLoading(false);
       collaborationRoomsRequestInFlightRef.current = false;
     }
   };
@@ -21874,6 +22120,8 @@ export default function App() {
     const { silent = false, resetNotesDraft = false, suppressLoader = false } = options;
     if (!roomId || collaborationRoomRequestInFlightRef.current === roomId) return;
     collaborationRoomRequestInFlightRef.current = roomId;
+    setSelectedRoomBoardImageId("");
+    setIsCollaborationMaterialsLoading(true);
     if (!silent && !suppressLoader) setIsRoomLoading(true);
     try {
       const materialsPromise = authFetch(`/collaboration/rooms/${roomId}/material-items`, { cache: "no-store", timeoutMs: 8000 })
@@ -21888,7 +22136,8 @@ export default function App() {
           }
           return materialsData.items || [];
         })
-        .catch(() => null);
+        .catch((err) => { setCollaborationError(err.message || "Could not load shared materials."); return null; })
+        .finally(() => setIsCollaborationMaterialsLoading(false));
       const response = await authFetch(`/collaboration/rooms/${roomId}`, { cache: "no-store", timeoutMs: 10000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
@@ -21903,9 +22152,10 @@ export default function App() {
         JSON.stringify(current) === JSON.stringify(nextRoom) ? current : nextRoom
       ));
       syncRoomNotesDraftFromRoom(nextRoom, { force: resetNotesDraft });
-      if (!silent) setStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
+      if (!silent) setCollaborationStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
     } catch (err) {
-      if (!silent) setError(err.message || "Could not open the collaboration room.");
+      setIsCollaborationMaterialsLoading(false);
+      if (!silent) setCollaborationError(err.message || "Could not open the collaboration room.");
     } finally {
       if (collaborationRoomRequestInFlightRef.current === roomId) collaborationRoomRequestInFlightRef.current = "";
       if (!silent && !suppressLoader) setIsRoomLoading(false);
@@ -22188,10 +22438,12 @@ export default function App() {
       return;
     }
     void loadCollaborationProfile();
+    setIsCollaborationNotificationsLoading(true);
     authFetch("/collaboration/notifications", { timeoutMs: 8000 })
       .then(parseJsonSafe)
       .then((data) => setCollaborationNotifications(data.notifications || []))
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setIsCollaborationNotificationsLoading(false));
   }, [authToken]);
 
   useEffect(() => {
@@ -22234,7 +22486,7 @@ export default function App() {
   useEffect(() => {
     const isCollaborationVisible = currentPage === "collaboration" || (currentPage === "workspace" && activeTab === "collaboration");
     const shouldSyncFollowedRoom = Boolean(followRoomView && activeRoomId && currentPage === "workspace");
-    if (!authToken || !activeRoomId || (!isCollaborationVisible && !shouldSyncFollowedRoom)) return undefined;
+    if (!authToken || !activeRoomId || (!isCollaborationVisible && !shouldSyncFollowedRoom) || typeof EventSource !== "undefined") return undefined;
     const interval = window.setInterval(() => {
       loadCollaborationRoom(activeRoomId, { silent: true });
     }, ROOM_REFRESH_INTERVAL_MS);
@@ -22248,6 +22500,7 @@ export default function App() {
       setCollaborationRoomActivity([]);
       return undefined;
     }
+    setIsCollaborationActivityLoading(true);
     const source = new EventSource(`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/activity/events`, { withCredentials: true });
     source.addEventListener("activity", (event) => {
       try {
@@ -22257,6 +22510,7 @@ export default function App() {
         const hasNewActivity = Boolean(collaborationActivityLatestIdRef.current && newestActivityId && collaborationActivityLatestIdRef.current !== newestActivityId);
         collaborationActivityLatestIdRef.current = newestActivityId;
         setCollaborationRoomActivity(nextActivity);
+        setIsCollaborationActivityLoading(false);
         if (hasNewActivity) void loadCollaborationRoom(activeRoomId, { silent: true });
       } catch {
         // A later realtime event or normal Room refresh will recover the feed.
@@ -22265,6 +22519,7 @@ export default function App() {
     source.addEventListener("access_revoked", () => {
       source.close();
       setCollaborationRoomActivity([]);
+      setIsCollaborationActivityLoading(false);
       setActiveRoom(null);
       setActiveRoomId("");
       setError("Your access to this Room has ended.");
@@ -22353,7 +22608,7 @@ export default function App() {
         timeoutMs: 7000,
       }).then(parseJsonSafe).then((data) => {
         if (data?.control) applyCollaborationAdminControl(data.control);
-      }).catch((err) => setError(err?.message || "Admin Control could not synchronize this Room view."));
+      }).catch((err) => setCollaborationError(err?.message || "Admin Control could not synchronize this Room view."));
     }, 180);
     return () => window.clearTimeout(collaborationAdminPublishTimerRef.current);
   }, [activeRoom?.is_owner, activeRoomId, adminControlPage, collaborationAdminControl?.active, collaborationAdminControl?.allow_explore, collaborationMaterialFilter, collaborationMobileView, selectedCollaborationMaterial?.id]);
@@ -25670,6 +25925,9 @@ export default function App() {
     userMessageId = "",
     assistantMessageId = "",
     onDelta = null,
+    onActivity = null,
+    onGenerationStarted = null,
+    onCompleted = null,
   } = {}) => {
     if (!(await ensurePremiumFeatureAvailable("study_chat", "Study chat messages"))) {
       throw createUsageBlockedError("You have used all free study chat attempts for today.");
@@ -25733,6 +25991,18 @@ export default function App() {
     let answer = "";
     let savedConversation = null;
     await consumeAssistantStream(response, ({ event, data }) => {
+      if (event === "ready") {
+        onGenerationStarted?.(data || {});
+        return;
+      }
+      if (event === "activity") {
+        onActivity?.(data || {});
+        return;
+      }
+      if (event === "generation_state") {
+        if (data?.activity) onActivity?.(data.activity);
+        return;
+      }
       if (event === "delta") {
         const delta = String(data?.text || "");
         if (!delta) return;
@@ -25744,8 +26014,9 @@ export default function App() {
         savedConversation = data.conversation;
         return;
       }
-      if (event === "done" && data?.conversation_usage) {
-        setStudyChatConversationUsage(data.conversation_usage);
+      if (event === "done") {
+        if (data?.conversation_usage) setStudyChatConversationUsage(data.conversation_usage);
+        onCompleted?.(data || {});
         return;
       }
       if (event === "conversation_limit" || data?.status === "CONVERSATION_LIMIT_REACHED") {
@@ -26350,7 +26621,8 @@ export default function App() {
     setIsAskingChat(true);
     const chatTurnId = `study-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question, images: referenceImagesForQuestion };
-    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
+    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "", pending: true };
+    setStudyChatActivities((current) => ({ ...current, [pendingAssistantMessage.id]: [] }));
     pendingStudyChatAnchorIdRef.current = pendingAssistantMessage.id;
     const baseMessages = Array.isArray(submission?.baseMessages) ? submission.baseMessages : chatMessages;
     const targetConversationId = String(submission?.conversationId || activeStudyChatId);
@@ -26374,9 +26646,43 @@ export default function App() {
           if (studyChatRequestRunRef.current !== requestRunId) return;
           setChatMessages((current) => current.map((message) => (
             message.id === pendingAssistantMessage.id
-              ? { ...message, content: streamedAnswer || "Thinking..." }
+              ? { ...message, content: streamedAnswer || "", pending: true }
               : message
           )));
+        },
+        onGenerationStarted: (generation) => {
+          const generationId = String(generation?.generation_id || pendingAssistantMessage.id);
+          window.localStorage.setItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY, JSON.stringify({
+            userEmail: authEmail, generationId, conversationId: targetConversationId,
+            assistantMessageId: pendingAssistantMessage.id, startedAt: new Date().toISOString(),
+          }));
+        },
+        onActivity: (activity) => {
+          if (studyChatRequestRunRef.current !== requestRunId || !activity?.activity_type) return;
+          setStudyChatActivities((current) => ({
+            ...current,
+            [pendingAssistantMessage.id]: [...(current[pendingAssistantMessage.id] || []).filter((item) => item.activity_type !== activity.activity_type), activity],
+          }));
+        },
+        onCompleted: (generation) => {
+          const storedGeneration = JSON.parse(window.localStorage.getItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY) || "null");
+          if (!storedGeneration?.generationId || storedGeneration.generationId === String(generation?.generation_id || "")) {
+            window.localStorage.removeItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY);
+          }
+          const completedConversationId = String(generation?.conversation_id || targetConversationId);
+          const userIsViewingConversation = currentPageRef.current === "voice" && activeStudyChatIdRef.current === completedConversationId;
+          if (userIsViewingConversation) {
+            void authFetch(`/api/chat/conversations/${encodeURIComponent(completedConversationId)}/seen`, { method: "POST", timeoutMs: 8000 }).catch(() => undefined);
+          } else {
+            setUnseenStudyChatIds((current) => new Set([...current, completedConversationId]));
+            const historyTitle = studyChatHistoryIndex.find((item) => item.id === completedConversationId)?.title || "Study Chat";
+            setChatCompletionToast({
+              conversationId: completedConversationId,
+              assistantMessageId: String(generation?.assistant_message_id || pendingAssistantMessage.id),
+              title: historyTitle,
+              generationId: String(generation?.generation_id || ""),
+            });
+          }
         },
       });
       if (studyChatRequestRunRef.current !== requestRunId) return;
@@ -26385,7 +26691,7 @@ export default function App() {
         const next = [...current];
         const lastIndex = next.length - 1;
         if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
-          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer, pending: false };
           return next;
         }
         return [...next, { id: `${chatTurnId}-assistant-complete`, role: "assistant", content: answer }];
@@ -26499,7 +26805,7 @@ export default function App() {
     setIsStudyChatVoiceAnswering(false);
     setIsStudyChatVoiceSessionOpen(false);
     setStudyChatVoiceStatus("Response stopped.");
-    setChatMessages((current) => current.filter((message) => !(message.role === "assistant" && message.content === "Thinking...")));
+    setChatMessages((current) => current.filter((message) => !(message.role === "assistant" && message.pending && !message.content)));
   };
 
   const speakStudyChatVoiceAnswer = (answerText = "", { onComplete } = {}) => {
@@ -26575,11 +26881,12 @@ export default function App() {
     const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     setError("");
     setStatus("MABASO is answering your voice question...");
-    setStudyChatVoiceStatus("Thinking through your question...");
+    setStudyChatVoiceStatus("Understanding your question...");
     setIsAskingChat(true);
     const chatTurnId = `study-chat-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = { id: `${chatTurnId}-user`, role: "user", content: question, images: referenceImagesForQuestion };
-    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "Thinking..." };
+    const pendingAssistantMessage = { id: `${chatTurnId}-assistant`, role: "assistant", content: "", pending: true };
+    setStudyChatActivities((current) => ({ ...current, [pendingAssistantMessage.id]: [] }));
     const updatedHistory = [...chatMessages, userMessage];
     setChatMessages([...updatedHistory, pendingAssistantMessage]);
     setChatQuestion("");
@@ -26602,9 +26909,23 @@ export default function App() {
           if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
           setChatMessages((current) => current.map((message) => (
             message.id === pendingAssistantMessage.id
-              ? { ...message, content: streamedAnswer || "Thinking..." }
+              ? { ...message, content: streamedAnswer || "", pending: true }
               : message
           )));
+        },
+        onGenerationStarted: (generation) => {
+          window.localStorage.setItem(ACTIVE_CHAT_GENERATION_STORAGE_KEY, JSON.stringify({
+            userEmail: authEmail, generationId: String(generation?.generation_id || pendingAssistantMessage.id),
+            conversationId: activeStudyChatId, assistantMessageId: pendingAssistantMessage.id,
+            startedAt: new Date().toISOString(),
+          }));
+        },
+        onActivity: (activity) => {
+          if (studyChatVoiceAnswerRunRef.current !== requestRunId || !activity?.activity_type) return;
+          setStudyChatActivities((current) => ({
+            ...current,
+            [pendingAssistantMessage.id]: [...(current[pendingAssistantMessage.id] || []).filter((item) => item.activity_type !== activity.activity_type), activity],
+          }));
         },
       });
       if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
@@ -26613,7 +26934,7 @@ export default function App() {
         const next = [...current];
         const lastIndex = next.length - 1;
         if (lastIndex >= 0 && next[lastIndex]?.id === pendingAssistantMessage.id) {
-          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer };
+          next[lastIndex] = { ...next[lastIndex], role: "assistant", content: answer, pending: false };
           return next;
         }
         return [...next, { id: `${chatTurnId}-assistant-complete`, role: "assistant", content: answer }];
@@ -26970,15 +27291,13 @@ export default function App() {
             </div>
           ) : (
             <div className="mabaso-ai-response">
-              {message.content === "Thinking..."
-                ? renderStreamingDots()
-                : <AssistantMarkdown content={message.content} theme="dark" />}
-              {isAskingChat && message.role === "assistant" && message.id === lastAssistantId && message.content !== "Thinking..."
-                ? renderStreamingDots()
-                : null}
+              {message.role === "assistant" && (message.pending || (studyChatActivities[message.id] || []).length) ? (
+                <ChatActivityTimeline activities={studyChatActivities[message.id] || []} compact={!fullPage} />
+              ) : null}
+              {message.content ? <AssistantMarkdown content={message.content} theme="dark" /> : null}
             </div>
           )}
-          {message.role === "assistant" && message.content !== "Thinking..." ? <StudyChatResponseActions messageId={message.id || `assistant-${index}`} content={message.content} language={outputLanguage} preferredVoice={selectedTeacherVoiceName} onError={setError} /> : null}
+          {message.role === "assistant" && !message.pending && message.content ? <StudyChatResponseActions messageId={message.id || `assistant-${index}`} content={message.content} language={outputLanguage} preferredVoice={selectedTeacherVoiceName} onError={setError} /> : null}
           {message.role === "user" && editingStudyChatMessageId !== message.id ? <StudyChatUserActions message={message} disabled={isAskingChat || isSubmittingStudyChatEdit} onEdit={beginEditingStudyChatQuestion} onError={setError} /> : null}
         </div>
       )) : (fullPage ? null : (
@@ -27286,7 +27605,7 @@ export default function App() {
             {chatHistoryRows.map((row) => <div key={row.id} className={`study-chat-history-row ${row.id === activeStudyChatId ? "is-active" : ""}`}>
               <button type="button" onClick={() => openSavedStudyChat(row.id)} className="study-chat-history-item">
                 <MessageCircle className="h-4 w-4" aria-hidden="true" />
-                <span className="min-w-0"><span className="flex min-w-0 items-center gap-1.5"><span className="block truncate">{row.title}</span>{row.isPinned ? <Pin className="study-chat-history-pin h-3 w-3 shrink-0" aria-label="Pinned conversation" /> : null}</span><small className="block truncate">{row.subtitle}</small></span>
+                <span className="min-w-0"><span className="flex min-w-0 items-center gap-1.5"><span className="block truncate">{row.title}</span>{row.isPinned ? <Pin className="study-chat-history-pin h-3 w-3 shrink-0" aria-label="Pinned conversation" /> : null}{unseenStudyChatIds.has(row.id) ? <span className="study-chat-unread-dot" role="img" aria-label="New AI response" /> : null}</span><small className="block truncate">{row.subtitle}</small></span>
               </button>
               <div className="study-chat-history-actions">
                 <button type="button" className="study-chat-history-more" aria-label={`More actions for ${row.title}`} aria-haspopup="menu" aria-expanded={studyChatHistoryMenuId === row.id} onClick={(event) => { event.stopPropagation(); const next = studyChatHistoryMenuId === row.id ? "" : row.id; if (next) { const rect = event.currentTarget.closest(".study-chat-history-row")?.getBoundingClientRect(); setStudyChatHistoryMenuAnchor(rect ? { left: Math.max(8, Math.min(rect.right - 196, window.innerWidth - 204)), top: rect.bottom + 4, mobile: window.innerWidth <= 768 } : null); } else setStudyChatHistoryMenuAnchor(null); setStudyChatHistoryMenuId(next); }}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
@@ -27644,7 +27963,7 @@ export default function App() {
     setTeacherRealtimeMicrophoneEnabled(false, { scheduleSleep: false });
     setIsTeacherListening(false);
     setIsTeacherQuestionLoading(true);
-    setTeacherQuestionStatus("Thinking...");
+    setTeacherQuestionStatus("Preparing your explanation...");
     const committed = sendTeacherRealtimeEvent({ type: "input_audio_buffer.commit" });
     if (!committed || !sendTeacherRealtimeResponseRequest({ audio: true })) {
       setIsTeacherQuestionLoading(false);
@@ -27743,7 +28062,7 @@ export default function App() {
   };
 
   const openChatShareDialog = () => {
-    const eligible = chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && message.content && message.content !== "Thinking...");
+    const eligible = chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && String(message.content || "").trim() && !message.pending);
     if (!eligible.length) {
       setError("Start a conversation before sharing it.");
       return;
@@ -27761,7 +28080,7 @@ export default function App() {
     try {
       const snapshot = await requestLectureAssistantConversation(normalizedId, { messageLimit: 80 });
       const messages = Array.isArray(snapshot?.conversation?.messages) ? snapshot.conversation.messages : [];
-      const eligible = messages.filter((message) => ["user", "assistant"].includes(message.role) && message.content && message.content !== "Thinking...");
+      const eligible = messages.filter((message) => ["user", "assistant"].includes(message.role) && String(message.content || "").trim() && !message.pending);
       if (!eligible.length) throw new Error("This conversation has no messages to share yet.");
       setPublicShareDialog({
         open: true,
@@ -27900,7 +28219,7 @@ export default function App() {
         <p>Only the selected study content is shared. Your account, source files, private history, and session information stay private.</p>
         {publicShareDialog.type === "chat" && !publicShareDialog.url ? <label className="public-share-choice"><input type="checkbox" checked={Boolean(publicShareDialog.chooseMessages)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, chooseMessages: event.target.checked }))} /> Choose individual messages</label> : null}
         {!publicShareDialog.shareId ? <label className="public-share-expiry"><span>Link expiry</span><select value={Number(publicShareDialog.expiryDays || 0)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, expiryDays: Number(event.target.value) }))}><option value={0}>No automatic expiry</option><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select></label> : null}
-        {publicShareDialog.type === "chat" && publicShareDialog.chooseMessages && !publicShareDialog.url ? <div className="public-share-message-picker">{chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && message.content !== "Thinking...").map((message) => <label key={message.id}><input type="checkbox" checked={(publicShareDialog.selectedIds || []).includes(message.id)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, selectedIds: event.target.checked ? [...(current.selectedIds || []), message.id] : (current.selectedIds || []).filter((id) => id !== message.id) }))} /><span>{message.role === "assistant" ? "Mabaso" : "Question"}: {String(message.content).slice(0, 120)}</span></label>)}</div> : null}
+        {publicShareDialog.type === "chat" && publicShareDialog.chooseMessages && !publicShareDialog.url ? <div className="public-share-message-picker">{chatMessages.filter((message) => ["user", "assistant"].includes(message.role) && String(message.content || "").trim() && !message.pending).map((message) => <label key={message.id}><input type="checkbox" checked={(publicShareDialog.selectedIds || []).includes(message.id)} onChange={(event) => setPublicShareDialog((current) => ({ ...current, selectedIds: event.target.checked ? [...(current.selectedIds || []), message.id] : (current.selectedIds || []).filter((id) => id !== message.id) }))} /><span>{message.role === "assistant" ? "Mabaso" : "Question"}: {String(message.content).slice(0, 120)}</span></label>)}</div> : null}
         {(publicShareDialog.warnings || []).length ? <p className="public-share-warning">Review before sharing: this content may contain {(publicShareDialog.warnings || []).join(", ")}.</p> : null}
         {publicShareDialog.url ? <div className="public-share-url"><input readOnly value={publicShareDialog.url} aria-label="Public share link" /><button type="button" className={copiedPublicShareUrl === publicShareDialog.url ? "is-copied" : ""} onClick={copyPublicShareUrl} aria-label={copiedPublicShareUrl === publicShareDialog.url ? "Share link copied" : "Copy share link"}>{copiedPublicShareUrl === publicShareDialog.url ? <Check className="h-4 w-4" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}{copiedPublicShareUrl === publicShareDialog.url ? "Copied" : "Copy link"}</button></div> : null}
         <div className="public-share-dialog-actions">{publicShareDialog.shareId ? <button type="button" onClick={() => disablePublicShare()} disabled={isUpdatingPublicShare}>Disable link</button> : null}{publicShareDialog.shareId ? <button type="button" onClick={updatePublicShareSnapshot} disabled={isUpdatingPublicShare}>Update shared version</button> : null}<button type="button" onClick={publicShareDialog.type === "chat" ? createChatPublicShare : () => createMaterialPublicShare(historyItems.find((item) => item.id === publicShareDialog.itemId), Number(publicShareDialog.expiryDays || 0))} disabled={isUpdatingPublicShare}>{isUpdatingPublicShare ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{publicShareDialog.shareId ? "Regenerate link" : "Create link"}</button></div>
@@ -29524,10 +29843,12 @@ export default function App() {
     setStatus("New Study Chat started.");
   };
 
-  const openSavedStudyChat = (conversationId = "") => {
+  const openSavedStudyChat = (conversationId = "", assistantMessageId = "") => {
     const normalizedConversationId = String(conversationId || "").replace(/[^a-zA-Z0-9_-]+/g, "").slice(0, 96);
     if (!normalizedConversationId) return;
-    pendingStudyChatAnchorIdRef.current = normalizedConversationId;
+    pendingStudyChatAnchorIdRef.current = String(assistantMessageId || normalizedConversationId);
+    setUnseenStudyChatIds((current) => { const next = new Set(current); next.delete(normalizedConversationId); return next; });
+    void authFetch(`/api/chat/conversations/${encodeURIComponent(normalizedConversationId)}/seen`, { method: "POST", timeoutMs: 8000 }).catch(() => undefined);
     const historyRecord = studyChatHistoryIndex.find((item) => item.id === normalizedConversationId);
     const cachedMaterialKey = historyRecord?.materialKey || studyChatMaterialKey;
     let restoredFromCache = false;
@@ -31886,6 +32207,14 @@ export default function App() {
         {historyPanel}
         {quizFeedbackModal}
         {renderStudyChatVoiceCaptureOverlay()}
+        {chatCompletionToast ? createPortal(
+          <button type="button" className="chat-completion-toast" onClick={() => { const target = chatCompletionToast; setChatCompletionToast(null); openSavedStudyChat(target.conversationId, target.assistantMessageId); }} aria-label={`Open completed response in ${chatCompletionToast.title}`}>
+            <span className="chat-completion-toast-icon"><Check className="h-4 w-4" aria-hidden="true" /></span>
+            <span><strong>{chatCompletionToast.type === "failed" ? "Response couldn't be completed" : "Response ready"}</strong><small>{chatCompletionToast.type === "failed" ? `Open “${chatCompletionToast.title}” to try again.` : `Your answer in “${chatCompletionToast.title}” is ready.`}</small></span>
+            <X className="h-4 w-4" aria-hidden="true" onClick={(event) => { event.stopPropagation(); setChatCompletionToast(null); }} />
+          </button>,
+          document.body,
+        ) : null}
       </main>
       {renderMobileAppNavigation()}
     </div>

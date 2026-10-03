@@ -178,7 +178,7 @@ export const sitePages = [
     hero: {
       eyebrow: "Pricing / Subscriptions",
       headline: "Fair study plans without surprise billing.",
-      description: "Mabaso AI pricing is designed around visible limits, no-card free access, usage warnings, cancellation clarity, and paid overages that stay disabled unless a user explicitly turns them on.",
+      description: "Mabaso AI pricing is designed around visible limits, a no-card Free plan, an eligible one-time no-card trial, clear cancellation, and server-enforced usage controls. Starting a trial does not create a PayFast subscription or schedule an automatic charge.",
       ctas: [
         primaryCta("Start Free", "open-app", "capture"),
         secondaryCta("Contact Support", "navigate", "/support/contact-support"),
@@ -199,7 +199,7 @@ export const sitePages = [
         name: "Free",
         price: "R0",
         description: "For light studying and trying Mabaso AI without a card.",
-        features: ["10 Study Chat questions per day", "1 Study Guide, test, presentation, podcast, and mind map per day", "3 photo or document uploads per day"],
+        features: ["15 Study Chat questions per day", "Up to 5 successful user messages in each individual AI conversation", "1 Study Guide, test, presentation, podcast, and mind map per day", "1 source upload and 3 Study Chat uploads per day"],
         action: "Start free",
       },
       {
@@ -207,8 +207,8 @@ export const sitePages = [
         price: "R50 monthly",
         alternatives: "R270 per semester or R480 annually",
         description: "For active students creating regular study packs.",
-        features: ["20 Study Chat questions per day", "3 Study Guides and presentations per day", "15 photo or document uploads per day", "7-day trial, then R50 monthly unless cancelled"],
-        action: "Start 7-day trial",
+        features: ["25 Study Chat questions per day", "Up to 25 successful user messages in each individual AI conversation", "3 Study Guides and presentations per day", "3 source uploads and 10 Study Chat uploads per day", "Eligible accounts can start the current no-card trial without creating a recurring payment"],
+        action: "Review trial and plans",
       },
       {
         name: "Premium Student",
@@ -220,11 +220,11 @@ export const sitePages = [
       },
     ],
     workflow: [
-      "Show exact monthly prices before checkout",
-      "Warn users at 50%, 80%, and 100% usage",
-      "Keep paid overages off by default",
-      "Make cancellation and downgrade controls visible",
-      "Do not show fake usage or billing metrics when backend data is missing",
+      "The backend checks trial eligibility and records trial start and end times against the signed-in account",
+      "A no-card trial is separate from PayFast and does not silently create a recurring subscription",
+      "A paid PayFast subscription activates only after provider confirmation",
+      "Cancelling future renewal is separate from requesting a refund for a completed transaction",
+      "Daily quotas and per-conversation limits remain independent and are enforced by the backend",
     ],
     emptyState: {
       title: "Billing is transparent by design.",
@@ -1265,7 +1265,7 @@ export const sitePages = [
     hero: {
       eyebrow: "AI Tools / Study Chat",
       headline: "Ask the lecture anything with context-aware AI chat.",
-      description: "Study Chat brings lecture memory into conversation. It uses the guide, transcript, notes, slides, past papers, and optional reference images to answer with more context than a generic chatbot.",
+      description: "Study Chat combines protected conversation history with lecture context. It can use the current guide, transcript, notes, slides, past papers and supported attachments, while saving each conversation so students can reopen it from Recents and continue where they stopped.",
       ctas: [
         primaryCta("Open Study Chat", "open-app", "workspace"),
         secondaryCta("See AI Accuracy Guide", "route", "/resources/ai-accuracy-guide"),
@@ -1288,9 +1288,11 @@ export const sitePages = [
       },
     },
     contains: [
-      { icon: "messages-square", title: "Lecture-aware answers", description: "Responses are grounded in the current lecture workspace context." },
-      { icon: "image-plus", title: "Image-assisted questions", description: "Students can add screenshots, notes, or handwritten references to a question." },
-      { icon: "shield-check", title: "Protected conversations", description: "Chat history and live academic context stay behind authentication." },
+      { icon: "messages-square", title: "Persistent conversations and message actions", description: "Each conversation is stored against the signed-in account. Students can reopen history, copy questions and answers, edit a previous question to create a new branch, and use the browser-based Read Aloud control without consuming an AI attempt." },
+      { icon: "activity", title: "Real generation activity", description: "Instead of a fabricated progress loop, the chat displays safe backend activity such as understanding the request, reading an attached document, checking a calculation, preparing the response and streaming the answer. Internal prompts and hidden model reasoning are never shown." },
+      { icon: "bell", title: "Background completion", description: "A response can continue while the student moves to another Mabaso AI section. When it finishes, an in-app notification links back to the exact answer and the conversation keeps an unread indicator until it is opened." },
+      { icon: "image-plus", title: "Document and image context", description: "Supported screenshots, notes and study documents can be attached to a question. The interface reports real reading or analysis stages only when that context is actually present." },
+      { icon: "shield-check", title: "Protected conversations and limits", description: "Conversation ownership is checked by the backend. Daily plan usage and the per-conversation message limit are separate; starting a new conversation never resets the daily allowance." },
     ],
     layout: [
       { title: "Conversation hero", description: "Show a premium chat shell with context badges, answer cards, and input controls." },
@@ -1858,6 +1860,12 @@ export const sitePages = [
       { question: "Which file types are supported?", answer: "Mabaso AI supports common lecture media plus notes, slides, images, PDFs, PowerPoint files, Word documents, and text-based study sources." },
       { question: "Can Mabaso AI mark written answers?", answer: "Yes. The platform supports written test answers, image-assisted answer uploads, and AI marking feedback inside the authenticated workspace." },
       { question: "Can I collaborate with other students?", answer: "Yes. Shared study rooms let invited members view a lecture-centered collaboration space with notes, room chat, and study-tool syncing." },
+      { question: "How does the free trial work?", answer: "An eligible account can activate the current one-time trial from billing without entering card details. The backend records the trial period and resolves the account's effective access on login, refresh and protected feature requests. The trial does not automatically create a PayFast subscription. When it expires, the account returns to Free unless a paid subscription is active." },
+      { question: "Can I leave Study Chat while Mabaso AI is answering?", answer: "Yes. The generation is tracked independently from the mounted chat screen, so moving to another Mabaso AI section does not start a second request. When the answer completes, an in-app response-ready notice can return you to the exact message, while an unread indicator remains in Recents until the conversation is viewed." },
+      { question: "Why is an old conversation read-only?", answer: "Plans can have both a daily AI allowance and a separate maximum number of successful user messages in one conversation. Reaching the conversation limit keeps the existing messages readable and offers New Chat. Creating that new conversation does not reset or bypass the daily allowance." },
+      { question: "What is the difference between cancellation and a refund?", answer: "Cancellation stops future recurring charges and normally leaves already-paid access available until the paid period ends. A refund request concerns a specific completed payment and is checked by the backend and payment provider. Mabaso AI's voluntary request window is 14 calendar days for transactions whose purchase country is South Africa and 7 days by default elsewhere, while mandatory consumer rights can override those company windows." },
+      { question: "Do my saved materials disappear if I downgrade or receive a refund?", answer: "No. A plan change can change future generation access and quotas, but it does not delete the account's chats, saved materials or documents. A completed full refund can end the refunded paid entitlement and return the account to Free." },
+      { question: "How do Collaboration Room invitations and join requests differ?", answer: "An invited user follows the room's invitation flow. A person who only discovers a room requests access and remains outside the private chat, board and materials until an authorised approver accepts the request. Room owners control whether trusted existing members may help process pending requests." },
       { question: "Are AI outputs always correct?", answer: "No AI system is perfect. Mabaso AI is designed as a supplementary study tool, and important information should still be independently verified." },
       { question: "Can I download my generated work?", answer: "Yes. Study packs, tests, presentations, and podcast audio can be exported from the authenticated workspace when the relevant asset has been generated." },
     ],

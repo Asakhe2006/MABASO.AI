@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { formatRoomActivityTime } from "../collaborationRoomUtils";
 
-export default function CollaborationRoomActivityPanel({ activity = [], onOpen, onClose }) {
+export default function CollaborationRoomActivityPanel({ activity = [], loading = false, onOpen, onClose }) {
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -35,7 +35,7 @@ export default function CollaborationRoomActivityPanel({ activity = [], onOpen, 
               </span>
             </button>
           );
-        }) : <p>No Room activity yet. Shared materials, board changes, and Admin Control updates will appear here.</p>}
+        }) : <p>{loading ? "Loading Room activity..." : "No Room activity yet. Shared materials, board changes, and Admin Control updates will appear here."}</p>}
       </section>
   );
 }

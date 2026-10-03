@@ -1,6 +1,6 @@
 export function getCollaborationRoomSourceContext(room = null) {
   if (!room || typeof room !== "object") {
-    return { transcript: "", summary: "", lectureNotes: "", lectureSlides: "", studyImages: [], hasContent: false };
+    return { transcript: "", summary: "", formula: "", example: "", lectureNotes: "", lectureSlides: "", studyImages: [], hasContent: false };
   }
   const snapshots = (room.materials || [])
     .map((item) => item?.source?.snapshot)
@@ -25,6 +25,8 @@ export function getCollaborationRoomSourceContext(room = null) {
   const context = {
     transcript: firstText("transcript"),
     summary: firstText("summary"),
+    formula: firstText("formula"),
+    example: firstText("example", "worked_example"),
     lectureNotes: firstText("lecture_notes", "lectureNotes"),
     lectureSlides: firstText("lecture_slides", "lectureSlides"),
     studyImages: firstImages(),

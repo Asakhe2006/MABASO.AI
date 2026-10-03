@@ -1971,7 +1971,7 @@ export function useLectureAssistant({
     if (!voiceSpeechStreamDoneRef.current) {
       setIsSpeaking(false);
       if (voiceModeEnabledRef.current) {
-        setStatusText("Thinking through the rest of the answer...");
+        setStatusText("Preparing the rest of the answer...");
       }
       return;
     }

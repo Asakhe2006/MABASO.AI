@@ -17,6 +17,90 @@
   --study-purple: #7c3aed;
 }
 
+/* Safe operational activity for AI responses. Kept compact so streaming text
+   remains the visual focus on desktop, tablet, and mobile. */
+.chat-activity-timeline {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 0 0.5rem;
+  max-width: 34rem;
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.chat-activity-timeline.is-compact { font-size: 0.74rem; }
+.chat-activity-completed { display: grid; gap: 0.18rem; }
+.chat-activity-row { display: flex; min-height: 1.6rem; align-items: center; gap: 0.45rem; }
+.chat-activity-row.is-completed { color: rgba(148, 163, 184, 0.72); }
+.chat-activity-row.is-failed { color: rgb(254 202 202); }
+.chat-activity-row.is-active { color: rgb(209 250 229); }
+.chat-activity-icon { width: 0.9rem; height: 0.9rem; flex: 0 0 auto; }
+.chat-activity-icon.is-spinning { animation: chat-activity-spin 0.9s linear infinite; }
+.chat-activity-expand {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.15rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: inherit;
+}
+.chat-activity-expand:hover,
+.chat-activity-expand:focus-visible { background: rgba(255, 255, 255, 0.08); outline: none; }
+.chat-activity-expand svg { width: 0.85rem; height: 0.85rem; }
+
+.study-chat-unread-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 999px;
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.1);
+}
+
+.chat-completion-toast {
+  position: fixed;
+  z-index: 10080;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  width: min(23rem, calc(100vw - 2rem));
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: 1rem;
+  background: rgba(2, 26, 20, 0.97);
+  padding: 0.85rem;
+  color: #fff;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+  text-align: left;
+  animation: chat-completion-in 180ms ease-out both;
+}
+.chat-completion-toast-icon { display: inline-flex; width: 2rem; height: 2rem; align-items: center; justify-content: center; border-radius: 999px; background: rgba(16, 185, 129, 0.18); color: #6ee7b7; }
+.chat-completion-toast strong,
+.chat-completion-toast small { display: block; }
+.chat-completion-toast small { margin-top: 0.18rem; overflow: hidden; color: rgba(226, 232, 240, 0.78); text-overflow: ellipsis; white-space: nowrap; }
+
+@keyframes chat-activity-spin { to { transform: rotate(360deg); } }
+@keyframes chat-completion-in { from { opacity: 0; transform: translateY(0.5rem); } to { opacity: 1; transform: translateY(0); } }
+
+@media (max-width: 599px) {
+  .chat-activity-timeline { max-width: 100%; font-size: 0.74rem; }
+  .chat-activity-completed { max-height: 3.6rem; overflow: hidden; }
+  .chat-completion-toast { right: 0.75rem; bottom: calc(5.2rem + env(safe-area-inset-bottom)); width: calc(100vw - 1.5rem); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-activity-icon.is-spinning { animation-duration: 1.8s; }
+  .chat-completion-toast { animation: none; }
+}
+
 /* Final targeted overrides for mobile mode picker, focus view, capture sticky header, and study-guide media. */
 .ai-chat-mode-picker {
   position: relative;
@@ -15227,7 +15311,13 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
 @media (max-width: 959px) and (min-width: 761px) { .collaboration-main-grid { grid-template-columns:205px minmax(0,1fr); }.collaboration-center-stage { grid-column:2; }.collaboration-chat-panel { display:none; }.collaboration-search-trigger { width:42px; min-width:42px; height:42px; overflow:hidden; padding:0; text-indent:-999px; }.collaboration-search-trigger::after { display:grid; place-items:center; content:"⌕"; text-indent:0; }.collaboration-room-heading small { display:none; }.collaboration-room-actions .collaboration-avatar-stack { display:none; }.mabaso-room-chat { width:min(340px,calc(100vw - 229px)); }.mabaso-room-chat.is-desktop-expanded { left:12px; width:auto; }.collaboration-filter-row button { padding:10px 11px; }.collaboration-material-library,.collaboration-board-panel { padding:12px; } }
 @media (max-width: 760px) {
   .collaboration-product-shell { min-height:100dvh; margin:-.5rem; padding-bottom:76px; }.collaboration-global-bar { position:sticky; z-index:70; top:0; min-height:52px; padding:0 10px; background:rgba(2,20,14,.96); backdrop-filter:blur(16px); }.collaboration-brand { min-width:44px; min-height:44px; justify-content:flex-start; }.collaboration-brand-copy { display:none; }.collaboration-brand-mark { width:34px; height:34px; border:1px solid rgba(255,255,255,.12); border-radius:50%; background:#0a2520; font-size:20px; transform:none; }.collaboration-search-trigger { display:grid; width:38px; min-width:38px; height:38px; place-items:center; border-radius:50%; padding:0; text-align:center; }.collaboration-search-trigger span { display:none; }.collaboration-global-actions { gap:8px; }.collaboration-global-actions .profile-menu-button-copy,.collaboration-global-actions .profile-menu-button-chevron { display:none; }.collaboration-global-actions .profile-menu-button { min-height:38px; padding:2px; }.collaboration-global-actions .profile-menu-panel { right:0; left:auto; }.collaboration-room-header { min-height:72px; padding:9px 12px 7px; }.collaboration-room-avatar { width:40px; height:40px; font-size:18px; }.collaboration-room-heading { gap:10px; }.collaboration-room-heading h1 { max-width:calc(100vw - 82px); overflow:hidden; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }.collaboration-room-heading p { margin-top:3px; font-size:10px; }.collaboration-room-heading small { display:none; }.collaboration-room-actions { display:none; }.collaboration-feedback { margin:0 10px 8px; }.collaboration-main-grid { display:block; padding:0 10px 10px; }.collaboration-room-sidebar,.collaboration-materials-panel,.collaboration-chat-panel { display:none; }.collaboration-room-sidebar.is-mobile-active,.collaboration-materials-panel.is-mobile-active,.collaboration-chat-panel.is-mobile-active { display:block; }.collaboration-room-sidebar { min-height:calc(100dvh - 132px); }.collaboration-chat-panel.is-mobile-active { display:flex; min-height:calc(100dvh - 182px); padding-bottom:76px; }.collaboration-chat-panel.is-mobile-active .collaboration-chat-messages { padding-bottom:84px; }.collaboration-chat-panel.is-mobile-active .collaboration-chat-composer { position:fixed; z-index:880; right:10px; bottom:calc(76px + env(safe-area-inset-bottom)); left:10px; border:1px solid rgba(87,225,157,.22); border-radius:18px; background:rgba(4,28,20,.97); box-shadow:0 12px 36px rgba(0,0,0,.42); padding:8px; }.collaboration-chat-panel.is-mobile-active .collaboration-invite-strip { display:none; }.collaboration-mobile-room-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:0 10px 12px; }.collaboration-mobile-room-tabs button { min-height:39px; border-radius:8px; background:#0a2321; color:#edfdf6; font-size:12px; font-weight:700; }.collaboration-mobile-room-tabs button.is-active { border:1px solid #17dc83; background:#079e56; }.collaboration-filter-row { margin:0 3px; }.collaboration-filter-row button { padding:10px 12px; }.collaboration-dual-panels { display:block; }.collaboration-material-library { min-height:0; }.collaboration-board-panel { display:none; margin-top:10px; min-height:0; }.collaboration-board-panel.is-mobile-active { display:block; }.collaboration-board-grid { grid-template-columns:1fr; }.collaboration-material-list article { grid-template-columns:43px minmax(0,1fr) auto; }.collaboration-material-icon { width:41px; height:44px; }.collaboration-mobile-bottom-nav { position:fixed; z-index:900; right:9px; bottom:max(8px,env(safe-area-inset-bottom)); left:9px; display:grid; grid-template-columns:repeat(5,1fr); align-items:center; min-height:59px; border:1px solid rgba(77,232,151,.34); border-radius:18px; background:#041c14; box-shadow:0 14px 42px rgba(0,0,0,.54); }.collaboration-mobile-bottom-nav button { display:grid; min-height:52px; place-items:center; color:#b4d7c9; font-size:18px; }.collaboration-mobile-bottom-nav span { display:block; margin-top:-8px; font-size:9px; }.collaboration-mobile-bottom-nav button.is-active { color:#22e58b; }.collaboration-mobile-bottom-nav .collaboration-mobile-add { width:45px; height:45px; min-height:45px; justify-self:center; border-radius:50%; background:#13c96e; color:#fff; font-size:26px; }.collaboration-profile-popover { right:auto; width:min(410px,calc(100vw - 24px)); max-height:min(72dvh,560px); }.collaboration-discover-panel { margin-bottom:70px; }
-  .collaboration-room-utility-actions { justify-content:flex-start; overflow-x:auto; padding:0 15px 10px; }.collaboration-room-utility-actions > button { flex:none; }.collaboration-material-preview,.collaboration-compact-dialog { width:100%; max-height:90dvh; border-radius:20px 20px 0 0; }.collaboration-setting-buttons { grid-template-columns:1fr; }
+  .collaboration-room-header { position:relative; padding-right:138px; }
+  .collaboration-room-heading h1 { max-width:calc(100vw - 205px); }
+  .collaboration-room-utility-actions { position:absolute; z-index:74; top:61px; right:10px; justify-content:flex-end; gap:5px; overflow:visible; padding:0; }
+  .collaboration-room-utility-actions > button { width:36px; min-width:36px; min-height:36px; justify-content:center; padding:0; font-size:0; }
+  .collaboration-room-utility-actions .collaboration-activity-button { width:36px; min-width:36px; height:36px; }
+  .collaboration-room-utility-actions svg { width:16px; height:16px; }
+  .collaboration-material-preview,.collaboration-compact-dialog { width:100%; max-height:90dvh; border-radius:20px 20px 0 0; }.collaboration-setting-buttons { grid-template-columns:1fr; }
 }
 
 /* Final mobile composer sizing: keep the model label readable without a square
@@ -15520,6 +15610,22 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
   padding: 2px;
 }
 .collaboration-admin-control-menu .mabaso-setting-row { padding: 9px 11px; }
+
+@media (max-width: 600px) {
+  .collaboration-profile-popover .mabaso-toggle-sm {
+    width: 36px;
+    height: 20px;
+    min-height: 20px;
+    padding: 2px;
+  }
+  .collaboration-profile-popover .mabaso-toggle-sm .mabaso-toggle-knob {
+    width: 14px;
+    height: 14px;
+  }
+  .collaboration-profile-popover .mabaso-toggle-sm.is-on .mabaso-toggle-knob {
+    transform: translateX(16px);
+  }
+}
 
 .collaboration-room-activity-control { position: relative; flex: none; }
 .collaboration-activity-button {

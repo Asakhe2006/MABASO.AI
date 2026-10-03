@@ -16,6 +16,7 @@ import json
 import logging
 import mimetypes
 import os
+import queue
 import re
 import shutil
 import smtplib
@@ -40,7 +41,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import Response, StreamingResponse
 from openai import APIStatusError, InternalServerError, OpenAI
 from PIL import Image, ImageDraw, ImageFont
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import requests
 from chat_assistant import (
     DEFAULT_OPENAI_CHAT_MODEL,
@@ -52,9 +53,20 @@ from chat_assistant import (
     normalize_openai_model_name,
     resolve_provider_attempts,
 )
+from chat_activity import build_activity_event, infer_request_activity_types
 from supabase_chat_history import (
     SupabaseChatHistoryError,
     SupabaseChatHistoryStore,
+)
+from refund_policy import (
+    ACTIVE_REFUND_STATUSES,
+    REFUND_REASON_CODES,
+    PayFastApiClient,
+    PayFastApiError,
+    RefundPolicyConfig,
+    evaluate_refund_eligibility,
+    money as refund_money,
+    normalize_country as normalize_billing_country,
 )
 try:
     import psycopg
@@ -446,6 +458,8 @@ PAYFAST_PASSPHRASE = os.getenv("PAYFAST_PASSPHRASE", "").strip()
 PAYFAST_SANDBOX = os.getenv("PAYFAST_SANDBOX", "false").strip().lower() not in {"0", "false", "no", "off"}
 PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR = os.getenv("PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "0.00").strip()
+FREE_TRIAL_DAYS = max(1, get_early_int_env("FREE_TRIAL_DAYS", 7))
+FREE_TRIAL_PLAN_ID = os.getenv("FREE_TRIAL_PLAN_ID", "pro_student").strip() or "pro_student"
 OPENAI_ADMIN_KEY = os.getenv("OPENAI_ADMIN_KEY", "").strip()
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "").strip()
 OPENAI_COST_CACHE_SECONDS = max(60, get_early_int_env("OPENAI_COST_CACHE_SECONDS", 300))
@@ -7216,6 +7230,22 @@ class SessionModeRequest(BaseModel):
 class BillingCheckoutRequest(BaseModel):
     plan_id: str
     trial: bool = False
+    billing_country: str = ""
+
+
+class RefundRequestCreate(BaseModel):
+    payment_id: str
+    reason_code: str
+    reason_text: str = ""
+
+
+class RefundAdminDecision(BaseModel):
+    admin_note: str = ""
+    bank_details: dict[str, str] = Field(default_factory=dict)
+
+
+class SubscriptionCancelRequest(BaseModel):
+    reason: str = ""
 
 
 class PaymentCreateRequest(BaseModel):
@@ -7367,8 +7397,28 @@ app.add_middleware(
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     started_at = time.perf_counter()
-    response = await call_next(request)
+    incoming_request_id = compact_text(request.headers.get("x-request-id"))[:120]
+    request_id = incoming_request_id or f"REQ-{uuid4().hex}"
+    request.state.request_id = request_id
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        record_diagnostic_event(
+            event_type="API_REQUEST_FAILED",
+            category="api_error",
+            severity="ERROR",
+            request_id=request_id,
+            trace_id=request_id,
+            endpoint=request.url.path,
+            http_status=500,
+            duration_ms=duration_ms,
+            safe_message="The request failed before a response could be returned.",
+            metadata={"method": request.method, "error_type": type(exc).__name__},
+        )
+        raise
     duration_ms = int((time.perf_counter() - started_at) * 1000)
+    response.headers.setdefault("X-Request-ID", request_id)
     response.headers.setdefault("X-Response-Time-Ms", str(duration_ms))
     response.headers.setdefault("Vary", "Origin, Accept-Encoding")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -7398,11 +7448,37 @@ async def add_security_headers(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
     if duration_ms >= SLOW_REQUEST_LOG_MS and request.url.path != "/health":
         logger.warning(
-            "Slow request method=%s path=%s status=%s duration_ms=%s",
+            "Slow request method=%s path=%s status=%s duration_ms=%s request_id=%s",
             request.method,
             request.url.path,
             response.status_code,
             duration_ms,
+            request_id,
+        )
+        record_diagnostic_event(
+            event_type="API_REQUEST_SLOW",
+            category="performance",
+            severity="WARNING",
+            request_id=request_id,
+            trace_id=request_id,
+            endpoint=request.url.path,
+            http_status=response.status_code,
+            duration_ms=duration_ms,
+            safe_message="Request exceeded the slow-request threshold.",
+            metadata={"method": request.method},
+        )
+    elif response.status_code >= 400 and request.url.path != "/health":
+        record_diagnostic_event(
+            event_type="API_REQUEST_REJECTED" if response.status_code < 500 else "API_REQUEST_FAILED",
+            category="api_error",
+            severity="WARNING" if response.status_code < 500 else "ERROR",
+            request_id=request_id,
+            trace_id=request_id,
+            endpoint=request.url.path,
+            http_status=response.status_code,
+            duration_ms=duration_ms,
+            safe_message="Request returned an error response.",
+            metadata={"method": request.method},
         )
     return response
 
@@ -7629,6 +7705,11 @@ def init_db():
             "subscription_status": "TEXT NOT NULL DEFAULT 'free'",
             "subscription_start_at": "TEXT NOT NULL DEFAULT ''",
             "subscription_end_at": "TEXT NOT NULL DEFAULT ''",
+            "trial_status": "TEXT NOT NULL DEFAULT 'eligible'",
+            "trial_started_at": "TEXT NOT NULL DEFAULT ''",
+            "trial_ends_at": "TEXT NOT NULL DEFAULT ''",
+            "trial_used_at": "TEXT NOT NULL DEFAULT ''",
+            "billing_country": "TEXT NOT NULL DEFAULT ''",
             "usage_reset_at": "TEXT NOT NULL DEFAULT ''",
             "feature_permissions_json": "TEXT NOT NULL DEFAULT '{}'",
             "preferred_ai_chat_mode": "TEXT NOT NULL DEFAULT 'think_deeper'",
@@ -8245,6 +8326,61 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS assistant_generation_states (
+                generation_id TEXT PRIMARY KEY,
+                user_email TEXT NOT NULL,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                user_message_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                request_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                activity_type TEXT NOT NULL DEFAULT 'REQUEST_RECEIVED',
+                activity_json TEXT NOT NULL DEFAULT '{}',
+                answer_preview TEXT NOT NULL DEFAULT '',
+                has_unseen_response INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL DEFAULT '',
+                error_code TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_generation_user_request
+            ON assistant_generation_states (user_email, request_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_assistant_generation_conversation_updated
+            ON assistant_generation_states (user_email, conversation_id, updated_at DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS diagnostic_events (
+                id TEXT PRIMARY KEY,
+                trace_id TEXT NOT NULL DEFAULT '',
+                request_id TEXT NOT NULL DEFAULT '',
+                user_email TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL DEFAULT '',
+                severity TEXT NOT NULL DEFAULT 'INFO',
+                endpoint TEXT NOT NULL DEFAULT '',
+                http_status INTEGER NOT NULL DEFAULT 0,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                safe_message TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_diagnostic_events_created ON diagnostic_events (created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_diagnostic_events_user_created ON diagnostic_events (user_email, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_diagnostic_events_trace ON diagnostic_events (trace_id, created_at ASC)")
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS email_password_credentials (
                 email TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
@@ -8475,6 +8611,79 @@ def init_db():
             ON billing_payments (email, paid_at DESC)
             """
         )
+        checkout_columns = {row["name"] for row in connection.execute("PRAGMA table_info(billing_checkout_sessions)").fetchall()}
+        if "billing_country_at_purchase" not in checkout_columns:
+            connection.execute("ALTER TABLE billing_checkout_sessions ADD COLUMN billing_country_at_purchase TEXT NOT NULL DEFAULT ''")
+        payment_columns = {row["name"] for row in connection.execute("PRAGMA table_info(billing_payments)").fetchall()}
+        payment_column_defaults = {
+            "billing_country_at_purchase": "TEXT NOT NULL DEFAULT ''",
+            "currency": "TEXT NOT NULL DEFAULT 'ZAR'",
+            "refunded_amount_zar": "TEXT NOT NULL DEFAULT '0.00'",
+            "chargeback_status": "TEXT NOT NULL DEFAULT ''",
+            "provider_refund_status": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in payment_column_defaults.items():
+            if column_name not in payment_columns:
+                connection.execute(f"ALTER TABLE billing_payments ADD COLUMN {column_name} {column_definition}")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refund_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL,
+                payment_id TEXT NOT NULL,
+                pf_payment_id TEXT NOT NULL DEFAULT '',
+                subscription_id TEXT NOT NULL DEFAULT '',
+                provider_token TEXT NOT NULL DEFAULT '',
+                original_amount TEXT NOT NULL,
+                requested_amount TEXT NOT NULL,
+                approved_amount TEXT NOT NULL DEFAULT '0.00',
+                currency TEXT NOT NULL DEFAULT 'ZAR',
+                billing_country_at_purchase TEXT NOT NULL DEFAULT '',
+                reason_code TEXT NOT NULL,
+                reason_text TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                eligibility_window_days INTEGER NOT NULL DEFAULT 0,
+                policy_type TEXT NOT NULL DEFAULT 'company_goodwill_policy',
+                eligibility_reason TEXT NOT NULL DEFAULT '',
+                requested_at TEXT NOT NULL,
+                approved_at TEXT NOT NULL DEFAULT '',
+                rejected_at TEXT NOT NULL DEFAULT '',
+                processed_at TEXT NOT NULL DEFAULT '',
+                completed_at TEXT NOT NULL DEFAULT '',
+                provider_refund_reference TEXT NOT NULL DEFAULT '',
+                provider_status TEXT NOT NULL DEFAULT '',
+                provider_error TEXT NOT NULL DEFAULT '',
+                provider_response_json TEXT NOT NULL DEFAULT '{}',
+                usage_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                estimated_ai_cost_since_charge TEXT NOT NULL DEFAULT '0.00',
+                automatic_or_manual TEXT NOT NULL DEFAULT 'manual',
+                admin_user_id TEXT NOT NULL DEFAULT '',
+                admin_note TEXT NOT NULL DEFAULT '',
+                idempotency_key TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_email_created ON refund_requests (email, created_at DESC)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_payment_status ON refund_requests (payment_id, status)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_status_created ON refund_requests (status, created_at DESC)")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refund_audit_events (
+                id TEXT PRIMARY KEY,
+                refund_request_id TEXT NOT NULL,
+                payment_id TEXT NOT NULL DEFAULT '',
+                actor_email TEXT NOT NULL DEFAULT '',
+                actor_type TEXT NOT NULL DEFAULT 'system',
+                action TEXT NOT NULL,
+                safe_metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_audit_request_created ON refund_audit_events (refund_request_id, created_at)")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS billing_plan_features (
@@ -8670,7 +8879,9 @@ def init_db():
                     'study_timetables',
                     'lecture_timetables',
                     'study_guide_visual_cache',
-                    'study_guide_visual_events'
+                    'study_guide_visual_events',
+                    'refund_requests',
+                    'refund_audit_events'
                   ];
                   policy_role_clause text;
                 BEGIN
@@ -9601,6 +9812,9 @@ def record_audit_log(
     normalized_email = normalize_email(email)
     safe_status = (status or "success").strip().lower() or "success"
     payload = dict(metadata or {})
+    request_id = compact_text(getattr(getattr(request, "state", None), "request_id", "")) if request is not None else ""
+    if request_id and "request_id" not in payload:
+        payload["request_id"] = request_id
     country, city = get_request_location(request)
     if country and "country" not in payload:
         payload["country"] = country
@@ -9629,6 +9843,127 @@ def record_audit_log(
                 utc_now().isoformat(),
             ),
         )
+
+
+def record_diagnostic_event(
+    *,
+    event_type: str,
+    category: str,
+    severity: str = "INFO",
+    user_email: str = "",
+    trace_id: str = "",
+    request_id: str = "",
+    endpoint: str = "",
+    http_status: int = 0,
+    duration_ms: int = 0,
+    safe_message: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Store meaningful, sanitized diagnostics without affecting user flows."""
+    safe_metadata = dict(metadata or {})
+    for sensitive_key in (
+        "password", "token", "authorization", "cookie", "secret", "api_key",
+        "merchant_key", "passphrase", "access_token", "refresh_token",
+    ):
+        safe_metadata.pop(sensitive_key, None)
+    try:
+        with get_db_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO diagnostic_events (
+                    id, trace_id, request_id, user_email, category, event_type,
+                    severity, endpoint, http_status, duration_ms, safe_message,
+                    metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uuid4().hex,
+                    compact_text(trace_id)[:120],
+                    compact_text(request_id)[:120],
+                    normalize_email(user_email),
+                    compact_text(category)[:80],
+                    compact_text(event_type)[:120],
+                    compact_text(severity, "INFO").upper()[:20],
+                    compact_text(endpoint)[:240],
+                    max(0, int(http_status or 0)),
+                    max(0, int(duration_ms or 0)),
+                    compact_text(safe_message)[:500],
+                    dump_json(safe_metadata),
+                    utc_now().isoformat(),
+                ),
+            )
+    except Exception:
+        logger.warning("Could not persist diagnostic event type=%s", event_type, exc_info=True)
+
+
+def set_assistant_generation_state(
+    *,
+    generation_id: str,
+    user_email: str,
+    conversation_id: str = "",
+    user_message_id: str = "",
+    assistant_message_id: str = "",
+    request_id: str = "",
+    status: str,
+    activity: dict[str, Any],
+    answer_preview: str = "",
+    unseen: bool | None = None,
+    error_code: str = "",
+) -> None:
+    now_iso = utc_now().isoformat()
+    completed_at = now_iso if status in {"completed", "failed", "cancelled"} else ""
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO assistant_generation_states (
+                generation_id, user_email, conversation_id, user_message_id,
+                assistant_message_id, request_id, status, activity_type,
+                activity_json, answer_preview, has_unseen_response, started_at,
+                updated_at, completed_at, error_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(generation_id) DO UPDATE SET
+                status = excluded.status,
+                activity_type = excluded.activity_type,
+                activity_json = excluded.activity_json,
+                answer_preview = CASE WHEN excluded.answer_preview = '' THEN assistant_generation_states.answer_preview ELSE excluded.answer_preview END,
+                has_unseen_response = CASE WHEN ? < 0 THEN assistant_generation_states.has_unseen_response ELSE excluded.has_unseen_response END,
+                updated_at = excluded.updated_at,
+                completed_at = CASE WHEN excluded.completed_at = '' THEN assistant_generation_states.completed_at ELSE excluded.completed_at END,
+                error_code = excluded.error_code
+            """,
+            (
+                compact_text(generation_id), normalize_email(user_email), compact_text(conversation_id),
+                compact_text(user_message_id), compact_text(assistant_message_id), compact_text(request_id),
+                compact_text(status, "generating"), compact_text(activity.get("activity_type"), "REQUEST_RECEIVED"),
+                dump_json(activity), shorten_text(answer_preview, 800), int(bool(unseen)) if unseen is not None else -1,
+                now_iso, now_iso, completed_at, compact_text(error_code)[:80], -1 if unseen is None else int(bool(unseen)),
+            ),
+        )
+
+
+def get_assistant_generation_state(user_email: str, generation_id: str) -> dict[str, Any] | None:
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM assistant_generation_states WHERE generation_id = ? AND lower(user_email) = lower(?)",
+            (compact_text(generation_id), normalize_email(user_email)),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "generation_id": row["generation_id"],
+        "conversation_id": row["conversation_id"],
+        "user_message_id": row["user_message_id"],
+        "assistant_message_id": row["assistant_message_id"],
+        "request_id": row["request_id"],
+        "status": row["status"],
+        "activity": load_collaboration_json_object(row["activity_json"]),
+        "answer_preview": row["answer_preview"],
+        "has_unseen_response": bool(row["has_unseen_response"]),
+        "started_at": row["started_at"],
+        "updated_at": row["updated_at"],
+        "completed_at": row["completed_at"],
+        "error_code": row["error_code"],
+    }
 
 
 def get_admin_login_attempt_state(email: str, ip_address: str) -> dict[str, Any]:
@@ -18396,7 +18731,7 @@ def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
             """
             SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
                    provider_token, status, checkout_fields_json, raw_event_json,
-                   created_at, updated_at
+                   billing_country_at_purchase, created_at, updated_at
             FROM billing_checkout_sessions
             WHERE id = ?
             """,
@@ -18660,14 +18995,78 @@ def get_active_subscription_row(email: str) -> sqlite3.Row | None:
     return row
 
 
+def resolve_entitlement(email: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Single authoritative paid/trial/free access decision."""
+    normalized_email = normalize_email(email)
+    resolved_now = now or utc_now()
+    if is_admin_email(normalized_email):
+        return {
+            "entitlement": "expert", "plan_id": "premium_student", "access_level": "premium_student",
+            "trial_active": False, "trial_started_at": "", "trial_ends_at": "",
+            "subscription_active": True, "subscription_status": "active", "quota_profile": "premium_student",
+            "reason": "admin_protected_access",
+        }
+    paid = get_active_subscription_row(normalized_email)
+    if paid:
+        plan_id = get_billing_quota_plan_id(normalize_billing_plan_id(paid["plan_id"]))
+        return {
+            "entitlement": "expert" if plan_id == "premium_student" else "pro",
+            "plan_id": plan_id, "access_level": plan_id, "trial_active": False,
+            "trial_started_at": "", "trial_ends_at": "", "subscription_active": True,
+            "subscription_status": compact_text(paid["status"], "active"), "quota_profile": plan_id,
+            "reason": "active_paid_subscription",
+        }
+    with get_db_connection() as connection:
+        trial = connection.execute(
+            "SELECT trial_status, trial_started_at, trial_ends_at, trial_used_at FROM users WHERE lower(email) = ?",
+            (normalized_email,),
+        ).fetchone()
+    trial_ends = parse_billing_datetime(trial["trial_ends_at"]) if trial else None
+    trial_active = bool(trial and compact_text(trial["trial_status"]).lower() == "active" and trial_ends and trial_ends > resolved_now)
+    if trial_active:
+        plan_id = get_billing_quota_plan_id(FREE_TRIAL_PLAN_ID)
+        return {
+            "entitlement": "trial", "plan_id": plan_id, "access_level": plan_id,
+            "trial_active": True, "trial_started_at": compact_text(trial["trial_started_at"]),
+            "trial_ends_at": compact_text(trial["trial_ends_at"]), "subscription_active": False,
+            "subscription_status": "trialing", "quota_profile": plan_id, "reason": "active_no_card_trial",
+        }
+    if trial and compact_text(trial["trial_status"]).lower() == "active" and trial_ends and trial_ends <= resolved_now:
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE users SET trial_status = 'expired', updated_at = ? WHERE lower(email) = ? AND trial_status = 'active'",
+                (resolved_now.isoformat(), normalized_email),
+            )
+    return {
+        "entitlement": "free", "plan_id": "free", "access_level": "free", "trial_active": False,
+        "trial_started_at": compact_text(trial["trial_started_at"] if trial else ""),
+        "trial_ends_at": compact_text(trial["trial_ends_at"] if trial else ""),
+        "subscription_active": False, "subscription_status": "free", "quota_profile": "free",
+        "reason": "trial_expired" if trial_ends and trial_ends <= resolved_now else "no_active_subscription_or_trial",
+    }
+
+
 def get_effective_plan_id(email: str) -> str:
-    if is_admin_email(email):
-        return "premium_student"
-    row = get_active_subscription_row(email)
-    if not row:
-        return "free"
-    plan_id = normalize_billing_plan_id(row["plan_id"])
-    return get_billing_quota_plan_id(plan_id)
+    return compact_text(resolve_entitlement(email).get("plan_id"), "free")
+
+
+def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    subscription = get_user_subscription(email)
+    entitlement = resolve_entitlement(email)
+    if entitlement.get("trial_active"):
+        subscription = {
+            **subscription,
+            "status": "trialing",
+            "plan_id": entitlement["plan_id"],
+            "provider": "mabaso_trial",
+            "amount_zar": "0.00",
+            "current_period_start": entitlement.get("trial_started_at", ""),
+            "current_period_end": entitlement.get("trial_ends_at", ""),
+            "active": True,
+            "renewal_status": "trial",
+            "expired": False,
+        }
+    return {**subscription, "entitlement": entitlement}, entitlement
 
 
 def get_source_material_size_limit_bytes(email: str) -> tuple[str, int]:
@@ -18898,36 +19297,216 @@ def get_monthly_usage_summary(email: str) -> dict[str, Any]:
     }
 
 
+def get_refund_policy_config() -> RefundPolicyConfig:
+    return RefundPolicyConfig.from_env()
+
+
+def get_payfast_api_client() -> PayFastApiClient:
+    return PayFastApiClient(
+        merchant_id=PAYFAST_MERCHANT_ID,
+        passphrase=PAYFAST_PASSPHRASE,
+        sandbox=PAYFAST_SANDBOX,
+        timeout_seconds=max(5, get_early_int_env("PAYFAST_API_TIMEOUT_SECONDS", 20)),
+    )
+
+
+def record_refund_audit(
+    refund_request_id: str,
+    payment_id: str,
+    action: str,
+    *,
+    actor_email: str = "",
+    actor_type: str = "system",
+    metadata: dict[str, Any] | None = None,
+    connection: Any | None = None,
+) -> None:
+    values = (
+        uuid4().hex,
+        compact_text(refund_request_id),
+        compact_text(payment_id),
+        normalize_email(actor_email) if compact_text(actor_email) else "",
+        compact_text(actor_type, "system"),
+        compact_text(action),
+        json.dumps(metadata or {}, ensure_ascii=False),
+        utc_now().isoformat(),
+    )
+    query = """
+        INSERT INTO refund_audit_events (
+            id, refund_request_id, payment_id, actor_email, actor_type,
+            action, safe_metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    if connection is not None:
+        connection.execute(query, values)
+        return
+    with get_db_connection() as owned_connection:
+        owned_connection.execute(query, values)
+
+
+def get_usage_snapshot_since_charge(email: str, paid_at: str) -> dict[str, Any]:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT feature, quantity, metadata_json, created_at
+            FROM billing_usage_events
+            WHERE lower(email) = ? AND created_at >= ?
+            ORDER BY created_at ASC
+            """,
+            (normalized_email, compact_text(paid_at)),
+        ).fetchall()
+    counts: dict[str, int] = {}
+    estimated_cost = Decimal("0.00")
+    for row in rows:
+        feature = normalize_billing_plan_id(row["feature"])
+        counts[feature] = counts.get(feature, 0) + max(0, int(row["quantity"] or 0))
+        try:
+            metadata = json.loads(compact_text(row["metadata_json"], "{}"))
+        except json.JSONDecodeError:
+            metadata = {}
+        if isinstance(metadata, dict):
+            for key in ("estimated_ai_cost_zar", "estimated_cost_zar", "cost_zar"):
+                if metadata.get(key) is not None:
+                    estimated_cost += refund_money(metadata.get(key))
+                    break
+    total_events = sum(counts.values())
+    return {
+        "from_charge_at": compact_text(paid_at),
+        "captured_at": utc_now().isoformat(),
+        "features": counts,
+        "chats": int(counts.get("ai_chat", 0) + counts.get("study_chat", 0)),
+        "reports": int(counts.get("report", 0)),
+        "study_guides": int(counts.get("study_guide", 0)),
+        "flashcards": int(counts.get("flashcards", 0)),
+        "exams": int(counts.get("quiz", 0) + counts.get("practice_test", 0)),
+        "powerpoints": int(counts.get("presentation", 0)),
+        "podcasts": int(counts.get("podcast", 0)),
+        "transcriptions": int(counts.get("transcription", 0) + counts.get("video", 0)),
+        "total_paid_feature_events": total_events,
+        "estimated_ai_cost_since_charge": f"{estimated_cost:.2f}",
+    }
+
+
+def serialize_refund_request(row: Any) -> dict[str, Any]:
+    if not row:
+        return {}
+    try:
+        usage_snapshot = json.loads(compact_text(row["usage_snapshot_json"], "{}"))
+    except json.JSONDecodeError:
+        usage_snapshot = {}
+    return {
+        "id": row["id"],
+        "payment_id": row["payment_id"],
+        "pf_payment_id": row["pf_payment_id"],
+        "email": row["email"],
+        "original_amount": row["original_amount"],
+        "requested_amount": row["requested_amount"],
+        "approved_amount": row["approved_amount"],
+        "currency": row["currency"],
+        "billing_country_at_purchase": row["billing_country_at_purchase"] or "unknown",
+        "reason_code": row["reason_code"],
+        "reason_text": row["reason_text"],
+        "status": row["status"],
+        "eligibility_window_days": int(row["eligibility_window_days"] or 0),
+        "policy_type": row["policy_type"],
+        "eligibility_reason": row["eligibility_reason"],
+        "requested_at": row["requested_at"],
+        "approved_at": row["approved_at"],
+        "rejected_at": row["rejected_at"],
+        "processed_at": row["processed_at"],
+        "completed_at": row["completed_at"],
+        "provider_refund_reference": row["provider_refund_reference"],
+        "provider_status": row["provider_status"],
+        "provider_error": row["provider_error"],
+        "usage_snapshot": usage_snapshot,
+        "estimated_ai_cost_since_charge": row["estimated_ai_cost_since_charge"],
+        "automatic_or_manual": row["automatic_or_manual"],
+        "admin_user_id": row["admin_user_id"],
+        "admin_note": row["admin_note"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def list_refund_requests_for_user(email: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM refund_requests WHERE lower(email) = ? ORDER BY created_at DESC LIMIT 50",
+            (normalize_email(email),),
+        ).fetchall()
+    return [serialize_refund_request(row) for row in rows]
+
+
+def get_payment_refund_summary(payment_row: Any, *, now: datetime | None = None) -> dict[str, Any]:
+    if not payment_row:
+        return {"eligible": False, "status": "unavailable", "reason": "payment_not_found"}
+    usage_snapshot = get_usage_snapshot_since_charge(payment_row["email"], payment_row["paid_at"])
+    try:
+        eligibility = evaluate_refund_eligibility(
+            payment_status=payment_row["payment_status"],
+            paid_at=payment_row["paid_at"],
+            billing_country_at_purchase=payment_row["billing_country_at_purchase"],
+            original_amount=payment_row["amount_zar"],
+            refunded_amount=payment_row["refunded_amount_zar"],
+            chargeback_status=payment_row["chargeback_status"],
+            reason_code="accidental_purchase",
+            usage_snapshot=usage_snapshot,
+            now=now,
+            config=get_refund_policy_config(),
+        )
+    except ValueError:
+        eligibility = {"eligible": False, "status": "unavailable", "reason": "policy_error"}
+    with get_db_connection() as connection:
+        active = connection.execute(
+            """
+            SELECT id, status FROM refund_requests
+            WHERE payment_id = ? AND status NOT IN ('rejected', 'failed', 'cancelled', 'refunded')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (payment_row["id"],),
+        ).fetchone()
+    if active:
+        eligibility = {**eligibility, "eligible": False, "status": active["status"], "reason": "refund_request_exists", "refund_request_id": active["id"]}
+    return eligibility
+
+
 def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any]]:
     normalized_email = normalize_email(email)
     safe_limit = max(1, min(int(limit or 12), 50))
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, checkout_session_id, plan_id, provider, provider_payment_id,
-                   amount_zar, payment_status, paid_at, created_at, updated_at
+            SELECT id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                   amount_zar, payment_status, paid_at, created_at, updated_at,
+                   billing_country_at_purchase, currency, refunded_amount_zar,
+                   chargeback_status, provider_refund_status
             FROM billing_payments
-            WHERE email = ?
+            WHERE lower(email) = ?
             ORDER BY paid_at DESC
             LIMIT ?
             """,
             (normalized_email, safe_limit),
         ).fetchall()
-    return [
-        {
+    history = []
+    for row in rows:
+        history.append({
             "id": row["id"],
             "checkout_session_id": row["checkout_session_id"],
             "plan_id": normalize_billing_plan_id(row["plan_id"]),
             "provider": row["provider"],
             "provider_payment_id": row["provider_payment_id"],
             "amount_zar": row["amount_zar"],
+            "currency": row["currency"],
             "payment_status": row["payment_status"],
+            "billing_country_at_purchase": row["billing_country_at_purchase"] or "unknown",
+            "refunded_amount_zar": row["refunded_amount_zar"],
+            "provider_refund_status": row["provider_refund_status"],
             "paid_at": row["paid_at"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
+            "refund": get_payment_refund_summary(row),
+        })
+    return history
 
 
 def build_feature_permissions(usage: dict[str, Any]) -> dict[str, Any]:
@@ -18952,7 +19531,7 @@ def build_feature_permissions(usage: dict[str, Any]) -> dict[str, Any]:
 def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     now_iso = utc_now().isoformat()
-    subscription = get_user_subscription(normalized_email)
+    subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
     usage = get_billing_usage_summary(normalized_email)
     monthly_usage = get_monthly_usage_summary(normalized_email)
     payment_history = list_user_payment_history(normalized_email)
@@ -19409,9 +19988,10 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             """
             INSERT INTO billing_payments (
                 id, email, checkout_session_id, plan_id, provider, provider_payment_id,
-                amount_zar, payment_status, raw_event_json, paid_at, created_at, updated_at
+                amount_zar, payment_status, raw_event_json, billing_country_at_purchase,
+                currency, paid_at, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 email = excluded.email,
                 checkout_session_id = excluded.checkout_session_id,
@@ -19434,6 +20014,8 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 amount_gross,
                 next_status,
                 raw_event_json,
+                normalize_billing_country(session["billing_country_at_purchase"]),
+                "ZAR",
                 now_iso,
                 now_iso,
                 now_iso,
@@ -24070,6 +24652,17 @@ def auth_me(request: Request, response: Response, authorization: str | None = He
         payload["csrf_token"] = csrf_token
     response.headers["X-Auth-Cache"] = "hit" if cache_hit else "miss"
     response.headers["X-Auth-Time-Ms"] = str(auth_duration_ms)
+    threading.Thread(
+        target=record_diagnostic_event,
+        kwargs={
+            "event_type": "AUTH_ME_RESOLVED", "category": "authentication", "severity": "INFO",
+            "user_email": context["email"], "request_id": compact_text(getattr(request.state, "request_id", "")),
+            "endpoint": "/auth/me", "http_status": 200, "duration_ms": auth_duration_ms,
+            "safe_message": "Authenticated session restored without changing billing state.",
+            "metadata": {"session_mode": context["mode"], "token_refreshed": bool(refreshed_token), "session_cache_hit": cache_hit},
+        },
+        daemon=True,
+    ).start()
     return payload
 
 
@@ -24190,7 +24783,7 @@ async def update_ai_chat_mode_preference(
 @app.get("/api/billing/subscription")
 async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
     normalized_email = normalize_email(current_user)
-    subscription = get_user_subscription(normalized_email)
+    subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
     usage = get_billing_usage_summary(normalized_email)
     monthly_usage = get_monthly_usage_summary(normalized_email)
     payment_history = list_user_payment_history(normalized_email)
@@ -24209,6 +24802,7 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
             "last_synced_at": utc_now().isoformat(),
         },
         "subscription": subscription,
+        "entitlement": entitlement,
         "usage": usage,
         "monthly_usage": monthly_usage,
         "payment_history": payment_history,
@@ -24222,6 +24816,456 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
     }
 
 
+def send_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
+    settings = get_transactional_email_settings()
+    message = EmailMessage()
+    message["Subject"] = f"Mabaso AI refund update: {status_message}"
+    message["From"] = settings["from_email"]
+    message["To"] = email
+    message.set_content(
+        "Hello,\n\n"
+        f"Your Mabaso AI refund request for payment {compact_text(refund.get('payment_id'))} is now: {status_message}.\n\n"
+        f"Amount requested: R{compact_text(refund.get('requested_amount'), '0.00')}\n"
+        f"Status: {compact_text(refund.get('status'), 'unknown')}\n\n"
+        "Your chats, saved materials, documents, and account are not deleted by a cancellation or refund.\n\n"
+        "Mabaso AI"
+    )
+    send_transactional_message(message)
+
+
+async def deliver_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
+    try:
+        await asyncio.to_thread(send_refund_status_email, email, refund, status_message)
+    except Exception as exc:
+        logger.warning("Refund status email failed request=%s error=%s", compact_text(refund.get("id")), safe_email_delivery_error(exc))
+
+
+def _extract_payfast_refund_query(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        response = data.get("response")
+        if isinstance(response, dict):
+            return response
+        return data
+    return payload
+
+
+def _load_refund_request(refund_id: str, *, connection: Any | None = None) -> Any:
+    query = "SELECT * FROM refund_requests WHERE id = ?"
+    if connection is not None:
+        return connection.execute(query, (compact_text(refund_id),)).fetchone()
+    with get_db_connection() as owned_connection:
+        return owned_connection.execute(query, (compact_text(refund_id),)).fetchone()
+
+
+@app.get("/billing/refund-policy")
+def get_refund_policy(
+    payment_id: str = Query(default=""),
+    current_user: str = Depends(require_authenticated_user),
+):
+    config = get_refund_policy_config()
+    base = {
+        "za_window_days": config.za_window_days,
+        "default_window_days": config.default_window_days,
+        "country_overrides": config.country_overrides,
+        "za_policy_type": "company_goodwill_policy",
+        "legal_notice": "Applicable mandatory consumer rights can override Mabaso AI's goodwill window.",
+    }
+    if not compact_text(payment_id):
+        return base
+    with get_db_connection() as connection:
+        payment = connection.execute(
+            "SELECT * FROM billing_payments WHERE id = ? AND lower(email) = ?",
+            (compact_text(payment_id), normalize_email(current_user)),
+        ).fetchone()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    return {**base, "payment": get_payment_refund_summary(payment)}
+
+
+@app.get("/billing/payments")
+def get_customer_payments(current_user: str = Depends(require_authenticated_user)):
+    return {"payments": list_user_payment_history(current_user, limit=50)}
+
+
+@app.get("/billing/refund-requests/me")
+def get_customer_refund_requests(current_user: str = Depends(require_authenticated_user)):
+    return {"refund_requests": list_refund_requests_for_user(current_user)}
+
+
+@app.post("/billing/refund-requests")
+def create_customer_refund_request(
+    payload: RefundRequestCreate,
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(require_authenticated_user),
+):
+    email = normalize_email(current_user)
+    payment_id = compact_text(payload.payment_id)
+    reason_code = compact_text(payload.reason_code).lower()
+    if reason_code not in REFUND_REASON_CODES:
+        raise HTTPException(status_code=400, detail="Select a valid refund reason.")
+    reason_text = compact_text(payload.reason_text)[:1000]
+    with get_db_connection() as connection:
+        payment = connection.execute(
+            "SELECT * FROM billing_payments WHERE id = ? AND lower(email) = ?",
+            (payment_id, email),
+        ).fetchone()
+        user = connection.execute("SELECT user_id FROM users WHERE lower(email) = ?", (email,)).fetchone()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    usage_snapshot = get_usage_snapshot_since_charge(email, payment["paid_at"])
+    try:
+        eligibility = evaluate_refund_eligibility(
+            payment_status=payment["payment_status"],
+            paid_at=payment["paid_at"],
+            billing_country_at_purchase=payment["billing_country_at_purchase"],
+            original_amount=payment["amount_zar"],
+            refunded_amount=payment["refunded_amount_zar"],
+            chargeback_status=payment["chargeback_status"],
+            reason_code=reason_code,
+            usage_snapshot=usage_snapshot,
+            config=get_refund_policy_config(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    remaining = compact_text(eligibility.get("remaining_refundable_amount"), "0.00")
+    now_iso = utc_now().isoformat()
+    refund_id = uuid4().hex
+    idempotency_key = hashlib.sha256(f"refund:{email}:{payment_id}".encode("utf-8")).hexdigest()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute("SELECT * FROM refund_requests WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+        if existing:
+            serialized = serialize_refund_request(existing)
+            return {"message": "This payment already has a refund request.", "refund_request": serialized, "idempotent": True}
+        subscription = connection.execute(
+            "SELECT provider_token FROM billing_subscriptions WHERE lower(email) = ?",
+            (email,),
+        ).fetchone()
+        connection.execute(
+            """
+            INSERT INTO refund_requests (
+                id, user_id, email, payment_id, pf_payment_id, subscription_id, provider_token,
+                original_amount, requested_amount, approved_amount, currency,
+                billing_country_at_purchase, reason_code, reason_text, status,
+                eligibility_window_days, policy_type, eligibility_reason, requested_at,
+                usage_snapshot_json, estimated_ai_cost_since_charge, automatic_or_manual,
+                idempotency_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                refund_id,
+                compact_text(user["user_id"] if user else ""),
+                email,
+                payment_id,
+                compact_text(payment["provider_payment_id"]),
+                compact_text(payment["checkout_session_id"]),
+                compact_text(subscription["provider_token"] if subscription else ""),
+                compact_text(payment["amount_zar"], "0.00"),
+                remaining,
+                "0.00",
+                compact_text(payment["currency"], "ZAR"),
+                normalize_billing_country(payment["billing_country_at_purchase"]),
+                reason_code,
+                reason_text,
+                eligibility["status"],
+                int(eligibility.get("eligibility_window_days") or 0),
+                compact_text(eligibility.get("policy_type"), "company_goodwill_policy"),
+                compact_text(eligibility.get("reason")),
+                now_iso,
+                json.dumps(usage_snapshot, ensure_ascii=False),
+                compact_text(usage_snapshot.get("estimated_ai_cost_since_charge"), "0.00"),
+                compact_text(eligibility.get("automatic_or_manual"), "manual"),
+                idempotency_key,
+                now_iso,
+                now_iso,
+            ),
+        )
+        record_refund_audit(
+            refund_id,
+            payment_id,
+            "refund.requested",
+            actor_email=email,
+            actor_type="customer",
+            metadata={"status": eligibility["status"], "reason_code": reason_code},
+            connection=connection,
+        )
+        created = _load_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(created)
+    background_tasks.add_task(deliver_refund_status_email, email, serialized, "request received")
+    return {"message": "Refund request received.", "refund_request": serialized, "idempotent": False}
+
+
+@app.post("/billing/subscription/cancel")
+def cancel_customer_subscription(
+    payload: SubscriptionCancelRequest,
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(require_authenticated_user),
+):
+    email = normalize_email(current_user)
+    with get_db_connection() as connection:
+        subscription = connection.execute("SELECT * FROM billing_subscriptions WHERE lower(email) = ?", (email,)).fetchone()
+    if not subscription or compact_text(subscription["status"]).lower() != "active":
+        raise HTTPException(status_code=409, detail="There is no active paid subscription to cancel.")
+    token = compact_text(subscription["provider_token"])
+    if compact_text(subscription["provider"]).lower() == "payfast":
+        if not token:
+            raise HTTPException(status_code=409, detail="The PayFast subscription token is missing. Support has been notified.")
+        try:
+            provider_result = get_payfast_api_client().cancel_subscription(token)
+        except PayFastApiError as exc:
+            logger.warning("PayFast cancellation failed email=%s error=%s", email, str(exc))
+            raise HTTPException(status_code=exc.status_code, detail="PayFast could not cancel the recurring subscription. No cancellation was recorded; please retry or contact support.") from exc
+    else:
+        provider_result = {"status": "not_recurring", "data": {"response": True}}
+    now_iso = utc_now().isoformat()
+    cancel_at = compact_text(subscription["current_period_end"], now_iso)
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE billing_subscriptions SET status = 'cancel_at_period_end', cancel_at = ?, updated_at = ? WHERE lower(email) = ?",
+            (cancel_at, now_iso, email),
+        )
+        connection.execute(
+            "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (uuid4().hex, email, "", compact_text(subscription["provider"], "system"), "SUBSCRIPTION_CANCELLED", json.dumps({"cancel_at": cancel_at, "reason": compact_text(payload.reason)[:300], "provider_status": compact_text(provider_result.get("status"))}, ensure_ascii=False), now_iso),
+        )
+    return {"message": "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.", "cancel_at": cancel_at}
+
+
+@app.get("/admin/refunds")
+def list_admin_refunds(
+    status: str = Query(default=""),
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_status = compact_text(status).lower()
+    with get_db_connection() as connection:
+        if normalized_status:
+            rows = connection.execute("SELECT * FROM refund_requests WHERE status = ? ORDER BY created_at DESC LIMIT 200", (normalized_status,)).fetchall()
+        else:
+            rows = connection.execute("SELECT * FROM refund_requests ORDER BY created_at DESC LIMIT 200").fetchall()
+    return {"refunds": [serialize_refund_request(row) for row in rows]}
+
+
+@app.post("/admin/refunds/{refund_id}/reject")
+def reject_admin_refund(
+    refund_id: str,
+    payload: RefundAdminDecision,
+    background_tasks: BackgroundTasks,
+    current_admin: str = Depends(require_admin_user),
+):
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _load_refund_request(refund_id, connection=connection)
+        if not row:
+            raise HTTPException(status_code=404, detail="Refund request not found.")
+        if compact_text(row["status"]).lower() in {"processing", "provider_accepted", "refunded"}:
+            raise HTTPException(status_code=409, detail="This refund can no longer be rejected.")
+        connection.execute(
+            "UPDATE refund_requests SET status = 'rejected', rejected_at = ?, admin_user_id = ?, admin_note = ?, updated_at = ? WHERE id = ?",
+            (now_iso, normalize_email(current_admin), compact_text(payload.admin_note)[:1000], now_iso, refund_id),
+        )
+        record_refund_audit(refund_id, row["payment_id"], "refund.rejected", actor_email=current_admin, actor_type="admin", metadata={"note_present": bool(compact_text(payload.admin_note))}, connection=connection)
+        updated = _load_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated)
+    background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "rejected")
+    return {"message": "Refund request rejected.", "refund_request": serialized}
+
+
+@app.post("/admin/refunds/{refund_id}/approve")
+def approve_admin_refund(
+    refund_id: str,
+    payload: RefundAdminDecision,
+    background_tasks: BackgroundTasks,
+    current_admin: str = Depends(require_admin_user),
+):
+    admin_email = normalize_email(current_admin)
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _load_refund_request(refund_id, connection=connection)
+        if not row:
+            raise HTTPException(status_code=404, detail="Refund request not found.")
+        current_status = compact_text(row["status"]).lower()
+        if current_status in {"processing", "provider_accepted", "refunded"}:
+            return {"message": "This refund is already being processed.", "refund_request": serialize_refund_request(row), "idempotent": True}
+        if current_status in {"rejected", "cancelled", "failed"}:
+            raise HTTPException(status_code=409, detail=f"This refund request is {current_status}.")
+        cursor = connection.execute(
+            "UPDATE refund_requests SET status = 'processing', approved_at = ?, processed_at = ?, approved_amount = requested_amount, admin_user_id = ?, admin_note = ?, updated_at = ? WHERE id = ? AND status = ?",
+            (now_iso, now_iso, admin_email, compact_text(payload.admin_note)[:1000], now_iso, refund_id, current_status),
+        )
+        if int(cursor.rowcount or 0) != 1:
+            raise HTTPException(status_code=409, detail="Another administrator is already processing this refund.")
+        payment = connection.execute("SELECT * FROM billing_payments WHERE id = ? AND lower(email) = ?", (row["payment_id"], normalize_email(row["email"]))).fetchone()
+        subscription = connection.execute("SELECT * FROM billing_subscriptions WHERE lower(email) = ?", (normalize_email(row["email"]),)).fetchone()
+        record_refund_audit(refund_id, row["payment_id"], "refund.approved", actor_email=admin_email, actor_type="admin", metadata={}, connection=connection)
+    if not payment:
+        raise HTTPException(status_code=404, detail="The original payment no longer exists.")
+    payment_id = compact_text(payment["provider_payment_id"])
+    if not payment_id:
+        with get_db_connection() as connection:
+            connection.execute("UPDATE refund_requests SET status = 'manual_review', provider_error = ?, updated_at = ? WHERE id = ?", ("PayFast payment ID missing", utc_now().isoformat(), refund_id))
+        raise HTTPException(status_code=409, detail="This payment requires manual review because its PayFast transaction ID is missing.")
+    client = get_payfast_api_client()
+    try:
+        query_payload = client.query_refund(payment_id)
+        query = _extract_payfast_refund_query(query_payload)
+        available_cents = max(0, int(query.get("amount_available_for_refund") or 0))
+        requested_cents = int(refund_money(row["requested_amount"]) * 100)
+        if compact_text(query.get("status")).upper() != "REFUNDABLE" or available_cents <= 0:
+            raise PayFastApiError("PayFast reports that this payment is not refundable.", status_code=409, safe_payload=query)
+        amount_cents = min(requested_cents, available_cents)
+        is_full_refund = amount_cents >= int(refund_money(payment["amount_zar"]) * 100)
+        refund_method = compact_text((query.get("refund_full") if is_full_refund else query.get("refund_partial") or {}).get("method")).upper()
+        if refund_method == "BANK_PAYOUT" and not payload.bank_details:
+            with get_db_connection() as connection:
+                connection.execute("UPDATE refund_requests SET status = 'manual_review', provider_status = 'bank_details_required', provider_response_json = ?, updated_at = ? WHERE id = ?", (json.dumps({"status": query.get("status"), "refund_method": refund_method}, ensure_ascii=False), utc_now().isoformat(), refund_id))
+                record_refund_audit(refund_id, row["payment_id"], "refund.bank_details_required", actor_email=admin_email, actor_type="admin", metadata={"refund_method": refund_method}, connection=connection)
+            raise HTTPException(status_code=409, detail="PayFast requires bank payout details for this refund. Collect only the fields shown in the PayFast refund query, then approve again.")
+        if is_full_refund and subscription and compact_text(subscription["status"]).lower() in {"active", "cancel_at_period_end"} and compact_text(subscription["provider"]).lower() == "payfast":
+            token = compact_text(subscription["provider_token"])
+            if token:
+                client.cancel_subscription(token)
+        provider_payload = client.create_refund(
+            payment_id,
+            amount_cents=amount_cents,
+            reason=compact_text(row["reason_text"], row["reason_code"]),
+            bank_details=payload.bank_details,
+        )
+    except PayFastApiError as exc:
+        logger.warning("PayFast refund failed request=%s error=%s", refund_id, str(exc))
+        with get_db_connection() as connection:
+            connection.execute("UPDATE refund_requests SET status = 'failed', provider_status = 'failed', provider_error = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (str(exc)[:300], json.dumps(exc.safe_payload, ensure_ascii=False), utc_now().isoformat(), refund_id))
+            record_refund_audit(refund_id, row["payment_id"], "refund.provider_failed", actor_email=admin_email, actor_type="admin", metadata={"error": str(exc)[:200]}, connection=connection)
+        raise HTTPException(status_code=exc.status_code, detail=f"PayFast refund failed: {str(exc)}") from exc
+    provider_data = _extract_payfast_refund_query(provider_payload)
+    provider_reference = compact_text(provider_data.get("refund_id") or provider_data.get("reference") or payment_id)
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE refund_requests SET status = 'provider_accepted', provider_status = 'accepted', provider_refund_reference = ?, provider_response_json = ?, provider_error = '', updated_at = ? WHERE id = ?",
+            (provider_reference, json.dumps(provider_payload, ensure_ascii=False), utc_now().isoformat(), refund_id),
+        )
+        record_refund_audit(refund_id, row["payment_id"], "refund.provider_accepted", actor_email=admin_email, actor_type="admin", metadata={"provider_reference": provider_reference}, connection=connection)
+        updated = _load_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated)
+    background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "submitted to PayFast")
+    return {"message": "Refund submitted to PayFast. Completion will be confirmed separately.", "refund_request": serialized}
+
+
+@app.post("/admin/refunds/{refund_id}/refresh")
+def refresh_admin_refund(
+    refund_id: str,
+    background_tasks: BackgroundTasks,
+    current_admin: str = Depends(require_admin_user),
+):
+    row = _load_refund_request(refund_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Refund request not found.")
+    if compact_text(row["status"]).lower() == "refunded":
+        return {"message": "Refund already completed.", "refund_request": serialize_refund_request(row), "idempotent": True}
+    payment_id = compact_text(row["pf_payment_id"])
+    if not payment_id:
+        raise HTTPException(status_code=409, detail="PayFast payment ID is missing.")
+    try:
+        query_payload = get_payfast_api_client().query_refund(payment_id)
+    except PayFastApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=f"Could not refresh PayFast refund status: {str(exc)}") from exc
+    query = _extract_payfast_refund_query(query_payload)
+    status = compact_text(query.get("status")).upper()
+    completed = status == "COMPLETED" or int(query.get("amount_available_for_refund") or 0) == 0
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        if completed:
+            connection.execute("UPDATE refund_requests SET status = 'refunded', provider_status = 'completed', completed_at = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (now_iso, json.dumps(query_payload, ensure_ascii=False), now_iso, refund_id))
+            connection.execute("UPDATE billing_payments SET refunded_amount_zar = ?, provider_refund_status = 'refunded', updated_at = ? WHERE id = ?", (row["approved_amount"], now_iso, row["payment_id"]))
+            subscription = connection.execute("SELECT provider_payment_id FROM billing_subscriptions WHERE lower(email) = ?", (normalize_email(row["email"]),)).fetchone()
+            if subscription and compact_text(subscription["provider_payment_id"]) == payment_id:
+                connection.execute("UPDATE billing_subscriptions SET status = 'refunded', cancel_at = ?, updated_at = ? WHERE lower(email) = ?", (now_iso, now_iso, normalize_email(row["email"])))
+            record_refund_audit(refund_id, row["payment_id"], "refund.completed", actor_email=current_admin, actor_type="admin", metadata={}, connection=connection)
+        else:
+            connection.execute("UPDATE refund_requests SET provider_status = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (compact_text(query.get("status"), "pending").lower(), json.dumps(query_payload, ensure_ascii=False), now_iso, refund_id))
+        updated = _load_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated)
+    if completed:
+        sync_user_account_snapshot(serialized["email"])
+        background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "completed")
+    return {"message": "Refund completed." if completed else "Refund is still being processed by PayFast.", "refund_request": serialized}
+
+
+@app.post("/api/billing/trial/start")
+def start_free_trial(
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    email = normalize_email(current_user)
+    now = utc_now()
+    now_iso = now.isoformat()
+    trial_end = (now + timedelta(days=FREE_TRIAL_DAYS)).isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+            (email, now_iso, uuid4().hex, now_iso),
+        )
+        user = connection.execute(
+            "SELECT trial_status, trial_started_at, trial_ends_at, trial_used_at FROM users WHERE lower(email) = ?",
+            (email,),
+        ).fetchone()
+        paid = connection.execute(
+            "SELECT status, current_period_end FROM billing_subscriptions WHERE lower(email) = ?",
+            (email,),
+        ).fetchone()
+        paid_end = parse_billing_datetime(paid["current_period_end"]) if paid else None
+        if paid and compact_text(paid["status"]).lower() == "active" and paid_end and paid_end > now:
+            raise HTTPException(status_code=409, detail="Your paid subscription is already active.")
+        existing_end = parse_billing_datetime(user["trial_ends_at"]) if user else None
+        already_active = bool(
+            user
+            and compact_text(user["trial_status"]).lower() == "active"
+            and existing_end
+            and existing_end > now
+        )
+        if already_active:
+            pass
+        if user and compact_text(user["trial_used_at"]):
+            if not already_active:
+                raise HTTPException(status_code=409, detail="This account has already used its free trial.")
+        if not already_active:
+            connection.execute(
+                """
+                UPDATE users SET trial_status = 'active', trial_started_at = ?, trial_ends_at = ?,
+                    trial_used_at = ?, updated_at = ? WHERE lower(email) = ?
+                """,
+                (now_iso, trial_end, now_iso, now_iso, email),
+            )
+    entitlement = resolve_entitlement(email, now=now)
+    if already_active:
+        return {"message": "Your free trial is already active.", "entitlement": entitlement, "idempotent": True}
+    logger.info("Trial activation user=%s entitlement=%s reason=%s ends_at=%s", email, entitlement["entitlement"], entitlement["reason"], trial_end)
+    record_audit_log(action="billing.trial.started", email=email, request=request, resource_type="billing_trial", resource_name=FREE_TRIAL_PLAN_ID, metadata={"trial_days": FREE_TRIAL_DAYS, "trial_ends_at": trial_end})
+    record_diagnostic_event(
+        event_type="TRIAL_ACTIVATED", category="trial", severity="INFO", user_email=email,
+        request_id=compact_text(getattr(request.state, "request_id", "")), endpoint="/api/billing/trial/start",
+        http_status=200, safe_message="Free trial activated and entitlement recalculated.",
+        metadata={"old_entitlement": "free", "new_entitlement": entitlement.get("entitlement"), "reason": entitlement.get("reason"), "trial_ends_at": trial_end},
+    )
+    return {"message": f"Your {FREE_TRIAL_DAYS}-day Pro trial is active.", "entitlement": entitlement, "idempotent": False}
+
+
+@app.get("/admin/billing/entitlements/{user_email}")
+def diagnose_user_entitlement(user_email: str, current_admin: str = Depends(require_admin_user)):
+    email = validate_email_address(user_email)
+    with get_db_connection() as connection:
+        user = connection.execute(
+            "SELECT current_plan_id, subscription_status, trial_status, trial_started_at, trial_ends_at, trial_used_at FROM users WHERE lower(email) = ?",
+            (email,),
+        ).fetchone()
+    return {"user": dict(user) if user else None, "effective": resolve_entitlement(email)}
+
+
 @app.post("/api/billing/checkout")
 async def create_billing_checkout(
     payload: BillingCheckoutRequest,
@@ -24232,6 +25276,13 @@ async def create_billing_checkout(
     email = normalize_email(current_user)
     plan = get_billing_plan(payload.plan_id)
     is_trial = bool(payload.trial)
+    billing_country = normalize_billing_country(payload.billing_country)
+    if compact_text(payload.billing_country) and not billing_country:
+        raise HTTPException(status_code=400, detail="Billing country must be a two-letter country code.")
+    if not billing_country:
+        with get_db_connection() as connection:
+            country_row = connection.execute("SELECT billing_country FROM users WHERE lower(email) = ?", (email,)).fetchone()
+        billing_country = normalize_billing_country(country_row["billing_country"] if country_row else "")
     require_payfast_configured(require_subscription=is_trial)
     if is_trial:
         ensure_payfast_trial_eligible(email, plan["id"])
@@ -24249,9 +25300,9 @@ async def create_billing_checkout(
             """
             INSERT INTO billing_checkout_sessions (
                 id, email, plan_id, amount_zar, provider, status,
-                checkout_fields_json, created_at, updated_at
+                checkout_fields_json, billing_country_at_purchase, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 checkout_id,
@@ -24261,6 +25312,7 @@ async def create_billing_checkout(
                 "payfast",
                 "pending",
                 json.dumps(fields, ensure_ascii=False),
+                billing_country,
                 now_iso,
                 now_iso,
             ),
@@ -24882,6 +25934,345 @@ async def save_lecture_timetable(
         metadata={"entries": len(lecture_timetable.get("entries") or [])},
     )
     return {"lecture_timetable": lecture_timetable}
+
+
+def _diagnostic_row_dict(row: Any) -> dict[str, Any]:
+    if not row:
+        return {}
+    return {key: row[key] for key in row.keys()}
+
+
+def _safe_diagnostic_metadata(value: Any) -> dict[str, Any]:
+    metadata = safe_json_loads(value, {})
+    if not isinstance(metadata, dict):
+        return {}
+    blocked = {"password", "token", "authorization", "cookie", "secret", "api_key", "merchant_key", "passphrase", "access_token", "refresh_token"}
+    return {str(key): item for key, item in metadata.items() if str(key).lower() not in blocked}
+
+
+def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
+    normalized_email = normalize_email(target_email)
+    with get_db_connection() as connection:
+        user_row = connection.execute(
+            """
+            SELECT email, user_id, role, current_plan_id, subscription_status, verified_at,
+                   subscription_start_at, subscription_end_at, trial_status,
+                   trial_started_at, trial_ends_at, trial_used_at, billing_country,
+                   usage_reset_at, last_login_at, created_at, updated_at
+            FROM users WHERE lower(email) = lower(?)
+            """,
+            (normalized_email,),
+        ).fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User not found.")
+        account_state = connection.execute(
+            "SELECT status, updated_at, updated_by FROM user_account_states WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+        sessions = connection.execute(
+            """
+            SELECT session_id, login_at, last_activity_at, expires_at, status, country, city
+            FROM active_sessions WHERE lower(email) = lower(?)
+            ORDER BY last_activity_at DESC LIMIT 12
+            """,
+            (normalized_email,),
+        ).fetchall()
+        audit_rows = connection.execute(
+            """
+            SELECT id, action, resource_type, resource_name, duration_ms, status,
+                   metadata_json, created_at
+            FROM audit_logs WHERE lower(email) = lower(?)
+            ORDER BY created_at DESC LIMIT 80
+            """,
+            (normalized_email,),
+        ).fetchall()
+        diagnostic_rows = connection.execute(
+            """
+            SELECT id, trace_id, request_id, category, event_type, severity,
+                   endpoint, http_status, duration_ms, safe_message, metadata_json, created_at
+            FROM diagnostic_events WHERE lower(user_email) = lower(?)
+            ORDER BY created_at DESC LIMIT 100
+            """,
+            (normalized_email,),
+        ).fetchall()
+        billing_events = connection.execute(
+            """
+            SELECT id, checkout_session_id, provider, event_type, payload_json, created_at
+            FROM billing_events WHERE lower(email) = lower(?)
+            ORDER BY created_at DESC LIMIT 60
+            """,
+            (normalized_email,),
+        ).fetchall()
+        refunds = connection.execute(
+            """
+            SELECT id, payment_id, pf_payment_id, original_amount, requested_amount,
+                   approved_amount, currency, billing_country_at_purchase, reason_code,
+                   status, eligibility_window_days, policy_type, eligibility_reason,
+                   requested_at, processed_at, completed_at, provider_status,
+                   provider_error, automatic_or_manual, admin_note, updated_at
+            FROM refund_requests WHERE lower(email) = lower(?)
+            ORDER BY created_at DESC LIMIT 30
+            """,
+            (normalized_email,),
+        ).fetchall()
+        generations = connection.execute(
+            """
+            SELECT generation_id, conversation_id, request_id, status, activity_type,
+                   has_unseen_response, started_at, updated_at, completed_at, error_code
+            FROM assistant_generation_states WHERE lower(user_email) = lower(?)
+            ORDER BY updated_at DESC LIMIT 40
+            """,
+            (normalized_email,),
+        ).fetchall()
+
+    user = _diagnostic_row_dict(user_row)
+    entitlement = resolve_entitlement(normalized_email)
+    subscription = get_user_subscription(normalized_email)
+    usage = get_billing_usage_summary(normalized_email)
+    permissions = build_feature_permissions(usage)
+    payments = list_user_payment_history(normalized_email, limit=30)
+    latest_payment = payments[0] if payments else None
+    trial_end = parse_billing_datetime(user.get("trial_ends_at"))
+    now = utc_now()
+    trial_remaining_seconds = max(0, int((trial_end - now).total_seconds())) if trial_end else 0
+    database_plan = compact_text(user.get("current_plan_id"), "free")
+    database_subscription = compact_text(user.get("subscription_status"), "free")
+    mismatch_reasons: list[str] = []
+    if entitlement.get("trial_active") and entitlement.get("entitlement") != "trial":
+        mismatch_reasons.append("Active trial did not resolve to the Trial entitlement.")
+    if entitlement.get("subscription_active") and entitlement.get("entitlement") == "free":
+        mismatch_reasons.append("An active subscription resolved to Free.")
+    if usage.get("plan_id") != entitlement.get("quota_profile"):
+        mismatch_reasons.append("The quota profile does not match the entitlement resolver.")
+    if database_plan not in {"", "free", entitlement.get("plan_id")} and not entitlement.get("subscription_active"):
+        mismatch_reasons.append("The stored database plan differs from current effective access.")
+
+    timeline: list[dict[str, Any]] = []
+    for row in audit_rows:
+        item = _diagnostic_row_dict(row)
+        timeline.append({
+            "id": item.get("id"), "source": "audit", "category": item.get("resource_type") or "application",
+            "event_type": item.get("action"), "severity": "INFO" if item.get("status") == "success" else "ERROR",
+            "status": item.get("status"), "message": item.get("resource_name"),
+            "request_id": _safe_diagnostic_metadata(item.get("metadata_json")).get("request_id", ""),
+            "metadata": _safe_diagnostic_metadata(item.get("metadata_json")), "created_at": item.get("created_at"),
+        })
+    for row in diagnostic_rows:
+        item = _diagnostic_row_dict(row)
+        timeline.append({
+            "id": item.get("id"), "source": "diagnostic", "category": item.get("category"),
+            "event_type": item.get("event_type"), "severity": item.get("severity"),
+            "status": item.get("http_status") or "", "message": item.get("safe_message"),
+            "request_id": item.get("request_id"), "trace_id": item.get("trace_id"),
+            "metadata": _safe_diagnostic_metadata(item.get("metadata_json")), "created_at": item.get("created_at"),
+        })
+    for row in billing_events:
+        item = _diagnostic_row_dict(row)
+        timeline.append({
+            "id": item.get("id"), "source": "billing", "category": "billing",
+            "event_type": item.get("event_type"), "severity": "INFO", "status": "recorded",
+            "message": item.get("provider"), "metadata": _safe_diagnostic_metadata(item.get("payload_json")),
+            "created_at": item.get("created_at"),
+        })
+    timeline.sort(key=lambda item: compact_text(item.get("created_at")), reverse=True)
+
+    return {
+        "account": {
+            **user,
+            "account_status": account_state["status"] if account_state else "active",
+            "google_auth_status": "linked" if user.get("verified_at") or user.get("last_login_at") else "not_confirmed",
+        },
+        "entitlement": entitlement,
+        "entitlement_trace": [
+            {"step": "active_expert_subscription", "matched": bool(entitlement.get("subscription_active") and entitlement.get("entitlement") == "expert")},
+            {"step": "active_pro_subscription", "matched": bool(entitlement.get("subscription_active") and entitlement.get("entitlement") == "pro")},
+            {"step": "active_free_trial", "matched": bool(entitlement.get("trial_active"))},
+            {"step": "free_fallback", "matched": entitlement.get("entitlement") == "free"},
+        ],
+        "subscription": subscription,
+        "trial": {
+            "status": user.get("trial_status"), "eligible": user.get("trial_status") == "eligible" and not user.get("trial_used_at"),
+            "used": bool(user.get("trial_used_at")), "started_at": user.get("trial_started_at"),
+            "ends_at": user.get("trial_ends_at"), "expired": bool(trial_end and trial_end <= now),
+            "remaining_seconds": trial_remaining_seconds,
+        },
+        "usage": usage,
+        "feature_access": permissions,
+        "payments": payments,
+        "latest_payment": latest_payment,
+        "refunds": [_diagnostic_row_dict(row) for row in refunds],
+        "sessions": [_diagnostic_row_dict(row) for row in sessions],
+        "generations": [_diagnostic_row_dict(row) for row in generations],
+        "state_comparison": {
+            "database_plan": database_plan,
+            "database_subscription": database_subscription,
+            "trial_status": user.get("trial_status"),
+            "resolved_entitlement": entitlement.get("entitlement"),
+            "quota_profile": usage.get("plan_id"),
+            "provider_status": subscription.get("status"),
+            "mismatch_detected": bool(mismatch_reasons),
+            "mismatch_reasons": mismatch_reasons,
+        },
+        "timeline": timeline[:140],
+    }
+
+
+def build_admin_diagnostics_overview() -> dict[str, Any]:
+    started_at = time.perf_counter()
+    now = utc_now()
+    retention_days = max(7, get_early_int_env("DIAGNOSTIC_RETENTION_DAYS", 30))
+    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    with get_db_connection() as connection:
+        connection.execute("DELETE FROM diagnostic_events WHERE created_at < ?", (cutoff,))
+        event_rows = connection.execute(
+            """
+            SELECT id, trace_id, request_id, user_email, category, event_type, severity,
+                   endpoint, http_status, duration_ms, safe_message, metadata_json, created_at
+            FROM diagnostic_events ORDER BY created_at DESC LIMIT 200
+            """
+        ).fetchall()
+        counts = connection.execute(
+            """
+            SELECT severity, COUNT(*) AS total FROM diagnostic_events
+            WHERE created_at >= ? GROUP BY severity
+            """,
+            ((now - timedelta(days=1)).isoformat(),),
+        ).fetchall()
+        trial_rows = connection.execute(
+            "SELECT trial_status, COUNT(*) AS total FROM users GROUP BY trial_status"
+        ).fetchall()
+        refund_rows = connection.execute(
+            "SELECT status, COUNT(*) AS total FROM refund_requests GROUP BY status"
+        ).fetchall()
+        generation_rows = connection.execute(
+            "SELECT status, COUNT(*) AS total FROM assistant_generation_states GROUP BY status"
+        ).fetchall()
+        active_paid = connection.execute(
+            "SELECT COUNT(*) AS total FROM billing_subscriptions WHERE status = 'active'"
+        ).fetchone()
+    db_latency_ms = int((time.perf_counter() - started_at) * 1000)
+    events = []
+    for row in event_rows:
+        item = _diagnostic_row_dict(row)
+        item["metadata"] = _safe_diagnostic_metadata(item.pop("metadata_json", "{}"))
+        events.append(item)
+    return {
+        "generated_at": now.isoformat(),
+        "retention_days": retention_days,
+        "counts_24h": {row["severity"]: int(row["total"] or 0) for row in counts},
+        "trial_counts": {row["trial_status"]: int(row["total"] or 0) for row in trial_rows},
+        "refund_counts": {row["status"]: int(row["total"] or 0) for row in refund_rows},
+        "generation_counts": {row["status"]: int(row["total"] or 0) for row in generation_rows},
+        "active_paid_subscriptions": int(active_paid["total"] or 0) if active_paid else 0,
+        "recent_events": events,
+        "system_health": {
+            "backend": "online", "database": "connected", "database_latency_ms": db_latency_ms,
+            "database_backend": DATABASE_BACKEND, "environment": compact_text(os.getenv("APP_ENV"), "production" if is_production_environment() else "development"),
+        },
+        "deployment": {
+            "backend_commit": compact_text(os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT"), "unknown")[:80],
+            "frontend_commit": compact_text(os.getenv("VITE_GIT_COMMIT"), "reported by frontend build")[:80],
+            "service_id": compact_text(os.getenv("RENDER_SERVICE_ID"), "")[:120],
+            "app_public_url": compact_text(APP_PUBLIC_URL)[:240],
+        },
+        "environment_checks": {
+            "DATABASE_URL": bool(DATABASE_URL), "APP_SECRET": bool(os.getenv("APP_SECRET")),
+            "PAYFAST_MERCHANT_ID": bool(PAYFAST_MERCHANT_ID), "PAYFAST_MERCHANT_KEY": bool(PAYFAST_MERCHANT_KEY),
+            "PAYFAST_PASSPHRASE": bool(PAYFAST_PASSPHRASE), "APP_PUBLIC_URL": bool(APP_PUBLIC_URL),
+            "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+            "EMAIL_PROVIDER": bool(os.getenv("BREVO_API_KEY") or os.getenv("SMTP_HOST")),
+        },
+    }
+
+
+@app.get("/admin/diagnostics/overview")
+def get_admin_diagnostics_overview(request: Request, current_admin: str = Depends(require_admin_user)):
+    snapshot = build_admin_diagnostics_overview()
+    record_audit_log(action="admin.diagnostics.view", email=current_admin, request=request, resource_type="admin", resource_name="diagnostics")
+    return snapshot
+
+
+@app.get("/admin/diagnostics/users/search")
+def search_admin_diagnostic_users(
+    q: str = Query(default="", max_length=180),
+    limit: int = Query(default=20, ge=1, le=50),
+    current_admin: str = Depends(require_admin_user),
+):
+    query = compact_text(q).lower()
+    pattern = f"%{query}%"
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT email, user_id, role, current_plan_id, subscription_status,
+                   trial_status, last_login_at, created_at
+            FROM users
+            WHERE ? = '' OR lower(email) LIKE ? OR lower(user_id) LIKE ?
+            ORDER BY COALESCE(NULLIF(last_login_at, ''), created_at) DESC LIMIT ?
+            """,
+            (query, pattern, pattern, limit),
+        ).fetchall()
+    return {"users": [_diagnostic_row_dict(row) for row in rows]}
+
+
+@app.get("/admin/diagnostics/users/{target_email}")
+def get_admin_user_diagnostics(target_email: str, request: Request, current_admin: str = Depends(require_admin_user)):
+    snapshot = build_admin_user_diagnostic_snapshot(validate_email_address(target_email))
+    record_audit_log(action="admin.diagnostics.user_inspected", email=current_admin, request=request, resource_type="admin_diagnostics", resource_name=target_email)
+    return snapshot
+
+
+@app.post("/admin/diagnostics/users/{target_email}/recalculate-entitlement")
+def recalculate_admin_user_entitlement(target_email: str, request: Request, current_admin: str = Depends(require_admin_user)):
+    normalized_email = validate_email_address(target_email)
+    entitlement = resolve_entitlement(normalized_email)
+    record_audit_log(
+        action="admin.diagnostics.entitlement_recalculated", email=current_admin, request=request,
+        resource_type="entitlement", resource_name=normalized_email,
+        metadata={"resolved_entitlement": entitlement.get("entitlement"), "reason": entitlement.get("reason")},
+    )
+    return {"entitlement": entitlement, "message": "Entitlement recalculated using the authoritative resolver. No plan was changed."}
+
+
+@app.get("/admin/diagnostics/events")
+def list_admin_diagnostic_events(
+    severity: str = Query(default="", max_length=20),
+    category: str = Query(default="", max_length=80),
+    trace_id: str = Query(default="", max_length=120),
+    user_email: str = Query(default="", max_length=180),
+    limit: int = Query(default=100, ge=1, le=250),
+    current_admin: str = Depends(require_admin_user),
+):
+    clauses: list[str] = []
+    params: list[Any] = []
+    if severity:
+        clauses.append("upper(severity) = upper(?)")
+        params.append(severity)
+    if category:
+        clauses.append("lower(category) = lower(?)")
+        params.append(category)
+    if trace_id:
+        clauses.append("(trace_id = ? OR request_id = ?)")
+        params.extend([trace_id, trace_id])
+    if user_email:
+        clauses.append("lower(user_email) = lower(?)")
+        params.append(validate_email_address(user_email))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, trace_id, request_id, user_email, category, event_type, severity,
+                   endpoint, http_status, duration_ms, safe_message, metadata_json, created_at
+            FROM diagnostic_events {where} ORDER BY created_at DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    events = []
+    for row in rows:
+        item = _diagnostic_row_dict(row)
+        item["metadata"] = _safe_diagnostic_metadata(item.pop("metadata_json", "{}"))
+        events.append(item)
+    return {"events": events}
 
 
 @app.get("/admin/dashboard")
@@ -38319,6 +39710,23 @@ def create_lecture_assistant_stream(
         payload = payload.model_copy(update={"reference_images": reference_images})
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
+    generation_id = compact_text(payload.client_request_id, uuid4().hex)
+    existing_generation = get_assistant_generation_state(current_user, generation_id)
+    if existing_generation:
+        def replay_existing_generation():
+            yield build_sse_event("generation_state", existing_generation)
+            if existing_generation.get("activity"):
+                yield build_sse_event("activity", existing_generation["activity"])
+            if existing_generation.get("status") == "completed":
+                yield build_sse_event("generation_completed", existing_generation)
+            elif existing_generation.get("status") == "failed":
+                yield build_sse_event("error", {"message": "Response couldn't be completed.", "generation_id": generation_id})
+
+        return StreamingResponse(
+            replay_existing_generation(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
     plan_id = get_effective_plan_id(current_user)
     requested_mode = normalize_ai_chat_mode(payload.requested_mode)
@@ -38411,7 +39819,37 @@ def create_lecture_assistant_stream(
     max_output_tokens = resolve_lecture_assistant_max_output_tokens(payload)
     generation_temperature = 0.35 if bool(payload.voice_mode) else 0.55
 
-    def event_stream():
+    generation_events: queue.Queue[str | None] = queue.Queue()
+    document_context_present = bool(
+        compact_text(payload.transcript)
+        or compact_text(payload.lecture_notes)
+        or compact_text(payload.lecture_slides)
+        or compact_text(payload.past_question_papers)
+    )
+    activity_types = infer_request_activity_types(
+        question=payload.question,
+        reference_image_count=len(reference_images),
+        reference_document_count=1 if compact_text(payload.lecture_notes) else 0,
+        has_document_context=document_context_present,
+    )
+    initial_activity = build_activity_event(
+        "REQUEST_RECEIVED",
+        generation_id=generation_id,
+        conversation_id=payload.conversation_id,
+    )
+    set_assistant_generation_state(
+        generation_id=generation_id,
+        user_email=current_user,
+        conversation_id=payload.conversation_id,
+        user_message_id=payload.user_message_id,
+        assistant_message_id=payload.assistant_message_id,
+        request_id=generation_id,
+        status="queued",
+        activity=initial_activity,
+        unseen=False,
+    )
+
+    def run_generation() -> None:
         selected_attempt: dict[str, str] | None = None
         emitted_characters = 0
         fallback_count = 0
@@ -38423,44 +39861,59 @@ def create_lecture_assistant_stream(
         streamed_answer_parts: list[str] = []
         generation_started_at = utc_now()
         first_token_at: datetime | None = None
+        completed_activity_types: set[str] = set()
 
-        def persist_turn_in_background(assistant_text: str, attempt: dict[str, str]) -> None:
-            database_started_at = utc_now()
-            saved_conversation = persist_lecture_assistant_turn(
-                current_user=current_user,
-                payload=payload,
-                assistant_text=assistant_text,
-                selected_attempt=attempt,
+        def push(event_name: str, data: dict[str, Any]) -> None:
+            generation_events.put(build_sse_event(event_name, data))
+
+        def activity(activity_type: str, state: str = "active", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+            event = build_activity_event(
+                activity_type,
+                state=state,
+                metadata=metadata,
+                generation_id=generation_id,
+                conversation_id=payload.conversation_id,
             )
-            record_audit_log(
-                action="lecture_assistant.persist",
-                email=current_user,
-                request=request,
-                resource_type="lecture_assistant",
-                resource_name=compact_text(attempt.get("model"), compact_text(attempt.get("provider"), "lecture-assistant")),
-                duration_ms=int((utc_now() - database_started_at).total_seconds() * 1000),
-                metadata={
-                    "provider": compact_text(attempt.get("provider")),
-                    "conversation_id": compact_text(payload.conversation_id),
-                    "session_id": compact_text(payload.session_id),
-                    "client_request_id": compact_text(payload.client_request_id),
-                    "saved": bool(saved_conversation),
-                    "background": True,
-                },
+            push("activity", event)
+            set_assistant_generation_state(
+                generation_id=generation_id,
+                user_email=current_user,
+                conversation_id=payload.conversation_id,
+                user_message_id=payload.user_message_id,
+                assistant_message_id=payload.assistant_message_id,
+                request_id=generation_id,
+                status="failed" if state == "failed" else "completed" if activity_type == "COMPLETED" else "generating",
+                activity=event,
+                answer_preview="".join(streamed_answer_parts),
+                unseen=True if activity_type == "COMPLETED" else None,
+                error_code="GENERATION_FAILED" if state == "failed" else "",
             )
+            record_diagnostic_event(
+                event_type=f"CHAT_ACTIVITY_{activity_type}",
+                category="chat_generation",
+                severity="ERROR" if state == "failed" else "INFO",
+                user_email=current_user,
+                trace_id=generation_id,
+                request_id=generation_id,
+                endpoint="/api/chat/stream",
+                safe_message=event["display_text"],
+                metadata={"conversation_id": compact_text(payload.conversation_id), "state": state},
+            )
+            if state == "completed":
+                completed_activity_types.add(activity_type)
+            return event
 
         try:
-            yield build_sse_event(
+            push(
                 "ready",
                 {
                     "conversation_id": compact_text(payload.conversation_id),
                     "session_id": compact_text(payload.session_id),
+                    "generation_id": generation_id,
                     "provider_order": [attempt["provider"] for attempt in attempts],
                 },
             )
-
-            # Open the stream before database/context retrieval. This gives the
-            # browser an immediate response while slower history stores wake up.
+            activity("UNDERSTANDING_REQUEST")
             context_started_at = utc_now()
             _, persisted_recent_messages, persisted_memory_summary = load_persisted_lecture_assistant_context(
                 current_user,
@@ -38476,24 +39929,39 @@ def create_lecture_assistant_stream(
                 persisted_recent_messages=persisted_recent_messages,
                 memory_summary=persisted_memory_summary,
             )
-            yield build_sse_event(
+            activity("UNDERSTANDING_REQUEST", "completed")
+            push(
                 "context_ready",
                 {
                     "duration_ms": int((utc_now() - context_started_at).total_seconds() * 1000),
                     "history_messages": len(persisted_recent_messages),
+                    "generation_id": generation_id,
                 },
             )
 
+            for stage in activity_types[1:]:
+                if stage == "PREPARING_RESPONSE":
+                    break
+                metadata: dict[str, Any] = {}
+                if stage in {"READING_DOCUMENT", "ANALYZING_DOCUMENT"}:
+                    metadata["document_count"] = 1
+                if stage == "ANALYZING_IMAGE":
+                    metadata["image_count"] = len(reference_images)
+                activity(stage, metadata=metadata)
+                activity(stage, "completed", metadata=metadata)
+
+            activity("PREPARING_RESPONSE")
             for index, attempt in enumerate(attempts, start=1):
                 token_started = False
                 terminal_provider = attempt["provider"]
-                yield build_sse_event(
+                push(
                     "provider_attempt",
                     {
                         "provider": attempt["provider"],
                         "label": attempt["label"],
                         "model": attempt["model"],
                         "attempt": index,
+                        "generation_id": generation_id,
                     },
                 )
                 try:
@@ -38511,42 +39979,35 @@ def create_lecture_assistant_stream(
                             token_started = True
                             first_token_at = utc_now()
                             selected_attempt = attempt
-                            yield build_sse_event(
+                            if "PREPARING_RESPONSE" not in completed_activity_types:
+                                activity("PREPARING_RESPONSE", "completed")
+                            activity("STREAMING_RESPONSE")
+                            push(
                                 "provider_selected",
                                 {
                                     "provider": attempt["provider"],
                                     "label": attempt["label"],
                                     "model": attempt["model"],
                                     "attempt": index,
-                                    "trace_id": compact_text(payload.client_request_id),
+                                    "trace_id": generation_id,
+                                    "generation_id": generation_id,
                                     "first_token_ms": int((first_token_at - generation_started_at).total_seconds() * 1000),
                                 },
                             )
                         emitted_characters += len(delta)
                         streamed_answer_parts.append(delta)
-                        yield build_sse_event(
-                            "delta",
-                            {
-                                "text": delta,
-                                "provider": attempt["provider"],
-                                "model": attempt["model"],
-                            },
-                        )
+                        push("delta", {"text": delta, "provider": attempt["provider"], "model": attempt["model"], "generation_id": generation_id})
 
                     if not token_started:
-                        raise ProviderStreamError(
-                            attempt["provider"],
-                            f"{attempt['label']} returned no answer text.",
-                            status_code=502,
-                        )
+                        raise ProviderStreamError(attempt["provider"], f"{attempt['label']} returned no answer text.", status_code=502)
 
                     assistant_text = "".join(streamed_answer_parts).strip()
                     generation_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
+                    if "CHECKING_RESULT" in activity_types and "CHECKING_RESULT" not in completed_activity_types:
+                        activity("CHECKING_RESULT")
+                        activity("CHECKING_RESULT", "completed")
                     if conversation_reservation_id:
-                        final_conversation_usage = finalize_ai_chat_conversation_turn(
-                            conversation_reservation_id,
-                            completed=True,
-                        ) or conversation_usage
+                        final_conversation_usage = finalize_ai_chat_conversation_turn(conversation_reservation_id, completed=True) or conversation_usage
                         turn_finalized = True
                     generation_completed = True
                     if daily_usage:
@@ -38558,8 +40019,29 @@ def create_lecture_assistant_stream(
                             actual_model=compact_text(attempt.get("model")),
                             reasoning_effort=compact_text(attempt.get("reasoning_effort")),
                         )
-                        yield build_sse_event("usage", {key: value for key, value in daily_usage.items() if key != "account"})
-                    yield build_sse_event(
+                        push("usage", {key: value for key, value in daily_usage.items() if key != "account"})
+
+                    database_started_at = utc_now()
+                    saved_conversation = persist_lecture_assistant_turn(
+                        current_user=current_user,
+                        payload=payload,
+                        assistant_text=assistant_text,
+                        selected_attempt=attempt,
+                    )
+                    if saved_conversation:
+                        push("conversation_saved", {"conversation": saved_conversation, "generation_id": generation_id})
+                    record_audit_log(
+                        action="lecture_assistant.persist",
+                        email=current_user,
+                        request=request,
+                        resource_type="lecture_assistant",
+                        resource_name=compact_text(attempt.get("model"), compact_text(attempt.get("provider"), "lecture-assistant")),
+                        duration_ms=int((utc_now() - database_started_at).total_seconds() * 1000),
+                        metadata={"provider": compact_text(attempt.get("provider")), "conversation_id": compact_text(payload.conversation_id), "client_request_id": generation_id, "saved": bool(saved_conversation), "background": True},
+                    )
+                    activity("STREAMING_RESPONSE", "completed")
+                    activity("COMPLETED", "completed")
+                    push(
                         "done",
                         {
                             "provider": attempt["provider"],
@@ -38571,142 +40053,68 @@ def create_lecture_assistant_stream(
                             "conversation_usage": final_conversation_usage,
                             "fallback_count": fallback_count,
                             "characters": emitted_characters,
-                            "trace_id": compact_text(payload.client_request_id),
+                            "trace_id": generation_id,
+                            "generation_id": generation_id,
+                            "assistant_message_id": compact_text(payload.assistant_message_id),
+                            "conversation_id": compact_text(payload.conversation_id),
                             "first_token_ms": int(((first_token_at or utc_now()) - generation_started_at).total_seconds() * 1000),
                             "generation_ms": generation_ms,
-                        },
-                    )
-                    threading.Thread(
-                        target=persist_turn_in_background,
-                        args=(assistant_text, dict(attempt)),
-                        daemon=True,
-                    ).start()
-                    yield build_sse_event(
-                        "save_queued",
-                        {
-                            "conversation_id": compact_text(payload.conversation_id),
-                            "trace_id": compact_text(payload.client_request_id),
-                            "background": True,
                         },
                     )
                     return
                 except ProviderStreamError as exc:
                     terminal_error = compact_text(exc.user_message, f"{attempt['label']} could not answer right now.")
-                    logger.warning(
-                        "Lecture assistant provider failed",
-                        extra={
-                            "provider": attempt["provider"],
-                            "model": attempt["model"],
-                            "status_code": exc.status_code,
-                            "user": current_user,
-                        },
-                    )
+                    logger.warning("Lecture assistant provider failed provider=%s model=%s", attempt["provider"], attempt["model"])
                     if not token_started and index < len(attempts):
                         fallback_count += 1
                         next_attempt = attempts[index]
-                        same_provider_retry = compact_text(next_attempt["provider"]) == compact_text(attempt["provider"])
-                        yield build_sse_event(
-                            "fallback",
-                            {
-                                "from": attempt["provider"],
-                                "from_label": attempt["label"],
-                                "to": next_attempt["provider"],
-                                "to_label": next_attempt["label"],
-                                "message": (
-                                    f"{attempt['label']} could not answer right now. Retrying the same voice provider."
-                                    if same_provider_retry
-                                    else f"{attempt['label']} could not answer right now. Switching to {next_attempt['label']}."
-                                ),
-                                "reason": terminal_error,
-                            },
-                        )
+                        push("fallback", {"from": attempt["provider"], "from_label": attempt["label"], "to": next_attempt["provider"], "to_label": next_attempt["label"], "message": "The first provider could not answer. Trying the next available provider.", "reason": terminal_error, "generation_id": generation_id})
                         continue
-                    yield build_sse_event(
-                        "error",
-                        {
-                            "provider": attempt["provider"],
-                            "label": attempt["label"],
-                            "model": attempt["model"],
-                            "message": terminal_error,
-                        },
-                    )
+                    activity("FAILED", "failed")
+                    push("error", {"provider": attempt["provider"], "label": attempt["label"], "model": attempt["model"], "message": terminal_error, "generation_id": generation_id})
                     return
-                except Exception:
+                except Exception as exc:
                     terminal_error = f"{attempt['label']} hit an unexpected streaming error."
-                    logger.exception(
-                        "Lecture assistant provider crashed unexpectedly",
-                        extra={
-                            "provider": attempt["provider"],
-                            "model": attempt["model"],
-                            "user": current_user,
-                        },
-                    )
+                    logger.exception("Lecture assistant provider crashed unexpectedly provider=%s model=%s", attempt["provider"], attempt["model"])
                     if not token_started and index < len(attempts):
                         fallback_count += 1
                         next_attempt = attempts[index]
-                        same_provider_retry = compact_text(next_attempt["provider"]) == compact_text(attempt["provider"])
-                        yield build_sse_event(
-                            "fallback",
-                            {
-                                "from": attempt["provider"],
-                                "from_label": attempt["label"],
-                                "to": next_attempt["provider"],
-                                "to_label": next_attempt["label"],
-                                "message": (
-                                    f"{attempt['label']} had a connection problem. Retrying the same voice provider."
-                                    if same_provider_retry
-                                    else f"{attempt['label']} had a connection problem. Switching to {next_attempt['label']}."
-                                ),
-                                "reason": terminal_error,
-                            },
-                        )
+                        push("fallback", {"from": attempt["provider"], "from_label": attempt["label"], "to": next_attempt["provider"], "to_label": next_attempt["label"], "message": "The first provider had a connection problem. Trying the next available provider.", "reason": terminal_error, "generation_id": generation_id})
                         continue
-                    yield build_sse_event(
-                        "error",
-                        {
-                            "provider": attempt["provider"],
-                            "label": attempt["label"],
-                            "model": attempt["model"],
-                            "message": terminal_error,
-                        },
-                    )
+                    activity("FAILED", "failed")
+                    push("error", {"provider": attempt["provider"], "label": attempt["label"], "model": attempt["model"], "message": "Study chat could not finish the answer.", "generation_id": generation_id})
                     return
-
-            if not selected_attempt:
-                yield build_sse_event(
-                    "error",
-                    {
-                        "provider": terminal_provider,
-                        "message": terminal_error or "All lecture assistant providers are unavailable right now.",
-                    },
-                )
+            activity("FAILED", "failed")
+            push("error", {"provider": terminal_provider, "message": terminal_error or "All lecture assistant providers are unavailable right now.", "generation_id": generation_id})
         finally:
             if conversation_reservation_id and not turn_finalized:
                 finalize_ai_chat_conversation_turn(conversation_reservation_id, completed=False)
             if daily_usage and not generation_completed:
-                refund_usage_event(
-                    usage_event_id=compact_text(daily_usage.get("usage_event_id")),
-                    email=current_user,
-                    reason="assistant_generation_failed",
-                )
-            total_latency_ms = int((utc_now() - generation_started_at).total_seconds() * 1000)
+                refund_usage_event(usage_event_id=compact_text(daily_usage.get("usage_event_id")), email=current_user, reason="assistant_generation_failed")
             record_audit_log(
                 action="lecture_assistant.chat",
+                status="success" if generation_completed else "failed",
                 email=current_user,
                 request=request,
                 resource_type="lecture_assistant",
                 resource_name=(selected_attempt or {}).get("model", terminal_provider or "lecture-assistant"),
                 duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
-                metadata={
-                    "provider": (selected_attempt or {}).get("provider", terminal_provider),
-                    "fallback_count": fallback_count,
-                    "characters": emitted_characters,
-                    "conversation_id": compact_text(payload.conversation_id),
-                    "session_id": compact_text(payload.session_id),
-                    "client_request_id": compact_text(payload.client_request_id),
-                    "errored": bool(terminal_error and not selected_attempt),
-                },
+                metadata={"provider": (selected_attempt or {}).get("provider", terminal_provider), "fallback_count": fallback_count, "characters": emitted_characters, "conversation_id": compact_text(payload.conversation_id), "session_id": compact_text(payload.session_id), "client_request_id": generation_id, "errored": not generation_completed, "generation_id": generation_id},
             )
+            generation_events.put(None)
+
+    threading.Thread(
+        target=run_generation,
+        name=f"mabaso-chat-{generation_id[:12]}",
+        daemon=True,
+    ).start()
+
+    def event_stream():
+        while True:
+            event = generation_events.get()
+            if event is None:
+                return
+            yield event
 
     return StreamingResponse(
         event_stream(),
@@ -38782,6 +40190,120 @@ async def stream_lecture_assistant_openrouter(
         current_user=current_user,
         forced_provider="openrouter",
     )
+
+
+def list_assistant_generation_states(user_email: str, *, unseen_only: bool = False, limit: int = 80) -> list[dict[str, Any]]:
+    where_unseen = "AND has_unseen_response = 1" if unseen_only else ""
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT * FROM assistant_generation_states
+            WHERE lower(user_email) = lower(?) {where_unseen}
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (normalize_email(user_email), max(1, min(int(limit or 80), 100))),
+        ).fetchall()
+    return [
+        {
+            "generation_id": row["generation_id"],
+            "conversation_id": row["conversation_id"],
+            "user_message_id": row["user_message_id"],
+            "assistant_message_id": row["assistant_message_id"],
+            "request_id": row["request_id"],
+            "status": row["status"],
+            "activity": load_collaboration_json_object(row["activity_json"]),
+            "answer_preview": row["answer_preview"],
+            "has_unseen_response": bool(row["has_unseen_response"]),
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"],
+            "completed_at": row["completed_at"],
+            "error_code": row["error_code"],
+        }
+        for row in rows
+    ]
+
+
+@app.get("/api/chat/generations")
+def get_my_assistant_generations(
+    unseen_only: bool = Query(default=False),
+    limit: int = Query(default=80, ge=1, le=100),
+    current_user: str = Depends(require_authenticated_user),
+):
+    return {"generations": list_assistant_generation_states(current_user, unseen_only=unseen_only, limit=limit)}
+
+
+@app.get("/api/chat/generations/{generation_id}")
+def get_my_assistant_generation(
+    generation_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    generation = get_assistant_generation_state(current_user, generation_id)
+    if not generation:
+        raise HTTPException(status_code=404, detail="Generation not found.")
+    return {"generation": generation}
+
+
+@app.get("/api/chat/generations/{generation_id}/events")
+async def stream_my_assistant_generation(
+    generation_id: str,
+    request: Request,
+    current_user: str = Depends(require_authenticated_user),
+):
+    if not get_assistant_generation_state(current_user, generation_id):
+        raise HTTPException(status_code=404, detail="Generation not found.")
+
+    async def generation_events():
+        last_signature = ""
+        while not await request.is_disconnected():
+            generation = await asyncio.to_thread(get_assistant_generation_state, current_user, generation_id)
+            if not generation:
+                yield build_sse_event("error", {"message": "Generation is no longer available."})
+                return
+            signature = f"{generation.get('status')}:{generation.get('updated_at')}:{generation.get('activity', {}).get('activity_type')}"
+            if signature != last_signature:
+                last_signature = signature
+                yield build_sse_event("generation_state", generation)
+                if generation.get("activity"):
+                    yield build_sse_event("activity", generation["activity"])
+            if generation.get("status") in {"completed", "failed", "cancelled"}:
+                yield build_sse_event("generation_completed" if generation.get("status") == "completed" else "error", generation)
+                return
+            await asyncio.sleep(0.75)
+
+    return StreamingResponse(
+        generation_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-store", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/chat/conversations/{conversation_id}/seen")
+def mark_assistant_conversation_seen(
+    conversation_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    if chat_history_store.available and not chat_history_store.get_conversation(current_user, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE assistant_generation_states
+            SET has_unseen_response = 0, updated_at = ?
+            WHERE lower(user_email) = lower(?) AND conversation_id = ?
+            """,
+            (now_iso, normalize_email(current_user), compact_text(conversation_id)),
+        )
+    record_diagnostic_event(
+        event_type="CHAT_RESPONSE_MARKED_SEEN",
+        category="chat_generation",
+        user_email=current_user,
+        trace_id=compact_text(conversation_id),
+        safe_message="Completed chat response marked as seen.",
+        metadata={"conversation_id": compact_text(conversation_id)},
+    )
+    return {"conversation_id": compact_text(conversation_id), "has_unseen_response": False}
 
 
 def ensure_chat_history_store_configured() -> None:
@@ -39132,7 +40654,7 @@ async def transcribe_lecture_assistant_voice(
 
 
 @app.get("/collaboration/rooms")
-async def list_collaboration_rooms(current_user: str = Depends(require_authenticated_user)):
+def list_collaboration_rooms(current_user: str = Depends(require_authenticated_user)):
     with get_db_connection() as connection:
         rows = connection.execute(
             """
@@ -39368,7 +40890,7 @@ async def create_collaboration_room(
 
 
 @app.get("/collaboration/rooms/{room_id}")
-async def get_collaboration_room(room_id: str, current_user: str = Depends(require_authenticated_user)):
+def _get_collaboration_room_sync(room_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room(room_id, current_user)
     return {"room": serialize_collaboration_room(room, current_user)}
 
@@ -39558,7 +41080,7 @@ async def decide_collaboration_room_join_request(
 
 
 @app.get("/collaboration/rooms/{room_id}/activity")
-async def list_collaboration_room_activity(
+def _list_collaboration_room_activity_sync(
     room_id: str,
     current_user: str = Depends(require_authenticated_user),
 ):
@@ -39572,7 +41094,7 @@ async def stream_collaboration_room_activity(
     request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
-    get_accessible_collaboration_room_access(room_id, current_user)
+    await asyncio.to_thread(get_accessible_collaboration_room_access, room_id, current_user)
 
     async def activity_events():
         last_signature = ""
@@ -39580,18 +41102,18 @@ async def stream_collaboration_room_activity(
             if await request.is_disconnected():
                 break
             try:
-                get_accessible_collaboration_room_access(room_id, current_user)
+                await asyncio.to_thread(get_accessible_collaboration_room_access, room_id, current_user)
             except HTTPException:
                 yield f"event: access_revoked\ndata: {dump_json({'room_id': room_id})}\n\n"
                 break
-            activity = get_collaboration_room_activity(room_id, 25)
+            activity = await asyncio.to_thread(get_collaboration_room_activity, room_id, 25)
             signature = activity[0]["id"] if activity else "empty"
             if signature != last_signature:
                 last_signature = signature
                 yield f"event: activity\ndata: {dump_json({'room_id': room_id, 'activity': activity})}\n\n"
             else:
                 yield ": keep-alive\n\n"
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
     return StreamingResponse(
         activity_events(),
@@ -39601,7 +41123,7 @@ async def stream_collaboration_room_activity(
 
 
 @app.get("/collaboration/rooms/{room_id}/admin-control")
-async def get_collaboration_room_admin_control(
+def get_collaboration_room_admin_control(
     room_id: str,
     current_user: str = Depends(require_authenticated_user),
 ):
@@ -39610,7 +41132,7 @@ async def get_collaboration_room_admin_control(
 
 
 @app.post("/collaboration/rooms/{room_id}/admin-control/start")
-async def start_collaboration_room_admin_control(
+def _start_collaboration_room_admin_control_sync(
     room_id: str,
     payload: CollaborationAdminControlRequest,
     current_user: str = Depends(require_authenticated_user),
@@ -39651,7 +41173,7 @@ async def start_collaboration_room_admin_control(
 
 
 @app.patch("/collaboration/rooms/{room_id}/admin-control/state")
-async def update_collaboration_room_admin_control(
+def _update_collaboration_room_admin_control_sync(
     room_id: str,
     payload: CollaborationAdminControlRequest,
     current_user: str = Depends(require_authenticated_user),
@@ -39680,7 +41202,7 @@ async def update_collaboration_room_admin_control(
 
 
 @app.post("/collaboration/rooms/{room_id}/admin-control/bring")
-async def bring_collaboration_room_members_to_admin(
+def _bring_collaboration_room_members_to_admin_sync(
     room_id: str,
     payload: CollaborationAdminControlRequest,
     current_user: str = Depends(require_authenticated_user),
@@ -39708,7 +41230,7 @@ async def bring_collaboration_room_members_to_admin(
 
 
 @app.post("/collaboration/rooms/{room_id}/admin-control/heartbeat")
-async def heartbeat_collaboration_room_admin_control(
+def heartbeat_collaboration_room_admin_control(
     room_id: str,
     current_user: str = Depends(require_authenticated_user),
 ):
@@ -39727,7 +41249,7 @@ async def heartbeat_collaboration_room_admin_control(
 
 
 @app.delete("/collaboration/rooms/{room_id}/admin-control")
-async def stop_collaboration_room_admin_control(
+def _stop_collaboration_room_admin_control_sync(
     room_id: str,
     current_user: str = Depends(require_authenticated_user),
 ):
@@ -39767,14 +41289,14 @@ async def stream_collaboration_room_admin_control(
     request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
-    get_accessible_collaboration_room(room_id, current_user)
+    await asyncio.to_thread(get_accessible_collaboration_room, room_id, current_user)
 
     async def control_events():
         last_signature = ""
         last_keepalive = utc_now()
         while not await request.is_disconnected():
             try:
-                _, control = get_collaboration_admin_control(room_id, current_user)
+                _, control = await asyncio.to_thread(get_collaboration_admin_control, room_id, current_user)
             except HTTPException:
                 yield build_sse_event("control", {"active": False, "removed": True})
                 return
@@ -39785,7 +41307,7 @@ async def stream_collaboration_room_admin_control(
             elif (utc_now() - last_keepalive).total_seconds() >= 15:
                 last_keepalive = utc_now()
                 yield ": keepalive\n\n"
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(1.25)
 
     return StreamingResponse(
         control_events(),
@@ -39849,18 +41371,18 @@ async def stream_collaboration_room_messages(
     current_user: str = Depends(require_authenticated_user),
 ):
     """Stream the latest bounded message window to authorized Room members."""
-    room = get_accessible_collaboration_room_access(room_id, current_user)
+    room = await asyncio.to_thread(get_accessible_collaboration_room_access, room_id, current_user)
 
     async def message_events():
         last_signature = ""
         last_keepalive = utc_now()
         while not await request.is_disconnected():
             try:
-                get_accessible_collaboration_room_access(room["id"], current_user)
+                await asyncio.to_thread(get_accessible_collaboration_room_access, room["id"], current_user)
             except HTTPException:
                 yield build_sse_event("access_revoked", {"room_id": room["id"]})
                 return
-            messages = get_collaboration_room_messages(room["id"], 80)
+            messages = await asyncio.to_thread(get_collaboration_room_messages, room["id"], 80)
             signature = ":".join(
                 f"{compact_text(message.get('id'))}@{compact_text(message.get('created_at'))}"
                 for message in messages[-2:]
@@ -39871,7 +41393,7 @@ async def stream_collaboration_room_messages(
             elif (utc_now() - last_keepalive).total_seconds() >= 15:
                 last_keepalive = utc_now()
                 yield ": keepalive\n\n"
-            await asyncio.sleep(0.65)
+            await asyncio.sleep(1.5)
 
     return StreamingResponse(
         message_events(),
@@ -40226,7 +41748,7 @@ async def update_collaboration_room_materials(
 
 
 @app.get("/collaboration/rooms/{room_id}/material-items")
-async def list_collaboration_material_items(room_id: str, current_user: str = Depends(require_authenticated_user)):
+def _list_collaboration_material_items_sync(room_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room(room_id, current_user)
     return {"items": get_collaboration_room_materials(room["id"])}
 
@@ -40248,6 +41770,7 @@ async def create_collaboration_material_item(
     item_id = uuid4().hex
     now_iso = utc_now().isoformat()
     safe_source = payload.source if isinstance(payload.source, dict) else {}
+    source_snapshot = safe_source.get("snapshot") if isinstance(safe_source.get("snapshot"), dict) else {}
     actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
         connection.execute(
@@ -40259,7 +41782,37 @@ async def create_collaboration_material_item(
             """,
             (item_id, room["id"], current_user, title, material_type, compact_text(payload.description)[:2000], dump_json(safe_source), "room", now_iso, now_iso),
         )
-        connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
+        if source_snapshot:
+            # Shared workspaces become valid Room generation context. Missing
+            # fields never erase an existing course resource.
+            images_json = dump_json(source_snapshot.get("study_images") or [])
+            flashcards_json = dump_json(source_snapshot.get("flashcards") or [])
+            questions_json = dump_json(source_snapshot.get("quiz_questions") or [])
+            connection.execute(
+                """
+                UPDATE collaboration_rooms
+                SET transcript = COALESCE(NULLIF(?, ''), transcript),
+                    summary = COALESCE(NULLIF(?, ''), summary),
+                    formula = COALESCE(NULLIF(?, ''), formula),
+                    example = COALESCE(NULLIF(?, ''), example),
+                    lecture_notes = COALESCE(NULLIF(?, ''), lecture_notes),
+                    lecture_slides = COALESCE(NULLIF(?, ''), lecture_slides),
+                    study_images_json = CASE WHEN ? <> '[]' THEN ? ELSE study_images_json END,
+                    flashcards_json = CASE WHEN ? <> '[]' THEN ? ELSE flashcards_json END,
+                    quiz_questions_json = CASE WHEN ? <> '[]' THEN ? ELSE quiz_questions_json END,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    compact_text(source_snapshot.get("transcript")), compact_text(source_snapshot.get("summary")),
+                    compact_text(source_snapshot.get("formula")), compact_text(source_snapshot.get("example")),
+                    compact_text(source_snapshot.get("lecture_notes")), compact_text(source_snapshot.get("lecture_slides")),
+                    images_json, images_json, flashcards_json, flashcards_json, questions_json, questions_json,
+                    now_iso, room["id"],
+                ),
+            )
+        else:
+            connection.execute("UPDATE collaboration_rooms SET updated_at = ? WHERE id = ?", (now_iso, room["id"]))
         create_collaboration_room_activity(
             connection, room_id=room["id"], actor_email=current_user,
             activity_type="material_shared", action_text=f'{actor_name} shared {material_type.replace("_", " ")} "{title}"',
@@ -40583,7 +42136,7 @@ async def upload_collaboration_voice_note(
 
 
 @app.delete("/collaboration/rooms/{room_id}/material-items/{item_id}")
-async def delete_collaboration_material_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
+def delete_collaboration_material_item(room_id: str, item_id: str, current_user: str = Depends(require_authenticated_user)):
     room = get_accessible_collaboration_room_access(room_id, current_user)
     actor_name = collaboration_actor_name(current_user)
     with get_db_connection() as connection:
@@ -40741,7 +42294,7 @@ COLLABORATION_PRESENCE_TTL_SECONDS = max(60, int(os.getenv("COLLABORATION_PRESEN
 
 
 @app.get("/collaboration/notifications")
-async def list_collaboration_notifications(current_user: str = Depends(require_authenticated_user)):
+def list_collaboration_notifications(current_user: str = Depends(require_authenticated_user)):
     with get_db_connection() as connection:
         rows = connection.execute(
             """
@@ -40771,7 +42324,7 @@ async def list_collaboration_notifications(current_user: str = Depends(require_a
 
 
 @app.post("/collaboration/presence")
-async def update_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
+def _update_collaboration_presence_sync(current_user: str = Depends(require_authenticated_user)):
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
         connection.execute(
@@ -40786,7 +42339,7 @@ async def update_collaboration_presence(current_user: str = Depends(require_auth
 
 
 @app.delete("/collaboration/presence")
-async def clear_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
+def clear_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
     with get_db_connection() as connection:
         connection.execute(
             "DELETE FROM collaboration_presence WHERE lower(email) = ?",
@@ -41217,6 +42770,62 @@ async def export_report_docx(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
     )
+
+
+# Public service-level async contracts are retained for callers and tests while
+# FastAPI keeps the decorated synchronous implementations in its worker pool.
+# This prevents blocking database access from starving SSE, chat, and room APIs.
+async def get_collaboration_room(room_id: str, current_user: str = Depends(require_authenticated_user)):
+    return _get_collaboration_room_sync(room_id, current_user)
+
+
+async def list_collaboration_room_activity(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _list_collaboration_room_activity_sync(room_id, current_user)
+
+
+async def start_collaboration_room_admin_control(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _start_collaboration_room_admin_control_sync(room_id, payload, current_user)
+
+
+async def update_collaboration_room_admin_control(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _update_collaboration_room_admin_control_sync(room_id, payload, current_user)
+
+
+async def bring_collaboration_room_members_to_admin(
+    room_id: str,
+    payload: CollaborationAdminControlRequest,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _bring_collaboration_room_members_to_admin_sync(room_id, payload, current_user)
+
+
+async def stop_collaboration_room_admin_control(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _stop_collaboration_room_admin_control_sync(room_id, current_user)
+
+
+async def list_collaboration_material_items(
+    room_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    return _list_collaboration_material_items_sync(room_id, current_user)
+
+
+async def update_collaboration_presence(current_user: str = Depends(require_authenticated_user)):
+    return _update_collaboration_presence_sync(current_user)
 
 
 if __name__ == "__main__":

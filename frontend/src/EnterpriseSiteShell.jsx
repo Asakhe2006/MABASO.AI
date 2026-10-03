@@ -601,7 +601,7 @@ export function EnterpriseSiteShell({
                 </article>
               ))}
             </div>
-            <p className="enterprise-pricing-note">The seven-day trial requires a payment method. Nothing is charged on the first day; Pro Student renews at R50 monthly after seven days unless cancelled before renewal.</p>
+            <p className="enterprise-pricing-note">Eligible accounts can start Mabaso AI's current one-time trial without a card. The trial is separate from PayFast and does not create an automatic renewal. Paid subscriptions begin only after the user deliberately chooses a plan and the payment provider confirms it.</p>
           </section>
         ) : null}
 
