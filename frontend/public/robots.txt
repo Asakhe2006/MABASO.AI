@@ -1,4 +1,9 @@
 User-agent: *
 Allow: /
+Disallow: /app/
+Disallow: /admin
+Disallow: /workspace/
+Disallow: /c/
+Disallow: /share/
 Host: mabaso-ai-web.onrender.com
 Sitemap: https://mabaso-ai-web.onrender.com/sitemap.xml

@@ -14,6 +14,12 @@ from typing import Any
 ACTIVITY_TEXT: dict[str, str] = {
     "REQUEST_RECEIVED": "Request received…",
     "UNDERSTANDING_REQUEST": "Understanding your question…",
+    "SEARCHING_PRODUCT_KNOWLEDGE": "Checking Mabaso AI information…",
+    "SEARCHING_WEB": "Searching the web…",
+    "READING_SOURCES": "Reading sources…",
+    "COMPARING_INFORMATION": "Comparing information…",
+    "OPENING_WEBSITE": "Opening the website…",
+    "READING_WEBSITE": "Reading the page…",
     "READING_DOCUMENT": "Reading your document…",
     "ANALYZING_DOCUMENT": "Analyzing the material…",
     "ANALYZING_IMAGE": "Analyzing your image…",
@@ -39,6 +45,12 @@ ACTIVITY_TEXT: dict[str, str] = {
 COMPLETED_ACTIVITY_TEXT: dict[str, str] = {
     "REQUEST_RECEIVED": "Request received",
     "UNDERSTANDING_REQUEST": "Understood your question",
+    "SEARCHING_PRODUCT_KNOWLEDGE": "Checked Mabaso AI information",
+    "SEARCHING_WEB": "Searched the web",
+    "READING_SOURCES": "Reviewed sources",
+    "COMPARING_INFORMATION": "Compared the information",
+    "OPENING_WEBSITE": "Opened the website",
+    "READING_WEBSITE": "Read the page",
     "READING_DOCUMENT": "Read your document",
     "ANALYZING_DOCUMENT": "Analyzed the material",
     "ANALYZING_IMAGE": "Analyzed your image",
@@ -113,9 +125,9 @@ def infer_request_activity_types(
 ) -> list[str]:
     """Return only stages supported by real request inputs.
 
-    There is deliberately no web-search stage here: the current lecture chat
-    route does not invoke a web-search tool, so claiming that it does would be
-    misleading.
+    Tool-specific stages such as SEARCHING_WEB are emitted by the tool itself
+    only after routing has selected and started that real operation. This input
+    classifier therefore never fabricates search, source, or file-work events.
     """
 
     stages = ["UNDERSTANDING_REQUEST"]
@@ -127,4 +139,3 @@ def infer_request_activity_types(
         stages.extend(["CALCULATING", "CHECKING_RESULT"])
     stages.append("PREPARING_RESPONSE")
     return stages
-

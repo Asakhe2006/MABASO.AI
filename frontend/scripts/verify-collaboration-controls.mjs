@@ -67,7 +67,7 @@ assert.match(cssSource, /\.collaboration-desktop-workspace-tabs/, "Desktop colla
 assert.match(appSource, /\+ Add photo/, "The room Images tool must provide a working photo upload action.");
 assert.match(appSource, /\+ Add video/, "The room Videos tool must provide a working video upload action.");
 assert.match(appSource, /inviteDiscoveredProfileToRoom\(profile\)/, "Discovery results must offer privacy-safe room invitations.");
-assert.match(appSource, /role=\{error \? "alert" : "status"\}/, "Collaboration API failures must be visible in the page.");
+assert.match(appSource, /role=\{collaborationError \? "alert" : "status"\}/, "Collaboration API failures must be visible in the page and scoped to Collaboration.");
 assert.match(cssSource, /\.collaboration-chat-panel\.is-mobile-active \.collaboration-chat-composer \{ position:fixed;/, "Mobile room chat composer must stay above the bottom navigation.");
 assert.match(cssSource, /\.collaboration-board-reader \{/, "Expanded board items need a responsive reader surface.");
 assert.doesNotMatch(cssSource, /\.collaboration-activity-dismiss-layer/, "Room Activity must close through click-outside handling without covering the workspace.");

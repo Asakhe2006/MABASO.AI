@@ -18,9 +18,11 @@ The **Rooms** button opens your room list even when no room or material is curre
 
 ## The room header
 
-The room header shows the room name, membership count and whether you are the owner or a member. The member-count button opens the room's member list. **Room settings** opens access and answer-visibility controls. Owners can manage members and change answer visibility. A regular member can use **Leave room**, which asks for confirmation before removing that membership. Owners are not shown a misleading Leave button because ownership must be handled safely first.
+The room header shows the room name, membership count and whether you are the owner or a member. The member-count button opens the room's member list. **Room settings** opens access and answer-visibility controls. Only the room owner can remove another member; a moderator or ordinary member cannot construct an API request to do so. A regular member can use **Leave room**, which asks for confirmation before removing only their own membership. Owners are not shown a misleading Leave button because ownership must be handled safely first.
 
 **Invite** moves an owner to the invitation control. Enter one or more student email addresses and press **Invite** to add those accounts to the room. The invitation is processed by the protected backend; the address is not published in student discovery. **Follow shared view** controls whether the workspace follows the room's selected study-tool context.
+
+An invitation link remembers the target room while the visitor signs in and opens the invitation after the invited email has been authenticated. Discovering a room is different: an uninvited visitor can see only its safe discovery summary and must submit **Request to Join**. A pending request does not grant access to chat, materials, board content or the private realtime channel. The owner can approve or decline it, and may separately enable the owner-only setting that lets existing trusted members help review join requests.
 
 ## Mobile room navigation
 
@@ -44,11 +46,15 @@ The board holds information that the group wants to keep visible separately from
 
 Each board item displays its type, title, content and checklist where relevant. The item action is available only to the creator or an authorised manager. Deleting an item requires confirmation and removes that board record from the room.
 
-## Room Chat
+## Room activity and Room Chat
+
+The compact bell belongs to the open room rather than to unrelated Mabaso AI pages. It shows the newest room activity without covering the workspace, closes when the user taps outside it, and keeps at most the latest 25 items in the displayed feed. Activities use specific descriptions—such as adding a note, uploading a photo or sharing a named study guide—and can link back to an existing resource. Only current approved room members receive private room activity.
 
 The chat area displays saved room messages in time order and identifies the signed-in student's own messages as **You**. Type into **Type a message** and press the arrow send button. On mobile, the composer stays fixed directly above the Collaboration bottom navigation so the keyboard and navigation do not hide it. Pressing Enter sends a message; Shift+Enter creates a new line.
 
 Messages are written through the authenticated room-message endpoint and are reloaded with the room. Only room members can fetch or send room messages. If a message cannot be sent, the reason is displayed inside the Collaboration page instead of leaving the button looking unresponsive.
+
+Room voice notes are ordinary persisted room messages, separate from Mabaso AI voice-assistant features. Their audio is uploaded without calling OpenAI or consuming an AI chat attempt. A voice-message player provides play or pause, progress and playback speed, and a matching room notification can play the note without forcing the recipient to leave the page they are using.
 
 ## Create Profile and student discovery
 
@@ -68,7 +74,6 @@ Successful actions such as creating a room, sending a message, sharing a materia
 
 ## Privacy and access rules
 
-Room content is protected by both authentication and room membership. Knowing a room identifier is not enough to read its chat, materials or board. Owners and moderators receive management permissions; regular members cannot delete another student's material or board item. Student discovery uses academic relevance and voluntary profile fields. It does not reveal email addresses, private workspaces, private materials or precise location.
+Room content is protected by both authentication and room membership. Knowing a room identifier is not enough to read its chat, materials or board. Only an owner can remove a member. Other management permissions remain limited to the exact actions the backend authorises; regular members cannot delete another student's material or board item. Student discovery uses academic relevance and voluntary profile fields. It does not reveal email addresses, private workspaces, private materials or precise location.
 
 The Collaboration interface never changes a private saved workspace into a public link automatically. Sharing to a room creates a room-scoped material record for authorised members. Public sharing, where available elsewhere in Mabaso AI, is a separate explicit action with its own protected share token.
-

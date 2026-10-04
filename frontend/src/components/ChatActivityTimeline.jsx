@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronUp, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 function normalizeActivity(activity) {
   if (!activity || typeof activity !== "object") return null;
@@ -21,7 +21,7 @@ function ActivityIcon({ state }) {
 }
 
 export default function ChatActivityTimeline({ activities = [], compact = false }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expandedOverride, setExpandedOverride] = useState(null);
   const normalized = useMemo(() => {
     const byType = new Map();
     activities.map(normalizeActivity).filter(Boolean).forEach((activity) => {
@@ -32,15 +32,11 @@ export default function ChatActivityTimeline({ activities = [], compact = false 
   const current = [...normalized].reverse().find((activity) => activity.state === "active" || activity.state === "failed")
     || normalized[normalized.length - 1];
 
-  useEffect(() => {
-    if (current?.activityType === "STREAMING_RESPONSE" || current?.activityType === "COMPLETED") {
-      setExpanded(false);
-    }
-  }, [current?.activityType]);
-
   if (!current) return null;
   const completed = normalized.filter((activity) => activity !== current && activity.state === "completed");
   const canExpand = completed.length > 0;
+  const autoCollapsed = current.activityType === "STREAMING_RESPONSE" || current.activityType === "COMPLETED";
+  const expanded = expandedOverride ?? !autoCollapsed;
 
   return (
     <section className={`chat-activity-timeline${compact ? " is-compact" : ""}`} aria-label="Mabaso AI activity">
@@ -61,7 +57,7 @@ export default function ChatActivityTimeline({ activities = [], compact = false 
           <button
             type="button"
             className="chat-activity-expand"
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setExpandedOverride(!expanded)}
             aria-expanded={expanded}
             aria-label={expanded ? "Hide completed activity" : "Show completed activity"}
           >

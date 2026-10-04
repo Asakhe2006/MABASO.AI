@@ -4041,7 +4041,7 @@ function loadCachedCollaborationRooms(email = "") {
   try {
     const ownerKey = normalizeHistoryOwnerEmail(email);
     if (!ownerKey) return [];
-    const cache = JSON.parse(window.sessionStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || "{}");
+    const cache = JSON.parse(window.localStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || window.sessionStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || "{}");
     return Array.isArray(cache?.[ownerKey]) ? cache[ownerKey].filter((room) => normalizeCollaborationRoomId(room?.id)).slice(0, 60) : [];
   } catch {
     return [];
@@ -4053,7 +4053,7 @@ function persistCachedCollaborationRooms(email = "", rooms = []) {
   const ownerKey = normalizeHistoryOwnerEmail(email);
   if (!ownerKey) return;
   try {
-    const cache = JSON.parse(window.sessionStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || "{}");
+    const cache = JSON.parse(window.localStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || window.sessionStorage.getItem(COLLABORATION_ROOM_LIST_CACHE_KEY) || "{}");
     const lightweightRooms = (Array.isArray(rooms) ? rooms : []).slice(0, 60).map((room) => ({
       id: normalizeCollaborationRoomId(room?.id),
       title: String(room?.title || "Collaboration Room"),
@@ -4063,7 +4063,7 @@ function persistCachedCollaborationRooms(email = "", rooms = []) {
       latest_message: room?.latest_message || null,
       member_role: String(room?.member_role || "member"),
     })).filter((room) => room.id);
-    window.sessionStorage.setItem(COLLABORATION_ROOM_LIST_CACHE_KEY, JSON.stringify({ ...cache, [ownerKey]: lightweightRooms }));
+    window.localStorage.setItem(COLLABORATION_ROOM_LIST_CACHE_KEY, JSON.stringify({ ...cache, [ownerKey]: lightweightRooms }));
   } catch {
     // A cache failure must never block the server-backed Room list.
   }
@@ -7270,7 +7270,7 @@ export default function App() {
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false);
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState(() => loadCachedCollaborationRooms(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
-  const [isCollaborationRoomsLoading, setIsCollaborationRoomsLoading] = useState(false);
+  const [isCollaborationRoomsLoading, setIsCollaborationRoomsLoading] = useState(true);
   const [isCollaborationMaterialsLoading, setIsCollaborationMaterialsLoading] = useState(false);
   const [collaborationError, setCollaborationError] = useState("");
   const [collaborationStatus, setCollaborationStatus] = useState("");
@@ -7643,6 +7643,7 @@ export default function App() {
   const authBroadcastChannelRef = useRef(null);
   const authExpiryHandledRef = useRef(false);
   const pendingRoomInviteIdRef = useRef(loadStoredRoomInviteId());
+  const processedRoomInviteIdRef = useRef("");
   const lastUsageBlockedMessageRef = useRef("");
   const answerSyncTimersRef = useRef({});
   const markQuizRef = useRef(null);
@@ -8186,7 +8187,7 @@ export default function App() {
                   {selectedBillingPlan.name}
                   {selectedBillingPlan.selectedIntervalLabel ? ` - ${selectedBillingPlan.selectedIntervalLabel}` : ""} {selectedBillingPlan.selectedPrice || selectedBillingPlan.price || ""}
                 </h3>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">PayFast redirects to online checkout and activates the paid plan automatically after PayFast confirms the payment. PayShap creates a bank reference for manual verification.</p>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">{selectedBillingPlan.trial ? "Choose PayFast to securely set up automatic billing after the seven-day trial, or start the one-time no-card trial. Mabaso AI never collects banking credentials itself." : "PayFast redirects to online checkout and activates the paid plan automatically after confirmation. PayShap creates a bank reference for manual verification."}</p>
               </div>
               <button type="button" onClick={() => setSelectedBillingPlan(null)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Change plan</button>
             </div>
@@ -8206,14 +8207,22 @@ export default function App() {
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => startBillingCheckout(selectedBillingPlan, "payfast")}
+                onClick={() => startBillingCheckout(selectedBillingPlan, "payfast", { trial: Boolean(selectedBillingPlan.trial) })}
                 disabled={Boolean(billingCheckoutPlanId)}
                 className="rounded-2xl bg-white px-4 py-4 text-left text-sm font-bold text-slate-950 transition hover:bg-cyan-50 disabled:cursor-wait disabled:opacity-70"
               >
-                {billingCheckoutPlanId === `payfast:${selectedBillingPlan.id}` ? "Opening PayFast..." : "Pay with PayFast"}
-                <span className="mt-2 block text-xs font-semibold text-slate-600">Card, EFT, or PayFast-supported checkout. Automatic activation after confirmation.</span>
+                {billingCheckoutPlanId === `${selectedBillingPlan.trial ? "trial-payfast" : "payfast"}:${selectedBillingPlan.id}` ? "Opening PayFast..." : selectedBillingPlan.trial ? "Start trial with PayFast" : "Pay with PayFast"}
+                <span className="mt-2 block text-xs font-semibold text-slate-600">{selectedBillingPlan.trial ? "PayFast securely collects the supported payment method. No subscription charge today; billing starts after seven days unless cancelled." : "Card, EFT, or PayFast-supported checkout. Automatic activation after confirmation."}</span>
               </button>
-              <button
+              {selectedBillingPlan.trial ? <button
+                type="button"
+                onClick={() => startBillingCheckout(selectedBillingPlan, "nocard", { trial: true })}
+                disabled={Boolean(billingCheckoutPlanId)}
+                className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-left text-sm font-bold text-emerald-50 transition hover:bg-emerald-300/15 disabled:cursor-wait disabled:opacity-70"
+              >
+                {billingCheckoutPlanId === `trial-nocard:${selectedBillingPlan.id}` ? "Starting trial..." : "Start no-card trial"}
+                <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Starts once per eligible account and ends without automatic renewal.</span>
+              </button> : <button
                 type="button"
                 onClick={() => startBillingCheckout(selectedBillingPlan, "payshap")}
                 disabled={Boolean(billingCheckoutPlanId)}
@@ -8221,7 +8230,7 @@ export default function App() {
               >
                 {billingCheckoutPlanId === `payshap:${selectedBillingPlan.id}` ? "Generating PayShap..." : "Pay with PayShap"}
                 <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Manual verification happens before the plan activates.</span>
-              </button>
+              </button>}
             </div>
             {billingCheckoutMessage ? (
               <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
@@ -8265,14 +8274,14 @@ export default function App() {
                     type="button"
                     onClick={(event) => {
                       event.preventDefault();
-                      void startBillingCheckout(plan, "payfast", { trial: true });
+                      selectBillingPlanForPayment({ ...plan, trial: true });
                     }}
                     disabled={Boolean(billingCheckoutPlanId)}
                     className="w-full rounded-2xl bg-emerald-400 px-4 py-3 text-sm font-black text-emerald-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-70"
                   >
-                    {billingCheckoutPlanId === "trial:pro_student" ? "Starting trial..." : "Start 7-day free trial"}
+                    Choose 7-day free trial
                   </button>
-                  <p className="mt-2 text-xs leading-5 text-slate-300">No card required. Pro access starts immediately for seven days. One trial per account.</p>
+                  <p className="mt-2 text-xs leading-5 text-slate-300">Choose PayFast renewal setup or the no-card option. One seven-day trial per eligible account.</p>
                 </div>
               ) : null}
               {plan.billingOptions?.length ? (
@@ -8865,7 +8874,11 @@ export default function App() {
     if (!nextInviteRoomId) return;
     persistPendingRoomInviteId(nextInviteRoomId);
     setHighlightedInviteRoomId((current) => current || nextInviteRoomId);
-  }, [browserPath]);
+    if (!authToken) {
+      setAuthMessage("Sign in with the email address that was invited. Your room invitation will open automatically after sign-in.");
+      setShowLandingAuthOptions(true);
+    }
+  }, [browserPath, authToken]);
 
   useEffect(() => {
     if (!authToken) return;
@@ -12273,7 +12286,7 @@ export default function App() {
         {isShareMaterialPickerOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsShareMaterialPickerOpen(false)}><section className="collaboration-history-picker" role="dialog" aria-modal="true" aria-label="Share saved material" onMouseDown={(event) => event.stopPropagation()}><div className="force-mobile-stack flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">Your Mabaso history</p><h3 className="mt-1 text-xl font-semibold text-white">Share a saved material</h3><p className="mt-2 text-sm leading-6 text-slate-300">Choose any saved material. It is added to this room, then opened here immediately.</p></div><button type="button" onClick={() => setIsShareMaterialPickerOpen(false)} className="rounded-lg px-3 py-2 text-sm text-slate-200">Close</button></div><div className="mt-4 max-h-[55dvh] space-y-2 overflow-y-auto">{historyItems.length ? historyItems.map((item) => <button key={item.id} type="button" onClick={() => void shareHistoryMaterialToRoom(item)} disabled={Boolean(isSharingHistoryMaterialId)} className="collaboration-history-picker-item"><span className="collaboration-material-icon is-study_guide">PDF</span><span><strong>{item.title || item.fileName || "Saved study material"}</strong><small>{item.subject || item.fileName || "Mabaso AI material"}</small></span><b>{isSharingHistoryMaterialId === item.id ? "Sharing..." : "Share & Open"}</b></button>) : <p className="collaboration-empty-copy">No saved materials are available yet. Generate a Study Guide or save a workspace first.</p>}</div></section></div> : null}
         {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><div className="mt-4 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); setIsCreateRoomPanelOpen(true); setCollaborationMobileView("rooms"); }}>Create Room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }}>Share Existing Material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setCollaborationMobileView("board"); setIsBoardComposerOpen(true); }}>Add to Board</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); roomBoardImageInputRef.current?.click(); }}>Upload board photo</button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)}>Cancel</button></div></section></div> : null}
         {selectedCollaborationBoardItem ? <CollaborationBoardItemDialog item={selectedCollaborationBoardItem} canEdit={selectedCollaborationBoardItem.owner_email === normalizedAuthEmail || Boolean(activeRoom?.can_manage)} onClose={() => setSelectedCollaborationBoardItem(null)} onSave={saveCollaborationBoardItem} /> : null}
-        {isCollaborationMembersOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationMembersOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room members" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room members</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationMembersOpen(false)} aria-label="Close members"><X className="h-5 w-5" /></button></div><div className="collaboration-members-list">{(activeRoom.members || []).map((member) => <div key={member.email}><span>{String(member.email || "M").slice(0, 2).toUpperCase()}</span><p><strong>{member.email === normalizedAuthEmail ? "You" : String(member.email || "Member").split("@")[0]}</strong><small>{member.role || "member"}</small></p>{activeRoom.can_manage && member.role !== "owner" && member.email !== normalizedAuthEmail ? <button type="button" className="collaboration-remove-member" onClick={() => void removeMemberFromActiveRoom(member)} disabled={removingRoomMemberEmail === member.email}>{removingRoomMemberEmail === member.email ? "Removing..." : "Remove"}</button> : null}</div>)}</div>{activeRoom.is_owner ? <div className="collaboration-dialog-invite"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite student by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>{isAddingRoomMembers ? "Inviting..." : "Invite"}</button></div> : null}</section></div> : null}
+        {isCollaborationMembersOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationMembersOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room members" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room members</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationMembersOpen(false)} aria-label="Close members"><X className="h-5 w-5" /></button></div><div className="collaboration-members-list">{(activeRoom.members || []).map((member) => <div key={member.email}><span>{String(member.email || "M").slice(0, 2).toUpperCase()}</span><p><strong>{member.email === normalizedAuthEmail ? "You" : String(member.email || "Member").split("@")[0]}</strong><small>{member.role || "member"}</small></p>{activeRoom.is_owner && member.role !== "owner" && member.email !== normalizedAuthEmail ? <button type="button" className="collaboration-remove-member" onClick={() => void removeMemberFromActiveRoom(member)} disabled={removingRoomMemberEmail === member.email}>{removingRoomMemberEmail === member.email ? "Removing..." : "Remove"}</button> : null}</div>)}</div>{activeRoom.is_owner ? <div className="collaboration-dialog-invite"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite student by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>{isAddingRoomMembers ? "Inviting..." : "Invite"}</button></div> : null}</section></div> : null}
         {isCollaborationSettingsOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationSettingsOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room settings" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room settings</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationSettingsOpen(false)} aria-label="Close room settings"><X className="h-5 w-5" /></button></div><div className="collaboration-setting-list"><div><strong>Room access</strong><small>Only the owner and invited members can open this room.</small></div><div><strong>Test answers</strong><small>{activeRoom.test_visibility === "shared" ? "Members can compare shared answers." : "Each member's answers remain private."}</small></div>{activeRoom.is_owner ? <div className="collaboration-setting-buttons"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={activeRoom.test_visibility === "private" ? "is-active" : ""}>Private answers</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={activeRoom.test_visibility === "shared" ? "is-active" : ""}>Shared answers</button></div> : null}{activeRoom.is_owner ? <div className="collaboration-setting-toggle"><div><strong>Allow members to approve join requests</strong><small>When off, only the Room owner can review requests.</small></div><ToggleSwitch checked={Boolean(activeRoom.allow_member_approvals)} onChange={(checked) => void updateRoomMemberApprovalSetting(checked)} disabled={isUpdatingRoomApprovalSettings} aria-label="Allow members to approve join requests" /></div> : null}{activeRoom.can_manage_join_requests ? <div className="collaboration-join-requests"><strong>Pending join requests</strong>{(activeRoom.pending_join_requests || []).length ? (activeRoom.pending_join_requests || []).map((request) => <article key={request.id}><span>{String(request.requester_email || "Student").split("@")[0]}</span><div><button type="button" onClick={() => void decideRoomJoinRequest(request.id, "approved")} disabled={decidingJoinRequestId === request.id}>Approve</button><button type="button" className="is-danger" onClick={() => void decideRoomJoinRequest(request.id, "declined")} disabled={decidingJoinRequestId === request.id}>Decline</button></div></article>) : <small>No pending requests.</small>}</div> : null}<button type="button" onClick={() => { setIsCollaborationSettingsOpen(false); setIsCollaborationMembersOpen(true); }}>Manage members</button>{!activeRoom.is_owner ? <button type="button" className="is-danger" onClick={() => { setIsCollaborationSettingsOpen(false); void leaveCollaborationRoom(); }}>Leave room</button> : null}</div></section></div> : null}
         {selectedCollaborationMediaItem ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label={`${selectedCollaborationMediaItem.title} viewer`} onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>{selectedCollaborationMediaItem.material_type}</p><h3>{selectedCollaborationMediaItem.title}</h3></div><button type="button" onClick={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }} aria-label="Close media viewer"><X className="h-5 w-5" aria-hidden="true" /></button></div>{isLoadingCollaborationMedia ? <div className="collaboration-media-loading"><LoaderCircle className="h-6 w-6 animate-spin" aria-hidden="true" />Opening media...</div> : selectedCollaborationMediaUrl ? selectedCollaborationMediaItem.material_type === "video" ? <video src={selectedCollaborationMediaUrl} controls playsInline preload="metadata" /> : <img src={selectedCollaborationMediaUrl} alt={selectedCollaborationMediaItem.title || "Room photo"} /> : <p className="collaboration-empty-copy">This media could not be opened.</p>}</section></div> : null}
         {selectedRoomBoardImageId && selectedRoomBoardImage ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setSelectedRoomBoardImageId("")}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label="Board photo viewer" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Board photo</p><h3>{selectedRoomBoardImage.name || "Room photo"}</h3></div><button type="button" onClick={() => setSelectedRoomBoardImageId("")} aria-label="Close board photo"><X className="h-5 w-5" aria-hidden="true" /></button></div><img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Board photo"} /></section></div> : null}
@@ -18804,13 +18817,15 @@ export default function App() {
     hasLoadedTimetableRef.current = true;
     loadedTimetableModeRef.current = loadMode;
     const cachedPayload = readCachedStudyTimetablePayload();
-    if (!timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload)) {
+    const hasCachedTimetable = !timetablePlanningStateRef.current.isEditing && hasStudyTimetablePayloadContent(cachedPayload);
+    if (hasCachedTimetable) {
       applyTimetablePayload(cachedPayload, { preferCurrentWeek: true });
     }
-    setIsLoadingTimetable(true);
+    // Cached timetables render immediately while the authoritative copy refreshes quietly.
+    setIsLoadingTimetable(!hasCachedTimetable);
     setTimetableMessage("");
     try {
-      const response = await authFetch("/study-timetable", { timeoutMs: 60000 });
+      const response = await authFetch("/study-timetable", { timeoutMs: 15000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
       if (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview) return;
@@ -18836,7 +18851,7 @@ export default function App() {
     } catch (err) {
       hasLoadedTimetableRef.current = false;
       loadedTimetableModeRef.current = "";
-      setTimetableMessage(getReadableRequestError(err));
+      if (!hasCachedTimetable) setTimetableMessage(getReadableRequestError(err));
     } finally {
       setIsLoadingTimetable(false);
     }
@@ -20300,16 +20315,17 @@ export default function App() {
       navigateToPath("/pricing");
       return;
     }
-    const provider = String(paymentProvider || "").trim().toLowerCase() === "payfast" ? "payfast" : "payshap";
-    if (trial) {
+    const requestedProvider = String(paymentProvider || "").trim().toLowerCase();
+    const provider = requestedProvider === "payfast" ? "payfast" : requestedProvider === "nocard" ? "nocard" : "payshap";
+    if (trial && provider === "nocard") {
       setSelectedBillingPlan(null);
       setManualPaymentRequest(null);
     }
     setBillingCheckoutMessage(trial ? "Starting your free trial..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
-    const checkoutKey = trial ? `trial:${plan.id}` : `${provider}:${plan.id}`;
+    const checkoutKey = trial ? `trial-${provider}:${plan.id}` : `${provider}:${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
     try {
-      if (trial) {
+      if (trial && provider === "nocard") {
         const response = await authFetch("/api/billing/trial/start", {
           method: "POST",
           timeoutMs: 15000,
@@ -22405,6 +22421,16 @@ export default function App() {
       if (err?.message) setStatus("Opened the class room from your requests.");
     }
   };
+
+  useEffect(() => {
+    if (!authChecked || !authServerStateReady || !authToken || !authEmail) return;
+    const pendingRoomId = loadStoredRoomInviteId();
+    if (!pendingRoomId || processedRoomInviteIdRef.current === pendingRoomId) return;
+    processedRoomInviteIdRef.current = pendingRoomId;
+    void joinCollaborationRequest(pendingRoomId).finally(() => {
+      persistPendingRoomInviteId("");
+    });
+  }, [authChecked, authServerStateReady, authToken, authEmail]);
 
   useEffect(() => {
     if (!authToken) {

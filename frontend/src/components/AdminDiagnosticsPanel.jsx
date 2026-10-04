@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const TABS = [
   ["inspector", "User Inspector"],
   ["timeline", "User Timeline"],
+  ["entitlement", "Entitlement Trace"],
+  ["trials", "Trial Trace"],
+  ["quotas", "Quota Trace"],
+  ["billing", "Payments & Refunds"],
+  ["authentication", "Authentication"],
+  ["generations", "Background Jobs"],
   ["events", "API Errors & Traces"],
   ["system", "System & Deployment"],
 ];
@@ -63,7 +69,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadOverview = async () => {
+  const loadOverview = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -73,9 +79,9 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [authFetch]);
 
-  useEffect(() => { void loadOverview(); }, []);
+  useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -87,7 +93,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
       }
     }, query ? 240 : 0);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [authFetch, query]);
 
   const inspectUser = async (email) => {
     if (!email) return;
@@ -158,6 +164,18 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
       ) : null}
 
       {tab === "timeline" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">{selectedEmail ? `${selectedEmail} timeline` : "User timeline"}</h3><p className="mt-2 text-sm text-slate-500">Authentication, trial, billing, generation, quota, and admin events are ordered newest first.</p><div className="mt-5"><Timeline items={snapshot?.timeline || []} /></div></article> : null}
+
+      {tab === "entitlement" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Entitlement trace</h3><p className="mt-2 text-sm text-slate-500">This is the real resolver decision, not an independent dashboard calculation.</p>{snapshot ? <><div className="mt-5 grid gap-3 sm:grid-cols-3"><Metric label="Effective entitlement" value={title(entitlement.entitlement)} tone="emerald" /><Metric label="Reason" value={title(entitlement.reason)} tone="sky" /><Metric label="Plan source" value={title(entitlement.source || entitlement.reason)} /></div><div className="mt-5 space-y-2">{(snapshot.entitlement_trace || []).map((step, index) => <div key={step.step} className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm ${step.matched ? "bg-emerald-50 text-emerald-800" : "bg-slate-50 text-slate-600"}`}><span>{index + 1}. {title(step.step)}</span><strong>{step.matched ? "YES" : "NO"}</strong></div>)}</div></> : <p className="mt-5 text-sm text-slate-500">Select a user in User Inspector.</p>}</article> : null}
+
+      {tab === "trials" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-xl font-semibold text-slate-950">Free-trial trace</h3><p className="mt-2 text-sm text-slate-500">Eligibility, activation, expiry, current paid state, and the exact entitlement result.</p></div><div className="rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">{overview?.trial_counts?.active || 0} active trials</div></div>{snapshot ? <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Eligible" value={snapshot.trial?.eligible ? "Yes" : "No"} tone={snapshot.trial?.eligible ? "emerald" : "slate"} /><Metric label="Trial status" value={title(snapshot.trial?.status)} /><Metric label="Started" value={formatDate(snapshot.trial?.started_at)} /><Metric label="Ends" value={formatDate(snapshot.trial?.ends_at)} /><Metric label="Already used" value={snapshot.trial?.used ? "Yes" : "No"} /><Metric label="Expired" value={snapshot.trial?.expired ? "Yes" : "No"} tone={snapshot.trial?.expired ? "amber" : "emerald"} /><Metric label="Remaining" value={`${Math.floor((snapshot.trial?.remaining_seconds || 0) / 3600)} hours`} /><Metric label="Effective access" value={title(entitlement.entitlement)} tone="sky" /></div> : <p className="mt-5 text-sm text-slate-500">Select a user in User Inspector to view their trial lifecycle.</p>}</article> : null}
+
+      {tab === "quotas" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Quota trace</h3><p className="mt-2 text-sm text-slate-500">Server-side usage and remaining allowance from the active quota profile.</p>{snapshot ? <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(snapshot.usage?.features || []).map((feature) => <Metric key={feature.feature} label={feature.label} value={feature.unlimited ? `${feature.used} used · Unlimited` : `${feature.used} / ${feature.limit} · ${feature.remaining} remaining`} tone={feature.remaining === 0 ? "rose" : "slate"} />)}</div> : <p className="mt-5 text-sm text-slate-500">Select a user in User Inspector.</p>}</article> : null}
+
+      {tab === "billing" ? <div className="grid gap-5 xl:grid-cols-2"><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Payment trace</h3><div className="mt-4 space-y-3">{(snapshot?.payments || []).length ? snapshot.payments.map((payment) => <div key={payment.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex justify-between gap-3"><strong>{title(payment.plan_id)}</strong><span>{payment.currency || "ZAR"} {payment.amount || payment.amount_zar || "--"}</span></div><p className="mt-2 text-slate-500">{title(payment.status)} · {formatDate(payment.paid_at || payment.created_at)}</p><p className="mt-1 break-all font-mono text-xs text-slate-400">{payment.pf_payment_id || payment.provider_payment_id || "No provider ID"}</p></div>) : <p className="text-sm text-slate-500">No payments for the selected user.</p>}</div></article><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Refund trace</h3><div className="mt-4 space-y-3">{(snapshot?.refunds || []).length ? snapshot.refunds.map((refund) => <div key={refund.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex justify-between gap-3"><strong>{title(refund.status)}</strong><span>{refund.currency} {refund.requested_amount}</span></div><p className="mt-2 text-slate-500">{title(refund.reason_code)} · {formatDate(refund.requested_at)}</p>{refund.provider_error ? <p className="mt-2 text-rose-700">{refund.provider_error}</p> : null}</div>) : <p className="text-sm text-slate-500">No refund requests for the selected user.</p>}</div></article></div> : null}
+
+      {tab === "authentication" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Authentication trace</h3><p className="mt-2 text-sm text-slate-500">Safe session metadata only; tokens, cookies, passwords, and OAuth secrets are never displayed.</p><div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(snapshot?.sessions || []).map((session) => <div key={session.session_id} className="rounded-2xl bg-slate-50 p-4 text-sm"><strong>{title(session.status)}</strong><p className="mt-2 text-slate-500">Login {formatDate(session.login_at)}</p><p className="mt-1 text-slate-500">Last activity {formatDate(session.last_activity_at)}</p><p className="mt-1 text-slate-500">{session.city || "Unknown city"}, {session.country || "Unknown country"}</p></div>)}</div></article> : null}
+
+      {tab === "generations" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Background generation jobs</h3><div className="mt-5 space-y-3">{(snapshot?.generations || []).length ? snapshot.generations.map((generation) => <div key={generation.generation_id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex flex-wrap justify-between gap-2"><strong>{title(generation.status)}</strong><span>{title(generation.activity_type)}</span></div><p className="mt-2 break-all font-mono text-xs text-slate-500">{generation.generation_id}</p><p className="mt-2 text-slate-500">Started {formatDate(generation.started_at)} · Updated {formatDate(generation.updated_at)}</p></div>) : <p className="text-sm text-slate-500">No background generations for the selected user.</p>}</div></article> : null}
 
       {tab === "events" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">API errors and trace IDs</h3><p className="mt-2 text-sm text-slate-500">Only sanitized operational messages are shown. High-volume token updates are not logged.</p><div className="mt-5"><Timeline items={recentErrors} /></div></article> : null}
 

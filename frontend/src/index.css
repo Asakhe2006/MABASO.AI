@@ -15545,6 +15545,28 @@ body > .study-guide-focus-stage .study-guide-fallback.study-guide-slide-active {
   .collaboration-guide-slide-thumbnails { padding-right:14px; padding-left:14px; }
 }
 
+/* Focus mode always uses the complete viewport canvas, including short slides.
+   The active slide itself scrolls only when its content is taller than the canvas. */
+body.study-guide-focus-open > .study-guide-focus-stage {
+  width: 100vw !important;
+  height: 100dvh !important;
+  min-height: 100dvh !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-deck {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-active {
+  align-self: stretch !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  overflow-y: auto !important;
+}
+
 @media (max-width:768px) {
   .study-chat-page-composer .ai-chat-mode-trigger { width:auto !important; min-width:64px !important; max-width:92px !important; min-height:36px !important; padding:0 9px !important; border-radius:999px !important; }
   .study-chat-page-composer .ai-chat-mode-trigger-label,

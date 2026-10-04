@@ -4,9 +4,11 @@ Mabaso AI Collaboration Rooms use the same protected room data on desktop and mo
 
 ## Room roles
 
-The room owner creates the room and manages its membership and answer-visibility setting. An authorised room manager can perform the management actions returned by the backend. A regular member can read and contribute to the room but cannot remove another student's protected content. Someone who is not a member cannot open a private room by changing the room address or guessing its identifier.
+The room owner creates the room and manages its membership and answer-visibility setting. Only the owner can remove another member. An authorised room manager can perform only the separate management actions returned by the backend; that status does not grant member-removal permission. A regular member can read and contribute to the room but cannot remove another student or another student's protected content. Someone who is not a member cannot open a private room by changing the room address or guessing its identifier.
 
 The member list shows the owner and current members. The **Members** button opens this list. The **Invite** control accepts account email addresses, while discovery invitations use an opaque public profile identifier so the discovered student's email address is not exposed. The **Room settings** button contains member management and test-answer visibility. The **Leave room** button is available to regular members and requires confirmation.
+
+An explicitly invited user does not have to create a separate join request. An uninvited user who finds a discoverable room receives **Request to Join** instead of private access. Requests are persisted as pending until approved or declined. The owner can optionally allow existing members to review requests, but only the owner can change that permission; pending users remain outside every private room API and realtime channel.
 
 ## Private and shared answers
 
@@ -33,4 +35,3 @@ On mobile, **Rooms** always returns to the room list. **Chat** and **Board** req
 On desktop, the sidebar room controls, category filters, material library, board and chat use the same backend data. **All Materials**, **Study Guides**, **Notes**, **PowerPoints**, **Mind Maps**, **Podcasts**, **Images** and **Videos** filter the room library; they do not create fake content or reveal another room's materials.
 
 Every write action displays either a success confirmation or an understandable error inside Collaboration. Buttons are disabled when required context is missing, and destructive actions require confirmation where the result cannot be immediately undone.
-

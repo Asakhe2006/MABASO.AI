@@ -297,6 +297,14 @@ class CollaborationRoomFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(deleted_message["ok"])
 
+        with self.assertRaises(main.HTTPException) as unauthorized_removal:
+            await main.remove_collaboration_room_member(
+                room_id,
+                owner,
+                current_user="student2@example.com",
+            )
+        self.assertEqual(unauthorized_removal.exception.status_code, 403)
+
         removed = await main.remove_collaboration_room_member(
             room_id,
             "student2@example.com",

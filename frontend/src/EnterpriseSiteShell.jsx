@@ -601,7 +601,7 @@ export function EnterpriseSiteShell({
                 </article>
               ))}
             </div>
-            <p className="enterprise-pricing-note">Eligible accounts can start Mabaso AI's current one-time trial without a card. The trial is separate from PayFast and does not create an automatic renewal. Paid subscriptions begin only after the user deliberately chooses a plan and the payment provider confirms it.</p>
+            <p className="enterprise-pricing-note">Eligible accounts can choose either PayFast renewal setup for the seven-day trial or the clearly separate no-card trial. PayFast securely collects supported payment details and only renews after the displayed trial period unless cancelled; Mabaso AI never collects those credentials itself. The no-card option creates no recurring subscription.</p>
           </section>
         ) : null}
 
