@@ -77,6 +77,17 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertIn(result["system_health"]["environment"], {"development", "production"})
         self.assertIn("MATPLOTLIB", result["environment_checks"])
 
+    def test_payfast_checkout_uses_the_registered_webhook_route(self):
+        with patch.object(main, "APP_PUBLIC_URL", "https://mabaso-ai-web.onrender.com"):
+            fields = main.build_payfast_checkout_fields(
+                request=make_request(),
+                email="student@example.test",
+                checkout_id="checkout-123",
+                plan=main.get_billing_plan("pro_student"),
+                trial=True,
+            )
+        self.assertEqual(fields["notify_url"], "https://api.example.test/api/billing/payfast/webhook")
+
     def test_openai_cost_summary_uses_returned_amount_without_token_pricing(self):
         summary = main.summarize_openai_cost_buckets([{
             "data": [{

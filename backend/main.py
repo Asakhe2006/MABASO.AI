@@ -18672,7 +18672,7 @@ def build_payfast_checkout_fields(
         "merchant_key": PAYFAST_MERCHANT_KEY,
         "return_url": f"{app_base_url}/payment-success?session_id={quote(checkout_id)}",
         "cancel_url": f"{app_base_url}/pricing?billing=cancelled&session_id={quote(checkout_id)}",
-        "notify_url": f"{api_base_url}/api/payfast/webhook",
+        "notify_url": f"{api_base_url}/api/billing/payfast/webhook",
         "name_first": email.split("@", 1)[0][:100],
         "email_address": email[:100],
         "m_payment_id": checkout_id,
