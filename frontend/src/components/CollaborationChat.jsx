@@ -165,6 +165,7 @@ export default function CollaborationChat({
   isRecordingPaused = false,
   isUploadingVoice = false,
   isSending = false,
+  isLoading = false,
   mediaUrl,
   onLoadOlder,
   isLoadingOlder = false,
@@ -246,7 +247,7 @@ export default function CollaborationChat({
         </header>
         <div ref={listRef} className="mabaso-chat-message-list" onScroll={(event) => { const node = event.currentTarget; if (node.scrollHeight - node.scrollTop - node.clientHeight < 100) setShowNewMessage(false); }}>
           {messages.length >= 50 && !olderExhausted ? <button type="button" className="mabaso-load-older" disabled={isLoadingOlder} onClick={async () => { const loaded = await onLoadOlder?.(); if (!loaded) setOlderState({ roomId: room?.id || "", exhausted: true }); }}>{isLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button> : null}
-          {messages.length ? messages.map((message, index) => <MessageBubble key={message.id} message={message} previous={messages[index - 1]} currentUserEmail={currentUserEmail} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} mediaUrl={mediaUrl} onReply={(item) => { setReplyingTo(item); textareaRef.current?.focus(); }} onDelete={onDeleteMessage} />) : <div className="mabaso-chat-empty"><span>MA</span><h3>Start the conversation.</h3><p>Share questions, lecture discussions, voice notes and study ideas with your classmates.</p></div>}
+          {messages.length ? messages.map((message, index) => <MessageBubble key={message.id} message={message} previous={messages[index - 1]} currentUserEmail={currentUserEmail} activeVoiceId={activeVoiceId} setActiveVoiceId={setActiveVoiceId} mediaUrl={mediaUrl} onReply={(item) => { setReplyingTo(item); textareaRef.current?.focus(); }} onDelete={onDeleteMessage} />) : isLoading ? <div className="mabaso-chat-empty" role="status" aria-live="polite"><span>MA</span><h3>Loading room chat…</h3><p>Your messages are being opened securely.</p></div> : <div className="mabaso-chat-empty"><span>MA</span><h3>Start the conversation.</h3><p>Share questions, lecture discussions, voice notes and study ideas with your classmates.</p></div>}
         </div>
         {showNewMessage ? <button type="button" className="mabaso-new-message" onClick={() => { const list = listRef.current; if (list) list.scrollTop = list.scrollHeight; setShowNewMessage(false); }}><ArrowDown aria-hidden="true" /> New message</button> : null}
         <footer className="mabaso-chat-composer-shell">

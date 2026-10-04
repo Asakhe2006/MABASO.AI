@@ -175,7 +175,7 @@ services:
       - key: FROM_EMAIL
         sync: false
       - key: SUPPORT_EMAIL
-        value: "mabasoasakhe@gmail.com"
+        value: "mabasoasakhe10@gmail.com"
       - key: SMTP_USE_TLS
         value: "true"
       - key: SMTP_USE_SSL

@@ -15567,6 +15567,31 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-active
   overflow-y: auto !important;
 }
 
+/* Keep the final focus-mode grid names aligned with the actual child areas.
+   The previous `thumbnails`/`navigation` names created implicit grid tracks,
+   which left short slides floating in only part of the viewport. */
+@media (min-width: 769px) {
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar toolbar"
+      "thumbs slide"
+      "thumbs nav" !important;
+    grid-template-columns: clamp(230px, 18vw, 300px) minmax(0, 1fr) !important;
+    grid-template-rows: 58px minmax(0, 1fr) 68px !important;
+  }
+}
+
+@media (max-width: 768px) {
+  body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-deck {
+    grid-template-areas:
+      "toolbar"
+      "slide"
+      "nav" !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: 44px minmax(0, 1fr) 58px !important;
+  }
+}
+
 @media (max-width:768px) {
   .study-chat-page-composer .ai-chat-mode-trigger { width:auto !important; min-width:64px !important; max-width:92px !important; min-height:36px !important; padding:0 9px !important; border-radius:999px !important; }
   .study-chat-page-composer .ai-chat-mode-trigger-label,

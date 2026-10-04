@@ -202,76 +202,23 @@ function LoginWall({
 }
 
 function ContactSupportForm({
+  supportForm = {},
+  onSupportFieldChange,
+  onSupportSubmit,
   isAuthenticated = false,
 }) {
-  const supportEmail = "mabasoasakhe10@gmail.com";
-  const supportPhone = "+27632089201";
-
+  const categories = supportForm.categories || ["General help", "Account access", "Study tools", "Collaboration", "Billing and payments"];
   return (
     <section className="mt-8 rounded-[30px] border border-white/10 bg-slate-950/70 p-5 xl:p-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Contact Mabaso AI</p>
-          <h2 className="mt-3 text-2xl font-semibold text-white">Reach Mabaso AI through direct support channels.</h2>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-            Whether you need help with your account, lecture capture, study generation, or collaboration, you can contact Mabaso AI directly by email or phone.
-          </p>
-        </div>
-        <span className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200">
-          {isAuthenticated ? "Signed-in access available" : "Public support information"}
-        </span>
-      </div>
-      <div className="mt-6 overflow-hidden rounded-[26px] border border-white/10 bg-white/[0.04]">
-        <div className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 bg-white/[0.05] text-sm font-semibold text-white">
-          <div className="px-4 py-3">Support Channel</div>
-          <div className="border-l border-white/10 px-4 py-3">Availability</div>
-          <div className="border-l border-white/10 px-4 py-3">Details</div>
-        </div>
-        {[
-          ["Email Support", "All users", supportEmail],
-          ["In-App Messaging", "Signed-in users", supportPhone],
-          ["Phone Call", "Direct contact", supportPhone],
-        ].map(([channel, availability, detail]) => (
-          <div key={channel} className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 text-sm text-slate-200 last:border-b-0">
-            <div className="px-4 py-4 font-semibold text-white">{channel}</div>
-            <div className="border-l border-white/10 px-4 py-4">{availability}</div>
-            <div className="border-l border-white/10 px-4 py-4">{detail}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6 grid gap-4 xl:grid-cols-3">
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Email Support</p>
-          <p className="mt-3 text-sm leading-7 text-slate-300">For all enquiries, send an email directly to Mabaso AI support.</p>
-          <a href={`mailto:${supportEmail}`} className="mt-4 inline-flex rounded-full border border-cyan-300/20 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/15">
-            {supportEmail}
-          </a>
-        </article>
-
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">In-App Messaging</p>
-          <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-7 text-slate-300">
-            <li>Signed-in users can ask for support while using Mabaso AI.</li>
-            <li>Use <span className="font-semibold text-white">{supportPhone}</span> as the contact number for in-app support guidance.</li>
-          </ul>
-        </article>
-
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Phone Support</p>
-          <p className="mt-3 text-sm leading-7 text-slate-300">For direct phone calls, contact Mabaso AI using the number below.</p>
-          <a href={`tel:${supportPhone}`} className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
-            {supportPhone}
-          </a>
-        </article>
-      </div>
-
-      <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-        <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/70">Response Notes</p>
-        <p className="mt-3 text-sm leading-7 text-slate-300">
-          Response times may vary depending on support volume. For the clearest help, include the page you were using, what you clicked, and what you expected to happen.
-        </p>
-      </div>
+      <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/70">Mabaso AI Support</p>
+      <h2 className="mt-3 text-2xl font-semibold text-white">Send your question securely.</h2>
+      <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Describe the page you were using, what you clicked, and what you expected to happen. The message is delivered to Mabaso AI Support without publishing the support mailbox.</p>
+      <form className="mt-6 grid gap-4" onSubmit={(event) => { event.preventDefault(); onSupportSubmit?.(); }}>
+        {!isAuthenticated ? <label><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Your email</span><input type="email" required value={supportForm.email || ""} onChange={(event) => onSupportFieldChange?.("email", event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-white outline-none focus:border-emerald-300" placeholder="you@example.com" /></label> : null}
+        <label><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Topic</span><select value={supportForm.category || categories[0]} onChange={(event) => onSupportFieldChange?.("category", event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-[#07140f] px-4 py-3 text-sm text-white outline-none focus:border-emerald-300">{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
+        <label><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Question</span><textarea required rows={6} maxLength={3000} value={supportForm.message || ""} onChange={(event) => onSupportFieldChange?.("message", event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-7 text-white outline-none focus:border-emerald-300" placeholder="Tell us what you need help with..." /></label>
+        <div className="flex flex-wrap items-center gap-3"><button type="submit" disabled={supportForm.isSubmitting || !(supportForm.message || "").trim()} className="rounded-full bg-emerald-400 px-5 py-3 text-sm font-bold text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50">{supportForm.isSubmitting ? "Sending..." : "Send to Mabaso AI Support"}</button>{supportForm.feedback ? <p className="text-sm text-emerald-100" role="status">{supportForm.feedback}</p> : null}</div>
+      </form>
     </section>
   );
 }
@@ -510,21 +457,20 @@ export function EnterpriseSiteShell({
   const [activeFaqIndex, setActiveFaqIndex] = useState(0);
   const [activeDocumentSection, setActiveDocumentSection] = useState("overview");
 
-  const isLocked = !isAuthenticated && page.access !== "public";
-  const isStudyWorkflowPage = page.route === "/resources/study-workflow";
-  const isProseOnlyGuide = isStudyWorkflowPage || page.route.startsWith("/collaboration/");
+  const isLocked = false; // Product documentation is public; only live user data is session-gated.
+  const isProseOnlyGuide = page.route.startsWith("/collaboration/");
   const filteredFaq = useMemo(() => {
     if (!page.faq?.length) return [];
     const normalizedQuery = faqQuery.trim().toLowerCase();
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
-  const visibleContains = isProseOnlyGuide ? [] : (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const visibleContains = (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
   // Public product pages should read like useful documentation, not a wall of
   // short marketing capability labels. Detailed tools remain available in the
   // authenticated workspace and in the page's full prose/FAQ sections.
   const visibleModules = [];
-  const visibleWorkflow = isProseOnlyGuide ? [] : (page.workflow || []).filter(isUsefulPublicCopy);
+  const visibleWorkflow = (page.workflow || []).filter(isUsefulPublicCopy);
   const visibleFileGroups = (page.fileGroups || [])
     .map((group) => ({ ...group, items: (group.items || []).filter(isUsefulPublicCopy) }))
     .filter((group) => isUsefulPublicCopy(group.label) && group.items.length);
@@ -556,7 +502,7 @@ export function EnterpriseSiteShell({
 
   return (
     <div className="enterprise-site-shell min-h-screen bg-[var(--page-bg)] text-slate-100">
-      <main className="relative mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+      <main className={`relative mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8 ${isProseOnlyGuide ? "enterprise-prose-only-guide" : ""}`}>
         <EnterpriseNavigation currentRoute={currentRoute} isAuthenticated={isAuthenticated} onNavigate={onNavigate} onOpenApp={onOpenApp} onOpenSignIn={onOpenSignIn} onPrepareSignIn={onPrepareSignIn} />
 
         <section id="overview" className="enterprise-page-hero enterprise-document-header">
@@ -601,7 +547,7 @@ export function EnterpriseSiteShell({
                 </article>
               ))}
             </div>
-            <p className="enterprise-pricing-note">Eligible accounts can choose either PayFast renewal setup for the seven-day trial or the clearly separate no-card trial. PayFast securely collects supported payment details and only renews after the displayed trial period unless cancelled; Mabaso AI never collects those credentials itself. The no-card option creates no recurring subscription.</p>
+            <p className="enterprise-pricing-note">Eligible accounts can begin the seven-day trial through PayFast. PayFast securely authorises the recurring subscription and collects the supported payment details; Mabaso AI never receives card credentials. The first subscription charge is scheduled after the displayed trial period unless the user cancels the renewal.</p>
           </section>
         ) : null}
 
@@ -700,7 +646,7 @@ export function EnterpriseSiteShell({
               </section>
             ) : null}
 
-            {page.route === "/support/contact-support" ? (
+            {["/support/contact-support", "/support/help-center"].includes(page.route) ? (
               <ContactSupportForm
                 supportForm={supportForm}
                 onSupportFieldChange={onSupportFieldChange}
@@ -801,6 +747,49 @@ export function EnterpriseSiteShell({
   );
 }
 
+const PROTECTED_ROUTE_DETAILS = {
+  "/app/capture": [
+    { title: "How lecture capture works", description: "Capture is the starting point for a study workspace. A student can record a lecture or add supported notes, slides, past papers, audio, video, or documents. Mabaso AI keeps the selected sources together so later tools use the correct course material instead of an unrelated previous workspace." },
+    { title: "What happens after upload", description: "The platform validates the source, extracts usable text or audio, and shows a real loading state while processing continues. Once the source is ready, the student can create a Study Guide and then open formulas, worked examples, flashcards, quizzes, reports, presentations, podcasts, mind maps, and other supported tools separately." },
+    { title: "Saving and privacy", description: "A completed workspace is saved to the signed-in account and appears in My Materials. Uploads, generated content, edits, and history are private unless the owner deliberately shares a supported item or adds it to an authorised Collaboration Room." },
+  ],
+  "/app/workspace": [
+    { title: "One workspace for every study tool", description: "The Study Workspace keeps the transcript or source material, Study Guide, formulas, worked examples, flashcards, tests, notes, presentations, reports, podcasts, mind maps, and study images together. Opening a saved workspace restores the material that belongs to that history item." },
+    { title: "Study Guide reading and editing", description: "Study Guides are organised as interactive textbook sections with definitions, explanations, examples, formulas, exam tips, common mistakes, summaries, and revision prompts when the source supports them. Students can edit, highlight, navigate slides in Focus Mode, and save changes back to their account." },
+    { title: "Generation is deliberate", description: "Heavy tools do not run merely because a workspace opens. The student chooses which tool to generate, sees loading feedback for that tool, and keeps existing results while another supported output is created." },
+  ],
+  "/app/chat": [
+    { title: "Private saved conversations", description: "AI Chat supports follow-up questions, saved conversation history, per-chat message limits, plan-based daily quotas, model modes, copying, editing a question, read aloud, code-block word wrap, and reopening an earlier discussion from Recents." },
+    { title: "Responses can finish in the background", description: "A response continues when the student moves to another Mabaso AI page. When it finishes, an in-app notification can return the user to the exact answer, while an unread indicator remains on the conversation until it is opened." },
+    { title: "Current information and source context", description: "Mabaso AI uses the current conversation and any authorised learning context. When a question genuinely requires current internet information, the web-search route uses real retrieved sources and citations rather than displaying a fake search status." },
+  ],
+  "/app/materials": [
+    { title: "Persistent study history", description: "My Materials lists saved workspaces from the authenticated account. Recent metadata is loaded first so the history can appear quickly, while the complete Study Guide and other large outputs are fetched only when the student opens that item." },
+    { title: "Continue where you stopped", description: "Opening a material restores its correct source, generated tools, edits, highlights, and available downloads. A downgrade or approved refund changes future access but does not delete the user's existing chats, materials, documents, or account." },
+    { title: "Controlled sharing", description: "The material menu separates opening, copying a read-only share link, updating an existing shared snapshot, disabling a link, and deleting the owner's history item. A private workspace URL is never treated as a public share link." },
+  ],
+  "/app/payments": [
+    { title: "Billing and usage in one account page", description: "My Payments shows the current plan or PayFast-authorised trial, remaining daily usage, PayFast transaction history, manual PayShap requests, refund status, and the controls for cancelling future recurring charges." },
+    { title: "Trials, cancellation, and refunds are separate", description: "An eligible trial begins through PayFast so renewal can be authorised securely. Cancelling stops future recurring charges, while a refund request applies to a particular successful charge and is checked independently against payment status, remaining refundable amount, usage, country-at-purchase policy, and applicable consumer rights." },
+    { title: "Payment support", description: "The page includes a secure payment-query form. Users can send the payment reference and an explanation to Mabaso AI Support without the website exposing the support mailbox or requesting unnecessary banking secrets." },
+  ],
+  "/app/timetable": [
+    { title: "Plan a realistic study week", description: "The Study Timetable combines subjects, priorities, performance, examination dates, available days, preferred session lengths, and break choices. The result is editable and stays linked to the signed-in account." },
+    { title: "Fast restoration", description: "A cached timetable appears immediately when available while the authoritative account copy refreshes in the background. The interface distinguishes loading from an empty timetable so slow connections do not falsely claim that no plan exists." },
+    { title: "Track actual progress", description: "Students mark sessions complete only after doing the work. Missed and completed sessions remain visible so the schedule can support honest revision planning rather than simply producing a decorative calendar." },
+  ],
+  "/app/collaboration": [
+    { title: "Rooms are permission-controlled study spaces", description: "A room owner creates the room, invites students, manages settings, and can approve discovered users who request access. Pending users cannot read private chat, board items, member data, shared files, or Room AI context until membership is approved." },
+    { title: "Communication and shared course material", description: "Approved members can use room chat, voice notes, the collaboration board, shared images and files, and supported Mabaso study materials. Shared Study Guides, formulas, worked examples, notes, flashcards, quizzes, presentations, reports, podcasts, and mind maps keep their saved room history instead of being regenerated whenever the room opens." },
+    { title: "Realtime activity and owner controls", description: "Meaningful room actions create a concise activity record for authorised members. Admin Control can synchronise the owner's supported room view for followers, while leaving or removal immediately stops private realtime delivery and backend access." },
+  ],
+  "/study-session": [
+    { title: "A distraction-reduced revision session", description: "Study Session provides a full-screen timer, active material context, notes, focus tracking, and text-based study help. It is intended for working through a planned block rather than generating unrelated content." },
+    { title: "Progress remains connected", description: "The session uses the signed-in workspace and timetable context where available. Leaving the focus surface returns the student to the application without publishing private notes or replacing the underlying saved material." },
+    { title: "Responsive controls", description: "The timer, navigation, notes, and exit controls remain reachable on desktop, tablet, and mobile screens. Content scrolls inside the study surface instead of forcing the entire page wider than the device." },
+  ],
+};
+
 export function ProtectedWorkspacePreview({
   route,
   onNavigate,
@@ -813,6 +802,11 @@ export function ProtectedWorkspacePreview({
   isGoogleSigningIn = false,
   isAppleSigningIn = false,
 }) {
+  const routeDetails = PROTECTED_ROUTE_DETAILS[route.route] || [
+    { title: "What this protected page does", description: route.description },
+    { title: "Why sign-in is required", description: "The page works with account history, private study data, billing information, or authorised collaboration state. Mabaso AI verifies the signed-in user before returning that data." },
+    { title: "What happens after sign-in", description: "The requested workspace opens directly after authentication and restores only information the current account is allowed to access." },
+  ];
   const previewPage = {
     route: route.route,
     title: route.title,
@@ -847,15 +841,12 @@ export function ProtectedWorkspacePreview({
         ],
       },
     },
-    contains: [
-      { icon: "shield-check", title: "Authenticated session required", description: "This area holds user-linked study materials, generated outputs, or collaboration context." },
-      { icon: "lock-keyhole", title: "Blurred preview by default", description: "Unauthenticated visitors see a darkened workspace preview rather than live academic data." },
-      { icon: "arrow-right-left", title: "Direct app handoff", description: "Once signed in, the visitor is routed into the real Mabaso AI workspace route." },
-    ],
-    layout: [
-      { title: "Protected workspace shell", description: "Present the app route like a premium blurred preview instead of a blank redirect." },
-      { title: "Session benefit framing", description: "Explain why authentication exists: transcripts, history, exports, and collaboration are private." },
-      { title: "Secure CTA rail", description: "Keep clear actions for sign-in, Google, Apple, and account creation." },
+    contains: routeDetails,
+    workflow: [
+      "Read the feature explanation and choose Sign In when you are ready to use the live page.",
+      "Mabaso AI validates the secure session and identifies the current account.",
+      "The backend checks ownership or room permission before returning private data.",
+      "The app opens the requested page and restores that account's saved state.",
     ],
     modules: [
       {

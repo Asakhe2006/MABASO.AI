@@ -7291,6 +7291,7 @@ export default function App() {
   const [followRoomView, setFollowRoomView] = useState(true);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   const [isRoomLoading, setIsRoomLoading] = useState(false);
+  const [isLeavingRoom, setIsLeavingRoom] = useState(false);
   const [isAddingRoomMembers, setIsAddingRoomMembers] = useState(false);
   const [isSavingRoomNotes, setIsSavingRoomNotes] = useState(false);
   const [isSendingRoomMessage, setIsSendingRoomMessage] = useState(false);
@@ -7411,6 +7412,9 @@ export default function App() {
   const [supportMessageDraft, setSupportMessageDraft] = useState("");
   const [supportFeedback, setSupportFeedback] = useState("");
   const [isSendingSupport, setIsSendingSupport] = useState(false);
+  const [billingSupportMessage, setBillingSupportMessage] = useState("");
+  const [billingSupportFeedback, setBillingSupportFeedback] = useState("");
+  const [isSendingBillingSupport, setIsSendingBillingSupport] = useState(false);
   const [supportContactEmail, setSupportContactEmail] = useState("");
   const [supportContactCategory, setSupportContactCategory] = useState(DEFAULT_SUPPORT_CONTACT_CATEGORY);
   const [supportContactDevice, setSupportContactDevice] = useState(() => detectSupportDevice());
@@ -7869,6 +7873,14 @@ export default function App() {
     }
 
     const routedPage = resolveCurrentPageFromRoute(targetPath);
+    if (routeInfo.sitePage && !routeInfo.protectedWorkspaceRoute) {
+      // Signing in from an information page is an app-entry action. Do not
+      // leave the newly authenticated user on the marketing route.
+      setCurrentPage("capture");
+      navigateToPath("/app/capture", { replace: true });
+      consumePendingPostAuthRedirectPath();
+      return true;
+    }
     if (!routeInfo.protectedWorkspaceRoute || !routedPage) return false;
     setCurrentPage(routedPage);
     navigateToPath(targetPath, { replace: true });
@@ -8187,7 +8199,7 @@ export default function App() {
                   {selectedBillingPlan.name}
                   {selectedBillingPlan.selectedIntervalLabel ? ` - ${selectedBillingPlan.selectedIntervalLabel}` : ""} {selectedBillingPlan.selectedPrice || selectedBillingPlan.price || ""}
                 </h3>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">{selectedBillingPlan.trial ? "Choose PayFast to securely set up automatic billing after the seven-day trial, or start the one-time no-card trial. Mabaso AI never collects banking credentials itself." : "PayFast redirects to online checkout and activates the paid plan automatically after confirmation. PayShap creates a bank reference for manual verification."}</p>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">{selectedBillingPlan.trial ? "Continue to PayFast to securely authorise the seven-day trial and its recurring renewal. Mabaso AI never receives or stores your card details." : "PayFast redirects to online checkout and activates the paid plan automatically after confirmation. PayShap creates a bank reference for manual verification."}</p>
               </div>
               <button type="button" onClick={() => setSelectedBillingPlan(null)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-bold text-white">Change plan</button>
             </div>
@@ -8214,15 +8226,7 @@ export default function App() {
                 {billingCheckoutPlanId === `${selectedBillingPlan.trial ? "trial-payfast" : "payfast"}:${selectedBillingPlan.id}` ? "Opening PayFast..." : selectedBillingPlan.trial ? "Start trial with PayFast" : "Pay with PayFast"}
                 <span className="mt-2 block text-xs font-semibold text-slate-600">{selectedBillingPlan.trial ? "PayFast securely collects the supported payment method. No subscription charge today; billing starts after seven days unless cancelled." : "Card, EFT, or PayFast-supported checkout. Automatic activation after confirmation."}</span>
               </button>
-              {selectedBillingPlan.trial ? <button
-                type="button"
-                onClick={() => startBillingCheckout(selectedBillingPlan, "nocard", { trial: true })}
-                disabled={Boolean(billingCheckoutPlanId)}
-                className="rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-4 text-left text-sm font-bold text-emerald-50 transition hover:bg-emerald-300/15 disabled:cursor-wait disabled:opacity-70"
-              >
-                {billingCheckoutPlanId === `trial-nocard:${selectedBillingPlan.id}` ? "Starting trial..." : "Start no-card trial"}
-                <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Starts once per eligible account and ends without automatic renewal.</span>
-              </button> : <button
+              {!selectedBillingPlan.trial ? <button
                 type="button"
                 onClick={() => startBillingCheckout(selectedBillingPlan, "payshap")}
                 disabled={Boolean(billingCheckoutPlanId)}
@@ -8230,7 +8234,7 @@ export default function App() {
               >
                 {billingCheckoutPlanId === `payshap:${selectedBillingPlan.id}` ? "Generating PayShap..." : "Pay with PayShap"}
                 <span className="mt-2 block text-xs font-semibold text-emerald-100/80">Bank payment reference. Manual verification happens before the plan activates.</span>
-              </button>}
+              </button> : null}
             </div>
             {billingCheckoutMessage ? (
               <div className="mt-3 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 px-4 py-3 text-sm font-semibold text-emerald-50">
@@ -8281,7 +8285,7 @@ export default function App() {
                   >
                     Choose 7-day free trial
                   </button>
-                  <p className="mt-2 text-xs leading-5 text-slate-300">Choose PayFast renewal setup or the no-card option. One seven-day trial per eligible account.</p>
+                  <p className="mt-2 text-xs leading-5 text-slate-300">One seven-day trial per eligible account. PayFast securely authorises the recurring subscription before the trial begins.</p>
                 </div>
               ) : null}
               {plan.billingOptions?.length ? (
@@ -8324,7 +8328,7 @@ export default function App() {
             {fairBillingGuardrails.map((rule) => <div key={rule} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200">{rule}</div>)}
           </div>
         </div>
-        {billingSubscription ? (
+        {false && billingSubscription ? (
           <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -8357,7 +8361,7 @@ export default function App() {
             ) : null}
           </div>
         ) : null}
-        {paymentHistory.length ? (
+        {false && paymentHistory.length ? (
           <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
             <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-400">Payment History</p>
             <p className="mt-2 text-sm leading-6 text-slate-300">Cancellation stops future charges. A refund request applies to one completed transaction and is checked by the backend and PayFast.</p>
@@ -8385,7 +8389,7 @@ export default function App() {
             ) : null}
           </div>
         ) : null}
-        {billingUsage?.features?.length ? (
+        {false && billingUsage?.features?.length ? (
           <div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/60 p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -10220,9 +10224,8 @@ export default function App() {
                 <div className="material-more-anchor">
                   <button type="button" onClick={() => toggleMaterialMoreMenu(item)} className="material-more-button" aria-label={`More actions for ${item.title}`} aria-haspopup="menu" aria-expanded={materialMenuItemId === item.id}><Ellipsis className="h-4 w-4" aria-hidden="true" /></button>
                   {materialMenuItemId === item.id ? <div className="material-more-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => publicShareRecords[item.id]?.url ? navigator.clipboard.writeText(publicShareRecords[item.id].url).then(() => { setStatus("Read-only share link copied."); setMaterialMenuItemId(""); }) : createMaterialPublicShare(item)}><Link className="h-4 w-4" />Copy Share Link</button>
-                    <button type="button" role="menuitem" onClick={() => createMaterialPublicShare(item)}><RefreshCw className="h-4 w-4" />Regenerate Link</button>
-                    <button type="button" role="menuitem" onClick={() => { setMaterialMenuItemId(""); setPublicShareDialog(publicShareRecords[item.id] || { open: true, type: "material", itemId: item.id, title: item.title }); }}><RefreshCw className="h-4 w-4" />Update shared version</button>
+                    <button type="button" role="menuitem" onClick={() => publicShareRecords[item.id]?.url ? copyKnownMaterialShareLink(publicShareRecords[item.id]) : createMaterialPublicShare(item)}><Link className="h-4 w-4" />{publicShareRecords[item.id]?.url ? "Copy share link" : publicShareRecords[item.id]?.shareId ? "Create a new share link" : "Create share link"}</button>
+                    {publicShareRecords[item.id]?.shareId ? <button type="button" role="menuitem" onClick={() => updatePublicShareSnapshot(publicShareRecords[item.id])}><RefreshCw className="h-4 w-4" />Update shared version</button> : null}
                     {publicShareRecords[item.id]?.shareId ? <button type="button" role="menuitem" onClick={() => { setMaterialMenuItemId(""); void disablePublicShare(publicShareRecords[item.id]); }}><X className="h-4 w-4" />Disable Link</button> : null}
                     <button type="button" role="menuitem" onClick={() => removeHistoryItem(item.id)}><X className="h-4 w-4" />Remove from history</button>
                   </div> : null}
@@ -10911,70 +10914,13 @@ export default function App() {
 
   const renderSupportPage = () => (
     <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-      <div className="border-b border-white/10 pb-5">
-        <div className="flex items-start gap-4">
-          {renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Support and Contact</p>
-            <h2 className="mt-2 text-3xl font-semibold text-white">How to contact Mabaso AI.</h2>
-            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Use the support details below for enquiries, in-app messaging guidance, and direct phone calls instead of sending support tickets inside the dashboard.</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-6 overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.04]">
-        <div className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 bg-white/[0.05] text-sm font-semibold text-white">
-          <div className="px-4 py-3">Support Channel</div>
-          <div className="border-l border-white/10 px-4 py-3">Availability</div>
-          <div className="border-l border-white/10 px-4 py-3">Details</div>
-        </div>
-        {[
-          ["Email Support", "All users", "mabasoasakhe10@gmail.com"],
-          ["In-App Messaging", "Signed-in users", "+27632089201"],
-          ["Phone Call", "Direct contact", "+27632089201"],
-        ].map(([channel, availability, detail]) => (
-          <div key={channel} className="grid grid-cols-[1.2fr_1fr_1fr] border-b border-white/10 text-sm text-slate-200 last:border-b-0">
-            <div className="px-4 py-4 font-semibold text-white">{channel}</div>
-            <div className="border-l border-white/10 px-4 py-4">{availability}</div>
-            <div className="border-l border-white/10 px-4 py-4">{detail}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-6 grid gap-5 xl:grid-cols-3">
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Email Support</p>
-          <p className="mt-3 text-sm leading-7 text-slate-300">For all enquiries, send an email directly to Mabaso AI support.</p>
-          <a href="mailto:mabasoasakhe10@gmail.com" className="mt-4 inline-flex rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-300/15">
-            mabasoasakhe10@gmail.com
-          </a>
-        </article>
-
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">In-App Messaging</p>
-          <div className="mt-3 space-y-3 text-sm leading-7 text-slate-300">
-            <p>Signed-in users can ask for help while using Mabaso AI.</p>
-            <p>Use <span className="font-semibold text-white">+27632089201</span> for in-app messaging support guidance.</p>
-          </div>
-        </article>
-
-        <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Phone Support</p>
-          <p className="mt-3 text-sm leading-7 text-slate-300">For direct phone calls, use the Mabaso AI contact number below.</p>
-          <a href="tel:+27632089201" className="mt-4 inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10">
-            +27632089201
-          </a>
-        </article>
-      </div>
-
-      <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-        <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Best Way To Reach Us</p>
-        <div className="mt-4 space-y-3 text-sm text-slate-300">
-          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use email for formal enquiries and longer explanations.</div>
-          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">Use +27632089201 for in-app messaging support guidance and direct phone calls.</div>
-          <div className="rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3">For faster help, mention the page you were using and what you expected Mabaso AI to do.</div>
-        </div>
-      </div>
+      <div className="border-b border-white/10 pb-5"><div className="flex items-start gap-4">{renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}<div className="min-w-0"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Help Center</p><h2 className="mt-2 text-3xl font-semibold text-white">Ask Mabaso AI Support.</h2><p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Explain the page you were using, what you clicked, and what you expected. Your message is sent securely to the support team without exposing the support mailbox.</p></div></div></div>
+      <form className="mt-6 rounded-[28px] border border-white/10 bg-white/[0.04] p-5" onSubmit={(event) => { event.preventDefault(); void submitSupportMessage(); }}>
+        <label className="block"><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Support topic</span><select value={supportContactCategory} onChange={(event) => setSupportContactCategory(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-[#07140f] px-4 py-3 text-sm text-white">{SUPPORT_CONTACT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
+        <label className="mt-4 block"><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Your question</span><textarea value={supportMessageDraft} onChange={(event) => setSupportMessageDraft(event.target.value.slice(0, 3000))} rows={7} placeholder="Describe the problem or question..." className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-7 text-white outline-none focus:border-emerald-300" /></label>
+        <div className="mt-4 flex flex-wrap items-center gap-3"><button type="submit" disabled={isSendingSupport || !supportMessageDraft.trim()} className="rounded-full bg-emerald-400 px-5 py-3 text-sm font-bold text-emerald-950 disabled:opacity-50">{isSendingSupport ? "Sending..." : "Send to Mabaso AI Support"}</button>{supportFeedback ? <p role="status" className="text-sm text-emerald-100">{supportFeedback}</p> : null}</div>
+      </form>
+      <div className="mt-6 grid gap-4 md:grid-cols-3"><article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><h3 className="font-semibold text-white">Account and access</h3><p className="mt-2 text-sm leading-7 text-slate-300">Ask about sign-in, history restoration, saved materials, profiles, or protected workspace access.</p></article><article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><h3 className="font-semibold text-white">Study and collaboration</h3><p className="mt-2 text-sm leading-7 text-slate-300">Report generation, upload, export, chat, timetable, Room, invitation, or shared-material problems.</p></article><article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><h3 className="font-semibold text-white">Billing</h3><p className="mt-2 text-sm leading-7 text-slate-300">Payment-specific questions can also be sent from My Payments with the relevant reference.</p></article></div>
     </section>
   );
 
@@ -12107,7 +12053,7 @@ export default function App() {
                 <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
                 <p>Verified means the bank payment reference was matched and the subscription was activated. PayFast subscriptions activate automatically after PayFast confirms payment.</p>
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
-                <p>If you do not receive feedback or your payment is not approved, email <a href="mailto:mabasoasakhe@gmail.com" className="font-semibold text-white underline decoration-white/30 underline-offset-4">mabasoasakhe@gmail.com</a>, WhatsApp, or call <a href="tel:+27632089201" className="font-semibold text-white underline decoration-white/30 underline-offset-4">+27632089201</a> with your payment reference and bank proof of payment.</p>
+                <p>If you need help, use the secure payment-query form below and include your payment reference and proof-of-payment details.</p>
               </div>
             </div>
           </div>
@@ -12123,6 +12069,29 @@ export default function App() {
             <div className="mt-5">{renderPaymentRequestsTable(paymentRequests)}</div>
           </article>
         </div>
+
+        <div className="mt-6 grid gap-5 xl:grid-cols-2">
+          <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Subscription and trial</p>
+            <h3 className="mt-2 text-2xl font-semibold text-white">Current account access</h3>
+            <p className="mt-3 text-sm leading-7 text-slate-300">{billingSubscription?.trial_active ? "Your PayFast-authorised free trial is active." : billingSubscription?.active ? "Your paid subscription is active." : "Your account currently uses the Free plan."}</p>
+            {billingSubscription?.current_period_end ? <p className="mt-2 text-sm text-slate-300">Current period ends {formatAdminDateTime(billingSubscription.current_period_end)}.</p> : null}
+            {(billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">Cancel future PayFast charges?</p><p className="mt-2 text-xs leading-5 text-rose-100/80">This stops renewal. It does not delete chats, materials, or your account.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950">Confirm cancellation</button><button type="button" onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel free trial renewal" : "Cancel subscription"}</button>}</div> : null}
+          </article>
+          <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Attempts remaining today</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">{billingUsage?.features?.length ? billingUsage.features.map((feature) => <div key={feature.feature} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3"><div className="flex justify-between gap-2 text-sm"><strong className="text-white">{feature.label}</strong><span className="text-emerald-100">{feature.unlimited ? "Unlimited" : `${feature.remaining} left`}</span></div><p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "No daily limit" : `${feature.used || 0}/${feature.limit || 0} used today`}</p></div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading usage history..." : "No usage has been recorded for this period."}</p>}</div>
+          </article>
+        </div>
+        <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">PayFast transaction history</p>
+          <h3 className="mt-2 text-2xl font-semibold text-white">Charges, trials, and refunds</h3>
+          <div className="mt-4 space-y-2">{paymentHistory.length ? paymentHistory.map((payment) => <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-white">{payment.is_trial ? "7-day Pro trial" : String(payment.plan_id || "plan").replaceAll("_", " ")} · R{payment.amount_zar}</p><p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at || payment.created_at)} · {payment.payment_status}</p></div>{payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="rounded-full border border-emerald-300/25 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}</div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading payment history..." : "No PayFast transactions have been recorded yet."}</p>}</div>
+          {refundPayment ? <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4"><div className="flex items-start justify-between gap-3"><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund form"><X className="h-4 w-4" /></button></div><select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"><option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option></select><textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"/><button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button></div> : null}
+        </article>
+        <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Payment support</p><h3 className="mt-2 text-2xl font-semibold text-white">Send a payment query</h3><p className="mt-3 text-sm leading-7 text-slate-300">Include the payment reference and what you expected to happen. Your query is sent securely to Mabaso AI Support.</p><textarea value={billingSupportMessage} onChange={(event) => setBillingSupportMessage(event.target.value.slice(0, 3000))} placeholder="Describe the payment or subscription issue" className="mt-4 min-h-28 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none"/><div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void submitBillingSupportMessage()} disabled={isSendingBillingSupport || !billingSupportMessage.trim()} className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-50">{isSendingBillingSupport ? "Sending..." : "Send query"}</button>{billingSupportFeedback ? <p className="text-sm text-emerald-100">{billingSupportFeedback}</p> : null}</div>
+        </article>
       </section>
     );
   };
@@ -12144,6 +12113,8 @@ export default function App() {
     const activeRoomSourceContext = getCollaborationRoomSourceContext(activeRoom);
     const selectedMaterialSnapshot = selectedCollaborationMaterial?.source?.snapshot || {};
     const selectedRoomGuideText = normalizeRenderedMathText(prettifyMathText(normalizeStudyGuideContentSpacing(selectedMaterialSnapshot.summary || selectedMaterialSnapshot.transcript || "")));
+    const selectedRoomFormulaText = normalizeRenderedMathText(prettifyMathText(selectedMaterialSnapshot.formula || activeRoomFormattedFormula || ""));
+    const selectedRoomExampleText = normalizeRenderedMathText(prettifyMathText(selectedMaterialSnapshot.example || selectedMaterialSnapshot.worked_example || activeRoomFormattedExample || ""));
     const selectedRoomGuideSections = extractGuideSections(selectedRoomGuideText);
     const selectedRoomGuideTitleSection = getGuideSectionByHeading(selectedRoomGuideSections, "LECTURE TITLE");
     const selectedRoomGuideSummarySection = getGuideSectionByHeading(selectedRoomGuideSections, "SHORT SUMMARY");
@@ -12161,8 +12132,8 @@ export default function App() {
       if (!activeRoomSourceContext.hasContent) {
         return <div className="collaboration-tool-prerequisite"><UploadCloud aria-hidden="true" /><div><strong>Add course material first</strong><p>Share a saved Mabaso material or upload a document before using this Room tool. Existing Room resources will remain available.</p></div><button type="button" onClick={shareCurrentWorkspaceMaterialToRoom}>Share material</button></div>;
       }
-      if (collaborationMaterialFilter === "formulas") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Formulas</small><h3>Shared formula sheet</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("formulas")} disabled={generatingRoomMaterial === "formulas"}>{generatingRoomMaterial === "formulas" ? "Generating..." : activeRoomFormattedFormula ? "Regenerate" : "Generate formulas"}</button> : null}</div>{activeRoomFormattedFormula ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedFormula}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated a shared formula sheet yet.</p>}</section>;
-      if (collaborationMaterialFilter === "examples") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Worked Examples</small><h3>Shared step-by-step practice</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("examples")} disabled={generatingRoomMaterial === "examples"}>{generatingRoomMaterial === "examples" ? "Generating..." : activeRoomFormattedExample ? "Regenerate" : "Generate examples"}</button> : null}</div>{activeRoomFormattedExample ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{activeRoomFormattedExample}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated shared worked examples yet.</p>}</section>;
+      if (collaborationMaterialFilter === "formulas") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Formulas</small><h3>Shared formula sheet</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("formulas")} disabled={generatingRoomMaterial === "formulas"}>{generatingRoomMaterial === "formulas" ? "Generating..." : selectedRoomFormulaText ? "Regenerate" : "Generate formulas"}</button> : null}</div>{selectedRoomFormulaText ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{selectedRoomFormulaText}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated a shared formula sheet yet.</p>}</section>;
+      if (collaborationMaterialFilter === "examples") return <section className="collaboration-embedded-tool"><div className="collaboration-embedded-tool-heading"><div><small>Worked Examples</small><h3>Shared step-by-step practice</h3></div>{activeRoom.is_owner ? <button type="button" onClick={() => void generateCollaborationMaterial("examples")} disabled={generatingRoomMaterial === "examples"}>{generatingRoomMaterial === "examples" ? "Generating..." : selectedRoomExampleText ? "Regenerate" : "Generate examples"}</button> : null}</div>{selectedRoomExampleText ? <article className="collab-study-guide-document"><MobileFirstMarkdown>{selectedRoomExampleText}</MobileFirstMarkdown></article> : <p className="collaboration-empty-copy">The owner has not generated shared worked examples yet.</p>}</section>;
       if (collaborationMaterialFilter === "note") return <section className="collaboration-embedded-tool">{renderNoteQualityPanel()}</section>;
       if (collaborationMaterialFilter === "presentation") return <section className="collaboration-embedded-tool">{renderPresentationPanel(() => generateCollaborationMaterial("presentation"))}</section>;
       if (collaborationMaterialFilter === "mind_map") return <section className="collaboration-embedded-tool">{renderMindMapPanel(() => generateCollaborationMaterial("mind_map"))}</section>;
@@ -12254,7 +12225,7 @@ export default function App() {
         {isAdminControlConfirmOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => !isUpdatingAdminControl && setIsAdminControlConfirmOpen(false)}><section className="collaboration-admin-control-confirm" role="dialog" aria-modal="true" aria-label="Start Admin Control Mode" onMouseDown={(event) => event.stopPropagation()}><span>▣</span><h3>Start Admin Control Mode?</h3><p>Connected members who choose Follow Admin will move with your supported Room view. This never controls their device or browser outside Mabaso AI.</p><div className="mabaso-setting-row"><span>Allow members to Explore independently</span><ToggleSwitch checked={collaborationAdminControl?.allow_explore ?? true} onChange={(checked) => setCollaborationAdminControl((current) => ({ ...(current || {}), allow_explore: checked }))} aria-label="Allow members to Explore independently" /></div><div><button type="button" onClick={() => setIsAdminControlConfirmOpen(false)} disabled={isUpdatingAdminControl}>Cancel</button><button type="button" className="is-primary" onClick={() => void startCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Starting..." : "Start Control"}</button></div></section></div> : null}
         <div className="collaboration-room-header">
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
-          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} className="collaboration-primary-button">Leave room</button> : null}</div> : null}
+          {activeRoom ? <div className="collaboration-room-actions"><div className="collaboration-avatar-stack">{(activeRoom.members || []).slice(0, 3).map((member) => <span key={member.email}>{String(member.email || "M").slice(0, 2).toUpperCase()}</span>)}<b>+{Math.max(0, (activeRoom.member_count || activeRoom.members?.length || 1) - 3)}</b></div>{activeRoom.is_owner ? <button type="button" onClick={() => setIsCollaborationMembersOpen(true)} className="collaboration-outline-button">♙ Invite</button> : null}{renderAdminControlActions()}{!activeRoom.is_owner ? <button type="button" onClick={leaveCollaborationRoom} disabled={isLeavingRoom} className="collaboration-primary-button">{isLeavingRoom ? "Leaving room..." : "Leave room"}</button> : null}</div> : null}
         </div>
         {collaborationAdminControl?.active ? <div className="collaboration-admin-control-status" role="status"><i /> <strong>Admin Control active</strong><span>•</span><span>{activeRoom?.is_owner ? "Members are following your Room view" : followRoomView ? "Following admin" : "You are in Explore mode"}</span></div> : null}
         {(collaborationError || collaborationStatus) ? <div className={`collaboration-feedback ${collaborationError ? "is-error" : "is-success"}`} role={collaborationError ? "alert" : "status"}>{collaborationError || collaborationStatus}</div> : null}
@@ -12265,7 +12236,7 @@ export default function App() {
             <button type="button" onClick={() => setIsCreateRoomPanelOpen((value) => !value)} className="collaboration-create-room">＋ Create New Room</button>
             <div className="collaboration-sidebar-actions"><button type="button" className="is-active" onClick={() => setCollaborationMobileView("rooms")}>♙ My Rooms</button><button type="button" onClick={() => { setIsCollaborationDiscoverOpen(true); void discoverCollaborationProfiles(); void loadDiscoverableCollaborationRooms(); window.requestAnimationFrame(() => document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}>⌕ Discover</button></div>
             {isCreateRoomPanelOpen ? <div className="collaboration-create-form"><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} placeholder="Room title" /><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={2} placeholder="Invite emails (optional)" /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={newRoomVisibility === "private" ? "is-active" : ""}>Private</button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={newRoomVisibility === "shared" ? "is-active" : ""}>Shared test</button></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom}>{isCreatingRoom ? "Creating..." : "Create Room"}</button></div> : null}
-            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.member_count} members</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">{isCollaborationRoomsLoading ? "Loading recent rooms..." : "You have not joined any collaboration rooms yet."}</p>}</div>
+            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { if (room.is_left) { setIsCollaborationDiscoverOpen(true); setCollaborationDiscoverQuery(room.title || ""); setCollaborationStatus("You left this room. Use Discover to request access again."); void loadDiscoverableCollaborationRooms(); return; } setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.is_left ? "Left room · request access" : `${room.member_count} members`}</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">{isCollaborationRoomsLoading ? "Loading recent rooms..." : "You have not joined any collaboration rooms yet."}</p>}</div>
             <div id="collaboration-discover" className="collaboration-discover-panel"><div className="flex items-center justify-between gap-2"><strong>Discover students</strong><button type="button" onClick={openProfilePopover}>{collaborationProfile ? "Edit profile" : "Create profile"}</button></div>{collaborationProfile ? <div className="collaboration-profile-summary"><b>✓ {collaborationProfile.display_name || "Profile saved"}</b><span>{[collaborationProfile.course, ...(collaborationProfile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic profile active"}</span></div> : <p className="collaboration-discovery-help">Create a profile to let academically relevant students find you.</p>}<div className="mt-3 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void discoverCollaborationProfiles(); }} placeholder="MATLAB, signals..." /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading}>{isProfileLoading ? "Searching..." : "Search"}</button></div>{isCollaborationDiscoverOpen ? <div className="mt-3 space-y-2">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 20).map((profile) => <article key={profile.public_id} className="collaboration-discovery-result"><div><strong className="collaboration-discovery-name">{profile.display_name || "Mabaso student"}{profile.is_online ? <i className="collaboration-presence-dot" aria-label="Online now" title="Online now" /> : null}</strong><span>{[profile.course, ...(profile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic collaborator"}</span>{(profile.match_reasons || []).length ? <small>{profile.match_reasons.slice(0, 2).join(" • ")}</small> : null}</div><button type="button" onClick={() => void inviteDiscoveredProfileToRoom(profile)} disabled={!activeRoom?.can_manage || invitingCollaborationProfileId === profile.public_id}>{invitingCollaborationProfileId === profile.public_id ? "Inviting..." : activeRoom?.can_manage ? "Invite" : "Open your room"}</button></article>) : <p className="collaboration-empty-copy">No matching students found. Try a subject, module, course, or skill.</p>}</div> : null}</div>
             {isCollaborationDiscoverOpen && collaborationDiscoverProfiles.some((profile) => profile.email || profile.phone) ? <div className="collaboration-discover-contacts" aria-label="Student shared contact details">{collaborationDiscoverProfiles.filter((profile) => profile.email || profile.phone).map((profile) => <div key={`contact-${profile.public_id}`}><strong>{profile.display_name || "Student"}</strong>{profile.email ? <a href={`mailto:${profile.email}`}>{profile.email}</a> : null}{profile.phone ? <a href={`tel:${String(profile.phone).replace(/[^+\d]/g, "")}`}>{profile.phone}</a> : null}</div>)}</div> : null}
             {isCollaborationDiscoverOpen ? <section className="collaboration-discover-rooms" aria-label="Discover Rooms"><div className="collaboration-discover-rooms-title"><strong>Discover Rooms</strong><button type="button" onClick={() => void loadDiscoverableCollaborationRooms()}>Refresh</button></div>{collaborationDiscoverRooms.length ? collaborationDiscoverRooms.map((room) => <article key={`discover-room-${room.id}`}><div><strong>{room.title}</strong><span>{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.is_private ? "Private" : "Public Room"}</span></div>{["member", "owner", "invited"].includes(room.membership_status) ? <button type="button" onClick={() => void openCollaborationRoom(room.id)}>Open</button> : room.membership_status === "pending" ? <button type="button" disabled>Request Pending</button> : <button type="button" onClick={() => void requestToJoinCollaborationRoom(room)}>Request to Join</button>}</article>) : <p className="collaboration-empty-copy">No matching public Rooms found.</p>}</section> : null}
@@ -12279,7 +12250,7 @@ export default function App() {
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
             {(activeRoom?.board_images || []).length ? <section className="collaboration-board-uploads"><p>Board photos</p><div>{activeRoom.board_images.map((image) => <figure key={image.id} role="button" tabIndex={0} onClick={() => setSelectedRoomBoardImageId(image.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedRoomBoardImageId(image.id); }}><img src={image.image_url} alt={image.name || "Board upload"} /><figcaption>{image.name || "Board photo"}</figcaption>{(image.uploaded_by === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void deleteRoomBoardImage(image.id); }}>Remove</button> : null}</figure>)}</div></section> : null}          </main>
 
-          <aside className={`collaboration-chat-panel ${collaborationMobileView === "chat" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>◯ Room Chat</h2><small><i /> {activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members` : "Open a room"}</small></div></div><div className="collaboration-chat-messages">{(activeRoom?.messages || []).length ? activeRoom.messages.map((message) => <article key={message.id} className={message.author_email === normalizedAuthEmail ? "is-own" : ""}><span>{message.author_email === normalizedAuthEmail ? "You" : String(message.author_email || "M").split("@")[0]}</span><p>{message.content}</p></article>) : <p className="collaboration-empty-copy">Start the conversation.</p>}</div><div className="collaboration-chat-composer"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} placeholder="Type a message..." rows={1} /><button type="button" onClick={sendRoomMessage} disabled={!activeRoom || isSendingRoomMessage}>➤</button></div>{activeRoom?.is_owner ? <div id="collaboration-invite" className="collaboration-invite-strip"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>Invite</button></div> : null}</aside>
+          <aside className={`collaboration-chat-panel ${collaborationMobileView === "chat" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>◯ Room Chat</h2><small><i /> {activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members` : "Open a room"}</small></div></div><div className="collaboration-chat-messages">{(activeRoom?.messages || []).length ? activeRoom.messages.map((message) => <article key={message.id} className={message.author_email === normalizedAuthEmail ? "is-own" : ""}><span>{message.author_email === normalizedAuthEmail ? "You" : String(message.author_email || "M").split("@")[0]}</span><p>{message.content}</p></article>) : <p className="collaboration-empty-copy" role="status">{activeRoom?.is_loading_shell || isRoomLoading ? "Loading room chat..." : "Start the conversation."}</p>}</div><div className="collaboration-chat-composer"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} placeholder="Type a message..." rows={1} /><button type="button" onClick={sendRoomMessage} disabled={!activeRoom || isSendingRoomMessage}>➤</button></div>{activeRoom?.is_owner ? <div id="collaboration-invite" className="collaboration-invite-strip"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>Invite</button></div> : null}</aside>
         </div>
 
         <nav className="collaboration-mobile-bottom-nav" aria-label="Collaboration navigation"><button type="button" onClick={() => switchMobileView("rooms")} className={collaborationMobileView === "rooms" ? "is-active" : ""}>⌂<span>Rooms</span></button><button type="button" onClick={() => switchMobileView("chat")} className={collaborationMobileView === "chat" ? "is-active" : ""}>◯<span>Chat</span></button><button type="button" onClick={() => switchMobileView("materials")} className={`collaboration-mobile-materials ${collaborationMobileView === "materials" ? "is-active" : ""}`} aria-label="Open room materials">▣<span>Materials</span></button><button type="button" onClick={() => switchMobileView("board")} className={collaborationMobileView === "board" ? "is-active" : ""}>♧<span>Board</span></button><button type="button" onClick={() => switchMobileView("more")}>•••<span>More</span></button></nav>
@@ -12287,7 +12258,7 @@ export default function App() {
         {isCollaborationActionSheetOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationActionSheetOpen(false)}><section className="collaboration-action-sheet" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><div className="mx-auto h-1.5 w-12 rounded-full bg-white/20" /><h3 className="mt-4 text-xl font-semibold text-white">Create or share</h3><div className="mt-4 grid gap-2"><button type="button" onClick={() => { setIsCollaborationActionSheetOpen(false); setIsCreateRoomPanelOpen(true); setCollaborationMobileView("rooms"); }}>Create Room</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); void shareCurrentWorkspaceMaterialToRoom(); }}>Share Existing Material</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); setCollaborationMobileView("board"); setIsBoardComposerOpen(true); }}>Add to Board</button><button type="button" disabled={!activeRoom} onClick={() => { setIsCollaborationActionSheetOpen(false); roomBoardImageInputRef.current?.click(); }}>Upload board photo</button><button type="button" onClick={() => setIsCollaborationActionSheetOpen(false)}>Cancel</button></div></section></div> : null}
         {selectedCollaborationBoardItem ? <CollaborationBoardItemDialog item={selectedCollaborationBoardItem} canEdit={selectedCollaborationBoardItem.owner_email === normalizedAuthEmail || Boolean(activeRoom?.can_manage)} onClose={() => setSelectedCollaborationBoardItem(null)} onSave={saveCollaborationBoardItem} /> : null}
         {isCollaborationMembersOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationMembersOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room members" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room members</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationMembersOpen(false)} aria-label="Close members"><X className="h-5 w-5" /></button></div><div className="collaboration-members-list">{(activeRoom.members || []).map((member) => <div key={member.email}><span>{String(member.email || "M").slice(0, 2).toUpperCase()}</span><p><strong>{member.email === normalizedAuthEmail ? "You" : String(member.email || "Member").split("@")[0]}</strong><small>{member.role || "member"}</small></p>{activeRoom.is_owner && member.role !== "owner" && member.email !== normalizedAuthEmail ? <button type="button" className="collaboration-remove-member" onClick={() => void removeMemberFromActiveRoom(member)} disabled={removingRoomMemberEmail === member.email}>{removingRoomMemberEmail === member.email ? "Removing..." : "Remove"}</button> : null}</div>)}</div>{activeRoom.is_owner ? <div className="collaboration-dialog-invite"><input value={roomMembersInput} onChange={(event) => setRoomMembersInput(event.target.value)} placeholder="Invite student by email" /><button type="button" onClick={addMembersToActiveRoom} disabled={isAddingRoomMembers}>{isAddingRoomMembers ? "Inviting..." : "Invite"}</button></div> : null}</section></div> : null}
-        {isCollaborationSettingsOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationSettingsOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room settings" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room settings</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationSettingsOpen(false)} aria-label="Close room settings"><X className="h-5 w-5" /></button></div><div className="collaboration-setting-list"><div><strong>Room access</strong><small>Only the owner and invited members can open this room.</small></div><div><strong>Test answers</strong><small>{activeRoom.test_visibility === "shared" ? "Members can compare shared answers." : "Each member's answers remain private."}</small></div>{activeRoom.is_owner ? <div className="collaboration-setting-buttons"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={activeRoom.test_visibility === "private" ? "is-active" : ""}>Private answers</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={activeRoom.test_visibility === "shared" ? "is-active" : ""}>Shared answers</button></div> : null}{activeRoom.is_owner ? <div className="collaboration-setting-toggle"><div><strong>Allow members to approve join requests</strong><small>When off, only the Room owner can review requests.</small></div><ToggleSwitch checked={Boolean(activeRoom.allow_member_approvals)} onChange={(checked) => void updateRoomMemberApprovalSetting(checked)} disabled={isUpdatingRoomApprovalSettings} aria-label="Allow members to approve join requests" /></div> : null}{activeRoom.can_manage_join_requests ? <div className="collaboration-join-requests"><strong>Pending join requests</strong>{(activeRoom.pending_join_requests || []).length ? (activeRoom.pending_join_requests || []).map((request) => <article key={request.id}><span>{String(request.requester_email || "Student").split("@")[0]}</span><div><button type="button" onClick={() => void decideRoomJoinRequest(request.id, "approved")} disabled={decidingJoinRequestId === request.id}>Approve</button><button type="button" className="is-danger" onClick={() => void decideRoomJoinRequest(request.id, "declined")} disabled={decidingJoinRequestId === request.id}>Decline</button></div></article>) : <small>No pending requests.</small>}</div> : null}<button type="button" onClick={() => { setIsCollaborationSettingsOpen(false); setIsCollaborationMembersOpen(true); }}>Manage members</button>{!activeRoom.is_owner ? <button type="button" className="is-danger" onClick={() => { setIsCollaborationSettingsOpen(false); void leaveCollaborationRoom(); }}>Leave room</button> : null}</div></section></div> : null}
+        {isCollaborationSettingsOpen && activeRoom ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setIsCollaborationSettingsOpen(false)}><section className="collaboration-compact-dialog" role="dialog" aria-modal="true" aria-label="Room settings" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Room settings</p><h3>{activeRoom.title}</h3></div><button type="button" onClick={() => setIsCollaborationSettingsOpen(false)} aria-label="Close room settings"><X className="h-5 w-5" /></button></div><div className="collaboration-setting-list"><div><strong>Room access</strong><small>Only the owner and invited members can open this room.</small></div><div><strong>Test answers</strong><small>{activeRoom.test_visibility === "shared" ? "Members can compare shared answers." : "Each member's answers remain private."}</small></div>{activeRoom.is_owner ? <div className="collaboration-setting-buttons"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={activeRoom.test_visibility === "private" ? "is-active" : ""}>Private answers</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={activeRoom.test_visibility === "shared" ? "is-active" : ""}>Shared answers</button></div> : null}{activeRoom.is_owner ? <div className="collaboration-setting-toggle"><div><strong>Allow members to approve join requests</strong><small>When off, only the Room owner can review requests.</small></div><ToggleSwitch checked={Boolean(activeRoom.allow_member_approvals)} onChange={(checked) => void updateRoomMemberApprovalSetting(checked)} disabled={isUpdatingRoomApprovalSettings} aria-label="Allow members to approve join requests" /></div> : null}{activeRoom.can_manage_join_requests ? <div className="collaboration-join-requests"><strong>Pending join requests</strong>{(activeRoom.pending_join_requests || []).length ? (activeRoom.pending_join_requests || []).map((request) => <article key={request.id}><span>{String(request.requester_email || "Student").split("@")[0]}</span><div><button type="button" onClick={() => void decideRoomJoinRequest(request.id, "approved")} disabled={decidingJoinRequestId === request.id}>Approve</button><button type="button" className="is-danger" onClick={() => void decideRoomJoinRequest(request.id, "declined")} disabled={decidingJoinRequestId === request.id}>Decline</button></div></article>) : <small>No pending requests.</small>}</div> : null}<button type="button" onClick={() => { setIsCollaborationSettingsOpen(false); setIsCollaborationMembersOpen(true); }}>Manage members</button>{!activeRoom.is_owner ? <button type="button" className="is-danger" onClick={() => { setIsCollaborationSettingsOpen(false); void leaveCollaborationRoom(); }} disabled={isLeavingRoom}>{isLeavingRoom ? "Leaving room..." : "Leave room"}</button> : null}</div></section></div> : null}
         {selectedCollaborationMediaItem ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label={`${selectedCollaborationMediaItem.title} viewer`} onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>{selectedCollaborationMediaItem.material_type}</p><h3>{selectedCollaborationMediaItem.title}</h3></div><button type="button" onClick={() => { setSelectedCollaborationMediaItem(null); setSelectedCollaborationMediaUrl(""); }} aria-label="Close media viewer"><X className="h-5 w-5" aria-hidden="true" /></button></div>{isLoadingCollaborationMedia ? <div className="collaboration-media-loading"><LoaderCircle className="h-6 w-6 animate-spin" aria-hidden="true" />Opening media...</div> : selectedCollaborationMediaUrl ? selectedCollaborationMediaItem.material_type === "video" ? <video src={selectedCollaborationMediaUrl} controls playsInline preload="metadata" /> : <img src={selectedCollaborationMediaUrl} alt={selectedCollaborationMediaItem.title || "Room photo"} /> : <p className="collaboration-empty-copy">This media could not be opened.</p>}</section></div> : null}
         {selectedRoomBoardImageId && selectedRoomBoardImage ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => setSelectedRoomBoardImageId("")}><section className="collaboration-media-viewer" role="dialog" aria-modal="true" aria-label="Board photo viewer" onMouseDown={(event) => event.stopPropagation()}><div className="collaboration-preview-header"><div><p>Board photo</p><h3>{selectedRoomBoardImage.name || "Room photo"}</h3></div><button type="button" onClick={() => setSelectedRoomBoardImageId("")} aria-label="Close board photo"><X className="h-5 w-5" aria-hidden="true" /></button></div><img src={selectedRoomBoardImage.image_url} alt={selectedRoomBoardImage.name || "Board photo"} /></section></div> : null}
         {renderCollaborationChatSurface()}
@@ -12319,6 +12290,7 @@ export default function App() {
       isRecordingPaused={isRoomVoiceRecordingPaused}
       isUploadingVoice={isUploadingRoomVoice}
       isSending={isSendingRoomMessage}
+      isLoading={Boolean(activeRoom?.is_loading_shell || isRoomLoading)}
       onLoadOlder={loadOlderRoomMessages}
       isLoadingOlder={isLoadingOlderRoomMessages}
       mediaUrl={(mediaId) => API_BASE_URL + "/collaboration/rooms/" + encodeURIComponent(activeRoomId) + "/media/" + encodeURIComponent(mediaId)}
@@ -14207,6 +14179,7 @@ export default function App() {
     const filteredSessions = sessionRows.filter((item) => matchesSearch(`${item.email} ${item.last_login_at} ${item.next_timeout_at}`));
     const filteredRatings = ratingItems.filter((item) => matchesSearch(`${item.email} ${item.stars} ${item.comment}`));
     const filteredManualPaymentRequests = manualPaymentRequests.filter((payment) => matchesSearch(`${payment.email} ${payment.status} ${payment.payment_reference} ${payment.plan_name}`));
+    const filteredBillingPayments = billingPayments.filter((payment) => matchesSearch(`${payment.user} ${payment.status} ${payment.transaction_id} ${payment.plan} ${payment.record_type}`));
     const pendingManualPaymentRequests = filteredManualPaymentRequests.filter((payment) => normalizePaymentStatus(payment.status) === "pending");
     const filteredBillingSubscriptions = billingSubscriptions.filter((subscription) => matchesSearch(`${subscription.user} ${subscription.status} ${subscription.plan} ${subscription.plan_id} ${subscription.payment_reference}`));
     const filteredSupportMessages = supportMessages.filter((message) => matchesSearch(`${message.email} ${message.category} ${message.message} ${message.page}`));
@@ -15367,6 +15340,23 @@ export default function App() {
                 <div className="mt-5">{renderAdminManualPaymentsTable(pendingManualPaymentRequests)}</div>
               </article>
             ) : null}
+
+            <article className={sectionCardClass}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-slate-500">PayFast and trial history</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-950">Recorded billing transactions</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">R0.00 PayFast card-authorisation records are retained as free-trial starts. They remain separate from revenue and from later paid renewals.</p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">{formatAdminInteger(filteredBillingPayments.length)} visible</span>
+              </div>
+              <div className="mt-5 overflow-x-auto">
+                <table className="min-w-[860px] w-full text-left text-sm">
+                  <thead><tr className="border-b border-slate-200 text-xs uppercase tracking-[0.14em] text-slate-500"><th className="px-3 py-3">User</th><th className="px-3 py-3">Record</th><th className="px-3 py-3">Plan</th><th className="px-3 py-3">Amount</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Date</th><th className="px-3 py-3">Provider reference</th></tr></thead>
+                  <tbody>{filteredBillingPayments.length ? filteredBillingPayments.map((payment) => <tr key={`${payment.transaction_id}-${payment.date}`} className="border-b border-slate-100 text-slate-700"><td className="px-3 py-3 break-all font-medium text-slate-900">{payment.user}</td><td className="px-3 py-3"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${payment.record_type === "free_trial" ? "bg-sky-50 text-sky-700" : "bg-emerald-50 text-emerald-700"}`}>{payment.record_type === "free_trial" ? "Free trial" : "Payment"}</span></td><td className="px-3 py-3">{payment.plan}</td><td className="px-3 py-3 font-semibold">{payment.amount_label}</td><td className="px-3 py-3">{payment.status}</td><td className="px-3 py-3">{formatAdminDateTime(payment.date)}</td><td className="px-3 py-3 break-all font-mono text-xs">{payment.transaction_id}</td></tr>) : <tr><td colSpan="7" className="px-3 py-8 text-center text-slate-500">No PayFast payments or trial authorisations match this search.</td></tr>}</tbody>
+                </table>
+              </div>
+            </article>
 
             <article className={sectionCardClass}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -17980,7 +17970,7 @@ export default function App() {
     }
     setIsBillingUsageLoading(true);
     const request = (async () => {
-      const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 15000, retries: 1 });
+      const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 45000, retries: 1 });
       const nextUsage = data.usage || null;
       const nextSubscription = data.subscription || null;
       const nextPaymentRequests = data.payment_requests || data.account?.payment_requests || [];
@@ -18825,7 +18815,7 @@ export default function App() {
     setIsLoadingTimetable(!hasCachedTimetable);
     setTimetableMessage("");
     try {
-      const response = await authFetch("/study-timetable", { timeoutMs: 15000 });
+      const response = await authFetch("/study-timetable", { timeoutMs: 45000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load your study timetable.");
       if (timetablePlanningStateRef.current.isEditing || timetablePlanningStateRef.current.hasPlanPreview) return;
@@ -20316,26 +20306,15 @@ export default function App() {
       return;
     }
     const requestedProvider = String(paymentProvider || "").trim().toLowerCase();
-    const provider = requestedProvider === "payfast" ? "payfast" : requestedProvider === "nocard" ? "nocard" : "payshap";
-    if (trial && provider === "nocard") {
-      setSelectedBillingPlan(null);
-      setManualPaymentRequest(null);
+    const provider = requestedProvider === "payfast" ? "payfast" : "payshap";
+    if (trial && provider !== "payfast") {
+      setBillingCheckoutMessage("Free trials must be authorised securely through PayFast.");
+      return;
     }
     setBillingCheckoutMessage(trial ? "Starting your free trial..." : provider === "payfast" ? "PayFast page is opening..." : "Generating your PayShap payment reference...");
     const checkoutKey = trial ? `trial-${provider}:${plan.id}` : `${provider}:${plan.id}`;
     setBillingCheckoutPlanId(checkoutKey);
     try {
-      if (trial && provider === "nocard") {
-        const response = await authFetch("/api/billing/trial/start", {
-          method: "POST",
-          timeoutMs: 15000,
-        });
-        const data = await parseJsonSafe(response);
-        if (!response.ok) throw new Error(data.detail || "Could not start the free trial.");
-        setBillingCheckoutMessage(data.message || "Your Pro trial is active.");
-        await refreshBillingStatus();
-        return;
-      }
       if (provider === "payfast") {
         const normalizedBillingCountry = billingCountry.trim().toUpperCase();
         if (!/^[A-Z]{2}$/.test(normalizedBillingCountry)) {
@@ -21821,8 +21800,8 @@ export default function App() {
 
   const loadHistoryFromServer = async () => {
     const { data } = await authJsonWithTransientRetries("/history?compact=true", { cache: "no-store" }, {
-      timeoutMs: 25000,
-      retries: 1,
+      timeoutMs: 45000,
+      retries: 0,
     });
     return normalizeHistoryItems(data.items || []);
   };
@@ -22006,15 +21985,21 @@ export default function App() {
     setIsHistoryLoadingFromServer(true);
 
     const hydrateHistory = async () => {
+      const immediateLocalItems = loadHistoryItems(authEmail)
+        .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
+        .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
+      if (immediateLocalItems.length && !cancelled) {
+        historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
+        skipNextHistorySyncRef.current = true;
+        setHistoryItems(immediateLocalItems);
+      }
       try {
         const remoteItems = await loadHistoryFromServer();
         if (cancelled) return;
         const serverItems = normalizeHistoryItems(remoteItems)
           .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
           .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
-        const localItems = loadHistoryItems(authEmail)
-          .filter((item) => historyItemBelongsToOwner(item, normalizedHistoryOwnerEmail))
-          .map((item) => ({ ...item, ownerEmail: normalizedHistoryOwnerEmail }));
+        const localItems = immediateLocalItems;
         const localItemsById = new Map(localItems.map((item) => [item.id, item]));
         const hydratedIndexItems = serverItems.map((item) => {
           const cachedItem = localItemsById.get(item.id);
@@ -22026,7 +22011,12 @@ export default function App() {
         const mergedAccountItems = mergeHistoryItems(hydratedIndexItems, localItems);
         const localOnlyItemsExist = localItems.some((item) => !serverItems.some((serverItem) => serverItem.id === item.id));
         const shouldImportLocalItems = localItems.length > 0 && (serverItems.length === 0 || localOnlyItemsExist);
-        const accountItems = shouldImportLocalItems ? await pushHistoryToServer(mergedAccountItems) : mergedAccountItems;
+        const accountItems = mergedAccountItems;
+        if (shouldImportLocalItems) {
+          void pushHistoryToServer(mergedAccountItems).then((savedItems) => {
+            if (!cancelled && savedItems?.length) setHistoryItems((current) => mergeHistoryItems(savedItems, current));
+          }).catch(() => undefined);
+        }
         if (cancelled) return;
         historyOwnerEmailRef.current = normalizedHistoryOwnerEmail;
         skipNextHistorySyncRef.current = true;
@@ -22096,11 +22086,13 @@ export default function App() {
     collaborationRoomsRequestInFlightRef.current = true;
     if (!collaborationRooms.length) setIsCollaborationRoomsLoading(true);
     try {
-      const response = await authFetch("/collaboration/rooms", { cache: "no-store", timeoutMs: 10000 });
+      const response = await authFetch("/collaboration/rooms", { cache: "no-store", timeoutMs: 45000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not load collaboration rooms.");
       handleCollaborationRoomActivity(data.rooms || []);
-      const nextRooms = data.rooms || [];
+      const serverRooms = data.rooms || [];
+      const leftRoomRecords = collaborationRooms.filter((room) => room?.is_left && !serverRooms.some((serverRoom) => serverRoom.id === room.id));
+      const nextRooms = [...serverRooms, ...leftRoomRecords];
       persistCachedCollaborationRooms(authEmail, nextRooms);
       setCollaborationRooms((current) => (
         JSON.stringify(current) === JSON.stringify(nextRooms) ? current : nextRooms
@@ -22140,21 +22132,18 @@ export default function App() {
     setIsCollaborationMaterialsLoading(true);
     if (!silent && !suppressLoader) setIsRoomLoading(true);
     try {
-      const materialsPromise = authFetch(`/collaboration/rooms/${roomId}/material-items`, { cache: "no-store", timeoutMs: 8000 })
+      const materialsPromise = authFetch(`/collaboration/rooms/${roomId}/material-items`, { cache: "no-store", timeoutMs: 45000 })
         .then(async (materialsResponse) => {
           const materialsData = await parseJsonSafe(materialsResponse);
           if (!materialsResponse.ok) throw new Error(materialsData.detail || "Could not load shared materials.");
-          if (collaborationRoomRequestInFlightRef.current === roomId) {
-            setActiveRoomId(roomId);
-            setActiveRoom((current) => current?.id === roomId
-              ? { ...current, materials: materialsData.items || [] }
-              : { id: roomId, title: "Opening room", materials: materialsData.items || [], members: [], messages: [], board_items: [], is_loading_shell: true });
-          }
+          setActiveRoom((current) => current?.id === roomId
+            ? { ...current, materials: materialsData.items || [] }
+            : current);
           return materialsData.items || [];
         })
         .catch((err) => { setCollaborationError(err.message || "Could not load shared materials."); return null; })
         .finally(() => setIsCollaborationMaterialsLoading(false));
-      const response = await authFetch(`/collaboration/rooms/${roomId}`, { cache: "no-store", timeoutMs: 10000 });
+      const response = await authFetch(`/collaboration/rooms/${roomId}`, { cache: "no-store", timeoutMs: 45000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not open the collaboration room.");
       if (collaborationRoomRequestInFlightRef.current !== roomId) return;
@@ -22163,10 +22152,17 @@ export default function App() {
       void materialsPromise;
       const nextRoom = data.room || null;
       persistActiveCollaborationRoomId(nextRoom?.id || roomId);
-      if (nextRoom?.id) collaborationRoomCacheRef.current.set(nextRoom.id, nextRoom);
-      setActiveRoom((current) => (
-        JSON.stringify(current) === JSON.stringify(nextRoom) ? current : nextRoom
-      ));
+      setActiveRoom((current) => {
+        const alreadyLoadedMaterials = current?.id === roomId && Array.isArray(current.materials) ? current.materials : [];
+        const serverMaterials = Array.isArray(nextRoom?.materials) ? nextRoom.materials : [];
+        const mergedRoom = nextRoom ? {
+          ...nextRoom,
+          materials: alreadyLoadedMaterials.length ? alreadyLoadedMaterials : serverMaterials,
+          is_loading_shell: false,
+        } : nextRoom;
+        if (mergedRoom?.id) collaborationRoomCacheRef.current.set(mergedRoom.id, mergedRoom);
+        return JSON.stringify(current) === JSON.stringify(mergedRoom) ? current : mergedRoom;
+      });
       syncRoomNotesDraftFromRoom(nextRoom, { force: resetNotesDraft });
       if (!silent) setCollaborationStatus(`Opened ${data.room?.title || "the collaboration room"}.`);
     } catch (err) {
@@ -22208,7 +22204,7 @@ export default function App() {
 
   const loadDiscoverableCollaborationRooms = async () => {
     try {
-      const response = await authFetch(`/collaboration/discover/rooms?query=${encodeURIComponent(collaborationDiscoverQuery)}`, { cache: "no-store", timeoutMs: 8000 });
+      const response = await authFetch(`/collaboration/discover/rooms?query=${encodeURIComponent(collaborationDiscoverQuery)}`, { cache: "no-store", timeoutMs: 30000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not discover Rooms.");
       setCollaborationDiscoverRooms(data.rooms || []);
@@ -22305,7 +22301,7 @@ export default function App() {
     const nextMaterial = (activeRoomRef.current?.materials || []).find((item) => item.id === nextState.material_id);
     if (nextMaterial) void openCollaborationMaterial(nextMaterial, { preservePage: true, silent: true });
     else if (nextState.material_id && activeRoomId) {
-      void authFetch(`/collaboration/rooms/${encodeURIComponent(activeRoomId)}/material-items`, { cache: "no-store", timeoutMs: 8000 })
+      void authFetch(`/collaboration/rooms/${encodeURIComponent(activeRoomId)}/material-items`, { cache: "no-store", timeoutMs: 45000 })
         .then(async (response) => {
           const data = await parseJsonSafe(response);
           if (!response.ok) throw new Error(data.detail || "Could not synchronize the controlled material.");
@@ -22465,7 +22461,7 @@ export default function App() {
     }
     void loadCollaborationProfile();
     setIsCollaborationNotificationsLoading(true);
-    authFetch("/collaboration/notifications", { timeoutMs: 8000 })
+    authFetch("/collaboration/notifications", { timeoutMs: 30000 })
       .then(parseJsonSafe)
       .then((data) => setCollaborationNotifications(data.notifications || []))
       .catch(() => undefined)
@@ -22477,7 +22473,7 @@ export default function App() {
     if (!authToken || !isCollaborationVisible) return undefined;
     const interval = window.setInterval(() => {
       refreshCollaborationRooms(true);
-      authFetch("/collaboration/notifications", { timeoutMs: 8000 })
+      authFetch("/collaboration/notifications", { timeoutMs: 30000 })
         .then(parseJsonSafe)
         .then((data) => setCollaborationNotifications(data.notifications || []))
         .catch(() => undefined);
@@ -23182,6 +23178,24 @@ export default function App() {
       body: JSON.stringify(payload),
     };
     return publicJsonWithTransientRetries("/support/public-contact", requestOptions, { timeoutMs: 90000, retries: 2 });
+  };
+
+  const submitBillingSupportMessage = async () => {
+    setIsSendingBillingSupport(true);
+    setBillingSupportFeedback("");
+    try {
+      const { data } = await submitSupportRequest({
+        page: "/app/payments",
+        category: "Billing and payments",
+        message: billingSupportMessage,
+      });
+      setBillingSupportMessage("");
+      setBillingSupportFeedback(data.message || "Your payment query was sent to Mabaso AI Support.");
+    } catch (err) {
+      setBillingSupportFeedback(err.message || "Your payment query could not be sent.");
+    } finally {
+      setIsSendingBillingSupport(false);
+    }
   };
 
   const submitSupportMessage = async () => {
@@ -28041,7 +28055,7 @@ export default function App() {
     setMaterialMenuItemId(opening ? item.id : "");
     if (!opening || publicShareRecords[item.id]) return;
     try {
-      const { data } = await authJsonWithTransientRetries(`/api/shares/status/material/${encodeURIComponent(item.id)}`, {}, { timeoutMs: 6000, retries: 0 });
+      const { data } = await authJsonWithTransientRetries(`/api/shares/status/material/${encodeURIComponent(item.id)}`, {}, { timeoutMs: 30000, retries: 0 });
       if (data?.share?.id) {
         setPublicShareRecords((current) => ({ ...current, [item.id]: { open: true, type: "material", itemId: item.id, shareId: data.share.id, title: data.share.title || item.title, url: "", warnings: [] } }));
       }
@@ -28192,6 +28206,20 @@ export default function App() {
     }
   };
 
+  const copyKnownMaterialShareLink = async (shareRecord) => {
+    const url = String(shareRecord?.url || "").trim();
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setMaterialMenuItemId("");
+      setStatus("Read-only share link copied.");
+    } catch {
+      setPublicShareDialog(shareRecord);
+      setMaterialMenuItemId("");
+      setError("Clipboard access was blocked. Copy the link from the share panel.");
+    }
+  };
+
   const disablePublicShare = async (shareRecord = publicShareDialog) => {
     if (!shareRecord?.shareId || isUpdatingPublicShare) return;
     setIsUpdatingPublicShare(true);
@@ -28209,15 +28237,17 @@ export default function App() {
     }
   };
 
-  const updatePublicShareSnapshot = async () => {
-    if (!publicShareDialog?.shareId || isUpdatingPublicShare) return;
+  const updatePublicShareSnapshot = async (shareRecord = publicShareDialog) => {
+    if (!shareRecord?.shareId || isUpdatingPublicShare) return;
     setIsUpdatingPublicShare(true);
+    setMaterialMenuItemId("");
     try {
-      const { data } = await authJsonWithTransientRetries(`/api/shares/${encodeURIComponent(publicShareDialog.shareId)}`, {
+      const { data } = await authJsonWithTransientRetries(`/api/shares/${encodeURIComponent(shareRecord.shareId)}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "update" }),
       }, { timeoutMs: 15000, retries: 0 });
-      setPublicShareDialog((current) => ({ ...current, warnings: data?.warnings || [] }));
-      setStatus("Shared version updated.");
+      setPublicShareDialog((current) => current?.shareId === shareRecord.shareId ? { ...current, warnings: data?.warnings || [] } : current);
+      if (shareRecord.itemId) setPublicShareRecords((current) => ({ ...current, [shareRecord.itemId]: { ...current[shareRecord.itemId], warnings: data?.warnings || [] } }));
+      setStatus("Shared version updated without changing its link.");
     } catch (error) {
       setError(error?.message || "The shared version could not be updated.");
     } finally {
@@ -29016,18 +29046,29 @@ export default function App() {
       return;
     }
     if (!window.confirm(`Leave ${activeRoom.title}? Shared materials remain in the room.`)) return;
+    setIsLeavingRoom(true);
+    setCollaborationStatus("Leaving room...");
     try {
-      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/membership`, { method: "DELETE" });
+      const leavingRoom = { ...activeRoom, membership_status: "left", is_left: true };
+      const response = await authFetch(`/collaboration/rooms/${activeRoomId}/membership`, { method: "DELETE", timeoutMs: 45000 });
       const data = await parseJsonSafe(response);
       if (!response.ok) throw new Error(data.detail || "Could not leave the room.");
+      setCollaborationRooms((current) => {
+        const next = current.some((room) => room.id === leavingRoom.id)
+          ? current.map((room) => room.id === leavingRoom.id ? leavingRoom : room)
+          : [leavingRoom, ...current];
+        persistCachedCollaborationRooms(authEmail, next);
+        return next;
+      });
       setActiveRoom(null);
       setActiveRoomId("");
       persistActiveCollaborationRoomId("");
-      await refreshCollaborationRooms(true);
       setCollaborationMobileView("rooms");
-      setStatus("You left the collaboration room.");
+      setCollaborationStatus("You left the room. Its public recent-room entry remains available if you need to request access again.");
     } catch (err) {
-      setError(err.message || "Could not leave the room.");
+      setCollaborationError(err.message || "Could not leave the room.");
+    } finally {
+      setIsLeavingRoom(false);
     }
   };
   const shareCurrentWorkspaceMaterialToRoom = async () => {
@@ -31332,6 +31373,10 @@ export default function App() {
             <UsersRound className="h-4 w-4" aria-hidden="true" />
             <span>{collaborationProfile ? "Edit Profile" : "Create Profile"}</span>
           </button>
+          <button type="button" onClick={() => { setIsProfileMenuOpen(false); openProtectedAppPage("payments"); void refreshBillingStatus(); }} className="profile-menu-row" role="menuitem">
+            <CreditCard className="h-4 w-4" aria-hidden="true" />
+            <span>Billing and payments</span>
+          </button>
           <button type="button" onClick={() => { setIsProfileMenuOpen(false); logout(); }} className="profile-menu-row profile-menu-logout" role="menuitem">
             <LogOut className="h-4 w-4" aria-hidden="true" />
             <span>Log out</span>
@@ -32201,7 +32246,7 @@ export default function App() {
                 {activeTab === "report" ? renderReportPanel() : null}
                 {activeTab === "mindmap" ? renderMindMapPanel() : null}
                 {activeTab === "quality" ? renderNoteQualityPanel() : null}
-                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room, then share workspace materials whenever you are ready. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p id="collaboration-rooms" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p id="collaboration-materials" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{(activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
+                {activeTab === "collaboration" ? <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]"><div className="space-y-5"><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Create room</p><h3 className="mt-2 text-2xl font-semibold text-white">Invite your study group</h3><p className="mt-3 text-sm leading-7 text-slate-300">Create an independent study room, then share workspace materials whenever you are ready. Invited students will see the same room when they sign in with those emails.</p><div className="mt-5 space-y-4"><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Room title</label><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder={hasCollaborationSeedContent ? `${extractHistoryTitle(summary, workspaceFileLabel)} group room` : "New study group"} /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Invite by email</label><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={4} className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-950/75 px-4 py-3 text-sm text-white outline-none" placeholder="student1@email.com, student2@email.com" /></div><div><label className="block text-xs uppercase tracking-[0.24em] text-slate-400">Group test visibility</label><div className="mt-2 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "private" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Private answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members cannot see what others are writing.</p></button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={`rounded-2xl border px-4 py-3 text-left text-sm ${newRoomVisibility === "shared" ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-50" : "border-white/10 bg-slate-950/75 text-slate-200"}`}><p className="font-semibold">Shared answers</p><p className="mt-2 text-xs leading-6 text-slate-300">Members can compare typed answers inside the room.</p></button></div></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom} className="w-full rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-50">{isCreatingRoom ? "Creating room..." : "Create collaboration room"}</button></div></div><div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p id="collaboration-rooms" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Available rooms</p><h3 className="mt-2 text-xl font-semibold text-white">Your collaboration list</h3></div><button type="button" onClick={() => refreshCollaborationRooms()} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">Refresh</button></div><div className="mt-4 space-y-3">{collaborationRooms.length ? collaborationRooms.map((room) => <button key={room.id} type="button" onClick={async () => { setCurrentPage("workspace"); setActiveTab("collaboration"); await loadCollaborationRoom(room.id, { resetNotesDraft: true }); }} className={`w-full rounded-2xl border p-4 text-left transition ${activeRoomId === room.id ? "border-emerald-300/35 bg-emerald-300/10" : "border-white/10 bg-slate-950/75 hover:bg-white/10"}`}><p className="text-sm font-semibold text-white">{room.title}</p><p className="mt-2 text-xs uppercase tracking-[0.2em] text-slate-400">{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.test_visibility}</p><p className="mt-2 text-xs text-slate-400">Updated {new Date(room.updated_at).toLocaleString()}</p></button>) : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4 text-sm leading-7 text-slate-300">No collaboration rooms yet. Create the first room and share materials whenever you are ready.</div>}</div></div></div><div className="space-y-5">{activeRoom ? <><div className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03))] p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Active room</p><h3 className="mt-2 text-3xl font-semibold text-white">{activeRoom.title}</h3><p className="mt-3 text-sm leading-7 text-slate-300">Shared tool: {roomToolLabel}. Room owner: {activeRoom.owner_email}.</p></div><div className="force-mobile-stack flex flex-wrap gap-3"><button type="button" onClick={syncCurrentTabToRoom} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50">Share workspace material</button><button type="button" onClick={() => setFollowRoomView((current) => !current)} className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-white">{followRoomView ? "Following room view" : "Follow room view"}</button></div></div><div className="mt-5 flex flex-wrap gap-2">{(activeRoom.members || []).map((member) => <span key={member.email} className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs text-slate-200">{member.email} {member.role === "owner" ? "(owner)" : ""}</span>)}</div><div className="mt-5 rounded-[24px] border border-white/10 bg-slate-950/70 p-5"><div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p id="collaboration-materials" className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared revision pack</p><h4 className="mt-2 text-2xl font-semibold text-white">Guide, formulas, worked examples, flashcards, and test</h4><p className="mt-3 text-sm leading-7 text-slate-300">Choose a resource below to make it the room’s shared revision focus.</p></div><div className="flex flex-wrap gap-2">{[{ id: "guide", label: "Study Guide" }, { id: "formulas", label: "Formulas" }, { id: "examples", label: "Worked Examples" }, { id: "flashcards", label: "Flashcards" }, { id: "quiz", label: "Test" }].map((tab) => <button key={tab.id} type="button" onClick={async () => { setFollowRoomView(true); await shareTabToRoom(tab.id); }} className={`rounded-full px-4 py-2 text-sm ${activeRoom.active_tab === tab.id ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>{tab.label}</button>)}</div></div><div className="mt-4 whitespace-pre-wrap break-words rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-7 text-slate-200">{buildCollaborationPreview(activeRoom) || "No shared content selected yet."}</div></div>{activeRoom.is_owner ? <div className="force-mobile-stack mt-5 flex flex-wrap gap-3"><button type="button" onClick={() => changeRoomTestVisibility("private")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "private" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Keep answers private</button><button type="button" onClick={() => changeRoomTestVisibility("shared")} className={`rounded-full px-4 py-2 text-sm ${activeRoom.test_visibility === "shared" ? "bg-white text-slate-950" : "border border-white/10 bg-white/5 text-white"}`}>Share answers in room</button></div> : null}</div><div className="grid gap-5 xl:grid-cols-2"><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="force-mobile-stack flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Shared notes</p><h4 className="mt-2 text-2xl font-semibold text-white">Everyone sees the same notes board</h4></div><button type="button" onClick={saveRoomNotes} disabled={isSavingRoomNotes} className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-50 disabled:opacity-50">{isSavingRoomNotes ? "Saving..." : "Save shared notes"}</button></div><textarea value={roomSharedNotesDraft} onChange={(event) => setRoomSharedNotesDraft(event.target.value)} rows={12} className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-950 px-4 py-4 text-sm leading-7 text-slate-100 outline-none" placeholder="Write group notes, exam reminders, common mistakes, or a plan for the test..." /></div><div className="rounded-[24px] border border-white/10 bg-slate-950/75 p-5"><div className="flex items-center justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Room chat</p><h4 className="mt-2 text-2xl font-semibold text-white">Live discussion</h4></div>{isRoomLoading ? <span className="rounded-full border border-white/10 bg-slate-950/75 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-300">Syncing</span> : null}</div><div className="mt-4 rounded-2xl border border-white/10 bg-slate-950 p-4">{activeRoom.is_loading_shell || isRoomLoading ? <p className="text-sm leading-7 text-slate-300">Loading room chat...</p> : (activeRoom.messages || []).length ? <div className="space-y-3">{activeRoom.messages.map((message) => <div key={message.id} className="rounded-2xl border border-white/10 bg-white/5 p-3"><p className="text-xs uppercase tracking-[0.2em] text-emerald-200/70">{message.author_email}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-200">{message.content}</p></div>)}</div> : <p className="text-sm leading-7 text-slate-300">Room messages will appear here. Use this to coordinate who is revising which section.</p>}</div><div className="mt-4 rounded-[24px] border border-white/10 bg-slate-950/80 p-4"><div className="force-mobile-stack flex items-end gap-3"><textarea ref={roomMessageInputRef} value={roomMessageDraft} onChange={(event) => setRoomMessageDraft(event.target.value)} onKeyDown={handleRoomChatKeyDown} rows={1} className="min-h-[56px] flex-1 resize-none bg-transparent px-1 py-3 text-sm leading-6 text-slate-100 outline-none placeholder:text-slate-500" placeholder="Type your message..." /><button type="button" onClick={sendRoomMessage} disabled={isSendingRoomMessage} className="flex h-12 w-12 items-center justify-center self-end rounded-full bg-[linear-gradient(135deg,#166534,#22c55e)] text-white disabled:opacity-50 sm:self-auto" aria-label="Send room message"><svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" /></svg></button></div><p className="mt-3 text-xs text-slate-400">This room chat refreshes automatically.</p></div></div></div></> : <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.03] p-8 text-sm leading-7 text-slate-300">Open a room from the list or create a new one to start shared notes, room chat, and group test settings.</div>}</div></div> : null}
               </div>
               </BodyPortal>
             </div>

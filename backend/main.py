@@ -8,6 +8,7 @@ from email.utils import getaddresses, parseaddr
 import html
 from html.parser import HTMLParser
 import hashlib
+import importlib.util
 import hmac
 from http.cookiejar import MozillaCookieJar
 import ipaddress
@@ -297,7 +298,7 @@ SESSION_CONTEXT_CACHE_TTL_SECONDS = max(1, int(os.getenv("SESSION_CONTEXT_CACHE_
 SESSION_LAST_SEEN_INTERVAL_SECONDS = max(10, int(os.getenv("SESSION_LAST_SEEN_INTERVAL_SECONDS", "90")))
 SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS = max(30, int(os.getenv("SESSION_SUBSCRIPTION_CHECK_INTERVAL_SECONDS", "300")))
 SLOW_REQUEST_LOG_MS = max(100, int(os.getenv("SLOW_REQUEST_LOG_MS", "1200")))
-SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe@gmail.com").strip()
+SUPPORT_EMAIL = os.getenv("SUPPORT_EMAIL", "mabasoasakhe10@gmail.com").strip()
 LECTURE_ASSISTANT_MODEL_TIMEOUT = float(os.getenv("LECTURE_ASSISTANT_MODEL_TIMEOUT", "75"))
 LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS = int(os.getenv("LECTURE_ASSISTANT_MAX_OUTPUT_TOKENS", "1200"))
 LECTURE_ASSISTANT_TEXT_MAX_OUTPUT_TOKENS = int(
@@ -18306,6 +18307,17 @@ def format_zar_amount(value: Any) -> str:
     return f"{amount:.2f}"
 
 
+def format_zar_transaction_amount(value: Any) -> str:
+    """Format an actual transaction amount, including a valid R0 trial setup."""
+    try:
+        amount = Decimal(compact_text(value, "0")).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=500, detail="Billing transaction amount is invalid.")
+    if amount < 0:
+        raise HTTPException(status_code=500, detail="Billing transaction amount cannot be negative.")
+    return f"{amount:.2f}"
+
+
 def get_billing_plan(plan_id: str) -> dict[str, str]:
     normalized_plan_id = normalize_billing_plan_id(plan_id)
     plan = BILLING_PLAN_CONFIG.get(normalized_plan_id)
@@ -18790,13 +18802,14 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
         }
     normalized_status = compact_text(row["status"]).lower()
     normalized_plan_id = normalize_billing_plan_id(row["plan_id"])
+    is_trialing = normalized_status == "trialing"
     period_state = build_subscription_period_state(
         row["current_period_end"],
-        active=normalized_status == "active",
+        active=normalized_status in {"active", "trialing"},
     )
     return {
         "status": normalized_status,
-        "plan_id": normalized_plan_id if normalized_status == "active" else "free",
+        "plan_id": normalized_plan_id if normalized_status in {"active", "trialing"} else "free",
         "paid_plan_id": normalized_plan_id,
         "provider": row["provider"],
         "amount_zar": row["amount_zar"],
@@ -18805,7 +18818,8 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
         "cancel_at": row["cancel_at"],
         "updated_at": row["updated_at"],
         "active": normalized_status == "active",
-        "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("renews" if normalized_status == "active" else normalized_status),
+        "trial_active": is_trialing,
+        "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("trial_renews" if is_trialing else "renews" if normalized_status == "active" else normalized_status),
         **period_state,
         "message": (
             "Your subscription has expired and your account has been returned to the Free Plan."
@@ -19031,7 +19045,7 @@ def resolve_entitlement(email: str, *, now: datetime | None = None) -> dict[str,
             "entitlement": "trial", "plan_id": plan_id, "access_level": plan_id,
             "trial_active": True, "trial_started_at": compact_text(trial["trial_started_at"]),
             "trial_ends_at": compact_text(trial["trial_ends_at"]), "subscription_active": False,
-            "subscription_status": "trialing", "quota_profile": plan_id, "reason": "active_no_card_trial",
+            "subscription_status": "trialing", "quota_profile": plan_id, "reason": "active_payfast_authorized_trial",
         }
     if trial and compact_text(trial["trial_status"]).lower() == "active" and trial_ends and trial_ends <= resolved_now:
         with get_db_connection() as connection:
@@ -19060,7 +19074,7 @@ def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dic
             **subscription,
             "status": "trialing",
             "plan_id": entitlement["plan_id"],
-            "provider": "mabaso_trial",
+            "provider": compact_text(subscription.get("provider"), "legacy_trial"),
             "amount_zar": "0.00",
             "current_period_start": entitlement.get("trial_started_at", ""),
             "current_period_end": entitlement.get("trial_ends_at", ""),
@@ -19442,6 +19456,8 @@ def list_refund_requests_for_user(email: str) -> list[dict[str, Any]]:
 def get_payment_refund_summary(payment_row: Any, *, now: datetime | None = None) -> dict[str, Any]:
     if not payment_row:
         return {"eligible": False, "status": "unavailable", "reason": "payment_not_found"}
+    if parse_zar_amount(payment_row["amount_zar"]) <= 0:
+        return {"eligible": False, "status": "trial", "reason": "no_charge_to_refund"}
     usage_snapshot = get_usage_snapshot_since_charge(payment_row["email"], payment_row["paid_at"])
     try:
         eligibility = evaluate_refund_eligibility(
@@ -19498,6 +19514,7 @@ def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any
             "provider": row["provider"],
             "provider_payment_id": row["provider_payment_id"],
             "amount_zar": row["amount_zar"],
+            "is_trial": parse_zar_amount(row["amount_zar"]) <= 0,
             "currency": row["currency"],
             "payment_status": row["payment_status"],
             "billing_country_at_purchase": row["billing_country_at_purchase"] or "unknown",
@@ -19924,8 +19941,8 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
         checkout_fields = {}
     is_trial_checkout = compact_text(checkout_fields.get("custom_str4")).lower() == "trial"
     plan = get_billing_plan(plan_id)
-    amount_gross = format_zar_amount(compact_text(payload.get("amount_gross"), session["amount_zar"]))
-    expected_amount = format_zar_amount(session["amount_zar"])
+    amount_gross = format_zar_transaction_amount(compact_text(payload.get("amount_gross"), session["amount_zar"]))
+    expected_amount = format_zar_transaction_amount(session["amount_zar"])
     allowed_amounts = {expected_amount}
     if is_trial_checkout:
         allowed_amounts.add(format_zar_amount(plan["amount_zar"]))
@@ -20032,7 +20049,7 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             next_status,
         )
         if next_status == "active":
-            upsert_billing_subscription(
+            _, period_end_iso = upsert_billing_subscription(
                 connection,
                 email=email,
                 plan_id=plan_id,
@@ -20042,8 +20059,36 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 amount_zar=format_zar_amount(plan["amount_zar"]),
                 raw_event_json=raw_event_json,
                 now_iso=now_iso,
-                duration_days=7 if is_initial_trial_activation else None,
+                duration_days=FREE_TRIAL_DAYS if is_initial_trial_activation else None,
             )
+            if is_initial_trial_activation:
+                # A R0 PayFast setup proves the card and creates the recurring
+                # token, but it is still a trial rather than a paid period.
+                connection.execute(
+                    "UPDATE billing_subscriptions SET status = 'trialing', updated_at = ? WHERE lower(email) = lower(?)",
+                    (now_iso, email),
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (email, now_iso, uuid4().hex, now_iso),
+                )
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET trial_status = 'active', trial_started_at = ?, trial_ends_at = ?,
+                        trial_used_at = COALESCE(NULLIF(trial_used_at, ''), ?), updated_at = ?
+                    WHERE lower(email) = lower(?)
+                    """,
+                    (now_iso, period_end_iso, now_iso, now_iso, email),
+                )
+            else:
+                connection.execute(
+                    "UPDATE users SET trial_status = CASE WHEN trial_used_at IS NOT NULL AND trial_used_at <> '' THEN 'converted' ELSE trial_status END, updated_at = ? WHERE lower(email) = lower(?)",
+                    (now_iso, email),
+                )
     sync_user_account_snapshot(email)
     return next_status
 
@@ -22076,10 +22121,11 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
                 "transaction_id": row["provider_payment_id"] or row["id"],
                 "checkout_session_id": row["checkout_session_id"],
                 "user": email,
-                "plan": get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id.replace("_", " ").title(),
+                "plan": (f"{get_billing_plan(plan_id)['name']} free trial" if amount <= 0 and plan_id in BILLING_PLAN_CONFIG else get_billing_plan(plan_id)["name"] if plan_id in BILLING_PLAN_CONFIG else plan_id.replace("_", " ").title()),
                 "plan_id": plan_id,
                 "amount": amount,
                 "amount_label": f"R{amount:,.2f}",
+                "record_type": "free_trial" if amount <= 0 else "payment",
                 "payment_method": "PayFast" if row["provider"] == "payfast" else compact_text(row["provider"], "Payment provider").replace("_", " ").title(),
                 "status": compact_text(row["payment_status"], "unknown").title(),
                 "date": paid_at.isoformat(),
@@ -25050,8 +25096,9 @@ def cancel_customer_subscription(
     email = normalize_email(current_user)
     with get_db_connection() as connection:
         subscription = connection.execute("SELECT * FROM billing_subscriptions WHERE lower(email) = ?", (email,)).fetchone()
-    if not subscription or compact_text(subscription["status"]).lower() != "active":
-        raise HTTPException(status_code=409, detail="There is no active paid subscription to cancel.")
+    subscription_status = compact_text(subscription["status"]).lower() if subscription else ""
+    if not subscription or subscription_status not in {"active", "trialing"}:
+        raise HTTPException(status_code=409, detail="There is no active subscription or trial to cancel.")
     token = compact_text(subscription["provider_token"])
     if compact_text(subscription["provider"]).lower() == "payfast":
         if not token:
@@ -25074,7 +25121,8 @@ def cancel_customer_subscription(
             "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (uuid4().hex, email, "", compact_text(subscription["provider"], "system"), "SUBSCRIPTION_CANCELLED", json.dumps({"cancel_at": cancel_at, "reason": compact_text(payload.reason)[:300], "provider_status": compact_text(provider_result.get("status"))}, ensure_ascii=False), now_iso),
         )
-    return {"message": "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.", "cancel_at": cancel_at}
+    message = ("Your free trial renewal is cancelled. Trial access remains available until the displayed trial end." if subscription_status == "trialing" else "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.")
+    return {"message": message, "cancel_at": cancel_at, "cancelled_status": subscription_status}
 
 
 @app.get("/admin/refunds")
@@ -25243,59 +25291,12 @@ def start_free_trial(
     request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
-    email = normalize_email(current_user)
-    now = utc_now()
-    now_iso = now.isoformat()
-    trial_end = (now + timedelta(days=FREE_TRIAL_DAYS)).isoformat()
-    with get_db_connection() as connection:
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
-            (email, now_iso, uuid4().hex, now_iso),
-        )
-        user = connection.execute(
-            "SELECT trial_status, trial_started_at, trial_ends_at, trial_used_at FROM users WHERE lower(email) = ?",
-            (email,),
-        ).fetchone()
-        paid = connection.execute(
-            "SELECT status, current_period_end FROM billing_subscriptions WHERE lower(email) = ?",
-            (email,),
-        ).fetchone()
-        paid_end = parse_billing_datetime(paid["current_period_end"]) if paid else None
-        if paid and compact_text(paid["status"]).lower() == "active" and paid_end and paid_end > now:
-            raise HTTPException(status_code=409, detail="Your paid subscription is already active.")
-        existing_end = parse_billing_datetime(user["trial_ends_at"]) if user else None
-        already_active = bool(
-            user
-            and compact_text(user["trial_status"]).lower() == "active"
-            and existing_end
-            and existing_end > now
-        )
-        if already_active:
-            pass
-        if user and compact_text(user["trial_used_at"]):
-            if not already_active:
-                raise HTTPException(status_code=409, detail="This account has already used its free trial.")
-        if not already_active:
-            connection.execute(
-                """
-                UPDATE users SET trial_status = 'active', trial_started_at = ?, trial_ends_at = ?,
-                    trial_used_at = ?, updated_at = ? WHERE lower(email) = ?
-                """,
-                (now_iso, trial_end, now_iso, now_iso, email),
-            )
-    entitlement = resolve_entitlement(email, now=now)
-    if already_active:
-        return {"message": "Your free trial is already active.", "entitlement": entitlement, "idempotent": True}
-    logger.info("Trial activation user=%s entitlement=%s reason=%s ends_at=%s", email, entitlement["entitlement"], entitlement["reason"], trial_end)
-    record_audit_log(action="billing.trial.started", email=email, request=request, resource_type="billing_trial", resource_name=FREE_TRIAL_PLAN_ID, metadata={"trial_days": FREE_TRIAL_DAYS, "trial_ends_at": trial_end})
-    record_diagnostic_event(
-        event_type="TRIAL_ACTIVATED", category="trial", severity="INFO", user_email=email,
-        request_id=compact_text(getattr(request.state, "request_id", "")), endpoint="/api/billing/trial/start",
-        http_status=200, safe_message="Free trial activated and entitlement recalculated.",
-        metadata={"old_entitlement": "free", "new_entitlement": entitlement.get("entitlement"), "reason": entitlement.get("reason"), "trial_ends_at": trial_end},
+    # Retain the route for old clients, but never activate access without a
+    # successful PayFast R0 subscription setup and returned provider token.
+    raise HTTPException(
+        status_code=410,
+        detail="Free trials now start through PayFast so the recurring payment can be authorised securely.",
     )
-    return {"message": f"Your {FREE_TRIAL_DAYS}-day Pro trial is active.", "entitlement": entitlement, "idempotent": False}
 
 
 @app.get("/admin/billing/entitlements/{user_email}")
@@ -26212,7 +26213,7 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
         "recent_events": events,
         "system_health": {
             "backend": "online", "database": "connected", "database_latency_ms": db_latency_ms,
-            "database_backend": DATABASE_BACKEND, "environment": compact_text(os.getenv("APP_ENV"), "production" if is_production_environment() else "development"),
+            "database_backend": DATABASE_BACKEND, "environment": compact_text(os.getenv("APP_ENV"), "production" if compact_text(os.getenv("RENDER")).lower() in {"1", "true", "yes"} else "development"),
         },
         "deployment": {
             "backend_commit": compact_text(os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT"), "unknown")[:80],
@@ -26226,6 +26227,7 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
             "PAYFAST_PASSPHRASE": bool(PAYFAST_PASSPHRASE), "APP_PUBLIC_URL": bool(APP_PUBLIC_URL),
             "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
             "EMAIL_PROVIDER": bool(os.getenv("BREVO_API_KEY") or os.getenv("SMTP_HOST")),
+            "MATPLOTLIB": importlib.util.find_spec("matplotlib") is not None,
         },
     }
 
@@ -31079,6 +31081,11 @@ def render_latex_math_png(latex: str, *, font_size: float = 12.0) -> bytes | Non
     body = body.replace(r"\begin{aligned}", "").replace(r"\end{aligned}", "")
     rows = [row.replace("&", "").strip() for row in re.split(r"\\\\", body) if row.strip()]
     try:
+        # Matplotlib otherwise attempts to cache fonts in the service account's
+        # home directory, which can be read-only on Render and in test sandboxes.
+        matplotlib_cache_dir = os.path.join(tempfile.gettempdir(), "mabaso-matplotlib-cache")
+        os.makedirs(matplotlib_cache_dir, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", matplotlib_cache_dir)
         from matplotlib.figure import Figure
 
         figure_height = max(0.42, 0.34 * len(rows))

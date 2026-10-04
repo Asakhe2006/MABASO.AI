@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fastapi import Request
+from fastapi import HTTPException
 
 from backend import main
 
@@ -61,6 +62,20 @@ class BillingIntegrationTests(unittest.TestCase):
         with patch.object(main, "PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "5.00"):
             with self.assertRaisesRegex(Exception, "must use PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR=0.00"):
                 main.format_payfast_trial_initial_amount()
+
+    def test_zero_value_trial_transaction_is_valid(self):
+        self.assertEqual(main.format_zar_transaction_amount("0.00"), "0.00")
+
+    def test_legacy_no_card_trial_endpoint_is_disabled(self):
+        with self.assertRaises(HTTPException) as raised:
+            main.start_free_trial(make_request(), current_user="student@example.test")
+        self.assertEqual(raised.exception.status_code, 410)
+        self.assertIn("PayFast", raised.exception.detail)
+
+    def test_diagnostics_overview_does_not_require_missing_environment_helper(self):
+        result = main.build_admin_diagnostics_overview()
+        self.assertIn(result["system_health"]["environment"], {"development", "production"})
+        self.assertIn("MATPLOTLIB", result["environment_checks"])
 
     def test_openai_cost_summary_uses_returned_amount_without_token_pricing(self):
         summary = main.summarize_openai_cost_buckets([{
