@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const TABS = [
   ["inspector", "User Inspector"],
@@ -60,6 +60,7 @@ function Timeline({ items = [] }) {
 }
 
 export default function AdminDiagnosticsPanel({ authFetch }) {
+  const authFetchRef = useRef(authFetch);
   const [tab, setTab] = useState("inspector");
   const [overview, setOverview] = useState(null);
   const [query, setQuery] = useState("");
@@ -69,38 +70,46 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
+
   const loadOverview = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      setOverview(await requestJson(authFetch, "/admin/diagnostics/overview"));
+      setOverview(await requestJson(authFetchRef.current, "/admin/diagnostics/overview"));
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setLoading(false);
     }
-  }, [authFetch]);
+  }, []);
 
   useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   useEffect(() => {
+    let active = true;
     const timer = window.setTimeout(async () => {
       try {
-        const payload = await requestJson(authFetch, `/admin/diagnostics/users/search?q=${encodeURIComponent(query)}&limit=20`);
-        setResults(payload.users || []);
+        const payload = await requestJson(authFetchRef.current, `/admin/diagnostics/users/search?q=${encodeURIComponent(query)}&limit=20`);
+        if (active) setResults(payload.users || []);
       } catch (requestError) {
-        setError(requestError.message);
+        if (active) setError(requestError.message);
       }
     }, query ? 240 : 0);
-    return () => window.clearTimeout(timer);
-  }, [authFetch, query]);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
 
   const inspectUser = async (email) => {
     if (!email) return;
     setLoading(true);
     setError("");
     try {
-      const payload = await requestJson(authFetch, `/admin/diagnostics/users/${encodeURIComponent(email)}`);
+      const payload = await requestJson(authFetchRef.current, `/admin/diagnostics/users/${encodeURIComponent(email)}`);
       setSelectedEmail(email);
       setSnapshot(payload);
       setTab("inspector");
@@ -115,7 +124,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
     if (!selectedEmail) return;
     setLoading(true);
     try {
-      await requestJson(authFetch, `/admin/diagnostics/users/${encodeURIComponent(selectedEmail)}/recalculate-entitlement`, { method: "POST" });
+      await requestJson(authFetchRef.current, `/admin/diagnostics/users/${encodeURIComponent(selectedEmail)}/recalculate-entitlement`, { method: "POST" });
       await inspectUser(selectedEmail);
     } catch (requestError) {
       setError(requestError.message);

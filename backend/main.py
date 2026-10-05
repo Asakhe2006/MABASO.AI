@@ -463,6 +463,7 @@ PAYFAST_SUBSCRIPTION_ENABLED = os.getenv("PAYFAST_SUBSCRIPTION_ENABLED", "true")
 PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR = os.getenv("PAYFAST_TRIAL_INITIAL_AMOUNT_ZAR", "0.00").strip()
 FREE_TRIAL_DAYS = max(1, get_early_int_env("FREE_TRIAL_DAYS", 7))
 FREE_TRIAL_PLAN_ID = os.getenv("FREE_TRIAL_PLAN_ID", "pro_student").strip() or "pro_student"
+FREE_TRIAL_MIN_ACCOUNT_SESSIONS = max(1, get_early_int_env("FREE_TRIAL_MIN_ACCOUNT_SESSIONS", 3))
 OPENAI_ADMIN_KEY = os.getenv("OPENAI_ADMIN_KEY", "").strip()
 OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "").strip()
 OPENAI_COST_CACHE_SECONDS = max(60, get_early_int_env("OPENAI_COST_CACHE_SECONDS", 300))
@@ -7623,8 +7624,8 @@ class PostgresConnection:
                         "prepare_threshold": None,
                     },
                     min_size=1,
-                    max_size=max(2, get_int_env("POSTGRES_POOL_MAX_SIZE", 6)),
-                    timeout=15,
+                    max_size=max(2, get_int_env("POSTGRES_POOL_MAX_SIZE", 10)),
+                    timeout=max(5, get_int_env("POSTGRES_POOL_TIMEOUT_SECONDS", 20)),
                     open=True,
                 )
                 logger.info(
@@ -18333,6 +18334,17 @@ def get_billing_plan(plan_id: str) -> dict[str, str]:
     }
 
 
+def get_billing_plan_display_name(plan_id: Any) -> str:
+    """Return a safe label for checkout and legacy/non-checkout plan values."""
+    normalized_plan_id = normalize_billing_plan_id(compact_text(plan_id, "free"))
+    if normalized_plan_id == "free":
+        return "Free"
+    plan = BILLING_PLAN_CONFIG.get(normalized_plan_id)
+    if plan:
+        return compact_text(plan.get("name"), normalized_plan_id.replace("_", " ").title())
+    return normalized_plan_id.replace("_", " ").title() or "Unknown"
+
+
 def serialize_billing_plan(plan_id: str) -> dict[str, Any]:
     plan = get_billing_plan(plan_id)
     checkout_enabled = bool(PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY and (PAYFAST_PASSPHRASE or not PAYFAST_SUBSCRIPTION_ENABLED))
@@ -18753,31 +18765,72 @@ def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-def ensure_payfast_trial_eligible(email: str, plan_id: str) -> None:
+def get_payfast_trial_eligibility(email: str) -> dict[str, Any]:
     normalized_email = validate_email_address(email)
-    if normalize_billing_plan_id(plan_id) != "pro_student":
-        raise HTTPException(status_code=400, detail="The seven-day free trial is available only on the monthly Pro Student plan.")
     subscription = get_user_subscription(normalized_email)
-    if subscription.get("active"):
-        raise HTTPException(status_code=409, detail="The free trial is available only before a paid subscription has been activated.")
     with get_db_connection() as connection:
+        session_row = connection.execute(
+            "SELECT COUNT(*) AS session_count FROM active_sessions WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
         prior_trial = connection.execute(
             """
             SELECT id, status, created_at
             FROM billing_checkout_sessions
             WHERE lower(email) = lower(?)
-              AND checkout_fields_json LIKE '%"custom_str4": "trial"%'
+              AND checkout_fields_json LIKE ?
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (normalized_email,),
+            (normalized_email, '%"custom_str4": "trial"%'),
         ).fetchone()
-    if not prior_trial:
-        return
-    prior_status = compact_text(prior_trial["status"]).lower()
-    created_at = parse_billing_datetime(prior_trial["created_at"])
-    pending_is_stale = prior_status == "pending" and created_at and (utc_now() - created_at) > timedelta(hours=1)
-    if not pending_is_stale:
+    session_count = int(session_row["session_count"] or 0) if session_row else 0
+    if subscription.get("active") or subscription.get("trial_active"):
+        return {
+            "eligible": False,
+            "session_count": session_count,
+            "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
+            "reason": "subscription_or_trial_active",
+        }
+    if session_count < FREE_TRIAL_MIN_ACCOUNT_SESSIONS:
+        return {
+            "eligible": False,
+            "session_count": session_count,
+            "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
+            "reason": "minimum_account_sessions_not_reached",
+        }
+    if prior_trial:
+        prior_status = compact_text(prior_trial["status"]).lower()
+        created_at = parse_billing_datetime(prior_trial["created_at"])
+        pending_is_stale = prior_status == "pending" and created_at and (utc_now() - created_at) > timedelta(hours=1)
+        if not pending_is_stale:
+            return {
+                "eligible": False,
+                "session_count": session_count,
+                "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
+                "reason": "trial_already_started_or_used",
+            }
+    return {
+        "eligible": True,
+        "session_count": session_count,
+        "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
+        "reason": "eligible",
+    }
+
+
+def ensure_payfast_trial_eligible(email: str, plan_id: str) -> None:
+    normalized_email = validate_email_address(email)
+    if normalize_billing_plan_id(plan_id) != "pro_student":
+        raise HTTPException(status_code=400, detail="The seven-day free trial is available only on the monthly Pro Student plan.")
+    eligibility = get_payfast_trial_eligibility(normalized_email)
+    if eligibility["reason"] == "subscription_or_trial_active":
+        raise HTTPException(status_code=409, detail="The free trial is available only before a paid subscription has been activated.")
+    if eligibility["reason"] == "minimum_account_sessions_not_reached":
+        raise HTTPException(
+            status_code=409,
+            detail=f"The free trial becomes available after {eligibility['sessions_required']} account sessions.",
+        )
+    if eligibility["reason"] == "trial_already_started_or_used":
         raise HTTPException(status_code=409, detail="This account has already started or used its seven-day Pro trial.")
 
 
@@ -22482,7 +22535,7 @@ def build_subscription_abuse_monitor() -> dict[str, Any]:
             {
                 "email": email,
                 "plan_id": compact_text(row["plan_id"], premium_plan_by_email.get(email, "free")),
-                "subscription_plan": get_billing_plan(compact_text(row["plan_id"], premium_plan_by_email.get(email, "free")))["name"],
+                "subscription_plan": get_billing_plan_display_name(compact_text(row["plan_id"], premium_plan_by_email.get(email, "free"))),
                 "risk_score": int(row["risk_score"] or 0),
                 "status": compact_text(row["status"], "normal"),
                 "device_count": int(row["device_count"] or device_count_by_email.get(email, 0)),
@@ -22505,7 +22558,7 @@ def build_subscription_abuse_monitor() -> dict[str, Any]:
             {
                 "email": email,
                 "plan_id": plan_id,
-                "subscription_plan": get_billing_plan(plan_id)["name"],
+                "subscription_plan": get_billing_plan_display_name(plan_id),
                 "risk_score": score,
                 "status": "warning" if score >= 41 else "normal",
                 "device_count": device_count,
@@ -24896,6 +24949,7 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
         "monthly_usage": monthly_usage,
         "payment_history": payment_history,
         "payment_requests": payment_requests,
+        "trial_eligibility": get_payfast_trial_eligibility(normalized_email),
         "manual_payment": {
             "provider": "payshap",
             "enabled": bool(PAYSHAP_ACCOUNT_NAME and PAYSHAP_NUMBER),

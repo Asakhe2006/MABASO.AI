@@ -22,6 +22,59 @@ def make_request() -> Request:
 
 
 class BillingIntegrationTests(unittest.TestCase):
+    def test_trial_eligibility_uses_parameterized_pattern_and_three_sessions(self):
+        statements = []
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, parameters=()):
+                statements.append((sql, parameters))
+                if "COUNT(*) AS session_count" in sql:
+                    return type("Result", (), {"fetchone": lambda _self: {"session_count": 3}})()
+                self_test.assertIn("checkout_fields_json LIKE ?", sql)
+                self_test.assertEqual(parameters[1], '%"custom_str4": "trial"%')
+                return type("Result", (), {"fetchone": lambda _self: None})()
+
+        self_test = self
+        with patch.object(main, "get_user_subscription", return_value={"active": False, "trial_active": False}), \
+                patch.object(main, "get_db_connection", return_value=FakeConnection()), \
+                patch.object(main, "FREE_TRIAL_MIN_ACCOUNT_SESSIONS", 3):
+            eligibility = main.get_payfast_trial_eligibility("student@example.test")
+
+        self.assertTrue(eligibility["eligible"])
+        self.assertEqual(eligibility["session_count"], 3)
+        self.assertEqual(len(statements), 2)
+
+    def test_trial_is_hidden_server_side_before_three_sessions(self):
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _parameters=()):
+                value = {"session_count": 2} if "COUNT(*) AS session_count" in sql else None
+                return type("Result", (), {"fetchone": lambda _self: value})()
+
+        with patch.object(main, "get_user_subscription", return_value={"active": False, "trial_active": False}), \
+                patch.object(main, "get_db_connection", return_value=FakeConnection()), \
+                patch.object(main, "FREE_TRIAL_MIN_ACCOUNT_SESSIONS", 3):
+            with self.assertRaises(HTTPException) as raised:
+                main.ensure_payfast_trial_eligible("student@example.test", "pro_student")
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("3 account sessions", raised.exception.detail)
+
+    def test_diagnostics_plan_labels_accept_free_and_legacy_values(self):
+        self.assertEqual(main.get_billing_plan_display_name("free"), "Free")
+        self.assertEqual(main.get_billing_plan_display_name("legacy_research"), "Legacy Research")
+
     def test_payfast_trial_fields_use_zero_initial_amount_and_signature_order(self):
         plan = {
             "id": "pro_student",

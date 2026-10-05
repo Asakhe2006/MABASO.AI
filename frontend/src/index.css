@@ -15567,6 +15567,33 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-active
   overflow-y: auto !important;
 }
 
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-focus-toolbar {
+  grid-area: toolbar !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-thumbnails {
+  grid-area: thumbs !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-title-card,
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slides,
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-fallback {
+  grid-area: slide !important;
+  align-self: stretch !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-nav {
+  grid-area: nav !important;
+}
+
+body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slides > .study-guide-section-card {
+  height: 100% !important;
+  min-height: 100% !important;
+  margin: 0 !important;
+}
+
 /* Keep the final focus-mode grid names aligned with the actual child areas.
    The previous `thumbnails`/`navigation` names created implicit grid tracks,
    which left short slides floating in only part of the viewport. */
@@ -15601,6 +15628,13 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-slide-active
   .assistant-code-actions { top:.45rem; right:.45rem; }
   .assistant-code-content { max-width:100%; overscroll-behavior-inline:contain; }
   .study-chat-limit-card { width:calc(100% - 1rem); margin-bottom:calc(.5rem + env(safe-area-inset-bottom)); }
+}
+
+.collaboration-media-upload-bar progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 6px;
+  accent-color: #22c55e;
 }
 .mabaso-toggle {
   position: relative;

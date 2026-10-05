@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 const AuthContext = createContext(null);
 const AUTH_DEVICE_ID_KEY = "mabaso-device-id";
 const AUTH_MANUAL_LOGOUT_KEY = "mabaso-manual-logout-v1";
-const SESSION_CHECK_TIMEOUT_MS = 6500;
+const SESSION_CHECK_TIMEOUT_MS = 12000;
 const SESSION_RETRY_DELAYS_MS = Object.freeze([800, 1600, 3000, 5000, 5000]);
 const SESSION_UNKNOWN_MESSAGE = "Session check is still restoring. We will retry in the background.";
 
@@ -176,7 +176,10 @@ export function AuthProvider({ children }) {
       return;
     }
     let active = true;
-    void getSessionSingleFlight().then((result) => {
+    // A just-created cross-origin cookie can take a moment to become visible
+    // after the OAuth redirect. Confirm one unauthorized response before
+    // deciding that a remembered session is really gone.
+    void getSessionSingleFlight({ retryUnauthorizedOnce: true }).then((result) => {
       if (!active) return;
       if (result.status === "unknown") {
         setAuthState({ status: "unknown", session: null, error: result.error });
@@ -195,7 +198,7 @@ export function AuthProvider({ children }) {
     const delay = SESSION_RETRY_DELAYS_MS[Math.min(retryAttemptRef.current, SESSION_RETRY_DELAYS_MS.length - 1)];
     const timer = window.setTimeout(() => {
       retryAttemptRef.current += 1;
-      void getSessionSingleFlight({ force: true }).then((result) => {
+      void getSessionSingleFlight({ force: true, retryUnauthorizedOnce: true }).then((result) => {
         if (result.status === "unknown") {
           setAuthState((current) => (
             current.status === "authenticated"
@@ -218,7 +221,7 @@ export function AuthProvider({ children }) {
       const now = Date.now();
       if (now - lastBackgroundCheckAtRef.current < 60_000) return;
       lastBackgroundCheckAtRef.current = now;
-      void checkSession({ force: true, background: true });
+      void checkSession({ force: true, background: true, retryUnauthorizedOnce: true });
     };
     window.addEventListener("focus", verifyWhenActive);
     document.addEventListener("visibilitychange", verifyWhenActive);

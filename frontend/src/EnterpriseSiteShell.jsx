@@ -12,6 +12,75 @@ const cardMotion = {
 
 const INTERNAL_PLANNING_COPY = /suggested visual|visual direction|public visitors?|public page|page should|layout architecture|design notes|placeholder|polished sample|premium .*cards?|what it should feel like|hero \+|cta rail/i;
 
+const PRODUCT_EXPLANATIONS = {
+  "/product/study-workspace": [
+    { title: "One source becomes a connected study workspace", description: "Students begin with a lecture recording, document, slide deck, image, pasted notes, or a supported video source. Mabaso AI keeps the source, transcript, generated Study Guide, formulas, worked examples, flashcards, tests, presentations, podcasts, reports, and notes connected to the same authenticated workspace instead of scattering them across unrelated downloads." },
+    { title: "Tools generate only when the student requests them", description: "The Study Guide is prepared first when it is needed, while other tools remain available from the workspace navigation. Opening a tool gives that request priority and displays its real loading state. Previously generated results are restored from account history rather than silently erased or regenerated on every visit." },
+    { title: "Editing and revision state persist", description: "Study Guide edits, highlights, selected tool, generated content, and saved workspace metadata are associated with the signed-in account. Focus Mode turns the active Study Guide section into a full-viewport reading surface, while exports use the same educational content order shown on the website." },
+    { title: "Private work remains private", description: "A workspace link contains a random resource identifier, but the identifier is not permission. The backend also checks the secure session and ownership before returning transcripts, documents, generated study content, downloads, or saved progress." },
+  ],
+  "/product/lecture-capture": [
+    { title: "Capture recordings and course files", description: "Lecture Capture accepts supported audio, video, documents, presentation slides, images, and typed material. Upload and recording states are shown while the source is transferred and processed, so a slow file is not mistaken for an empty workspace." },
+    { title: "Transcription creates reusable study context", description: "Spoken material is converted into a transcript that can support the Study Guide and the other learning tools. Students should still compare the result with the original lecture when names, formulas, accents, or poor audio quality make automatic transcription uncertain." },
+    { title: "Source material remains connected to history", description: "When a real workspace is created it receives a secure account-scoped identifier and appears in My Materials. Reopening it restores the saved source and generated work instead of requiring the student to upload the lecture again." },
+    { title: "Large work is processed without blocking navigation", description: "The interface loads the authenticated shell and recent metadata first, then performs heavier extraction and generation work with specific progress states. This keeps navigation usable while preserving the operation on the backend." },
+  ],
+  "/product/ai-study-guide": [
+    { title: "The guide is structured for university revision", description: "Mabaso AI organises the topic into definitions, explanations, key concepts, formulas where relevant, worked examples, real-world examples, exam guidance, common mistakes, summaries, revision questions, and key takeaways. Sections are selected according to the material, so a guide does not pretend every subject needs the same template." },
+    { title: "Figures are part of the explanation", description: "When a useful visual can be extracted or generated, it stays beside the section it explains and includes a title, caption, what to notice, and academic relevance. Decorative images are avoided, and a missing image does not prevent the text guide from remaining usable." },
+    { title: "Students can edit and annotate the result", description: "The Study Guide editor supports text changes, highlights, colour selection, erasing, undo and redo, copying, section regeneration, and Focus Mode. Saved edits and highlights are restored from the student's account, and regeneration is handled without silently overwriting unsaved work." },
+    { title: "The website and exports share one content order", description: "PDF and DOCX output use the same Study Guide content pipeline as the web view. Headings, explanations, tables, figures, formulas, and revision sections therefore remain in the same instructional sequence rather than being maintained as a separate simplified document." },
+  ],
+  "/product/transcript-generator": [
+    { title: "Turn recorded teaching into searchable text", description: "The Transcript Generator processes supported lecture audio or video and creates readable text that can be reviewed before further study tools are generated. It is intended to reduce manual note-taking, not to replace checking specialised terminology against the original recording." },
+    { title: "The transcript supplies context to connected tools", description: "After processing, the transcript can support Study Guides, notes, reports, flashcards, tests, worked examples, and Study Chat in the same workspace. This prevents each tool from starting without the lecture context the student already provided." },
+    { title: "Long recordings use explicit processing states", description: "Uploading, audio processing, transcription, and transcript preparation are distinct stages. The application does not claim that no transcript exists while the authenticated backend request is still running." },
+    { title: "Saved transcripts remain account-scoped", description: "Transcript history belongs to the authenticated user and can be reopened from the associated workspace. Logging out, refreshing, or moving to another device does not intentionally delete the stored transcript." },
+  ],
+  "/product/formula-extraction": [
+    { title: "Find formulas inside the supplied learning material", description: "Formula Extraction identifies mathematical expressions that are actually present or clearly relevant to the source. Each formula is presented with its variables, meaning, units where available, and the topic context needed to apply it responsibly." },
+    { title: "Rendering keeps notation readable", description: "Equations are rendered in the browser for clear study and remain available as text when local plotting or equation-image support is unavailable. A missing optional rendering library must not remove the formula or make the entire workspace fail." },
+    { title: "Formulas connect to examples and tests", description: "Students can move from a formula into worked examples, revision questions, and Study Chat without uploading the same lecture again. This helps distinguish memorising an equation from understanding when and why it is used." },
+    { title: "Not every subject produces a formula sheet", description: "If the source contains no meaningful formulas, Mabaso AI reports that honestly rather than inventing equations. Students can add more suitable notes or ask a general academic question separately." },
+  ],
+  "/product/worked-examples": [
+    { title: "Start with the problem and required method", description: "Worked Examples frames what is known, what must be found, and which principle or formula applies before showing a calculation. This helps students recognise the method instead of copying a final answer without understanding the setup." },
+    { title: "Follow a complete solution path", description: "Each example is divided into ordered stages with substitutions, units, intermediate results, and concise explanations of why the next step follows. Mathematics, engineering, and conceptual subjects use structures appropriate to the kind of problem rather than one generic answer layout." },
+    { title: "Check the result and learn from mistakes", description: "Where the problem supports it, the result is checked for units, sign, scale, assumptions, or another verification method. Common mistakes and exam cues explain where students often lose marks and what an assessor expects to see in a complete solution." },
+    { title: "Generate, save, and revisit examples", description: "Students generate examples from the current source or topic inside the authenticated Study Workspace. Successful results are stored with that workspace, can be reopened through My Materials, and may be shared into an authorised Collaboration Room without exposing the owner's private workspace history." },
+  ],
+  "/product/flashcards": [
+    { title: "Create cards from the active learning context", description: "Flashcards are generated from the lecture, document, transcript, or topic already open in the Study Workspace. They cover definitions and recall, but also include comparison, application, and conceptual questions where the source supports deeper practice." },
+    { title: "Reveal answers during active recall", description: "The question remains visible before the answer is revealed so students can attempt retrieval first. Card navigation works on desktop and touch screens, and the set can be revisited from its saved workspace." },
+    { title: "Cards support revision rather than replacing the source", description: "A flashcard deliberately compresses information. Students should return to the Study Guide, transcript, examples, or lecturer material when a card exposes a weak area or when the original explanation contains important conditions." },
+    { title: "Generation follows account limits", description: "The backend applies the current Free, Trial, Pro, or Premium quota profile when a set is created. Refreshing or opening a saved set does not intentionally consume another generation attempt." },
+  ],
+  "/product/ai-test-generator": [
+    { title: "Build practice from the current topic", description: "The Test Generator uses the active lecture or study material to create questions that match the available concepts. It can combine recall, explanation, application, and problem-solving instead of producing only multiple-choice definitions." },
+    { title: "Answers remain available for review", description: "Questions and their expected answers or marking guidance are kept together, while the interface lets a student attempt the question before revealing the solution. This supports self-testing without losing the reasoning needed after an incorrect answer." },
+    { title: "Results stay with the workspace", description: "Generated tests are saved as part of the authenticated study history and can be reopened without regenerating them. Supported tests may also be shared into a room where approved members can open the saved resource." },
+    { title: "AI questions still require academic judgement", description: "Students should compare high-stakes questions with official course outcomes, lecturer guidance, and past papers. Mabaso AI helps practise; it does not guarantee that generated questions predict an examination." },
+  ],
+  "/ai-tools/podcast-generator": [
+    { title: "Turn study material into a spoken revision script", description: "The Podcast Generator prepares a conversational educational script from the current topic or source. Speaker structure, explanations, examples, and recap sections are organised before audio is generated so the result sounds like guided revision rather than a document read word for word." },
+    { title: "Audio generation is a separate saved result", description: "When audio generation succeeds, the podcast is associated with the workspace and can be replayed from supported history views. Creating the podcast uses the applicable plan quota, while ordinary playback does not call the AI again." },
+    { title: "Long operations show their actual stage", description: "Script preparation, speaker organisation, audio generation, and finalisation are represented as distinct activities when the backend performs them. A completed state appears only after the usable result has been stored." },
+    { title: "The source remains available for verification", description: "Podcast narration is convenient for review, but students can return to the transcript, Study Guide, formulas, and figures when exact wording or visual context matters." },
+  ],
+  "/ai-tools/powerpoint-generator": [
+    { title: "Plan a presentation before generating slides", description: "Mabaso AI identifies the main teaching sequence, creates concise slide content, and applies a consistent presentation structure. Slides favour headings, diagrams, timelines, comparisons, and visual hierarchy over copying long paragraphs onto a canvas." },
+    { title: "Templates and source material guide the result", description: "Students can work from supported lecture content and, where the workspace offers it, provide a presentation template. The source remains the academic reference while the generated deck organises it for explanation and revision." },
+    { title: "Preview and download use the same slide order", description: "The web preview follows the generated slide sequence and the downloadable presentation preserves that order. Speaker notes and explanatory content are included where the generator produces them rather than being maintained in an unrelated export." },
+    { title: "Saved presentations can be reopened", description: "A successful presentation is kept with the authenticated workspace. Opening its history restores the result, while sharing into a Collaboration Room creates an authorised room resource rather than making the private workspace public." },
+  ],
+  "/ai-tools/study-chat": [
+    { title: "Ask questions and continue the same discussion", description: "Study Chat supports normal questions, follow-up questions, saved conversation history, supported file context, and distinct model modes. Opening an earlier conversation restores its messages and starts at the latest part of the discussion so the student can continue naturally." },
+    { title: "Message controls stay attached to each response", description: "User questions can be selected normally and include edit and copy actions where supported. Assistant responses include compact copy and Read Aloud controls; speech uses the browser's speech system and does not consume an OpenAI audio quota." },
+    { title: "Responses can complete after navigation", description: "A generation is identified once on the backend and can continue when the student moves to another Mabaso AI page. Completion creates a temporary in-app notice and a persistent unread indicator on that conversation until it is opened, without sending the question twice or charging quota twice." },
+    { title: "Current-information answers use real tools", description: "Ordinary educational explanations remain fast and do not search unnecessarily. When a question genuinely requires current information, the backend can perform a real web search, record safe activity stages, and attach citations from retrieved sources instead of inventing links or displaying a fake search message." },
+  ],
+};
+
 function isUsefulPublicCopy(value = "") {
   const text = String(value || "").trim();
   return Boolean(text) && !INTERNAL_PLANNING_COPY.test(text);
@@ -465,7 +534,8 @@ export function EnterpriseSiteShell({
     if (!normalizedQuery) return page.faq;
     return page.faq.filter((item) => `${item.question} ${item.answer}`.toLowerCase().includes(normalizedQuery));
   }, [faqQuery, page.faq]);
-  const visibleContains = (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const configuredContains = (page.contains || []).filter((item) => isUsefulPublicCopy(`${item.title} ${item.description}`));
+  const visibleContains = PRODUCT_EXPLANATIONS[page.route] || configuredContains;
   // Public product pages should read like useful documentation, not a wall of
   // short marketing capability labels. Detailed tools remain available in the
   // authenticated workspace and in the page's full prose/FAQ sections.
@@ -547,7 +617,7 @@ export function EnterpriseSiteShell({
                 </article>
               ))}
             </div>
-            <p className="enterprise-pricing-note">Eligible accounts can begin the seven-day trial through PayFast. PayFast securely authorises the recurring subscription and collects the supported payment details; Mabaso AI never receives card credentials. The first subscription charge is scheduled after the displayed trial period unless the user cancels the renewal.</p>
+            <p className="enterprise-pricing-note">The seven-day trial becomes available only after an account has recorded at least three sessions and has not used a previous trial. PayFast securely authorises the recurring card subscription and collects the payment details; Mabaso AI never receives card credentials. The first subscription charge is scheduled after the displayed trial period unless the user cancels the renewal from My Payments.</p>
           </section>
         ) : null}
 

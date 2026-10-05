@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const authSource = await readFile(new URL("../src/auth/AuthContext.jsx", import.meta.url), "utf8");
+const diagnosticsSource = await readFile(new URL("../src/components/AdminDiagnosticsPanel.jsx", import.meta.url), "utf8");
 
 assert.equal(
   (appSource.match(/\/auth\/me/g) || []).length,
@@ -40,5 +41,8 @@ assert.doesNotMatch(appSource, /if \(authToken \|\| !authChecked\) return;/, "Th
 assert.match(appSource, /authSessionRevisionRef/, "Protected requests must be tied to the session revision that started them.");
 assert.match(appSource, /requestSessionRevision !== authSessionRevisionRef\.current/, "A stale protected 401 must not log out a newer successful session.");
 assert.doesNotMatch(appSource, /setInterval\([^)]*\/auth\/me/s, "Session verification must not run on an interval.");
+assert.match(diagnosticsSource, /const authFetchRef = useRef\(authFetch\)/, "Diagnostics must keep the latest request function without making it a reload trigger.");
+assert.match(diagnosticsSource, /const loadOverview = useCallback\([\s\S]*?\}, \[\]\)/, "Diagnostics overview loading must stay stable across parent renders.");
+assert.match(diagnosticsSource, /\}, \[query\]\)/, "Diagnostics user search must only rerun when the query changes.");
 
 console.log("Auth bootstrap single-flight checks passed.");

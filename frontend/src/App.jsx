@@ -7071,6 +7071,7 @@ export default function App() {
   const [selectedBillingPlan, setSelectedBillingPlan] = useState(null);
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
+  const [billingTrialEligibility, setBillingTrialEligibility] = useState(null);
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [billingCountry, setBillingCountry] = useState("");
@@ -7331,6 +7332,7 @@ export default function App() {
   const [selectedCollaborationMediaUrl, setSelectedCollaborationMediaUrl] = useState("");
   const [isLoadingCollaborationMedia, setIsLoadingCollaborationMedia] = useState(false);
   const [isUploadingCollaborationMedia, setIsUploadingCollaborationMedia] = useState(false);
+  const [collaborationMediaUploadProgress, setCollaborationMediaUploadProgress] = useState(null);
   const [collaborationMediaNameDraft, setCollaborationMediaNameDraft] = useState("");
   const [selectedCollaborationBoardItem, setSelectedCollaborationBoardItem] = useState(null);
   const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
@@ -8272,7 +8274,7 @@ export default function App() {
                   {plan.safeguards.map((item) => <span key={`${plan.name}-${item}`} className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-200">{item}</span>)}
                 </div>
               </details>
-              {plan.id === "pro_student" ? (
+              {plan.id === "pro_student" && billingTrialEligibility?.eligible ? (
                 <div className="mt-5">
                   <button
                     type="button"
@@ -12245,7 +12247,7 @@ export default function App() {
           <main className={`collaboration-center-stage ${selectedCollaborationMaterial ? "has-open-material" : ""} ${isCollaborationBoardMinimized ? "is-board-minimized" : ""}`}>
             {activeRoom ? <div className="collaboration-desktop-workspace-tabs" aria-label="Open collaboration panels"><button type="button" className={!selectedCollaborationMaterial && !isCollaborationChatExpanded ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(null); setIsCollaborationChatExpanded(false); }} aria-label="Back to shared materials">← Materials</button>{collaborationOpenMaterialTabs.map((item) => <button key={item.id} type="button" className={selectedCollaborationMaterial?.id === item.id ? "is-active" : ""} onClick={() => { setSelectedCollaborationMaterial(item); setIsCollaborationChatExpanded(false); }}><span>{item.title}</span><i role="button" tabIndex={0} aria-label={`Close ${item.title}`} onClick={(event) => { event.stopPropagation(); setCollaborationOpenMaterialTabs((current) => current.filter((entry) => entry.id !== item.id)); if (selectedCollaborationMaterial?.id === item.id) setSelectedCollaborationMaterial(null); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>×</i></button>)}<button type="button" className={isCollaborationBoardMinimized ? "" : "is-active-soft"} aria-pressed={!isCollaborationBoardMinimized} onClick={() => setIsCollaborationBoardMinimized((current) => !current)}>{isCollaborationBoardMinimized ? "Restore Board" : "Minimize Board"}</button><button type="button" className={isCollaborationChatExpanded ? "is-active" : ""} aria-pressed={isCollaborationChatExpanded} onClick={() => setIsCollaborationChatExpanded((current) => !current)}>{isCollaborationChatExpanded ? "Restore workspace" : "Expand Chat"}</button></div> : null}
             {selectedCollaborationMaterial ? <CollaborationMaterialWorkspace key={selectedCollaborationMaterial.id} item={selectedCollaborationMaterial} mediaUrl={selectedCollaborationMediaUrl} renderMarkdown={(content) => <MobileFirstMarkdown>{content}</MobileFirstMarkdown>} renderPresentationVisual={(slide) => renderPresentationVisualPreview(slide)} renderMindMap={(root) => <MindMapFlow root={root} />} noteQualityPanel={renderNoteQualityPanel()} page={adminControlPage} onPageChange={setAdminControlPage} /> : null}
-            {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload the photo itself; add a name only if you want one." : "Upload videos and watch them inside Mabaso AI."}</small></div><input value={collaborationMediaNameDraft} onChange={(event) => setCollaborationMediaNameDraft(event.target.value)} placeholder={collaborationMaterialFilter === "image" ? "Photo name (optional)" : "Video name (optional)"} maxLength={180} /><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? "Uploading..." : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button></div> : null}
+            {activeRoom && ["image", "video"].includes(collaborationMaterialFilter) ? <div className="collaboration-media-upload-bar"><div><strong>{collaborationMaterialFilter === "image" ? "Room Images" : "Room Videos"}</strong><small>{collaborationMaterialFilter === "image" ? "Upload the photo itself; add a name only if you want one." : "Upload videos and watch them inside Mabaso AI."}</small></div><input value={collaborationMediaNameDraft} onChange={(event) => setCollaborationMediaNameDraft(event.target.value)} placeholder={collaborationMaterialFilter === "image" ? "Photo name (optional)" : "Video name (optional)"} maxLength={180} /><button type="button" onClick={() => pickCollaborationMedia(collaborationMaterialFilter)} disabled={isUploadingCollaborationMedia}>{isUploadingCollaborationMedia ? `Uploading ${Number.isFinite(collaborationMediaUploadProgress) ? `${collaborationMediaUploadProgress}%` : "..."}` : collaborationMaterialFilter === "image" ? "+ Add photo" : "+ Add video"}</button>{isUploadingCollaborationMedia && Number.isFinite(collaborationMediaUploadProgress) ? <progress value={collaborationMediaUploadProgress} max="100" aria-label={`${collaborationMediaUploadProgress}% uploaded`} /> : null}</div> : null}
             <section className={`collaboration-materials-panel ${["materials", "board"].includes(collaborationMobileView) ? "is-mobile-active" : ""} ${collaborationMobileView === "board" ? "is-board-active" : ""}`}><div className="collaboration-filter-row">{materialFilters.map((filter) => <button key={filter.id} type="button" onClick={() => { setCollaborationMaterialFilter(filter.id); setSelectedCollaborationMaterial(null); setCollaborationMobileView("materials"); }} className={collaborationMaterialFilter === filter.id ? "is-active" : ""}>{filter.label}</button>)}<button type="button" onClick={() => setIsCollaborationActionSheetOpen(true)}>••• More</button></div><div className="collaboration-dual-panels"><section className="collaboration-material-library"><div className="collaboration-panel-title"><h2>Shared Materials</h2><button type="button" onClick={() => void shareCurrentWorkspaceMaterialToRoom()} disabled={!activeRoom}>Share material</button></div>{renderActiveCollaborationTool()}<div className="collaboration-material-list">{visibleMaterials.length ? visibleMaterials.map((item) => <article key={item.id} role="button" tabIndex={0} onClick={() => void openCollaborationMaterial(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void openCollaborationMaterial(item); } }}><span className={`collaboration-material-icon is-${item.material_type}`}>{item.material_type === "image" && item.source?.media_id ? <img src={`${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(activeRoomId)}/media/${encodeURIComponent(item.source.media_id)}`} alt="" loading="lazy" /> : item.material_type === "study_guide" ? "PDF" : item.material_type === "presentation" ? "PPT" : "✦"}</span><div><strong>{item.title}</strong><small>{item.material_type === "image" ? (item.title || "") : <>{item.owner_email === normalizedAuthEmail ? "You" : "Room member"} • {item.description || "Shared study material"}</>}</small><span>Open</span></div>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); removeCollaborationMaterial(item); }} aria-label="Remove material">⋮</button> : null}</article>) : collaborationMaterialFilter === "all" ? <p className="collaboration-empty-copy">{isCollaborationMaterialsLoading ? "Loading shared materials..." : "No materials have been shared yet."}</p> : null}</div></section>
               <section className={`collaboration-board-panel ${collaborationMobileView === "board" ? "is-mobile-active" : ""}`}><div className="collaboration-panel-title"><div><h2>♧ Collaboration Board</h2><small>Share quick notes, ideas, tasks and announcements.</small></div><div className="flex gap-2"><button type="button" onClick={() => roomBoardImageInputRef.current?.click()} disabled={!activeRoom || isUploadingRoomBoardImage}>Upload</button><button type="button" onClick={() => setIsBoardComposerOpen((value) => !value)}>＋ Add to Board</button></div></div>{isBoardComposerOpen ? <div className="collaboration-board-composer"><select value={boardItemType} onChange={(event) => setBoardItemType(event.target.value)}><option value="note">Group note</option><option value="important">Important</option><option value="quote">Key quote</option><option value="task">Group task</option><option value="announcement">Announcement</option></select><input value={boardItemTitle} onChange={(event) => setBoardItemTitle(event.target.value)} placeholder="Title" /><textarea value={boardItemContent} onChange={(event) => setBoardItemContent(event.target.value)} placeholder="Write a note for the room..." />{boardItemType === "task" ? <textarea value={boardItemChecklist} onChange={(event) => setBoardItemChecklist(event.target.value)} placeholder="One checklist task per line" /> : null}<button type="button" onClick={postCollaborationBoardItem} disabled={isPostingBoardItem}>{isPostingBoardItem ? "Posting..." : "Post"}</button></div> : null}<div className="collaboration-board-grid">{(activeRoom?.board_items || []).length ? activeRoom.board_items.map((item) => <article key={item.id} className={`collaboration-board-item collaboration-board-item-${item.item_type}`} role="button" tabIndex={0} onClick={() => setSelectedCollaborationBoardItem(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCollaborationBoardItem(item); } }}><div className="flex justify-between gap-2"><strong>{item.item_type === "quote" ? "⚑ Key Quote" : item.item_type === "task" ? "▣ Group Task" : item.item_type}</strong>{(item.owner_email === normalizedAuthEmail || activeRoom?.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void removeCollaborationBoardItem(item); }} aria-label="Board item options">⋮</button> : null}</div>{item.title ? <h3>{item.title}</h3> : null}{item.content ? <p>{item.content}</p> : null}{(item.checklist || []).length ? <ul>{item.checklist.map((task, index) => <li key={`${item.id}-${index}`}>☐ {task}</li>)}</ul> : null}</article>) : <p className="collaboration-empty-copy">Nothing has been added to the board yet.</p>}</div></section></div></section>
             {(activeRoom?.board_images || []).length ? <section className="collaboration-board-uploads"><p>Board photos</p><div>{activeRoom.board_images.map((image) => <figure key={image.id} role="button" tabIndex={0} onClick={() => setSelectedRoomBoardImageId(image.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedRoomBoardImageId(image.id); }}><img src={image.image_url} alt={image.name || "Board upload"} /><figcaption>{image.name || "Board photo"}</figcaption>{(image.uploaded_by === normalizedAuthEmail || activeRoom.can_manage) ? <button type="button" onClick={(event) => { event.stopPropagation(); void deleteRoomBoardImage(image.id); }}>Remove</button> : null}</figure>)}</div></section> : null}          </main>
@@ -16130,6 +16132,7 @@ export default function App() {
     setActiveStudyChatId(createOpaqueResourceId("chat"));
     setBillingUsage(null);
     setBillingSubscription(null);
+    setBillingTrialEligibility(null);
     setPaymentRequests([]);
     setPaymentHistory([]);
     setManualPaymentDetails(null);
@@ -16683,6 +16686,7 @@ export default function App() {
     if (cachedBillingStatus?.usage || cachedBillingStatus?.subscription) {
       setBillingUsage(cachedBillingStatus.usage || null);
       setBillingSubscription(cachedBillingStatus.subscription || null);
+      setBillingTrialEligibility(cachedBillingStatus.trial_eligibility || null);
       if (Array.isArray(cachedBillingStatus.payment_requests)) setPaymentRequests(cachedBillingStatus.payment_requests);
       if (cachedBillingStatus.manual_payment_details) setManualPaymentDetails(cachedBillingStatus.manual_payment_details);
     }
@@ -17957,6 +17961,7 @@ export default function App() {
     if (!authToken) {
       setBillingUsage(null);
       setBillingSubscription(null);
+      setBillingTrialEligibility(null);
       setPaymentRequests([]);
       setPaymentHistory([]);
       setManualPaymentDetails(null);
@@ -17973,17 +17978,20 @@ export default function App() {
       const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 45000, retries: 1 });
       const nextUsage = data.usage || null;
       const nextSubscription = data.subscription || null;
+      const nextTrialEligibility = data.trial_eligibility || data.account?.trial_eligibility || null;
       const nextPaymentRequests = data.payment_requests || data.account?.payment_requests || [];
       const nextPaymentHistory = data.payment_history || data.account?.payment_history || [];
       const nextManualPaymentDetails = data.manual_payment?.payment_details || data.account?.manual_payment?.payment_details || null;
       setBillingUsage(nextUsage);
       setBillingSubscription(nextSubscription);
+      setBillingTrialEligibility(nextTrialEligibility);
       setPaymentRequests(Array.isArray(nextPaymentRequests) ? nextPaymentRequests : []);
       setPaymentHistory(Array.isArray(nextPaymentHistory) ? nextPaymentHistory : []);
       setManualPaymentDetails(nextManualPaymentDetails);
       saveBillingStatusCache(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "", {
         usage: nextUsage,
         subscription: nextSubscription,
+        trial_eligibility: nextTrialEligibility,
         payment_requests: Array.isArray(nextPaymentRequests) ? nextPaymentRequests : [],
         manual_payment_details: nextManualPaymentDetails,
         saved_at: new Date().toISOString(),
@@ -20451,6 +20459,7 @@ export default function App() {
     if (!authToken) {
       setBillingUsage(null);
       setBillingSubscription(null);
+      setBillingTrialEligibility(null);
       setPaymentRequests([]);
       setPaymentHistory([]);
       setManualPaymentDetails(null);
@@ -28636,29 +28645,52 @@ export default function App() {
     }
   };
 
+  const uploadCollaborationMediaRequest = async (roomId, formData, onProgress) => {
+    const uploadToken = await refreshSessionIfNeeded();
+    await refreshAuthCsrfToken();
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_BASE_URL}/collaboration/rooms/${encodeURIComponent(roomId)}/media`);
+      xhr.withCredentials = true;
+      xhr.timeout = 0;
+      withAuthHeaders({}, uploadToken).forEach((value, key) => xhr.setRequestHeader(key, value));
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+      });
+      xhr.addEventListener("load", () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText || "{}"); } catch { data = {}; }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error(data.detail || `Upload failed with status ${xhr.status}.`));
+      });
+      xhr.addEventListener("error", () => reject(new Error("The upload connection was interrupted. Your file was not lost; choose it again to retry.")));
+      xhr.addEventListener("abort", () => reject(new Error("The upload was cancelled.")));
+      xhr.send(formData);
+    });
+  };
+
   const uploadCollaborationMedia = async (files, mediaKind) => {
     if (!activeRoomId) return setError("Open a collaboration room before uploading media.");
     const fileList = Array.from(files || []).filter(Boolean);
     if (!fileList.length || !["image", "video"].includes(mediaKind)) return;
     setIsUploadingCollaborationMedia(true);
+    setCollaborationMediaUploadProgress(0);
     setError("");
     try {
       const uploadedItems = [];
-      for (const selectedFile of fileList) {
+      for (const [fileIndex, selectedFile] of fileList.entries()) {
         const formData = new FormData();
         formData.append("media", selectedFile);
         formData.append("media_kind", mediaKind);
         formData.append("display_name", fileList.length === 1 ? collaborationMediaNameDraft.trim() : "");
-        const response = await authFetch(`/collaboration/rooms/${activeRoomId}/media`, {
-          method: "POST",
-          body: formData,
-          timeoutMs: mediaKind === "video" ? 0 : Math.max(45000, getAdaptiveFileUploadTimeoutMs(selectedFile)),
+        const data = await uploadCollaborationMediaRequest(activeRoomId, formData, (fileProgress) => {
+          const overallProgress = ((fileIndex + fileProgress) / fileList.length) * 100;
+          setCollaborationMediaUploadProgress(Math.max(0, Math.min(99, Math.round(overallProgress))));
         });
-        const data = await parseJsonSafe(response);
-        if (!response.ok) throw new Error(data.detail || `Could not upload the ${mediaKind}.`);
         if (!data.item) throw new Error(`The server did not return the uploaded ${mediaKind}.`);
         uploadedItems.push(data.item);
         setActiveRoom((room) => room ? { ...room, materials: [data.item, ...(room.materials || [])] } : room);
+        setCollaborationMediaUploadProgress(Math.round(((fileIndex + 1) / fileList.length) * 100));
       }
       setCollaborationMaterialFilter(mediaKind);
       setCollaborationMediaNameDraft("");
@@ -28669,6 +28701,7 @@ export default function App() {
       setError(err.message || `Could not upload the ${mediaKind}.`);
     } finally {
       setIsUploadingCollaborationMedia(false);
+      window.setTimeout(() => setCollaborationMediaUploadProgress(null), 600);
     }
   };
 

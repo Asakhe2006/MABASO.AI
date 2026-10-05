@@ -25,7 +25,10 @@ assert.match(appSource, /loadCachedCollaborationRooms/, "Recent Rooms must resto
 assert.match(appSource, /pending-photo-/, "Room chat photos must render an immediate local preview while upload continues.");
 assert.match(appSource, /suppressLoader: Boolean\(immediateRoom\)/, "Recent Rooms must open cached room state immediately while refreshing in the background.");
 assert.match(appSource, /setIsShareMaterialPickerOpen\(true\);[\s\S]{0,240}loadHistoryFromServer/, "Share Material must open its picker before refreshing remote history.");
-assert.match(appSource, /timeoutMs: mediaKind === "video" \? 0/, "Large collaboration video uploads must not be cancelled by a short client timeout.");
+assert.match(appSource, /const xhr = new XMLHttpRequest\(\)/, "Collaboration media must use an upload transport that reports real byte progress.");
+assert.match(appSource, /xhr\.timeout = 0/, "Large collaboration video uploads must not be cancelled by a short client timeout.");
+assert.match(appSource, /event\.lengthComputable && event\.total > 0/, "Upload percentages must come from measurable transferred bytes.");
+assert.match(appSource, /collaborationMediaUploadProgress/, "Room media controls must display the current upload percentage.");
 assert.match(appSource, /playCollaborationNotificationVoice/, "Voice-note notifications must expose authenticated inline playback.");
 assert.match(roomChatSource, /message\.local_url/, "The shared room chat renderer must support optimistic local photo and voice URLs.");
 assert.match(appSource, /event\.nativeEvent\?\.isComposing/, "Desktop Enter-to-send must preserve IME composition.");
