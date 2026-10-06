@@ -87,7 +87,7 @@ export default function PublicLandingPage({
         <button type="button" className="public-landing-brand" onClick={() => navigate("/")}>Mabaso AI</button>
         <nav className="public-landing-links" aria-label="Public navigation">
           {NAV_GROUPS.map((group) => (
-            <details key={group.label} className="public-nav-dropdown">
+            <details key={group.label} name="public-navigation" className="public-nav-dropdown">
               <summary>{group.label}<ChevronDown aria-hidden="true" /></summary>
               <div className="public-nav-dropdown-menu">
                 {group.items.map(([label, route]) => <button key={route} type="button" onClick={() => navigate(route)}>{label}</button>)}

@@ -1,3 +1,4 @@
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -36,8 +37,8 @@ class BillingIntegrationTests(unittest.TestCase):
                 statements.append((sql, parameters))
                 if "COUNT(*) AS session_count" in sql:
                     return type("Result", (), {"fetchone": lambda _self: {"session_count": 3}})()
-                self_test.assertIn("checkout_fields_json LIKE ?", sql)
-                self_test.assertEqual(parameters[1], '%"custom_str4": "trial"%')
+                if "checkout_fields_json LIKE ?" in sql:
+                    self_test.assertEqual(parameters[1], '%"custom_str4": "trial"%')
                 return type("Result", (), {"fetchone": lambda _self: None})()
 
         self_test = self
@@ -48,7 +49,60 @@ class BillingIntegrationTests(unittest.TestCase):
 
         self.assertTrue(eligibility["eligible"])
         self.assertEqual(eligibility["session_count"], 3)
-        self.assertEqual(len(statements), 2)
+        self.assertEqual(len(statements), 4)
+
+    def test_trial_used_at_permanently_blocks_another_trial(self):
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _parameters=()):
+                if "SELECT trial_status, trial_used_at" in sql:
+                    value = {"trial_status": "expired", "trial_used_at": "2026-10-01T00:00:00+00:00"}
+                elif "COUNT(*) AS session_count" in sql:
+                    value = {"session_count": 8}
+                else:
+                    value = None
+                return type("Result", (), {"fetchone": lambda _self: value})()
+
+        with patch.object(main, "get_user_subscription", return_value={"active": False, "trial_active": False}), \
+                patch.object(main, "get_db_connection", return_value=FakeConnection()):
+            eligibility = main.get_payfast_trial_eligibility("student@example.test")
+
+        self.assertFalse(eligibility["eligible"])
+        self.assertEqual(eligibility["reason"], "trial_already_started_or_used")
+
+    def test_trial_claim_hashes_provider_identifiers(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            """
+            CREATE TABLE trial_claims (
+                id TEXT PRIMARY KEY, email TEXT NOT NULL, identity_hash TEXT NOT NULL UNIQUE,
+                payment_fingerprint_hash TEXT NOT NULL DEFAULT '', provider_token_hash TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL, checkout_session_id TEXT NOT NULL, provider_payment_id TEXT NOT NULL,
+                status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            """
+        )
+        main.record_trial_claim(
+            connection,
+            email="student@example.test",
+            checkout_session_id="checkout-1",
+            provider_payment_id="pf-1",
+            provider_token="raw-provider-token",
+            provider_payload={"payment_method_fingerprint": "raw-card-fingerprint"},
+            now_iso="2026-10-06T12:00:00+00:00",
+        )
+        row = connection.execute("SELECT * FROM trial_claims").fetchone()
+        self.assertNotEqual(row["provider_token_hash"], "raw-provider-token")
+        self.assertNotEqual(row["payment_fingerprint_hash"], "raw-card-fingerprint")
+        self.assertEqual(len(row["provider_token_hash"]), 64)
+        self.assertEqual(len(row["payment_fingerprint_hash"]), 64)
+        connection.close()
 
     def test_trial_is_hidden_server_side_before_three_sessions(self):
         class FakeConnection:

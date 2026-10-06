@@ -7085,7 +7085,10 @@ export default function App() {
   const [confirmingPaymentId, setConfirmingPaymentId] = useState("");
   const [adminPaymentActionId, setAdminPaymentActionId] = useState("");
   const [isBillingUsageLoading, setIsBillingUsageLoading] = useState(false);
+  const [isBillingStatusLoaded, setIsBillingStatusLoaded] = useState(false);
+  const [billingStatusLoadError, setBillingStatusLoadError] = useState("");
   const billingStatusRequestRef = useRef(null);
+  const billingCheckoutPollingRef = useRef("");
   const upgradeModalScrollRef = useRef(null);
   const upgradePaymentOptionsRef = useRef(null);
   const [currentPage, setCurrentPage] = useState("capture");
@@ -7272,6 +7275,7 @@ export default function App() {
   const [activeHistoryId, setActiveHistoryId] = useState("");
   const [collaborationRooms, setCollaborationRooms] = useState(() => loadCachedCollaborationRooms(window.localStorage.getItem(AUTH_EMAIL_KEY) || ""));
   const [isCollaborationRoomsLoading, setIsCollaborationRoomsLoading] = useState(true);
+  const [hasLoadedCollaborationRooms, setHasLoadedCollaborationRooms] = useState(false);
   const [isCollaborationMaterialsLoading, setIsCollaborationMaterialsLoading] = useState(false);
   const [collaborationError, setCollaborationError] = useState("");
   const [collaborationStatus, setCollaborationStatus] = useState("");
@@ -8128,7 +8132,7 @@ export default function App() {
     <details className="upgrade-modal-profile profile-menu-anchor">
       <summary className="profile-menu-button" aria-label="Profile">
         <span className="profile-menu-button-avatar" aria-hidden="true">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && !isBillingStatusLoaded ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </summary>
       <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
@@ -8341,7 +8345,7 @@ export default function App() {
                 </p>
               </div>
               <span className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] ${billingSubscription.active ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-800 text-slate-300"}`}>
-                {getSubscriptionCountdownText(billingSubscription) || "Free Plan"}
+                {!isBillingStatusLoaded && isBillingUsageLoading ? "Loading plan..." : getSubscriptionCountdownText(billingSubscription) || "Free Plan"}
               </span>
             </div>
             {billingSubscription.message ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">{billingSubscription.message}</p> : null}
@@ -10916,7 +10920,7 @@ export default function App() {
 
   const renderSupportPage = () => (
     <section className="collaboration-workspace overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/65 p-5 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur xl:p-6">
-      <div className="border-b border-white/10 pb-5"><div className="flex items-start gap-4">{renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}<div className="min-w-0"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Help Center</p><h2 className="mt-2 text-3xl font-semibold text-white">Ask Mabaso AI Support.</h2><p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Explain the page you were using, what you clicked, and what you expected. Your message is sent securely to the support team without exposing the support mailbox.</p></div></div></div>
+      <div className="border-b border-white/10 pb-5"><div className="flex items-start gap-4">{renderBackButton(() => openProtectedAppPage("capture"), "Back to capture page")}<div className="min-w-0"><p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">Help Center</p><h2 className="mt-2 text-3xl font-semibold text-white">Ask Mabaso AI Support.</h2><p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">Explain the page you were using, what you clicked, and what you expected. Your message is sent securely to the Mabaso AI Support team.</p></div></div></div>
       <form className="mt-6 rounded-[28px] border border-white/10 bg-white/[0.04] p-5" onSubmit={(event) => { event.preventDefault(); void submitSupportMessage(); }}>
         <label className="block"><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Support topic</span><select value={supportContactCategory} onChange={(event) => setSupportContactCategory(event.target.value)} className="mt-2 w-full rounded-2xl border border-white/10 bg-[#07140f] px-4 py-3 text-sm text-white">{SUPPORT_CONTACT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
         <label className="mt-4 block"><span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Your question</span><textarea value={supportMessageDraft} onChange={(event) => setSupportMessageDraft(event.target.value.slice(0, 3000))} rows={7} placeholder="Describe the problem or question..." className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-7 text-white outline-none focus:border-emerald-300" /></label>
@@ -12039,11 +12043,11 @@ export default function App() {
                 <div className="mt-4 grid gap-3">
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.payshap_number || "Configured after backend env vars are added"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{(isBillingUsageLoading || !isBillingStatusLoaded) ? "Loading PayShap details..." : manualPaymentDetails?.payshap_number || "PayShap is not configured"}</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || "Configured after backend env vars are added"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{(isBillingUsageLoading || !isBillingStatusLoaded) ? "Loading account name..." : manualPaymentDetails?.account_name || "PayShap is not configured"}</p>
                   </div>
                 </div>
                 <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Choose Payment Method</button>
@@ -12076,9 +12080,9 @@ export default function App() {
           <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Subscription and trial</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Current account access</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">{billingSubscription?.trial_active ? "Your PayFast-authorised free trial is active." : billingSubscription?.active ? "Your paid subscription is active." : "Your account currently uses the Free plan."}</p>
+            <p className="mt-3 text-sm leading-7 text-slate-300">{!isBillingStatusLoaded && isBillingUsageLoading ? "Loading your current account access..." : billingSubscription?.trial_active ? "Your PayFast-authorised free trial is active." : billingSubscription?.active ? "Your paid subscription is active." : billingStatusLoadError ? "Current account access could not be refreshed yet." : "Your account currently uses the Free plan."}</p>
             {billingSubscription?.current_period_end ? <p className="mt-2 text-sm text-slate-300">Current period ends {formatAdminDateTime(billingSubscription.current_period_end)}.</p> : null}
-            {(billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">Cancel future PayFast charges?</p><p className="mt-2 text-xs leading-5 text-rose-100/80">This stops renewal. It does not delete chats, materials, or your account.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950">Confirm cancellation</button><button type="button" onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel free trial renewal" : "Cancel subscription"}</button>}</div> : null}
+            {billingSubscription?.cancel_at ? <p className="mt-4 inline-flex rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">Renewal cancelled at PayFast</p> : (billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" && billingSubscription?.provider_token_present ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">Cancel future PayFast charges?</p><p className="mt-2 text-xs leading-5 text-rose-100/80">This stops renewal at PayFast. It does not delete chats, materials, or your account.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950">Confirm cancellation</button><button type="button" onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel free trial renewal" : "Cancel subscription"}</button>}</div> : null}
           </article>
           <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Attempts remaining today</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
@@ -12088,7 +12092,7 @@ export default function App() {
         <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">PayFast transaction history</p>
           <h3 className="mt-2 text-2xl font-semibold text-white">Charges, trials, and refunds</h3>
-          <div className="mt-4 space-y-2">{paymentHistory.length ? paymentHistory.map((payment) => <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-white">{payment.is_trial ? "7-day Pro trial" : String(payment.plan_id || "plan").replaceAll("_", " ")} · R{payment.amount_zar}</p><p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at || payment.created_at)} · {payment.payment_status}</p></div>{payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="rounded-full border border-emerald-300/25 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}</div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading payment history..." : "No PayFast transactions have been recorded yet."}</p>}</div>
+          <div className="mt-4 space-y-2">{paymentHistory.length ? paymentHistory.map((payment) => <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-white">{payment.is_trial ? "7-day Pro trial" : String(payment.plan_id || "plan").replaceAll("_", " ")} · R{payment.amount_zar}</p><p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at || payment.created_at)} · {payment.payment_status}</p></div>{payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="rounded-full border border-emerald-300/25 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}</div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading || !isBillingStatusLoaded ? "Loading PayFast transaction history..." : billingStatusLoadError ? "Payment history could not be loaded. Use Refresh to try again." : "No PayFast transactions have been recorded yet."}</p>}</div>
           {refundPayment ? <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4"><div className="flex items-start justify-between gap-3"><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund form"><X className="h-4 w-4" /></button></div><select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"><option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option></select><textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"/><button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button></div> : null}
         </article>
         <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
@@ -12238,7 +12242,7 @@ export default function App() {
             <button type="button" onClick={() => setIsCreateRoomPanelOpen((value) => !value)} className="collaboration-create-room">＋ Create New Room</button>
             <div className="collaboration-sidebar-actions"><button type="button" className="is-active" onClick={() => setCollaborationMobileView("rooms")}>♙ My Rooms</button><button type="button" onClick={() => { setIsCollaborationDiscoverOpen(true); void discoverCollaborationProfiles(); void loadDiscoverableCollaborationRooms(); window.requestAnimationFrame(() => document.getElementById("collaboration-discover")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}>⌕ Discover</button></div>
             {isCreateRoomPanelOpen ? <div className="collaboration-create-form"><input id="collaboration-room-title" value={roomTitleInput} onChange={(event) => setRoomTitleInput(event.target.value)} placeholder="Room title" /><textarea value={roomInviteInput} onChange={(event) => setRoomInviteInput(event.target.value)} rows={2} placeholder="Invite emails (optional)" /><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setNewRoomVisibility("private")} className={newRoomVisibility === "private" ? "is-active" : ""}>Private</button><button type="button" onClick={() => setNewRoomVisibility("shared")} className={newRoomVisibility === "shared" ? "is-active" : ""}>Shared test</button></div><button type="button" onClick={createCollaborationRoom} disabled={isCreatingRoom}>{isCreatingRoom ? "Creating..." : "Create Room"}</button></div> : null}
-            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { if (room.is_left) { setIsCollaborationDiscoverOpen(true); setCollaborationDiscoverQuery(room.title || ""); setCollaborationStatus("You left this room. Use Discover to request access again."); void loadDiscoverableCollaborationRooms(); return; } setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.is_left ? "Left room · request access" : `${room.member_count} members`}</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : <p className="collaboration-empty-copy">{isCollaborationRoomsLoading ? "Loading recent rooms..." : "You have not joined any collaboration rooms yet."}</p>}</div>
+            <p className="collaboration-sidebar-label">Recent Rooms</p><div className="collaboration-room-list">{sortedCollaborationRooms.length ? sortedCollaborationRooms.map((room) => <button key={room.id} type="button" onClick={() => { if (room.is_left) { setIsCollaborationDiscoverOpen(true); setCollaborationDiscoverQuery(room.title || ""); setCollaborationStatus("You left this room. Use Discover to request access again."); void loadDiscoverableCollaborationRooms(); return; } setCollaborationMobileView("materials"); void openCollaborationRoom(room.id, { initialView: "materials" }); }} className={activeRoomId === room.id ? "is-current" : ""}><span className="collaboration-list-avatar">{room.title.slice(0, 2).toUpperCase()}</span><span><strong>{room.title}</strong><small>{room.is_left ? "Left room · request access" : `${room.member_count} members`}</small></span>{room.id === activeRoomId ? <i /> : null}</button>) : (isCollaborationRoomsLoading || !hasLoadedCollaborationRooms) ? <div className="collaboration-list-loading" role="status"><LoaderCircle className="h-6 w-6 animate-spin" aria-hidden="true" /><span>Loading recent rooms...</span></div> : collaborationError ? <div className="collaboration-list-load-error" role="alert"><span>Rooms could not be loaded.</span><button type="button" onClick={() => void refreshCollaborationRooms()}>Retry</button></div> : <p className="collaboration-empty-copy">You have not joined any collaboration rooms yet.</p>}</div>
             <div id="collaboration-discover" className="collaboration-discover-panel"><div className="flex items-center justify-between gap-2"><strong>Discover students</strong><button type="button" onClick={openProfilePopover}>{collaborationProfile ? "Edit profile" : "Create profile"}</button></div>{collaborationProfile ? <div className="collaboration-profile-summary"><b>✓ {collaborationProfile.display_name || "Profile saved"}</b><span>{[collaborationProfile.course, ...(collaborationProfile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic profile active"}</span></div> : <p className="collaboration-discovery-help">Create a profile to let academically relevant students find you.</p>}<div className="mt-3 flex gap-2"><input value={collaborationDiscoverQuery} onChange={(event) => setCollaborationDiscoverQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void discoverCollaborationProfiles(); }} placeholder="MATLAB, signals..." /><button type="button" onClick={() => void discoverCollaborationProfiles()} disabled={isProfileLoading}>{isProfileLoading ? "Searching..." : "Search"}</button></div>{isCollaborationDiscoverOpen ? <div className="mt-3 space-y-2">{collaborationDiscoverProfiles.length ? collaborationDiscoverProfiles.slice(0, 20).map((profile) => <article key={profile.public_id} className="collaboration-discovery-result"><div><strong className="collaboration-discovery-name">{profile.display_name || "Mabaso student"}{profile.is_online ? <i className="collaboration-presence-dot" aria-label="Online now" title="Online now" /> : null}</strong><span>{[profile.course, ...(profile.subjects || []).slice(0, 2)].filter(Boolean).join(" • ") || "Academic collaborator"}</span>{(profile.match_reasons || []).length ? <small>{profile.match_reasons.slice(0, 2).join(" • ")}</small> : null}</div><button type="button" onClick={() => void inviteDiscoveredProfileToRoom(profile)} disabled={!activeRoom?.can_manage || invitingCollaborationProfileId === profile.public_id}>{invitingCollaborationProfileId === profile.public_id ? "Inviting..." : activeRoom?.can_manage ? "Invite" : "Open your room"}</button></article>) : <p className="collaboration-empty-copy">No matching students found. Try a subject, module, course, or skill.</p>}</div> : null}</div>
             {isCollaborationDiscoverOpen && collaborationDiscoverProfiles.some((profile) => profile.email || profile.phone) ? <div className="collaboration-discover-contacts" aria-label="Student shared contact details">{collaborationDiscoverProfiles.filter((profile) => profile.email || profile.phone).map((profile) => <div key={`contact-${profile.public_id}`}><strong>{profile.display_name || "Student"}</strong>{profile.email ? <a href={`mailto:${profile.email}`}>{profile.email}</a> : null}{profile.phone ? <a href={`tel:${String(profile.phone).replace(/[^+\d]/g, "")}`}>{profile.phone}</a> : null}</div>)}</div> : null}
             {isCollaborationDiscoverOpen ? <section className="collaboration-discover-rooms" aria-label="Discover Rooms"><div className="collaboration-discover-rooms-title"><strong>Discover Rooms</strong><button type="button" onClick={() => void loadDiscoverableCollaborationRooms()}>Refresh</button></div>{collaborationDiscoverRooms.length ? collaborationDiscoverRooms.map((room) => <article key={`discover-room-${room.id}`}><div><strong>{room.title}</strong><span>{room.member_count} member{room.member_count === 1 ? "" : "s"} • {room.is_private ? "Private" : "Public Room"}</span></div>{["member", "owner", "invited"].includes(room.membership_status) ? <button type="button" onClick={() => void openCollaborationRoom(room.id)}>Open</button> : room.membership_status === "pending" ? <button type="button" disabled>Request Pending</button> : <button type="button" onClick={() => void requestToJoinCollaborationRoom(room)}>Request to Join</button>}</article>) : <p className="collaboration-empty-copy">No matching public Rooms found.</p>}</section> : null}
@@ -16140,6 +16144,8 @@ export default function App() {
     setSelectedBillingPlan(null);
     setBillingCheckoutMessage("");
     setBillingCheckoutPlanId("");
+    setIsBillingStatusLoaded(false);
+    setBillingStatusLoadError("");
     setConfirmingPaymentId("");
     setAdminPaymentActionId("");
     setIsUpgradeModalOpen(false);
@@ -16149,6 +16155,8 @@ export default function App() {
     setActiveRoomId("");
     setActiveRoom(null);
     setCollaborationRooms([]);
+    setHasLoadedCollaborationRooms(false);
+    setIsCollaborationRoomsLoading(true);
     setAdminDashboard(null);
     setAdminSidebarTab("overview");
     setAdminSearchQuery("");
@@ -16688,7 +16696,9 @@ export default function App() {
       setBillingSubscription(cachedBillingStatus.subscription || null);
       setBillingTrialEligibility(cachedBillingStatus.trial_eligibility || null);
       if (Array.isArray(cachedBillingStatus.payment_requests)) setPaymentRequests(cachedBillingStatus.payment_requests);
+      if (Array.isArray(cachedBillingStatus.payment_history)) setPaymentHistory(cachedBillingStatus.payment_history);
       if (cachedBillingStatus.manual_payment_details) setManualPaymentDetails(cachedBillingStatus.manual_payment_details);
+      setIsBillingStatusLoaded(true);
     }
   }, [authChecked, authEmail]);
 
@@ -17968,12 +17978,15 @@ export default function App() {
       setManualPaymentRequest(null);
       setSelectedBillingPlan(null);
       setIsBillingUsageLoading(false);
+      setIsBillingStatusLoaded(false);
+      setBillingStatusLoadError("");
       return null;
     }
     if (billingStatusRequestRef.current) {
       return billingStatusRequestRef.current;
     }
     setIsBillingUsageLoading(true);
+    setBillingStatusLoadError("");
     const request = (async () => {
       const { data } = await authJsonWithTransientRetries("/api/billing/subscription", {}, { timeoutMs: 45000, retries: 1 });
       const nextUsage = data.usage || null;
@@ -17988,11 +18001,13 @@ export default function App() {
       setPaymentRequests(Array.isArray(nextPaymentRequests) ? nextPaymentRequests : []);
       setPaymentHistory(Array.isArray(nextPaymentHistory) ? nextPaymentHistory : []);
       setManualPaymentDetails(nextManualPaymentDetails);
+      setIsBillingStatusLoaded(true);
       saveBillingStatusCache(authEmail || window.localStorage.getItem(AUTH_EMAIL_KEY) || "", {
         usage: nextUsage,
         subscription: nextSubscription,
         trial_eligibility: nextTrialEligibility,
         payment_requests: Array.isArray(nextPaymentRequests) ? nextPaymentRequests : [],
+        payment_history: Array.isArray(nextPaymentHistory) ? nextPaymentHistory : [],
         manual_payment_details: nextManualPaymentDetails,
         saved_at: new Date().toISOString(),
       });
@@ -18001,6 +18016,9 @@ export default function App() {
     billingStatusRequestRef.current = request;
     try {
       return await request;
+    } catch (err) {
+      setBillingStatusLoadError(getReadableRequestError(err));
+      throw err;
     } finally {
       if (billingStatusRequestRef.current === request) {
         billingStatusRequestRef.current = null;
@@ -18057,6 +18075,40 @@ export default function App() {
     setStatus("Prompt removed.");
   };
 
+  const pollBillingCheckoutUntilRecorded = async (checkoutSessionId = "") => {
+    const sessionId = String(checkoutSessionId || "").trim();
+    if (!sessionId || !authToken) return;
+    if (billingCheckoutPollingRef.current === sessionId) return;
+    billingCheckoutPollingRef.current = sessionId;
+    setBillingCheckoutMessage("PayFast returned successfully. Waiting for secure payment confirmation...");
+    try {
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        try {
+          const { data } = await authJsonWithTransientRetries(
+            `/api/billing/checkout-sessions/${encodeURIComponent(sessionId)}`,
+            {},
+            { timeoutMs: 20000, retries: 1 },
+          );
+          if (data.complete) {
+            await refreshBillingStatus();
+            window.sessionStorage.removeItem("mabaso.pending-payfast-checkout");
+            setBillingCheckoutMessage(data.subscription?.trial_active
+              ? "Your PayFast-authorised free trial is active and recorded in My Payments."
+              : "Your PayFast payment is confirmed and your plan is active.");
+            return;
+          }
+        } catch (err) {
+          if (attempt >= 14) setBillingStatusLoadError(getReadableRequestError(err));
+        }
+        await wait(2000);
+      }
+      await refreshBillingStatus().catch(() => {});
+      setBillingCheckoutMessage("PayFast confirmation is still processing. Use Refresh shortly; your checkout will not be submitted twice.");
+    } finally {
+      if (billingCheckoutPollingRef.current === sessionId) billingCheckoutPollingRef.current = "";
+    }
+  };
+
   useEffect(() => {
     if (isUpgradeModalOpen && selectedBillingPlan?.paymentType === "checkout") {
       scrollUpgradePaymentOptionsIntoView();
@@ -18066,16 +18118,24 @@ export default function App() {
   useEffect(() => {
     if (browserPath !== "/payment-success") return;
     setBillingCheckoutMessage("Returned from PayFast. Checking your plan status...");
+    const checkoutSessionId = new URLSearchParams(window.location.search).get("session_id") || "";
+    if (checkoutSessionId) window.sessionStorage.setItem("mabaso.pending-payfast-checkout", checkoutSessionId);
     if (authToken) {
       setIsUpgradeModalOpen(false);
       openProtectedAppPage("payments", { replace: true });
-      refreshBillingStatusInBackground();
+      void pollBillingCheckoutUntilRecorded(checkoutSessionId);
       return;
     }
     prepareGoogleRedirect("/app/payments");
     navigateToPath("/signin", { replace: true });
     setAuthMessage("Sign in to finish checking your PayFast payment.");
   }, [authToken, browserPath]);
+
+  useEffect(() => {
+    if (!authToken || currentPage !== "payments") return;
+    const checkoutSessionId = window.sessionStorage.getItem("mabaso.pending-payfast-checkout") || "";
+    if (checkoutSessionId) void pollBillingCheckoutUntilRecorded(checkoutSessionId);
+  }, [authToken, currentPage]);
 
 
   const getUsageFeatureState = (usage, featureId) => {
@@ -22085,6 +22145,8 @@ export default function App() {
 
   useEffect(() => {
     if (!authChecked || !authToken || !authEmail) return;
+    setHasLoadedCollaborationRooms(false);
+    setIsCollaborationRoomsLoading(true);
     const cachedRooms = loadCachedCollaborationRooms(authEmail);
     if (cachedRooms.length) {
       setCollaborationRooms((current) => current.length ? current : cachedRooms);
@@ -22093,7 +22155,7 @@ export default function App() {
   const refreshCollaborationRooms = async (silent = false) => {
     if (!authToken || collaborationRoomsRequestInFlightRef.current) return;
     collaborationRoomsRequestInFlightRef.current = true;
-    if (!collaborationRooms.length) setIsCollaborationRoomsLoading(true);
+    if (!hasLoadedCollaborationRooms || !collaborationRooms.length) setIsCollaborationRoomsLoading(true);
     try {
       const response = await authFetch("/collaboration/rooms", { cache: "no-store", timeoutMs: 45000 });
       const data = await parseJsonSafe(response);
@@ -22103,6 +22165,8 @@ export default function App() {
       const leftRoomRecords = collaborationRooms.filter((room) => room?.is_left && !serverRooms.some((serverRoom) => serverRoom.id === room.id));
       const nextRooms = [...serverRooms, ...leftRoomRecords];
       persistCachedCollaborationRooms(authEmail, nextRooms);
+      setHasLoadedCollaborationRooms(true);
+      setCollaborationError("");
       setCollaborationRooms((current) => (
         JSON.stringify(current) === JSON.stringify(nextRooms) ? current : nextRooms
       ));
@@ -31384,7 +31448,7 @@ export default function App() {
         aria-expanded={isProfileMenuOpen}
       >
         <span className="profile-menu-button-avatar" aria-hidden="true">{displayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && !isBillingStatusLoaded ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </button>
       {isProfileMenuOpen ? (

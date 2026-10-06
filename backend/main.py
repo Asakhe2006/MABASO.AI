@@ -7931,6 +7931,25 @@ def init_db():
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS trial_claims (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                identity_hash TEXT NOT NULL,
+                payment_fingerprint_hash TEXT NOT NULL DEFAULT '',
+                provider_token_hash TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT 'payfast',
+                checkout_session_id TEXT NOT NULL DEFAULT '',
+                provider_payment_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'used',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_trial_claims_identity_hash ON trial_claims (identity_hash)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_trial_claims_payment_fingerprint ON trial_claims (payment_fingerprint_hash)")
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS account_sharing_risk (
                 email TEXT PRIMARY KEY,
                 plan_id TEXT NOT NULL DEFAULT 'free',
@@ -18765,10 +18784,72 @@ def get_checkout_session(checkout_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
+def hash_trial_identity(email: str) -> str:
+    normalized_email = normalize_email(email)
+    payload = ("trial-identity:" + normalized_email).encode("utf-8")
+    return hmac.new(APP_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def hash_trial_provider_value(kind: str, value: Any) -> str:
+    normalized_value = compact_text(value)
+    if not normalized_value:
+        return ""
+    payload = ("trial-" + compact_text(kind, "provider") + ":" + normalized_value).encode("utf-8")
+    return hmac.new(APP_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def record_trial_claim(
+    connection,
+    *,
+    email: str,
+    checkout_session_id: str,
+    provider_payment_id: str,
+    provider_token: str,
+    provider_payload: dict[str, Any] | None = None,
+    now_iso: str,
+) -> None:
+    """Permanently record trial use with hashes only, never raw card or bank data."""
+    provider_payload = provider_payload or {}
+    payment_fingerprint = next((
+        compact_text(provider_payload.get(key))
+        for key in ("payment_method_fingerprint", "card_fingerprint", "payment_fingerprint")
+        if compact_text(provider_payload.get(key))
+    ), "")
+    connection.execute(
+        """
+        INSERT INTO trial_claims (
+            id, email, identity_hash, payment_fingerprint_hash, provider_token_hash,
+            provider, checkout_session_id, provider_payment_id, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'payfast', ?, ?, 'used', ?, ?)
+        ON CONFLICT(identity_hash) DO UPDATE SET
+            email = excluded.email,
+            payment_fingerprint_hash = CASE WHEN trial_claims.payment_fingerprint_hash = '' THEN excluded.payment_fingerprint_hash ELSE trial_claims.payment_fingerprint_hash END,
+            provider_token_hash = CASE WHEN trial_claims.provider_token_hash = '' THEN excluded.provider_token_hash ELSE trial_claims.provider_token_hash END,
+            checkout_session_id = CASE WHEN trial_claims.checkout_session_id = '' THEN excluded.checkout_session_id ELSE trial_claims.checkout_session_id END,
+            provider_payment_id = CASE WHEN trial_claims.provider_payment_id = '' THEN excluded.provider_payment_id ELSE trial_claims.provider_payment_id END,
+            updated_at = excluded.updated_at
+        """,
+        (
+            uuid4().hex, normalize_email(email), hash_trial_identity(email),
+            hash_trial_provider_value("payment", payment_fingerprint),
+            hash_trial_provider_value("subscription-token", provider_token),
+            compact_text(checkout_session_id), compact_text(provider_payment_id), now_iso, now_iso,
+        ),
+    )
+
+
 def get_payfast_trial_eligibility(email: str) -> dict[str, Any]:
     normalized_email = validate_email_address(email)
     subscription = get_user_subscription(normalized_email)
     with get_db_connection() as connection:
+        user_row = connection.execute(
+            "SELECT trial_status, trial_used_at FROM users WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+        permanent_claim = connection.execute(
+            "SELECT id FROM trial_claims WHERE identity_hash = ? LIMIT 1",
+            (hash_trial_identity(normalized_email),),
+        ).fetchone()
         session_row = connection.execute(
             "SELECT COUNT(*) AS session_count FROM active_sessions WHERE lower(email) = lower(?)",
             (normalized_email,),
@@ -18791,6 +18872,13 @@ def get_payfast_trial_eligibility(email: str) -> dict[str, Any]:
             "session_count": session_count,
             "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
             "reason": "subscription_or_trial_active",
+        }
+    if (user_row and compact_text(user_row["trial_used_at"])) or permanent_claim:
+        return {
+            "eligible": False,
+            "session_count": session_count,
+            "sessions_required": FREE_TRIAL_MIN_ACCOUNT_SESSIONS,
+            "reason": "trial_already_started_or_used",
         }
     if session_count < FREE_TRIAL_MIN_ACCOUNT_SESSIONS:
         return {
@@ -18840,6 +18928,7 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
             "status": "free",
             "plan_id": "free",
             "provider": "",
+            "provider_token_present": False,
             "amount_zar": "0.00",
             "current_period_start": "",
             "current_period_end": "",
@@ -18865,6 +18954,7 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
         "plan_id": normalized_plan_id if normalized_status in {"active", "trialing"} else "free",
         "paid_plan_id": normalized_plan_id,
         "provider": row["provider"],
+        "provider_token_present": bool(compact_text(row["provider_token"])),
         "amount_zar": row["amount_zar"],
         "current_period_start": row["current_period_start"],
         "current_period_end": row["current_period_end"],
@@ -19120,6 +19210,7 @@ def get_effective_plan_id(email: str) -> str:
 
 
 def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    reconcile_payfast_trial_payment_history(email)
     subscription = get_user_subscription(email)
     entitlement = resolve_entitlement(email)
     if entitlement.get("trial_active"):
@@ -19541,8 +19632,81 @@ def get_payment_refund_summary(payment_row: Any, *, now: datetime | None = None)
     return eligibility
 
 
+def reconcile_payfast_trial_payment_history(email: str) -> None:
+    """Backfill a missing R0 trial authorization only from provider-backed records."""
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        user = connection.execute(
+            "SELECT trial_status, trial_started_at, trial_used_at FROM users WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+        if not user or (not compact_text(user["trial_used_at"]) and compact_text(user["trial_status"]).lower() not in {"active", "converted", "expired"}):
+            return
+        subscription = connection.execute(
+            "SELECT provider, provider_token, provider_payment_id, raw_event_json, created_at, updated_at FROM billing_subscriptions WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+        checkout = connection.execute(
+            """
+            SELECT id, plan_id, provider_payment_id, provider_token, status, raw_event_json,
+                   billing_country_at_purchase, created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE lower(email) = lower(?) AND checkout_fields_json LIKE ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (normalized_email, '%"custom_str4": "trial"%'),
+        ).fetchone()
+        if not subscription or compact_text(subscription["provider"]).lower() != "payfast" or not checkout:
+            return
+        provider_token = compact_text(subscription["provider_token"] or checkout["provider_token"])
+        provider_payment_id = compact_text(subscription["provider_payment_id"] or checkout["provider_payment_id"])
+        checkout_status = compact_text(checkout["status"]).lower()
+        if not (provider_token or provider_payment_id) or checkout_status not in {"active", "complete", "complete_payment", "trialing"}:
+            return
+        if provider_token and not compact_text(subscription["provider_token"]):
+            connection.execute(
+                "UPDATE billing_subscriptions SET provider_token = ?, updated_at = ? WHERE lower(email) = lower(?)",
+                (provider_token, utc_now().isoformat(), normalized_email),
+            )
+        existing = connection.execute(
+            "SELECT id FROM billing_payments WHERE lower(email) = lower(?) AND checkout_session_id = ? LIMIT 1",
+            (normalized_email, checkout["id"]),
+        ).fetchone()
+        if existing:
+            return
+        now_iso = utc_now().isoformat()
+        payment_id = provider_payment_id or ("trial-" + checkout["id"])
+        paid_at = compact_text(user["trial_started_at"] or checkout["updated_at"] or checkout["created_at"], now_iso)
+        raw_event_json = compact_text(checkout["raw_event_json"] or subscription["raw_event_json"], "{}")
+        connection.execute(
+            """
+            INSERT INTO billing_payments (
+                id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                amount_zar, payment_status, raw_event_json, billing_country_at_purchase,
+                currency, paid_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'payfast', ?, '0.00', 'active', ?, ?, 'ZAR', ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                payment_id, normalized_email, checkout["id"], normalize_billing_plan_id(checkout["plan_id"]),
+                provider_payment_id, raw_event_json, normalize_billing_country(checkout["billing_country_at_purchase"]),
+                paid_at, paid_at, now_iso,
+            ),
+        )
+        record_trial_claim(
+            connection,
+            email=normalized_email,
+            checkout_session_id=checkout["id"],
+            provider_payment_id=provider_payment_id,
+            provider_token=provider_token,
+            provider_payload=safe_json_loads(raw_event_json, {}),
+            now_iso=now_iso,
+        )
+
+
 def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any]]:
     normalized_email = normalize_email(email)
+    reconcile_payfast_trial_payment_history(normalized_email)
     safe_limit = max(1, min(int(limit or 12), 50))
     with get_db_connection() as connection:
         rows = connection.execute(
@@ -20136,6 +20300,15 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                     WHERE lower(email) = lower(?)
                     """,
                     (now_iso, period_end_iso, now_iso, now_iso, email),
+                )
+                record_trial_claim(
+                    connection,
+                    email=email,
+                    checkout_session_id=checkout_id,
+                    provider_payment_id=provider_payment_id,
+                    provider_token=provider_token,
+                    provider_payload=payload,
+                    now_iso=now_iso,
                 )
             else:
                 connection.execute(
@@ -24959,6 +25132,30 @@ async def get_billing_subscription(current_user: str = Depends(require_authentic
     }
 
 
+@app.get("/api/billing/checkout-sessions/{checkout_id}")
+def get_owned_billing_checkout_status(
+    checkout_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    """Return the authoritative PayFast callback state for the signed-in owner."""
+    normalized_email = normalize_email(current_user)
+    session = get_checkout_session(checkout_id)
+    if not session or normalize_email(session["email"]) != normalized_email:
+        raise HTTPException(status_code=404, detail="Checkout session not found.")
+    reconcile_payfast_trial_payment_history(normalized_email)
+    subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
+    status = compact_text(session["status"], "pending").lower()
+    complete = status in {"active", "complete", "complete_payment", "trialing"}
+    return {
+        "session_id": session["id"],
+        "status": status,
+        "complete": complete,
+        "updated_at": session["updated_at"],
+        "subscription": subscription,
+        "entitlement": entitlement,
+    }
+
+
 def send_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
     settings = get_transactional_email_settings()
     message = EmailMessage()
@@ -26124,6 +26321,24 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
             """,
             (normalized_email,),
         ).fetchall()
+        checkout_rows = connection.execute(
+            """
+            SELECT id, plan_id, provider, status, provider_payment_id,
+                   billing_country_at_purchase, created_at, updated_at
+            FROM billing_checkout_sessions WHERE lower(email) = lower(?)
+            ORDER BY created_at DESC LIMIT 20
+            """,
+            (normalized_email,),
+        ).fetchall()
+        trial_claim = connection.execute(
+            """
+            SELECT id, provider, checkout_session_id, status, created_at, updated_at,
+                   CASE WHEN payment_fingerprint_hash <> '' THEN 1 ELSE 0 END AS payment_fingerprint_recorded,
+                   CASE WHEN provider_token_hash <> '' THEN 1 ELSE 0 END AS provider_token_recorded
+            FROM trial_claims WHERE identity_hash = ? LIMIT 1
+            """,
+            (hash_trial_identity(normalized_email),),
+        ).fetchone()
 
     user = _diagnostic_row_dict(user_row)
     entitlement = resolve_entitlement(normalized_email)
@@ -26135,6 +26350,7 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
     trial_end = parse_billing_datetime(user.get("trial_ends_at"))
     now = utc_now()
     trial_remaining_seconds = max(0, int((trial_end - now).total_seconds())) if trial_end else 0
+    trial_eligibility = get_payfast_trial_eligibility(normalized_email)
     database_plan = compact_text(user.get("current_plan_id"), "free")
     database_subscription = compact_text(user.get("subscription_status"), "free")
     mismatch_reasons: list[str] = []
@@ -26144,8 +26360,13 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
         mismatch_reasons.append("An active subscription resolved to Free.")
     if usage.get("plan_id") != entitlement.get("quota_profile"):
         mismatch_reasons.append("The quota profile does not match the entitlement resolver.")
-    if database_plan not in {"", "free", entitlement.get("plan_id")} and not entitlement.get("subscription_active"):
-        mismatch_reasons.append("The stored database plan differs from current effective access.")
+    if database_plan != compact_text(entitlement.get("plan_id"), "free"):
+        mismatch_reasons.append("The stored database plan differs from the authoritative entitlement result.")
+    resolved_subscription_status = compact_text(entitlement.get("subscription_status"), "free")
+    if database_subscription != resolved_subscription_status and not (
+        database_subscription == "cancel_at_period_end" and entitlement.get("trial_active")
+    ):
+        mismatch_reasons.append("The stored subscription status differs from the authoritative resolver result.")
 
     timeline: list[dict[str, Any]] = []
     for row in audit_rows:
@@ -26191,10 +26412,14 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
         ],
         "subscription": subscription,
         "trial": {
-            "status": user.get("trial_status"), "eligible": user.get("trial_status") == "eligible" and not user.get("trial_used_at"),
+            "status": user.get("trial_status"), "eligible": bool(trial_eligibility.get("eligible")),
+            "eligibility_reason": trial_eligibility.get("reason"),
+            "session_count": trial_eligibility.get("session_count", 0),
+            "sessions_required": trial_eligibility.get("sessions_required", FREE_TRIAL_MIN_ACCOUNT_SESSIONS),
             "used": bool(user.get("trial_used_at")), "started_at": user.get("trial_started_at"),
             "ends_at": user.get("trial_ends_at"), "expired": bool(trial_end and trial_end <= now),
             "remaining_seconds": trial_remaining_seconds,
+            "claim": _diagnostic_row_dict(trial_claim),
         },
         "usage": usage,
         "feature_access": permissions,
@@ -26203,6 +26428,7 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
         "refunds": [_diagnostic_row_dict(row) for row in refunds],
         "sessions": [_diagnostic_row_dict(row) for row in sessions],
         "generations": [_diagnostic_row_dict(row) for row in generations],
+        "checkout_sessions": [_diagnostic_row_dict(row) for row in checkout_rows],
         "state_comparison": {
             "database_plan": database_plan,
             "database_subscription": database_subscription,
@@ -26250,6 +26476,27 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
         active_paid = connection.execute(
             "SELECT COUNT(*) AS total FROM billing_subscriptions WHERE status = 'active'"
         ).fetchone()
+        trial_user_rows = connection.execute(
+            """
+            SELECT u.email, u.user_id, u.trial_status, u.trial_started_at, u.trial_ends_at,
+                   u.trial_used_at, u.current_plan_id, u.subscription_status, u.last_login_at,
+                   s.provider, s.status AS provider_status, s.current_period_end,
+                   CASE WHEN s.provider_token <> '' THEN 1 ELSE 0 END AS provider_token_present,
+                   c.status AS latest_checkout_status, c.id AS latest_checkout_id
+            FROM users u
+            LEFT JOIN billing_subscriptions s ON lower(s.email) = lower(u.email)
+            LEFT JOIN billing_checkout_sessions c ON c.id = (
+                SELECT c2.id FROM billing_checkout_sessions c2
+                WHERE lower(c2.email) = lower(u.email) AND c2.checkout_fields_json LIKE ?
+                ORDER BY c2.created_at DESC LIMIT 1
+            )
+            WHERE u.trial_status IN ('active', 'eligible', 'expired', 'converted') OR u.trial_used_at <> ''
+            ORDER BY CASE WHEN u.trial_status = 'active' THEN 0 ELSE 1 END,
+                     COALESCE(NULLIF(u.trial_started_at, ''), u.created_at) DESC
+            LIMIT 150
+            """,
+            ('%"custom_str4": "trial"%',),
+        ).fetchall()
     db_latency_ms = int((time.perf_counter() - started_at) * 1000)
     events = []
     for row in event_rows:
@@ -26264,6 +26511,7 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
         "refund_counts": {row["status"]: int(row["total"] or 0) for row in refund_rows},
         "generation_counts": {row["status"]: int(row["total"] or 0) for row in generation_rows},
         "active_paid_subscriptions": int(active_paid["total"] or 0) if active_paid else 0,
+        "trial_users": [_diagnostic_row_dict(row) for row in trial_user_rows],
         "recent_events": events,
         "system_health": {
             "backend": "online", "database": "connected", "database_latency_ms": db_latency_ms,
