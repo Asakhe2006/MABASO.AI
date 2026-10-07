@@ -370,6 +370,7 @@ ADMIN_DASHBOARD_DEFAULT_RANGE = os.getenv("ADMIN_DASHBOARD_DEFAULT_RANGE", "7d")
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))
 PASSWORD_HASH_ITERATIONS = int(os.getenv("PASSWORD_HASH_ITERATIONS", "200000"))
 ADMIN_EMAILS_RAW = os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")).strip()
+REFUND_ADMIN_NOTIFICATION_EMAIL = os.getenv("REFUND_ADMIN_NOTIFICATION_EMAIL", "").strip()
 ADMIN_LOGIN_MAX_ATTEMPTS = int(os.getenv("ADMIN_LOGIN_MAX_ATTEMPTS", "3"))
 ADMIN_LOGIN_LOCKOUT_MINUTES = int(os.getenv("ADMIN_LOGIN_LOCKOUT_MINUTES", "15"))
 PODCAST_REQUEST_TIMEOUT = float(os.getenv("PODCAST_REQUEST_TIMEOUT", "180"))
@@ -7246,6 +7247,7 @@ class RefundRequestCreate(BaseModel):
 
 class RefundAdminDecision(BaseModel):
     admin_note: str = ""
+    decision_reason: str = ""
     bank_details: dict[str, str] = Field(default_factory=dict)
 
 
@@ -8707,6 +8709,18 @@ def init_db():
             )
             """
         )
+        refund_request_columns = {row["name"] for row in connection.execute("PRAGMA table_info(refund_requests)").fetchall()}
+        refund_request_column_defaults = {
+            "admin_notification_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "admin_notification_error": "TEXT NOT NULL DEFAULT ''",
+            "admin_notified_at": "TEXT NOT NULL DEFAULT ''",
+            "customer_notification_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "customer_notification_error": "TEXT NOT NULL DEFAULT ''",
+            "customer_notified_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in refund_request_column_defaults.items():
+            if column_name not in refund_request_columns:
+                connection.execute(f"ALTER TABLE refund_requests ADD COLUMN {column_name} {column_definition}")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_email_created ON refund_requests (email, created_at DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_payment_status ON refund_requests (payment_id, status)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_refund_requests_status_created ON refund_requests (status, created_at DESC)")
@@ -19744,17 +19758,32 @@ def get_usage_snapshot_since_charge(email: str, paid_at: str) -> dict[str, Any]:
     }
 
 
-def serialize_refund_request(row: Any) -> dict[str, Any]:
+def shorten_billing_reference(value: Any) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "", compact_text(value))
+    if not cleaned:
+        return ""
+    return cleaned if len(cleaned) <= 12 else f"...{cleaned[-12:]}"
+
+
+def serialize_refund_request(row: Any, *, include_admin: bool = False) -> dict[str, Any]:
     if not row:
         return {}
+    row_keys = set(row.keys())
     try:
         usage_snapshot = json.loads(compact_text(row["usage_snapshot_json"], "{}"))
     except json.JSONDecodeError:
         usage_snapshot = {}
+    payment_method = ""
+    if {"payment_method_type", "card_brand", "card_last4"}.intersection(row_keys):
+        payment_method = extract_safe_payfast_payment_method({
+            "payment_method": row["payment_method_type"] if "payment_method_type" in row_keys else "",
+            "card_brand": row["card_brand"] if "card_brand" in row_keys else "",
+            "card_last4": row["card_last4"] if "card_last4" in row_keys else "",
+        })["payment_method_label"]
     return {
         "id": row["id"],
         "payment_id": row["payment_id"],
-        "pf_payment_id": row["pf_payment_id"],
+        "pf_payment_id": shorten_billing_reference(row["pf_payment_id"]),
         "email": row["email"],
         "original_amount": row["original_amount"],
         "requested_amount": row["requested_amount"],
@@ -19772,16 +19801,116 @@ def serialize_refund_request(row: Any) -> dict[str, Any]:
         "rejected_at": row["rejected_at"],
         "processed_at": row["processed_at"],
         "completed_at": row["completed_at"],
-        "provider_refund_reference": row["provider_refund_reference"],
+        "provider_refund_reference": shorten_billing_reference(row["provider_refund_reference"]),
         "provider_status": row["provider_status"],
         "provider_error": row["provider_error"],
         "usage_snapshot": usage_snapshot,
         "estimated_ai_cost_since_charge": row["estimated_ai_cost_since_charge"],
         "automatic_or_manual": row["automatic_or_manual"],
-        "admin_user_id": row["admin_user_id"],
-        "admin_note": row["admin_note"],
+        "admin_user_id": row["admin_user_id"] if include_admin else "",
+        "admin_note": row["admin_note"] if include_admin else "",
+        "admin_notification_status": row["admin_notification_status"] if "admin_notification_status" in row_keys else "",
+        "admin_notification_error": row["admin_notification_error"] if include_admin and "admin_notification_error" in row_keys else "",
+        "admin_notified_at": row["admin_notified_at"] if "admin_notified_at" in row_keys else "",
+        "customer_notification_status": row["customer_notification_status"] if "customer_notification_status" in row_keys else "",
+        "customer_notification_error": row["customer_notification_error"] if "customer_notification_error" in row_keys else "",
+        "customer_notified_at": row["customer_notified_at"] if "customer_notified_at" in row_keys else "",
+        "customer_name": compact_text(row["customer_name"]) if "customer_name" in row_keys else compact_text(row["email"]).split("@", 1)[0].replace(".", " ").replace("_", " ").title(),
+        "plan_id": compact_text(row["plan_id"]) if "plan_id" in row_keys else "",
+        "plan_name": get_billing_plan_display_name(row["plan_id"]) if "plan_id" in row_keys else "",
+        "payment_status": compact_text(row["payment_status"]) if "payment_status" in row_keys else "",
+        "payment_date": compact_text(row["payment_date"]) if "payment_date" in row_keys else "",
+        "payment_provider": compact_text(row["payment_provider"]) if "payment_provider" in row_keys else "",
+        "payment_method": payment_method,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+ADMIN_REFUND_PENDING_STATUSES = {"requested", "eligible", "manual_review", "auto_approved"}
+ADMIN_REFUND_ALLOWED_FILTERS = {
+    "pending", "under_review", "processing", "refunded", "partially_refunded",
+    "rejected", "failed", "all", "",
+}
+REFUND_REJECTION_REASONS = {
+    "outside_refund_period": "The payment falls outside the applicable refund-request period.",
+    "usage_exceeds_policy_threshold": "The request requires a policy decision based on usage after purchase.",
+    "payment_already_refunded": "The payment has already been refunded.",
+    "transaction_not_eligible": "The payment provider reports that the transaction is not eligible for refund.",
+    "invalid_request": "The request could not be validated against the original payment.",
+    "other": "The request was reviewed and was not approved.",
+}
+
+
+def _admin_refund_join_query(where_clause: str = "") -> str:
+    return f"""
+        SELECT r.*,
+               p.plan_id AS plan_id,
+               p.payment_status AS payment_status,
+               p.paid_at AS payment_date,
+               p.provider AS payment_provider,
+               p.payment_method_type AS payment_method_type,
+               p.card_brand AS card_brand,
+               p.card_last4 AS card_last4,
+               COALESCE(cp.display_name, '') AS customer_name
+        FROM refund_requests r
+        JOIN billing_payments p
+          ON p.id = r.payment_id AND lower(p.email) = lower(r.email)
+        LEFT JOIN collaboration_profiles cp ON lower(cp.email) = lower(r.email)
+        {where_clause}
+    """
+
+
+def load_admin_refund_request(refund_id: str, *, connection: Any | None = None) -> Any:
+    query = _admin_refund_join_query("WHERE r.id = ?")
+    parameters = (compact_text(refund_id),)
+    if connection is not None:
+        return connection.execute(query, parameters).fetchone()
+    with get_db_connection() as owned_connection:
+        return owned_connection.execute(query, parameters).fetchone()
+
+
+def list_refund_audit_events(refund_id: str) -> list[dict[str, Any]]:
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, actor_email, actor_type, action, safe_metadata_json, created_at "
+            "FROM refund_audit_events WHERE refund_request_id = ? ORDER BY created_at ASC LIMIT 250",
+            (compact_text(refund_id),),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            metadata = json.loads(compact_text(row["safe_metadata_json"], "{}"))
+        except json.JSONDecodeError:
+            metadata = {}
+        result.append({
+            "id": row["id"],
+            "actor_email": row["actor_email"],
+            "actor_type": row["actor_type"],
+            "action": row["action"],
+            "metadata": metadata if isinstance(metadata, dict) else {},
+            "created_at": row["created_at"],
+        })
+    return result
+
+
+def get_admin_refund_status_counts(connection: Any | None = None) -> dict[str, int]:
+    if connection is None:
+        with get_db_connection() as owned_connection:
+            return get_admin_refund_status_counts(owned_connection)
+    rows = connection.execute(
+        "SELECT status, COUNT(*) AS total FROM refund_requests GROUP BY status"
+    ).fetchall()
+    raw = {compact_text(row["status"]).lower(): int(row["total"] or 0) for row in rows}
+    return {
+        "pending": sum(raw.get(status, 0) for status in ADMIN_REFUND_PENDING_STATUSES),
+        "under_review": raw.get("under_review", 0),
+        "processing": raw.get("processing", 0) + raw.get("provider_accepted", 0),
+        "refunded": raw.get("refunded", 0),
+        "partially_refunded": raw.get("partially_refunded", 0),
+        "rejected": raw.get("rejected", 0),
+        "failed": raw.get("failed", 0),
+        "all": sum(raw.values()),
     }
 
 
@@ -25386,15 +25515,31 @@ def reconcile_current_billing_subscription(current_user: str = Depends(require_a
 
 def send_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
     settings = get_transactional_email_settings()
+    plan_name = compact_text(refund.get("plan_name"), "Mabaso AI subscription")
+    amount = compact_text(refund.get("requested_amount"), "0.00")
+    requested_at = compact_text(refund.get("requested_at"), "Not recorded")
+    normalized_status_message = compact_text(status_message, "updated")
+    request_notice = (
+        "Submitting a request does not mean a refund has already been completed. "
+        "A Mabaso AI administrator will review it."
+        if normalized_status_message == "request received"
+        else "This message reflects the latest recorded state of your refund request."
+    )
     message = EmailMessage()
-    message["Subject"] = f"Mabaso AI refund update: {status_message}"
+    message["Subject"] = (
+        "We received your Mabaso AI refund request"
+        if normalized_status_message == "request received"
+        else f"Mabaso AI refund update: {normalized_status_message}"
+    )
     message["From"] = settings["from_email"]
     message["To"] = email
     message.set_content(
         "Hello,\n\n"
-        f"Your Mabaso AI refund request for payment {compact_text(refund.get('payment_id'))} is now: {status_message}.\n\n"
-        f"Amount requested: R{compact_text(refund.get('requested_amount'), '0.00')}\n"
+        f"Your refund request for {plan_name} is now: {normalized_status_message}.\n\n"
+        f"Amount: R{amount}\n"
+        f"Request date: {requested_at}\n"
         f"Status: {compact_text(refund.get('status'), 'unknown')}\n\n"
+        f"{request_notice}\n\n"
         "Your chats, saved materials, documents, and account are not deleted by a cancellation or refund.\n\n"
         "Mabaso AI"
     )
@@ -25402,10 +25547,138 @@ def send_refund_status_email(email: str, refund: dict[str, Any], status_message:
 
 
 async def deliver_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
+    refund_id = compact_text(refund.get("id"))
     try:
         await asyncio.to_thread(send_refund_status_email, email, refund, status_message)
+        now_iso = utc_now().isoformat()
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE refund_requests SET customer_notification_status = 'sent', "
+                "customer_notification_error = '', customer_notified_at = ?, updated_at = ? WHERE id = ?",
+                (now_iso, now_iso, refund_id),
+            )
+            record_refund_audit(
+                refund_id,
+                compact_text(refund.get("payment_id")),
+                "refund.customer_notification_sent",
+                actor_type="system",
+                metadata={"status_message": compact_text(status_message)[:80]},
+                connection=connection,
+            )
     except Exception as exc:
-        logger.warning("Refund status email failed request=%s error=%s", compact_text(refund.get("id")), safe_email_delivery_error(exc))
+        safe_error = safe_email_delivery_error(exc)
+        logger.warning("Refund status email failed request=%s error=%s", refund_id, safe_error)
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE refund_requests SET customer_notification_status = 'failed', "
+                "customer_notification_error = ?, updated_at = ? WHERE id = ?",
+                (safe_error, utc_now().isoformat(), refund_id),
+            )
+            record_refund_audit(
+                refund_id,
+                compact_text(refund.get("payment_id")),
+                "refund.customer_notification_failed",
+                actor_type="system",
+                metadata={"error": safe_error},
+                connection=connection,
+            )
+
+
+def get_refund_admin_notification_email() -> str:
+    if REFUND_ADMIN_NOTIFICATION_EMAIL:
+        return validate_email_address(REFUND_ADMIN_NOTIFICATION_EMAIL)
+    configured_admins = sorted(get_admin_email_set())
+    if configured_admins:
+        return validate_email_address(configured_admins[0])
+    raise HTTPException(
+        status_code=500,
+        detail="Refund admin notifications are not configured. Set REFUND_ADMIN_NOTIFICATION_EMAIL or ADMIN_EMAILS.",
+    )
+
+
+def send_admin_refund_request_email(refund: dict[str, Any]) -> None:
+    settings = get_transactional_email_settings()
+    recipient = get_refund_admin_notification_email()
+    plan_name = compact_text(refund.get("plan_name"), "Subscription")
+    amount = compact_text(refund.get("requested_amount"), "0.00")
+    customer_name = compact_text(refund.get("customer_name"), "Customer")
+    customer_email = validate_email_address(compact_text(refund.get("email")))
+    review_url = f"{APP_PUBLIC_URL}/admin/dashboard?section=refunds&refund={quote(compact_text(refund.get('id')))}"
+    message = EmailMessage()
+    message["Subject"] = f"New Mabaso AI refund request - R{amount} - {plan_name}"
+    message["From"] = settings["from_email"]
+    message["To"] = recipient
+    message.set_content(
+        "New refund request\n\n"
+        f"Customer: {customer_name}\n"
+        f"Email: {customer_email}\n"
+        f"Plan: {plan_name}\n"
+        f"Original payment: R{compact_text(refund.get('original_amount'), '0.00')}\n"
+        f"Requested refund: R{amount}\n"
+        f"Payment date: {compact_text(refund.get('payment_date'), 'Not recorded')}\n"
+        f"Request date: {compact_text(refund.get('requested_at'), 'Not recorded')}\n"
+        f"Reason: {compact_text(refund.get('reason_text') or refund.get('reason_code'), 'Not provided')}\n"
+        "Current status: Pending review\n\n"
+        f"Review refund request: {review_url}\n"
+    )
+    safe_review_url = html.escape(review_url, quote=True)
+    message.add_alternative(
+        "<html><body style=\"font-family:Arial,sans-serif;color:#0f172a;line-height:1.6\">"
+        "<h2>New refund request</h2>"
+        f"<p><strong>Customer:</strong> {html.escape(customer_name)}<br>"
+        f"<strong>Email:</strong> {html.escape(customer_email)}<br>"
+        f"<strong>Plan:</strong> {html.escape(plan_name)}<br>"
+        f"<strong>Original payment:</strong> R{html.escape(compact_text(refund.get('original_amount'), '0.00'))}<br>"
+        f"<strong>Requested refund:</strong> R{html.escape(amount)}<br>"
+        f"<strong>Payment date:</strong> {html.escape(compact_text(refund.get('payment_date'), 'Not recorded'))}<br>"
+        f"<strong>Request date:</strong> {html.escape(compact_text(refund.get('requested_at'), 'Not recorded'))}<br>"
+        f"<strong>Reason:</strong> {html.escape(compact_text(refund.get('reason_text') or refund.get('reason_code'), 'Not provided'))}<br>"
+        "<strong>Current status:</strong> Pending review</p>"
+        f"<p><a href=\"{safe_review_url}\" style=\"display:inline-block;background:#0f172a;color:#fff;"
+        "text-decoration:none;padding:12px 18px;border-radius:999px;font-weight:700\">Review refund request</a></p>"
+        "<p style=\"font-size:12px;color:#64748b\">Sign in to the protected Mabaso AI Admin Dashboard to review this request.</p>"
+        "</body></html>",
+        subtype="html",
+    )
+    send_transactional_message(message)
+
+
+async def deliver_admin_refund_request_notification(refund: dict[str, Any]) -> None:
+    refund_id = compact_text(refund.get("id"))
+    try:
+        await asyncio.to_thread(send_admin_refund_request_email, refund)
+        now_iso = utc_now().isoformat()
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE refund_requests SET admin_notification_status = 'sent', "
+                "admin_notification_error = '', admin_notified_at = ?, updated_at = ? WHERE id = ?",
+                (now_iso, now_iso, refund_id),
+            )
+            record_refund_audit(
+                refund_id,
+                compact_text(refund.get("payment_id")),
+                "refund.admin_notification_sent",
+                actor_type="system",
+                metadata={},
+                connection=connection,
+            )
+    except Exception as exc:
+        safe_error = safe_email_delivery_error(exc)
+        logger.warning("Refund admin notification failed request=%s error=%s", refund_id, safe_error)
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE refund_requests SET admin_notification_status = 'failed', "
+                "admin_notification_error = ?, updated_at = ? WHERE id = ?",
+                (safe_error, utc_now().isoformat(), refund_id),
+            )
+            record_refund_audit(
+                refund_id,
+                compact_text(refund.get("payment_id")),
+                "refund.admin_notification_failed",
+                actor_type="system",
+                metadata={"error": safe_error},
+                connection=connection,
+            )
 
 
 def _extract_payfast_refund_query(payload: dict[str, Any]) -> dict[str, Any]:
@@ -25418,6 +25691,39 @@ def _extract_payfast_refund_query(payload: dict[str, Any]) -> dict[str, Any]:
             return response
         return data
     return payload
+
+
+def sanitize_payfast_refund_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    query = _extract_payfast_refund_query(payload or {})
+    if not isinstance(query, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key in ("status", "amount_available_for_refund", "amount_refunded", "message"):
+        if query.get(key) is not None:
+            safe[key] = compact_text(query.get(key))[:300]
+    for key in ("refund_id", "reference"):
+        if query.get(key):
+            safe[key] = shorten_billing_reference(query.get(key))
+    for key in ("refund_full", "refund_partial"):
+        option = query.get(key)
+        if isinstance(option, dict):
+            safe[key] = {
+                item_key: compact_text(option.get(item_key))[:80]
+                for item_key in ("method", "status")
+                if option.get(item_key) is not None
+            }
+    return safe
+
+
+def payfast_refund_amount_cents(value: Any) -> int:
+    """Parse provider refund amounts without trusting locale or float precision."""
+    try:
+        return max(0, int(Decimal(str(value or "0").strip() or "0")))
+    except (InvalidOperation, TypeError, ValueError):
+        raise PayFastApiError(
+            "PayFast returned an invalid refundable amount.",
+            status_code=502,
+        )
 
 
 def _load_refund_request(refund_id: str, *, connection: Any | None = None) -> Any:
@@ -25560,9 +25866,10 @@ def create_customer_refund_request(
             metadata={"status": eligibility["status"], "reason_code": reason_code},
             connection=connection,
         )
-        created = _load_refund_request(refund_id, connection=connection)
+        created = load_admin_refund_request(refund_id, connection=connection)
     serialized = serialize_refund_request(created)
     background_tasks.add_task(deliver_refund_status_email, email, serialized, "request received")
+    background_tasks.add_task(deliver_admin_refund_request_notification, serialized)
     return {"message": "Refund request received.", "refund_request": serialized, "idempotent": False}
 
 
@@ -25609,15 +25916,135 @@ def cancel_customer_subscription(
 @app.get("/admin/refunds")
 def list_admin_refunds(
     status: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     current_admin: str = Depends(require_admin_user),
 ):
     normalized_status = compact_text(status).lower()
+    if normalized_status not in ADMIN_REFUND_ALLOWED_FILTERS:
+        raise HTTPException(status_code=400, detail="Unsupported refund status filter.")
     with get_db_connection() as connection:
-        if normalized_status:
-            rows = connection.execute("SELECT * FROM refund_requests WHERE status = ? ORDER BY created_at DESC LIMIT 200", (normalized_status,)).fetchall()
+        if normalized_status == "pending":
+            placeholders = ", ".join("?" for _ in ADMIN_REFUND_PENDING_STATUSES)
+            rows = connection.execute(
+                _admin_refund_join_query(
+                    f"WHERE r.status IN ({placeholders}) ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+                ),
+                (*sorted(ADMIN_REFUND_PENDING_STATUSES), limit, offset),
+            ).fetchall()
+        elif normalized_status == "processing":
+            rows = connection.execute(
+                _admin_refund_join_query(
+                    "WHERE r.status IN (?, ?) ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+                ),
+                ("processing", "provider_accepted", limit, offset),
+            ).fetchall()
+        elif normalized_status and normalized_status != "all":
+            rows = connection.execute(
+                _admin_refund_join_query(
+                    "WHERE r.status = ? ORDER BY r.created_at DESC LIMIT ? OFFSET ?"
+                ),
+                (normalized_status, limit, offset),
+            ).fetchall()
         else:
-            rows = connection.execute("SELECT * FROM refund_requests ORDER BY created_at DESC LIMIT 200").fetchall()
-    return {"refunds": [serialize_refund_request(row) for row in rows]}
+            rows = connection.execute(
+                _admin_refund_join_query("ORDER BY r.created_at DESC LIMIT ? OFFSET ?"),
+                (limit, offset),
+            ).fetchall()
+        counts = get_admin_refund_status_counts(connection)
+    return {
+        "refunds": [serialize_refund_request(row, include_admin=True) for row in rows],
+        "counts": counts,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/admin/refunds/summary")
+def get_admin_refund_summary(current_admin: str = Depends(require_admin_user)):
+    return {"counts": get_admin_refund_status_counts()}
+
+
+@app.get("/admin/refunds/{refund_id}")
+def get_admin_refund_details(
+    refund_id: str,
+    current_admin: str = Depends(require_admin_user),
+):
+    row = load_admin_refund_request(refund_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Refund request not found.")
+    provider_response: dict[str, Any] = {}
+    try:
+        provider_response = sanitize_payfast_refund_payload(
+            json.loads(compact_text(row["provider_response_json"], "{}"))
+        )
+    except json.JSONDecodeError:
+        provider_response = {}
+    return {
+        "refund_request": serialize_refund_request(row, include_admin=True),
+        "audit_history": list_refund_audit_events(refund_id),
+        "provider_response": provider_response,
+    }
+
+
+@app.post("/admin/refunds/{refund_id}/review")
+def mark_admin_refund_under_review(
+    refund_id: str,
+    current_admin: str = Depends(require_admin_user),
+):
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = _load_refund_request(refund_id, connection=connection)
+        if not row:
+            raise HTTPException(status_code=404, detail="Refund request not found.")
+        status = compact_text(row["status"]).lower()
+        if status in ADMIN_REFUND_PENDING_STATUSES:
+            connection.execute(
+                "UPDATE refund_requests SET status = 'under_review', admin_user_id = ?, updated_at = ? "
+                "WHERE id = ? AND status = ?",
+                (normalize_email(current_admin), now_iso, refund_id, status),
+            )
+            record_refund_audit(
+                refund_id,
+                row["payment_id"],
+                "refund.review_opened",
+                actor_email=current_admin,
+                actor_type="admin",
+                metadata={},
+                connection=connection,
+            )
+        updated = load_admin_refund_request(refund_id, connection=connection)
+    return {"refund_request": serialize_refund_request(updated, include_admin=True)}
+
+
+@app.post("/admin/refunds/{refund_id}/notify-admin")
+def retry_admin_refund_notification(
+    refund_id: str,
+    background_tasks: BackgroundTasks,
+    current_admin: str = Depends(require_admin_user),
+):
+    row = load_admin_refund_request(refund_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Refund request not found.")
+    serialized = serialize_refund_request(row, include_admin=True)
+    with get_db_connection() as connection:
+        connection.execute(
+            "UPDATE refund_requests SET admin_notification_status = 'pending', "
+            "admin_notification_error = '', updated_at = ? WHERE id = ?",
+            (utc_now().isoformat(), refund_id),
+        )
+        record_refund_audit(
+            refund_id,
+            row["payment_id"],
+            "refund.admin_notification_retry_requested",
+            actor_email=current_admin,
+            actor_type="admin",
+            metadata={},
+            connection=connection,
+        )
+    background_tasks.add_task(deliver_admin_refund_request_notification, serialized)
+    return {"message": "Admin notification retry queued.", "refund_request": serialized}
 
 
 @app.post("/admin/refunds/{refund_id}/reject")
@@ -25627,6 +26054,11 @@ def reject_admin_refund(
     background_tasks: BackgroundTasks,
     current_admin: str = Depends(require_admin_user),
 ):
+    decision_reason = compact_text(payload.decision_reason).lower()
+    if decision_reason not in REFUND_REJECTION_REASONS:
+        raise HTTPException(status_code=400, detail="Select a valid rejection reason.")
+    if decision_reason == "other" and not compact_text(payload.admin_note):
+        raise HTTPException(status_code=400, detail="Add an admin note when selecting Other.")
     now_iso = utc_now().isoformat()
     with get_db_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -25637,12 +26069,31 @@ def reject_admin_refund(
             raise HTTPException(status_code=409, detail="This refund can no longer be rejected.")
         connection.execute(
             "UPDATE refund_requests SET status = 'rejected', rejected_at = ?, admin_user_id = ?, admin_note = ?, updated_at = ? WHERE id = ?",
-            (now_iso, normalize_email(current_admin), compact_text(payload.admin_note)[:1000], now_iso, refund_id),
+            (
+                now_iso,
+                normalize_email(current_admin),
+                f"{decision_reason}: {compact_text(payload.admin_note)[:900]}".rstrip(": "),
+                now_iso,
+                refund_id,
+            ),
         )
-        record_refund_audit(refund_id, row["payment_id"], "refund.rejected", actor_email=current_admin, actor_type="admin", metadata={"note_present": bool(compact_text(payload.admin_note))}, connection=connection)
-        updated = _load_refund_request(refund_id, connection=connection)
-    serialized = serialize_refund_request(updated)
-    background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "rejected")
+        record_refund_audit(
+            refund_id,
+            row["payment_id"],
+            "refund.rejected",
+            actor_email=current_admin,
+            actor_type="admin",
+            metadata={"decision_reason": decision_reason, "note_present": bool(compact_text(payload.admin_note))},
+            connection=connection,
+        )
+        updated = load_admin_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated, include_admin=True)
+    background_tasks.add_task(
+        deliver_refund_status_email,
+        serialized["email"],
+        serialized,
+        f"not approved - {REFUND_REJECTION_REASONS[decision_reason]}",
+    )
     return {"message": "Refund request rejected.", "refund_request": serialized}
 
 
@@ -25662,20 +26113,42 @@ def approve_admin_refund(
             raise HTTPException(status_code=404, detail="Refund request not found.")
         current_status = compact_text(row["status"]).lower()
         if current_status in {"processing", "provider_accepted", "refunded"}:
-            return {"message": "This refund is already being processed.", "refund_request": serialize_refund_request(row), "idempotent": True}
+            return {"message": "This refund is already being processed.", "refund_request": serialize_refund_request(row, include_admin=True), "idempotent": True}
         if current_status in {"rejected", "cancelled", "failed"}:
             raise HTTPException(status_code=409, detail=f"This refund request is {current_status}.")
+        payment = connection.execute(
+            "SELECT * FROM billing_payments WHERE id = ? AND lower(email) = ?",
+            (row["payment_id"], normalize_email(row["email"])),
+        ).fetchone()
+        if not payment:
+            raise HTTPException(status_code=404, detail="The original payment no longer exists.")
+        if compact_text(payment["payment_status"]).lower() not in {"complete", "complete_payment", "paid", "success", "active"}:
+            raise HTTPException(status_code=409, detail="The original payment is not in a refundable successful state.")
+        if compact_text(payment["chargeback_status"]).lower() in {"active", "open", "pending", "disputed", "chargeback"}:
+            raise HTTPException(status_code=409, detail="This payment has an active dispute or chargeback and cannot be refunded twice.")
+        remaining_amount = max(
+            Decimal("0.00"),
+            refund_money(payment["amount_zar"]) - refund_money(payment["refunded_amount_zar"]),
+        )
+        approved_amount = min(refund_money(row["requested_amount"]), remaining_amount)
+        if approved_amount <= 0:
+            raise HTTPException(status_code=409, detail="This payment has no remaining refundable amount.")
         cursor = connection.execute(
-            "UPDATE refund_requests SET status = 'processing', approved_at = ?, processed_at = ?, approved_amount = requested_amount, admin_user_id = ?, admin_note = ?, updated_at = ? WHERE id = ? AND status = ?",
-            (now_iso, now_iso, admin_email, compact_text(payload.admin_note)[:1000], now_iso, refund_id, current_status),
+            "UPDATE refund_requests SET status = 'processing', approved_at = ?, processed_at = ?, approved_amount = ?, admin_user_id = ?, admin_note = ?, updated_at = ? WHERE id = ? AND status = ?",
+            (now_iso, now_iso, f"{approved_amount:.2f}", admin_email, compact_text(payload.admin_note)[:1000], now_iso, refund_id, current_status),
         )
         if int(cursor.rowcount or 0) != 1:
             raise HTTPException(status_code=409, detail="Another administrator is already processing this refund.")
-        payment = connection.execute("SELECT * FROM billing_payments WHERE id = ? AND lower(email) = ?", (row["payment_id"], normalize_email(row["email"]))).fetchone()
         subscription = connection.execute("SELECT * FROM billing_subscriptions WHERE lower(email) = ?", (normalize_email(row["email"]),)).fetchone()
-        record_refund_audit(refund_id, row["payment_id"], "refund.approved", actor_email=admin_email, actor_type="admin", metadata={}, connection=connection)
-    if not payment:
-        raise HTTPException(status_code=404, detail="The original payment no longer exists.")
+        record_refund_audit(
+            refund_id,
+            row["payment_id"],
+            "refund.approved",
+            actor_email=admin_email,
+            actor_type="admin",
+            metadata={"approved_amount": f"{approved_amount:.2f}"},
+            connection=connection,
+        )
     payment_id = compact_text(payment["provider_payment_id"])
     if not payment_id:
         with get_db_connection() as connection:
@@ -25685,22 +26158,64 @@ def approve_admin_refund(
     try:
         query_payload = client.query_refund(payment_id)
         query = _extract_payfast_refund_query(query_payload)
-        available_cents = max(0, int(query.get("amount_available_for_refund") or 0))
-        requested_cents = int(refund_money(row["requested_amount"]) * 100)
+        available_cents = payfast_refund_amount_cents(query.get("amount_available_for_refund"))
+        requested_cents = int(approved_amount * 100)
         if compact_text(query.get("status")).upper() != "REFUNDABLE" or available_cents <= 0:
             raise PayFastApiError("PayFast reports that this payment is not refundable.", status_code=409, safe_payload=query)
         amount_cents = min(requested_cents, available_cents)
-        is_full_refund = amount_cents >= int(refund_money(payment["amount_zar"]) * 100)
-        refund_method = compact_text((query.get("refund_full") if is_full_refund else query.get("refund_partial") or {}).get("method")).upper()
+        provider_approved_amount = (Decimal(amount_cents) / Decimal("100")).quantize(Decimal("0.01"))
+        with get_db_connection() as connection:
+            connection.execute(
+                "UPDATE refund_requests SET approved_amount = ?, updated_at = ? WHERE id = ?",
+                (f"{provider_approved_amount:.2f}", utc_now().isoformat(), refund_id),
+            )
+            record_refund_audit(
+                refund_id,
+                row["payment_id"],
+                "refund.provider_eligibility_confirmed",
+                actor_email=admin_email,
+                actor_type="admin",
+                metadata={"amount_cents": amount_cents},
+                connection=connection,
+            )
+        is_full_refund = (
+            refund_money(payment["refunded_amount_zar"]) + provider_approved_amount
+            >= refund_money(payment["amount_zar"])
+        )
+        refund_option = query.get("refund_full") if is_full_refund else query.get("refund_partial")
+        refund_method = compact_text((refund_option or {}).get("method")).upper()
         if refund_method == "BANK_PAYOUT" and not payload.bank_details:
             with get_db_connection() as connection:
-                connection.execute("UPDATE refund_requests SET status = 'manual_review', provider_status = 'bank_details_required', provider_response_json = ?, updated_at = ? WHERE id = ?", (json.dumps({"status": query.get("status"), "refund_method": refund_method}, ensure_ascii=False), utc_now().isoformat(), refund_id))
+                connection.execute("UPDATE refund_requests SET status = 'manual_review', provider_status = 'bank_details_required', provider_response_json = ?, updated_at = ? WHERE id = ?", (json.dumps(sanitize_payfast_refund_payload(query_payload), ensure_ascii=False), utc_now().isoformat(), refund_id))
                 record_refund_audit(refund_id, row["payment_id"], "refund.bank_details_required", actor_email=admin_email, actor_type="admin", metadata={"refund_method": refund_method}, connection=connection)
             raise HTTPException(status_code=409, detail="PayFast requires bank payout details for this refund. Collect only the fields shown in the PayFast refund query, then approve again.")
-        if is_full_refund and subscription and compact_text(subscription["status"]).lower() in {"active", "cancel_at_period_end"} and compact_text(subscription["provider"]).lower() == "payfast":
+        if (
+            is_full_refund
+            and subscription
+            and compact_text(subscription["status"]).lower() in {"active", "cancel_at_period_end"}
+            and compact_text(subscription["provider"]).lower() == "payfast"
+            and compact_text(subscription["provider_status"]).lower() != "cancelled"
+        ):
             token = compact_text(subscription["provider_token"])
             if token:
                 client.cancel_subscription(token)
+                with get_db_connection() as connection:
+                    cancelled_at = utc_now().isoformat()
+                    connection.execute(
+                        "UPDATE billing_subscriptions SET provider_status = 'cancelled', "
+                        "cancel_at = COALESCE(NULLIF(current_period_end, ''), ?), cancelled_at = ?, updated_at = ? "
+                        "WHERE lower(email) = ?",
+                        (cancelled_at, cancelled_at, cancelled_at, normalize_email(row["email"])),
+                    )
+                    record_refund_audit(
+                        refund_id,
+                        row["payment_id"],
+                        "refund.recurring_billing_cancelled",
+                        actor_email=admin_email,
+                        actor_type="admin",
+                        metadata={},
+                        connection=connection,
+                    )
         provider_payload = client.create_refund(
             payment_id,
             amount_cents=amount_cents,
@@ -25710,7 +26225,7 @@ def approve_admin_refund(
     except PayFastApiError as exc:
         logger.warning("PayFast refund failed request=%s error=%s", refund_id, str(exc))
         with get_db_connection() as connection:
-            connection.execute("UPDATE refund_requests SET status = 'failed', provider_status = 'failed', provider_error = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (str(exc)[:300], json.dumps(exc.safe_payload, ensure_ascii=False), utc_now().isoformat(), refund_id))
+            connection.execute("UPDATE refund_requests SET status = 'failed', provider_status = 'failed', provider_error = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (str(exc)[:300], json.dumps(sanitize_payfast_refund_payload(exc.safe_payload), ensure_ascii=False), utc_now().isoformat(), refund_id))
             record_refund_audit(refund_id, row["payment_id"], "refund.provider_failed", actor_email=admin_email, actor_type="admin", metadata={"error": str(exc)[:200]}, connection=connection)
         raise HTTPException(status_code=exc.status_code, detail=f"PayFast refund failed: {str(exc)}") from exc
     provider_data = _extract_payfast_refund_query(provider_payload)
@@ -25718,13 +26233,103 @@ def approve_admin_refund(
     with get_db_connection() as connection:
         connection.execute(
             "UPDATE refund_requests SET status = 'provider_accepted', provider_status = 'accepted', provider_refund_reference = ?, provider_response_json = ?, provider_error = '', updated_at = ? WHERE id = ?",
-            (provider_reference, json.dumps(provider_payload, ensure_ascii=False), utc_now().isoformat(), refund_id),
+            (provider_reference, json.dumps(sanitize_payfast_refund_payload(provider_payload), ensure_ascii=False), utc_now().isoformat(), refund_id),
         )
-        record_refund_audit(refund_id, row["payment_id"], "refund.provider_accepted", actor_email=admin_email, actor_type="admin", metadata={"provider_reference": provider_reference}, connection=connection)
-        updated = _load_refund_request(refund_id, connection=connection)
-    serialized = serialize_refund_request(updated)
+        record_refund_audit(
+            refund_id,
+            row["payment_id"],
+            "refund.provider_accepted",
+            actor_email=admin_email,
+            actor_type="admin",
+            metadata={"provider_reference": shorten_billing_reference(provider_reference)},
+            connection=connection,
+        )
+        updated = load_admin_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated, include_admin=True)
     background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "submitted to PayFast")
     return {"message": "Refund submitted to PayFast. Completion will be confirmed separately.", "refund_request": serialized}
+
+
+@app.post("/admin/refunds/{refund_id}/retry")
+def retry_admin_refund(
+    refund_id: str,
+    payload: RefundAdminDecision,
+    background_tasks: BackgroundTasks,
+    current_admin: str = Depends(require_admin_user),
+):
+    row = _load_refund_request(refund_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Refund request not found.")
+    if compact_text(row["status"]).lower() != "failed":
+        raise HTTPException(status_code=409, detail="Only a failed provider refund attempt can be retried.")
+    payment_id = compact_text(row["pf_payment_id"])
+    if not payment_id:
+        raise HTTPException(status_code=409, detail="PayFast payment ID is missing.")
+    try:
+        provider_payload = get_payfast_api_client().query_refund(payment_id)
+    except PayFastApiError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail="PayFast could not confirm whether retrying is safe. No retry was attempted.",
+        ) from exc
+    query = _extract_payfast_refund_query(provider_payload)
+    available_cents = payfast_refund_amount_cents(query.get("amount_available_for_refund"))
+    with get_db_connection() as connection:
+        payment = connection.execute(
+            "SELECT amount_zar, refunded_amount_zar FROM billing_payments WHERE id = ? AND lower(email) = ?",
+            (row["payment_id"], normalize_email(row["email"])),
+        ).fetchone()
+        if not payment:
+            raise HTTPException(status_code=404, detail="The original payment no longer exists.")
+        local_remaining_cents = int(
+            max(
+                Decimal("0.00"),
+                refund_money(payment["amount_zar"]) - refund_money(payment["refunded_amount_zar"]),
+            ) * 100
+        )
+        provider_status = compact_text(query.get("status")).upper()
+        if provider_status == "COMPLETED" or available_cents < local_remaining_cents:
+            connection.execute(
+                "UPDATE refund_requests SET status = 'provider_accepted', provider_status = ?, "
+                "provider_response_json = ?, provider_error = '', updated_at = ? WHERE id = ? AND status = 'failed'",
+                (
+                    compact_text(query.get("status"), "accepted").lower(),
+                    json.dumps(sanitize_payfast_refund_payload(provider_payload), ensure_ascii=False),
+                    utc_now().isoformat(),
+                    refund_id,
+                ),
+            )
+            record_refund_audit(
+                refund_id,
+                row["payment_id"],
+                "refund.retry_prevented_duplicate",
+                actor_email=current_admin,
+                actor_type="admin",
+                metadata={"provider_status": provider_status},
+                connection=connection,
+            )
+            should_refresh = True
+        else:
+            cursor = connection.execute(
+                "UPDATE refund_requests SET status = 'under_review', provider_error = '', updated_at = ? "
+                "WHERE id = ? AND status = 'failed'",
+                (utc_now().isoformat(), refund_id),
+            )
+            if int(cursor.rowcount or 0) != 1:
+                raise HTTPException(status_code=409, detail="Another administrator already retried this refund.")
+            record_refund_audit(
+                refund_id,
+                row["payment_id"],
+                "refund.retry_started",
+                actor_email=current_admin,
+                actor_type="admin",
+                metadata={},
+                connection=connection,
+            )
+            should_refresh = False
+    if should_refresh:
+        return refresh_admin_refund(refund_id, background_tasks, current_admin)
+    return approve_admin_refund(refund_id, payload, background_tasks, current_admin)
 
 
 @app.post("/admin/refunds/{refund_id}/refresh")
@@ -25736,8 +26341,8 @@ def refresh_admin_refund(
     row = _load_refund_request(refund_id)
     if not row:
         raise HTTPException(status_code=404, detail="Refund request not found.")
-    if compact_text(row["status"]).lower() == "refunded":
-        return {"message": "Refund already completed.", "refund_request": serialize_refund_request(row), "idempotent": True}
+    if compact_text(row["status"]).lower() in {"refunded", "partially_refunded"}:
+        return {"message": "Refund already completed.", "refund_request": serialize_refund_request(row, include_admin=True), "idempotent": True}
     payment_id = compact_text(row["pf_payment_id"])
     if not payment_id:
         raise HTTPException(status_code=409, detail="PayFast payment ID is missing.")
@@ -25747,23 +26352,51 @@ def refresh_admin_refund(
         raise HTTPException(status_code=exc.status_code, detail=f"Could not refresh PayFast refund status: {str(exc)}") from exc
     query = _extract_payfast_refund_query(query_payload)
     status = compact_text(query.get("status")).upper()
-    completed = status == "COMPLETED" or int(query.get("amount_available_for_refund") or 0) == 0
+    completed = status == "COMPLETED" or payfast_refund_amount_cents(query.get("amount_available_for_refund")) == 0
     now_iso = utc_now().isoformat()
+    completion_status = "processing"
     with get_db_connection() as connection:
         if completed:
-            connection.execute("UPDATE refund_requests SET status = 'refunded', provider_status = 'completed', completed_at = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (now_iso, json.dumps(query_payload, ensure_ascii=False), now_iso, refund_id))
-            connection.execute("UPDATE billing_payments SET refunded_amount_zar = ?, provider_refund_status = 'refunded', updated_at = ? WHERE id = ?", (row["approved_amount"], now_iso, row["payment_id"]))
+            payment = connection.execute(
+                "SELECT amount_zar, refunded_amount_zar FROM billing_payments WHERE id = ? AND lower(email) = ?",
+                (row["payment_id"], normalize_email(row["email"])),
+            ).fetchone()
+            original_amount = refund_money(payment["amount_zar"] if payment else row["original_amount"])
+            previously_refunded = refund_money(payment["refunded_amount_zar"] if payment else "0.00")
+            total_refunded = min(original_amount, previously_refunded + refund_money(row["approved_amount"]))
+            completion_status = "refunded" if total_refunded >= original_amount else "partially_refunded"
+            connection.execute(
+                "UPDATE refund_requests SET status = ?, provider_status = 'completed', completed_at = ?, provider_response_json = ?, updated_at = ? WHERE id = ?",
+                (completion_status, now_iso, json.dumps(sanitize_payfast_refund_payload(query_payload), ensure_ascii=False), now_iso, refund_id),
+            )
+            connection.execute(
+                "UPDATE billing_payments SET refunded_amount_zar = ?, provider_refund_status = ?, updated_at = ? WHERE id = ?",
+                (f"{total_refunded:.2f}", completion_status, now_iso, row["payment_id"]),
+            )
             subscription = connection.execute("SELECT provider_payment_id FROM billing_subscriptions WHERE lower(email) = ?", (normalize_email(row["email"]),)).fetchone()
-            if subscription and compact_text(subscription["provider_payment_id"]) == payment_id:
+            if completion_status == "refunded" and subscription and compact_text(subscription["provider_payment_id"]) == payment_id:
                 connection.execute("UPDATE billing_subscriptions SET status = 'refunded', cancel_at = ?, updated_at = ? WHERE lower(email) = ?", (now_iso, now_iso, normalize_email(row["email"])))
-            record_refund_audit(refund_id, row["payment_id"], "refund.completed", actor_email=current_admin, actor_type="admin", metadata={}, connection=connection)
+            record_refund_audit(
+                refund_id,
+                row["payment_id"],
+                "refund.completed",
+                actor_email=current_admin,
+                actor_type="admin",
+                metadata={"completion_status": completion_status, "refunded_total": f"{total_refunded:.2f}"},
+                connection=connection,
+            )
         else:
-            connection.execute("UPDATE refund_requests SET provider_status = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (compact_text(query.get("status"), "pending").lower(), json.dumps(query_payload, ensure_ascii=False), now_iso, refund_id))
-        updated = _load_refund_request(refund_id, connection=connection)
-    serialized = serialize_refund_request(updated)
+            connection.execute("UPDATE refund_requests SET provider_status = ?, provider_response_json = ?, updated_at = ? WHERE id = ?", (compact_text(query.get("status"), "pending").lower(), json.dumps(sanitize_payfast_refund_payload(query_payload), ensure_ascii=False), now_iso, refund_id))
+        updated = load_admin_refund_request(refund_id, connection=connection)
+    serialized = serialize_refund_request(updated, include_admin=True)
     if completed:
         sync_user_account_snapshot(serialized["email"])
-        background_tasks.add_task(deliver_refund_status_email, serialized["email"], serialized, "completed")
+        background_tasks.add_task(
+            deliver_refund_status_email,
+            serialized["email"],
+            serialized,
+            "completed" if completion_status == "refunded" else "partially refunded",
+        )
     return {"message": "Refund completed." if completed else "Refund is still being processed by PayFast.", "refund_request": serialized}
 
 

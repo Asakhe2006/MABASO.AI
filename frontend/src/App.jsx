@@ -28,6 +28,7 @@ import StudyChatResponseActions from "./components/StudyChatResponseActions";
 import StudyChatUserActions from "./components/StudyChatUserActions";
 import ChatActivityTimeline from "./components/ChatActivityTimeline";
 import AdminDiagnosticsPanel from "./components/AdminDiagnosticsPanel";
+import AdminRefundRequestsPanel from "./components/AdminRefundRequestsPanel";
 import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivityPanel";
 import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
@@ -7453,7 +7454,15 @@ export default function App() {
   const [adminSearchQuery, setAdminSearchQuery] = useState("");
   const [adminAnalyticsCompare, setAdminAnalyticsCompare] = useState(false);
   const [adminAnalyticsPage, setAdminAnalyticsPage] = useState(1);
-  const [adminSidebarTab, setAdminSidebarTab] = useState("overview");
+  const [adminSidebarTab, setAdminSidebarTab] = useState(() => (
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("section") === "refunds"
+      ? "refunds"
+      : "overview"
+  ));
+  const [adminRefundPendingCount, setAdminRefundPendingCount] = useState(0);
+  const [initialAdminRefundId] = useState(() => (
+    typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("refund") || "" : ""
+  ));
   const [isAdminSidebarOpen, setIsAdminSidebarOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [resolvedAdminAlertIds, setResolvedAdminAlertIds] = useState([]);
   const fileInputRef = useRef(null);
@@ -14094,6 +14103,7 @@ export default function App() {
       { id: "ai-costs", label: "OpenAI Data", group: "Product", icon: Bot },
       { id: "subscriptions", label: "Subscriptions", group: "Revenue", icon: CircleDollarSign },
       { id: "payments", label: "Payments", group: "Revenue", icon: CreditCard },
+      { id: "refunds", label: "Refund Requests", group: "Revenue", icon: RefreshCw },
       { id: "errors", label: "Errors", group: "Operations", icon: Bug },
       { id: "security", label: "Security", group: "Operations", icon: ShieldCheck },
       { id: "feedback", label: "Feedback", group: "Operations", icon: MessageCircle },
@@ -15778,6 +15788,16 @@ export default function App() {
         return <AdminDiagnosticsPanel authFetch={authFetch} />;
       }
 
+      if (adminSidebarTab === "refunds") {
+        return (
+          <AdminRefundRequestsPanel
+            authFetch={authFetch}
+            initialRefundId={initialAdminRefundId}
+            onPendingCountChange={setAdminRefundPendingCount}
+          />
+        );
+      }
+
       if (adminSidebarTab === "settings") {
         return (
           <div className="grid gap-5 xl:grid-cols-2">
@@ -15850,6 +15870,7 @@ export default function App() {
                           >
                             <ItemIcon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
                             <span>{item.label}</span>
+                            {item.id === "refunds" && adminRefundPendingCount > 0 ? <span className="ml-auto rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-bold text-white">{adminRefundPendingCount}</span> : null}
                           </button>
                         );
                       })}
@@ -16139,6 +16160,7 @@ export default function App() {
     setIsCollaborationRoomsLoading(true);
     setAdminDashboard(null);
     setAdminSidebarTab("overview");
+    setAdminRefundPendingCount(0);
     setAdminSearchQuery("");
     replacePodcastAudioUrl("");
     replacePodcastAudioSegments([]);
@@ -22799,6 +22821,10 @@ export default function App() {
   useEffect(() => {
     if (!isAuthReady || !authToken || authSessionMode !== "admin" || currentPage !== "admin") return undefined;
     loadAdminDashboard(true, "", adminDashboardRange);
+    authFetch("/admin/refunds/summary", { cache: "no-store", timeoutMs: 15000 })
+      .then(parseJsonSafe)
+      .then((payload) => setAdminRefundPendingCount(Number(payload?.counts?.pending || 0)))
+      .catch(() => undefined);
     const intervalId = window.setInterval(() => {
       loadAdminDashboard(true, "", adminDashboardRange);
     }, ADMIN_DASHBOARD_REFRESH_MS);

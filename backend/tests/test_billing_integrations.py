@@ -194,6 +194,61 @@ class BillingIntegrationTests(unittest.TestCase):
                 trial=True,
             )
         self.assertEqual(fields["notify_url"], "https://api.example.test/api/billing/payfast/webhook")
+        self.assertEqual(fields["return_url"], "https://mabaso-ai-web.onrender.com/payment-success?session_id=checkout-123")
+        self.assertEqual(fields["cancel_url"], "https://mabaso-ai-web.onrender.com/pricing?billing=cancelled&session_id=checkout-123")
+
+    def test_payfast_refund_payload_sanitizer_never_returns_secrets_or_full_identifiers(self):
+        sanitized = main.sanitize_payfast_refund_payload({
+            "data": {
+                "response": {
+                    "status": "REFUNDABLE",
+                    "amount_available_for_refund": 5000,
+                    "refund_id": "very-long-provider-refund-reference-123456789",
+                    "merchant_key": "must-not-leak",
+                    "passphrase": "must-not-leak",
+                    "refund_full": {"method": "API", "secret": "must-not-leak"},
+                }
+            }
+        })
+        self.assertEqual(sanitized["status"], "REFUNDABLE")
+        self.assertEqual(sanitized["amount_available_for_refund"], "5000")
+        self.assertTrue(sanitized["refund_id"].startswith("..."))
+        self.assertNotIn("merchant_key", sanitized)
+        self.assertNotIn("passphrase", sanitized)
+        self.assertNotIn("secret", sanitized["refund_full"])
+
+    def test_payfast_refund_amount_accepts_decimal_provider_values(self):
+        self.assertEqual(main.payfast_refund_amount_cents("5000.00"), 5000)
+        with self.assertRaises(main.PayFastApiError):
+            main.payfast_refund_amount_cents("not-an-amount")
+
+    def test_admin_refund_status_counts_group_pending_and_provider_processing(self):
+        rows = [
+            {"status": "eligible", "total": 2},
+            {"status": "manual_review", "total": 3},
+            {"status": "under_review", "total": 4},
+            {"status": "processing", "total": 1},
+            {"status": "provider_accepted", "total": 2},
+            {"status": "failed", "total": 1},
+        ]
+
+        class FakeConnection:
+            def execute(self, _sql):
+                return type("Result", (), {"fetchall": lambda _self: rows})()
+
+        counts = main.get_admin_refund_status_counts(FakeConnection())
+        self.assertEqual(counts["pending"], 5)
+        self.assertEqual(counts["under_review"], 4)
+        self.assertEqual(counts["processing"], 3)
+        self.assertEqual(counts["failed"], 1)
+        self.assertEqual(counts["all"], 13)
+
+    def test_refund_admin_notification_email_uses_explicit_address_then_admin_fallback(self):
+        with patch.object(main, "REFUND_ADMIN_NOTIFICATION_EMAIL", "billing@example.test"):
+            self.assertEqual(main.get_refund_admin_notification_email(), "billing@example.test")
+        with patch.object(main, "REFUND_ADMIN_NOTIFICATION_EMAIL", ""), \
+                patch.object(main, "get_admin_email_set", return_value={"admin@example.test"}):
+            self.assertEqual(main.get_refund_admin_notification_email(), "admin@example.test")
 
     def test_openai_cost_summary_uses_returned_amount_without_token_pricing(self):
         summary = main.summarize_openai_cost_buckets([{

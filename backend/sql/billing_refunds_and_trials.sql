@@ -52,6 +52,13 @@ CREATE TABLE IF NOT EXISTS public.refund_requests (
     updated_at text NOT NULL
 );
 
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS admin_notification_status text NOT NULL DEFAULT 'pending';
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS admin_notification_error text NOT NULL DEFAULT '';
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS admin_notified_at text NOT NULL DEFAULT '';
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS customer_notification_status text NOT NULL DEFAULT 'pending';
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS customer_notification_error text NOT NULL DEFAULT '';
+ALTER TABLE public.refund_requests ADD COLUMN IF NOT EXISTS customer_notified_at text NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS idx_refund_requests_email_created
     ON public.refund_requests (email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_refund_requests_payment_status

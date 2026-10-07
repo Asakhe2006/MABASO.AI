@@ -127,6 +127,10 @@ services:
         sync: false
       - key: ADMIN_EMAILS
         sync: false
+      - key: REFUND_ADMIN_NOTIFICATION_EMAIL
+        sync: false
+      - key: REFUND_AUTO_APPROVE_ENABLED
+        value: "false"
       - key: ADMIN_LOGIN_MAX_ATTEMPTS
         value: "3"
       - key: ADMIN_LOGIN_LOCKOUT_MINUTES
