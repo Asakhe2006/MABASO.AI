@@ -282,3 +282,7 @@ class PayFastApiClient:
 
     def cancel_subscription(self, token: str) -> dict[str, Any]:
         return self._request("PUT", f"/subscriptions/{quote_plus(str(token).strip())}/cancel")
+
+    def fetch_subscription(self, token: str) -> dict[str, Any]:
+        """Fetch an existing PayFast subscription using its server-side token only."""
+        return self._request("GET", f"/subscriptions/{quote_plus(str(token).strip())}")

@@ -610,7 +610,7 @@ export function EnterpriseSiteShell({
                   {plan.alternatives ? <small>{plan.alternatives}</small> : null}
                   <p>{plan.description}</p>
                   <details>
-                    <summary>Plan limits and access<LucideIcons.ChevronDown aria-hidden="true" /></summary>
+                    <summary>What's included<LucideIcons.ChevronDown aria-hidden="true" /></summary>
                     <ul>{plan.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>
                   </details>
                   <button type="button" onClick={() => onOpenApp(plan.name === "Free" ? "capture" : "payments")}>{plan.action}</button>

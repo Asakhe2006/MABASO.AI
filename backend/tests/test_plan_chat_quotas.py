@@ -17,12 +17,13 @@ class PlanChatQuotaTests(unittest.TestCase):
         premium_start = source.index('"premium_student": {', quotas_start)
         premium_end = source.index("\n    },", premium_start)
         premium_source = source[premium_start:premium_end]
-        self.assertIn('"study_chat_upload": -1', premium_source)
+        self.assertIn('"study_chat_upload": get_int_env("PREMIUM_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 25)', premium_source)
 
         self.assertIn('"study_chat": get_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_DAY", 15)', source)
-        self.assertIn('"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25)', source)
-        self.assertIn('"study_chat": -1', premium_source)
+        self.assertIn('"study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 40)', source)
+        self.assertIn('"study_chat": get_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 100)', premium_source)
         self.assertIn('"free": max(1, get_early_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5))', source)
+        self.assertIn('"premium_student": max(1, get_early_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", 75))', source)
 
 
 if __name__ == "__main__":

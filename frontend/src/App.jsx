@@ -932,19 +932,9 @@ const fairSubscriptionPlans = [
     paymentType: "free",
     audience: "Light study and trial users",
     limits: "Daily limits reset every 24 hours. Standard speed and entry-level study quality. No card required.",
-    howItWorks: "Free users can generate within the daily attempts below. When a tool reaches 0 attempts, that tool is blocked until the next daily reset or the user upgrades.",
+    howItWorks: "Free access is refreshed daily. When a tool has reached its daily allowance, it becomes available again at the next reset or after an upgrade.",
     attempts: [
-      "Unlimited AI chat messages",
-      "1 report/day",
-      "1 study guide/day",
-      "1 flashcard generation/day, choose 5-10 cards",
-      "1 PowerPoint/day",
-      "1 exam/test/day",
-      "1 podcast/day",
-      "1 mind map/day",
-      "1 audio/source processing job/day",
-      "3 voice messages/day",
-      "3 photo or document uploads/day",
+      "Limited Study Chat access", "Essential study generations", "Basic uploads", "Standard AI access",
     ],
     safeguards: ["No card required", "Standard accuracy", "Clear usage meter"],
   },
@@ -961,19 +951,9 @@ const fairSubscriptionPlans = [
     paymentType: "checkout",
     audience: "Active students who generate regular study packs",
     limits: "Higher daily limits, faster generation queue, better academic structure, exports, and stronger study tools.",
-    howItWorks: "Pro Student raises daily attempts and supports larger flashcard sets, faster responses, and more polished study output. When attempts reach 0, the matching tool is blocked until the next daily reset. Paid overages stay off by default.",
+    howItWorks: "Pro gives active students more daily study access, longer conversations, expanded uploads and faster study workflows. Paid overages stay off by default.",
     attempts: [
-      "Unlimited AI chat messages",
-      "6 reports/day",
-      "3 study guides/day",
-      "6 flashcard generations/day, choose 5-20 cards",
-      "3 PowerPoints/day",
-      "6 exams/tests/day",
-      "3 podcasts/day",
-      "6 mind maps/day",
-      "3 audio/source processing jobs/day",
-      "9 voice messages/day",
-      "10 photo or document uploads/day",
+      "More Study Chat access", "Longer conversations", "Expanded uploads", "More study-tool generations",
     ],
     safeguards: ["Faster queue", "Higher accuracy", "Renewal reminders"],
   },
@@ -989,19 +969,10 @@ const fairSubscriptionPlans = [
     ],
     paymentType: "checkout",
     audience: "Heavy academic users and research students",
-    limits: "Unlimited usage, best available quality settings, priority speed, deep research mode, and large-file processing.",
-    howItWorks: "Premium Student removes daily generation limits and gives the strongest quality profile, best speed tier, and highest-depth outputs.",
+    limits: "Generous study access, highest availability, priority speed, deep research workflows, and large-file processing.",
+    howItWorks: "Premium Student provides the highest study capacity and strongest quality profile while keeping expensive AI use responsibly managed.",
     attempts: [
-      "Unlimited study chat",
-      "Unlimited reports and expansions",
-      "Unlimited study guides",
-      "Unlimited flashcard generations, choose 5-30 cards",
-      "Unlimited exams and quizzes",
-      "Unlimited PowerPoints",
-      "Unlimited podcasts",
-      "Unlimited mind maps",
-      "Unlimited slide and document analysis",
-      "Unlimited photo or document uploads",
+      "Generous Study Chat access", "Highest upload capacity", "Priority study generations", "Advanced academic workflows",
     ],
     safeguards: ["Best quality tier", "Highest priority", "Premium features included"],
   },
@@ -7080,6 +7051,7 @@ export default function App() {
   const [refundExplanation, setRefundExplanation] = useState("");
   const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
   const [showCancelSubscriptionConfirm, setShowCancelSubscriptionConfirm] = useState(false);
+  const [isCancellingSubscription, setIsCancellingSubscription] = useState(false);
   const [manualPaymentDetails, setManualPaymentDetails] = useState(null);
   const [manualPaymentRequest, setManualPaymentRequest] = useState(null);
   const [confirmingPaymentId, setConfirmingPaymentId] = useState("");
@@ -7234,9 +7206,14 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [studyChatConversationUsage, setStudyChatConversationUsage] = useState({ used: 0, limit: null, limit_reached: false });
   const [studyChatHistoryIndex, setStudyChatHistoryIndex] = useState([]);
+  const [hasMoreStudyChatHistory, setHasMoreStudyChatHistory] = useState(false);
+  const [isLoadingMoreStudyChatHistory, setIsLoadingMoreStudyChatHistory] = useState(false);
   const [studyChatHistoryMenuId, setStudyChatHistoryMenuId] = useState("");
   const [studyChatHistoryMenuAnchor, setStudyChatHistoryMenuAnchor] = useState(null);
   const [isOpeningStudyChat, setIsOpeningStudyChat] = useState(false);
+  const [hasMoreStudyChatMessages, setHasMoreStudyChatMessages] = useState(false);
+  const [studyChatNextBefore, setStudyChatNextBefore] = useState("");
+  const [isLoadingOlderStudyChatMessages, setIsLoadingOlderStudyChatMessages] = useState(false);
   const [editingStudyChatMessageId, setEditingStudyChatMessageId] = useState("");
   const [editingStudyChatText, setEditingStudyChatText] = useState("");
   const [isSubmittingStudyChatEdit, setIsSubmittingStudyChatEdit] = useState(false);
@@ -8263,7 +8240,7 @@ export default function App() {
                 </div>
               </div>
               <details className="upgrade-plan-details mt-4 rounded-2xl border border-white/10 bg-slate-950/45 p-4">
-                <summary className="cursor-pointer list-none text-xs font-bold uppercase tracking-[0.18em] text-emerald-100">Plan limits and attempts</summary>
+                <summary className="cursor-pointer list-none text-xs font-bold uppercase tracking-[0.18em] text-emerald-100">What’s included</summary>
                 <p className="mt-3 text-sm leading-6 text-slate-200">{plan.limits}</p>
                 <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">How this plan works</p>
@@ -12043,11 +12020,11 @@ export default function App() {
                 <div className="mt-4 grid gap-3">
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{(isBillingUsageLoading || !isBillingStatusLoaded) ? "Loading PayShap details..." : manualPaymentDetails?.payshap_number || "PayShap is not configured"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.payshap_number || "PayShap is not configured"}</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{(isBillingUsageLoading || !isBillingStatusLoaded) ? "Loading account name..." : manualPaymentDetails?.account_name || "PayShap is not configured"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || "PayShap is not configured"}</p>
                   </div>
                 </div>
                 <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Choose Payment Method</button>
@@ -12080,19 +12057,22 @@ export default function App() {
           <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
             <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Subscription and trial</p>
             <h3 className="mt-2 text-2xl font-semibold text-white">Current account access</h3>
-            <p className="mt-3 text-sm leading-7 text-slate-300">{!isBillingStatusLoaded && isBillingUsageLoading ? "Loading your current account access..." : billingSubscription?.trial_active ? "Your PayFast-authorised free trial is active." : billingSubscription?.active ? "Your paid subscription is active." : billingStatusLoadError ? "Current account access could not be refreshed yet." : "Your account currently uses the Free plan."}</p>
-            {billingSubscription?.current_period_end ? <p className="mt-2 text-sm text-slate-300">Current period ends {formatAdminDateTime(billingSubscription.current_period_end)}.</p> : null}
-            {billingSubscription?.cancel_at ? <p className="mt-4 inline-flex rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">Renewal cancelled at PayFast</p> : (billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" && billingSubscription?.provider_token_present ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">Cancel future PayFast charges?</p><p className="mt-2 text-xs leading-5 text-rose-100/80">This stops renewal at PayFast. It does not delete chats, materials, or your account.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950">Confirm cancellation</button><button type="button" onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel free trial renewal" : "Cancel subscription"}</button>}</div> : null}
+            <p className="mt-3 text-sm leading-7 text-slate-300">{!isBillingStatusLoaded && isBillingUsageLoading ? "Loading your current account access..." : billingSubscription?.trial_active ? "Your complimentary Pro trial is active." : billingSubscription?.active ? "Your paid subscription is active." : billingStatusLoadError ? "Current account access could not be refreshed yet." : "Free plan · no recurring charge."}</p>
+            {billingSubscription?.trial_active && billingSubscription?.current_period_start ? <p className="mt-2 text-sm text-slate-300">Trial started {formatAdminDateTime(billingSubscription.current_period_start)}.</p> : null}
+            {(billingSubscription?.trial_active || billingSubscription?.active) && billingSubscription?.current_period_end ? <p className="mt-2 text-sm text-slate-300">{billingSubscription?.trial_active ? "Trial ends" : "Current period ends"} {formatAdminDateTime(billingSubscription.current_period_end)}.</p> : null}
+            {(billingSubscription?.trial_active || billingSubscription?.active) && billingSubscription?.next_billing_at ? <p className="mt-2 text-sm text-slate-300">Next payment {formatAdminDateTime(billingSubscription.next_billing_at)} · R{billingSubscription.amount_zar}.</p> : null}
+            {billingSubscription?.payment_method_label ? <p className="mt-2 text-sm text-slate-300">Payment method: {billingSubscription.payment_method_label}.</p> : null}
+            {billingSubscription?.cancel_at ? <p className="mt-4 inline-flex rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">Renewal cancelled · access remains until {formatAdminDateTime(billingSubscription.cancel_at)}</p> : (billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" && billingSubscription?.provider_token_present ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">{billingSubscription?.trial_active ? "Cancel your Pro trial?" : "Cancel your subscription?"}</p><p className="mt-2 text-xs leading-5 text-rose-100/80">{billingSubscription?.trial_active ? `Your trial remains available until ${formatAdminDateTime(billingSubscription.current_period_end)}. You will not be charged when it ends.` : "Future recurring charges will stop at PayFast. Your paid access remains until the displayed end date."}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={isCancellingSubscription} onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950 disabled:opacity-60">{isCancellingSubscription ? "Cancelling…" : billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button><button type="button" disabled={isCancellingSubscription} onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button>}</div> : null}
           </article>
           <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Attempts remaining today</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">{billingUsage?.features?.length ? billingUsage.features.map((feature) => <div key={feature.feature} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3"><div className="flex justify-between gap-2 text-sm"><strong className="text-white">{feature.label}</strong><span className="text-emerald-100">{feature.unlimited ? "Unlimited" : `${feature.remaining} left`}</span></div><p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "No daily limit" : `${feature.used || 0}/${feature.limit || 0} used today`}</p></div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading usage history..." : "No usage has been recorded for this period."}</p>}</div>
+            <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Today’s study access</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">{billingUsage?.features?.length ? billingUsage.features.map((feature) => { const usagePercent = feature.unlimited ? 0 : Math.min(100, Math.round(((Number(feature.used) || 0) / Math.max(1, Number(feature.limit) || 1)) * 100)); return <div key={feature.feature} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3"><div className="flex justify-between gap-2 text-sm"><strong className="text-white">{feature.label}</strong><span className="text-emerald-100">{feature.unlimited ? "Highest allowance" : `${usagePercent}% used`}</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-emerald-400 transition-[width] duration-300" style={{ width: `${usagePercent}%` }} /></div><p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "Available for your plan" : "Daily study access"}</p></div>; }) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading usage history..." : "No usage has been recorded for this period."}</p>}</div>
           </article>
         </div>
         <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">PayFast transaction history</p>
           <h3 className="mt-2 text-2xl font-semibold text-white">Charges, trials, and refunds</h3>
-          <div className="mt-4 space-y-2">{paymentHistory.length ? paymentHistory.map((payment) => <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-white">{payment.is_trial ? "7-day Pro trial" : String(payment.plan_id || "plan").replaceAll("_", " ")} · R{payment.amount_zar}</p><p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at || payment.created_at)} · {payment.payment_status}</p></div>{payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="rounded-full border border-emerald-300/25 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}</div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading || !isBillingStatusLoaded ? "Loading PayFast transaction history..." : billingStatusLoadError ? "Payment history could not be loaded. Use Refresh to try again." : "No PayFast transactions have been recorded yet."}</p>}</div>
+          <div className="mt-4 space-y-2">{paymentHistory.length ? paymentHistory.map((payment) => <div key={payment.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/60 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-white">{payment.is_trial ? "Pro Student trial · Trial started" : `${String(payment.plan_id || "plan").replaceAll("_", " ")} · R${payment.amount_zar}`}</p><p className="mt-1 text-xs text-slate-400">{formatAdminDateTime(payment.paid_at || payment.created_at)} · {payment.payment_status}{payment.payment_method_label ? ` · ${payment.payment_method_label}` : ""}{payment.reference ? ` · Ref ${payment.reference}` : ""}</p></div>{payment.refund?.eligible ? <button type="button" onClick={() => setRefundPayment(payment)} className="rounded-full border border-emerald-300/25 px-4 py-2 text-xs font-bold text-emerald-100">Request refund</button> : null}</div>) : <p className="text-sm text-slate-300">{isBillingUsageLoading || !isBillingStatusLoaded ? "Loading PayFast transaction history..." : billingStatusLoadError ? "Payment history could not be loaded. Use Refresh to try again." : "No PayFast transactions have been recorded yet."}</p>}</div>
           {refundPayment ? <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4"><div className="flex items-start justify-between gap-3"><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund form"><X className="h-4 w-4" /></button></div><select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"><option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option></select><textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"/><button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button></div> : null}
         </article>
         <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
@@ -12194,9 +12174,9 @@ export default function App() {
           <div className="collaboration-admin-control-actions">
             <button type="button" className="is-controlling" onClick={() => setIsAdminControlMenuOpen((value) => !value)} title="Admin Control active">▣ <span>Controlling</span></button>
             <button type="button" className="is-bring" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })} disabled={isUpdatingAdminControl}>Bring Everyone Here</button>
-            <button type="button" className="is-stop" onClick={() => void stopCollaborationAdminControl()} disabled={isUpdatingAdminControl}>Stop Control</button>
+            <button type="button" className="is-stop" onClick={() => void stopCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Stopping…" : "Stop Control"}</button>
             <button type="button" className="is-menu" onClick={() => setIsAdminControlMenuOpen((value) => !value)} aria-label="Open Admin Control options">⌄</button>
-            {isAdminControlMenuOpen ? <div className="collaboration-admin-control-menu"><button type="button" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })}>Bring Everyone Here</button><div className="mabaso-setting-row"><span>Allow members to Explore</span><ToggleSwitch checked={Boolean(control.allow_explore)} onChange={(checked) => void updateCollaborationAdminControl({ allowExplore: checked })} aria-label="Allow members to Explore" size="sm" /></div><button type="button" className="is-danger" onClick={() => void stopCollaborationAdminControl()}>Stop Control</button></div> : null}
+            {isAdminControlMenuOpen ? <div className="collaboration-admin-control-menu"><button type="button" onClick={() => void updateCollaborationAdminControl({ bringEveryone: true })}>Bring Everyone Here</button><div className="mabaso-setting-row"><span>Allow members to Explore</span><ToggleSwitch checked={Boolean(control.allow_explore)} onChange={(checked) => void updateCollaborationAdminControl({ allowExplore: checked })} aria-label="Allow members to Explore" size="sm" /></div><button type="button" disabled={isUpdatingAdminControl} className="is-danger" onClick={() => void stopCollaborationAdminControl()}>{isUpdatingAdminControl ? "Stopping…" : "Stop Control"}</button></div> : null}
           </div>
         );
       }
@@ -16425,12 +16405,13 @@ export default function App() {
       setStudyChatHistoryIndex([]);
     }
     if (authToken) {
-      void authJsonWithTransientRetries("/api/assistant/conversations?limit=80&offset=0&archived=false", {}, {
+      void authJsonWithTransientRetries("/api/assistant/conversations?limit=30&offset=0&archived=false", {}, {
         timeoutMs: 20000,
         retries: 1,
       }).then(({ data }) => {
         if (cancelled) return;
         const serverRows = Array.isArray(data?.items) ? data.items : [];
+        setHasMoreStudyChatHistory(Number(data?.total || 0) > serverRows.length);
         setStudyChatHistoryIndex(serverRows.map((item) => ({
           id: item.id,
           title: item.title || "Study Chat",
@@ -16489,13 +16470,15 @@ export default function App() {
     }
     if (authToken && activeStudyChatId) {
       // The explicit room/history opener controls the loading indicator. New chats should stay ready immediately.
-      void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=80`, {}, {
+      void authJsonWithTransientRetries(`/api/assistant/conversations/${encodeURIComponent(activeStudyChatId)}?message_limit=32`, {}, {
         timeoutMs: hasLocalMessages ? 12000 : 25000,
         retries: 1,
       }).then(({ data }) => {
         if (cancelled) return;
         const serverMessages = Array.isArray(data?.conversation?.messages) ? data.conversation.messages : [];
         const actualMessageCount = Number(data?.total_messages ?? data?.conversation?.messageCount ?? serverMessages.length);
+        setHasMoreStudyChatMessages(Boolean(data?.has_more));
+        setStudyChatNextBefore(String(data?.next_before || ""));
         if (data?.conversation_usage) setStudyChatConversationUsage(data.conversation_usage);
         setStudyChatHistoryIndex((current) => current.map((item) => item.id === activeStudyChatId
           ? { ...item, messageCount: Math.max(0, actualMessageCount) }
@@ -16515,6 +16498,8 @@ export default function App() {
         if (!cancelled) setIsOpeningStudyChat(false);
       });
     } else {
+      setHasMoreStudyChatMessages(false);
+      setStudyChatNextBefore("");
       setIsOpeningStudyChat(false);
     }
     return () => {
@@ -18269,7 +18254,8 @@ export default function App() {
 
   function getResolvedCurrentPlanId() {
     const planId = String(
-      billingUsage?.plan_id
+      (billingSubscription?.active || billingSubscription?.trial_active ? billingSubscription?.plan_id : "")
+      || billingUsage?.plan_id
       || billingSubscription?.plan_id
       || billingSubscription?.plan
       || billingSubscription?.current_plan
@@ -20454,6 +20440,7 @@ export default function App() {
 
   const cancelActiveSubscription = async () => {
     setBillingCheckoutMessage("");
+    setIsCancellingSubscription(true);
     try {
       const response = await authFetch("/billing/subscription/cancel", {
         method: "POST",
@@ -20468,6 +20455,8 @@ export default function App() {
       await refreshBillingStatus();
     } catch (err) {
       setBillingCheckoutMessage(getReadableRequestError(err));
+    } finally {
+      setIsCancellingSubscription(false);
     }
   };
 
@@ -27290,6 +27279,44 @@ export default function App() {
     const node = event.currentTarget;
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     setShowStudyChatJumpToLatest(distanceFromBottom > 120);
+    if (node.scrollTop < 180) void loadOlderStudyChatMessages();
+  };
+
+  const loadOlderStudyChatMessages = async () => {
+    const conversationId = String(activeStudyChatId || "").trim();
+    if (!conversationId || !authToken || !hasMoreStudyChatMessages || isLoadingOlderStudyChatMessages || !studyChatNextBefore) return false;
+    const container = studyChatScrollRef.current;
+    const previousHeight = container?.scrollHeight || 0;
+    const previousTop = container?.scrollTop || 0;
+    setIsLoadingOlderStudyChatMessages(true);
+    try {
+      const { data } = await requestLectureAssistantConversationMessages(conversationId, { before: studyChatNextBefore, limit: 32 });
+      const older = Array.isArray(data?.items) ? data.items.map((message, index) => ({
+        id: String(message.id || `older-study-chat-${index}`),
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: String(message.content || ""),
+        images: Array.isArray(message.referenceImages) ? message.referenceImages.slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS) : [],
+      })) : [];
+      if (conversationId !== activeStudyChatId) return false;
+      if (older.length) {
+        setChatMessages((current) => {
+          const existing = new Set(current.map((message) => message.id));
+          return [...older.filter((message) => !existing.has(message.id)), ...current];
+        });
+        window.requestAnimationFrame(() => {
+          const target = studyChatScrollRef.current;
+          if (target) target.scrollTop = previousTop + Math.max(0, target.scrollHeight - previousHeight);
+        });
+      }
+      setHasMoreStudyChatMessages(Boolean(data?.has_more));
+      setStudyChatNextBefore(String(data?.next_before || ""));
+      return older.length > 0;
+    } catch (error) {
+      if (!isAbortError(error)) setError((current) => current || "Earlier chat messages could not be loaded. Please try again.");
+      return false;
+    } finally {
+      setIsLoadingOlderStudyChatMessages(false);
+    }
   };
 
   const jumpStudyChatToLatest = () => {
@@ -27364,11 +27391,12 @@ export default function App() {
     }
   };
   const renderStudyChatMessages = ({ limit = 12, fullPage = false } = {}) => {
-    const visibleMessages = chatMessages.slice(-limit);
+    const visibleMessages = fullPage ? chatMessages : chatMessages.slice(-limit);
     const lastAssistantId = [...visibleMessages].reverse().find((message) => message.role === "assistant")?.id || "";
     return (
     <div className={fullPage ? "study-chat-page-messages" : "study-chat-messages study-chat-page-messages study-chat-embedded-messages"}>
-      {isOpeningStudyChat ? <div className="study-chat-message-loader" role="status" aria-live="polite"><span>Loading conversation</span>{renderStreamingDots("Loading conversation")}</div> : null}
+      {isLoadingOlderStudyChatMessages ? <div className="study-chat-message-loader" role="status" aria-live="polite"><span>Loading earlier messages…</span>{renderStreamingDots("Loading earlier messages")}</div> : null}
+      {isOpeningStudyChat && !visibleMessages.length ? <div className="study-chat-message-loader" role="status" aria-live="polite"><span>Opening recent messages…</span>{renderStreamingDots("Opening recent messages")}</div> : null}
       {visibleMessages.length ? visibleMessages.map((message, index) => (
         <div
           key={message.id || `${message.role}-${index}`}
@@ -27730,6 +27758,7 @@ export default function App() {
                 </div> : null}
               </div>
             </div>)}
+            {hasMoreStudyChatHistory ? <button type="button" className="study-chat-history-load-more" disabled={isLoadingMoreStudyChatHistory} onClick={() => void loadOlderStudyChatHistory()}>{isLoadingMoreStudyChatHistory ? "Loading older chats…" : "Load older chats"}</button> : null}
           </div>
           <div className="study-chat-sidebar-footer">
             <button type="button" onClick={openUpgradeFromStudyChat} className="study-chat-sidebar-upgrade">Upgrade to Pro</button>
@@ -30037,6 +30066,37 @@ export default function App() {
     currentPageRef.current = "voice";
     setCurrentPage("voice");
     navigateToPath(resolveAppRouteForPage("voice", authSessionMode, normalizedConversationId));
+  };
+
+  const loadOlderStudyChatHistory = async () => {
+    if (!authToken || isLoadingMoreStudyChatHistory || !hasMoreStudyChatHistory) return;
+    const offset = studyChatHistoryIndex.length;
+    setIsLoadingMoreStudyChatHistory(true);
+    try {
+      const { data } = await authJsonWithTransientRetries(`/api/assistant/conversations?limit=30&offset=${offset}&archived=false`, {}, {
+        timeoutMs: 20000,
+        retries: 1,
+      });
+      const rows = Array.isArray(data?.items) ? data.items : [];
+      setStudyChatHistoryIndex((current) => {
+        const known = new Set(current.map((item) => item.id));
+        const additions = rows.map((item) => ({
+          id: item.id,
+          title: item.title || "Study Chat",
+          updatedAt: item.updatedAt || item.lastMessageAt || "",
+          materialKey: item.contextKey || "general-study-chat",
+          messageCount: Number(item.messageCount || 0),
+          isPinned: Boolean(item.isPinned),
+          serverTitle: true,
+        })).filter((item) => item.id && !known.has(item.id));
+        return [...current, ...additions];
+      });
+      setHasMoreStudyChatHistory(offset + rows.length < Number(data?.total || 0));
+    } catch {
+      // Retain already available recent history; a later scroll can retry.
+    } finally {
+      setIsLoadingMoreStudyChatHistory(false);
+    }
   };
 
   const handleRoomChatKeyDown = (event) => {

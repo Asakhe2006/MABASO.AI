@@ -201,7 +201,7 @@ AI_CHAT_MODE_ACCESS = {
 AI_CHAT_CONVERSATION_LIMITS = {
     "free": max(1, get_early_int_env("FREE_PLAN_AI_CHAT_MESSAGES_PER_CONVERSATION", 5)),
     "pro_student": max(1, get_early_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", 25)),
-    "premium_student": get_early_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", -1),
+    "premium_student": max(1, get_early_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_CONVERSATION", 75)),
 }
 STUDY_CHAT_PRIMARY_TIMEOUT = max(15.0, float(os.getenv("STUDY_CHAT_PRIMARY_TIMEOUT", "38")))
 STUDY_CHAT_FALLBACK_TIMEOUT = max(12.0, float(os.getenv("STUDY_CHAT_FALLBACK_TIMEOUT", "28")))
@@ -473,6 +473,7 @@ PAYFAST_PROCESS_URL = (
     else "https://www.payfast.co.za/eng/process"
 )
 PAYFAST_REQUIRE_SOURCE_CHECK = os.getenv("PAYFAST_REQUIRE_SOURCE_CHECK", "false").strip().lower() in {"1", "true", "yes", "on"}
+PAYFAST_VALIDATE_SERVER_CONFIRMATION = os.getenv("PAYFAST_VALIDATE_SERVER_CONFIRMATION", "true").strip().lower() not in {"0", "false", "no", "off"}
 PAYSHAP_ACCOUNT_NAME = os.getenv("PAYSHAP_ACCOUNT_NAME", "").strip()
 PAYSHAP_NUMBER = os.getenv("PAYSHAP_NUMBER", "").strip()
 PAYFAST_ALLOWED_REFERER_HOSTS = {
@@ -591,7 +592,7 @@ BILLING_PLAN_QUOTAS = {
         "voice_transcription": get_int_env("PRO_STUDENT_VOICE_MESSAGES_PER_DAY", 9),
         "source_upload": get_int_env("PRO_STUDENT_SOURCE_UPLOADS_PER_DAY", 3),
         "study_chat_upload": get_int_env("PRO_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 10),
-        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 25),
+        "study_chat": get_int_env("PRO_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 40),
     },
     "premium_student": {
         "study_guide": -1,
@@ -606,9 +607,9 @@ BILLING_PLAN_QUOTAS = {
         "ai_notes": -1,
         "teacher_lesson": -1,
         "voice_transcription": -1,
-        "source_upload": -1,
-        "study_chat_upload": -1,
-        "study_chat": -1,
+        "source_upload": get_int_env("PREMIUM_STUDENT_SOURCE_UPLOADS_PER_DAY", 10),
+        "study_chat_upload": get_int_env("PREMIUM_STUDENT_STUDY_CHAT_UPLOADS_PER_DAY", 25),
+        "study_chat": get_int_env("PREMIUM_STUDENT_AI_CHAT_MESSAGES_PER_DAY", 100),
     },
 }
 HOSTING_COST_ESTIMATE_ZAR_PER_MONTH = get_float_env("HOSTING_COST_ESTIMATE_ZAR_PER_MONTH", 500)
@@ -8591,6 +8592,20 @@ def init_db():
             )
             """
         )
+        subscription_columns = {row["name"] for row in connection.execute("PRAGMA table_info(billing_subscriptions)").fetchall()}
+        subscription_column_defaults = {
+            "billing_frequency": "TEXT NOT NULL DEFAULT 'monthly'",
+            "next_billing_at": "TEXT NOT NULL DEFAULT ''",
+            "cancelled_at": "TEXT NOT NULL DEFAULT ''",
+            "provider_status": "TEXT NOT NULL DEFAULT ''",
+            "payment_method_type": "TEXT NOT NULL DEFAULT ''",
+            "card_brand": "TEXT NOT NULL DEFAULT ''",
+            "card_last4": "TEXT NOT NULL DEFAULT ''",
+            "last_reconciled_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column_name, column_definition in subscription_column_defaults.items():
+            if column_name not in subscription_columns:
+                connection.execute(f"ALTER TABLE billing_subscriptions ADD COLUMN {column_name} {column_definition}")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS billing_events (
@@ -8644,6 +8659,9 @@ def init_db():
             "refunded_amount_zar": "TEXT NOT NULL DEFAULT '0.00'",
             "chargeback_status": "TEXT NOT NULL DEFAULT ''",
             "provider_refund_status": "TEXT NOT NULL DEFAULT ''",
+            "payment_method_type": "TEXT NOT NULL DEFAULT ''",
+            "card_brand": "TEXT NOT NULL DEFAULT ''",
+            "card_last4": "TEXT NOT NULL DEFAULT ''",
         }
         for column_name, column_definition in payment_column_defaults.items():
             if column_name not in payment_columns:
@@ -18603,6 +18621,8 @@ def upsert_billing_subscription(
     raw_event_json: str = "{}",
     now_iso: str = "",
     duration_days: int | None = None,
+    payment_method: dict[str, str] | None = None,
+    provider_status: str = "active",
 ) -> tuple[str, str]:
     normalized_email = validate_email_address(email)
     normalized_plan_id = normalize_billing_plan_id(plan_id)
@@ -18610,14 +18630,17 @@ def upsert_billing_subscription(
     resolved_duration_days = max(1, int(duration_days or get_billing_plan_duration_days(normalized_plan_id)))
     period_end = (parse_billing_datetime(current_time) or utc_now()) + timedelta(days=resolved_duration_days)
     period_end_iso = period_end.isoformat()
+    safe_method = payment_method or {}
     connection.execute(
         """
         INSERT INTO billing_subscriptions (
             email, plan_id, status, provider, provider_token, provider_payment_id,
             amount_zar, current_period_start, current_period_end, cancel_at,
-            raw_event_json, created_at, updated_at
+            raw_event_json, created_at, updated_at, billing_frequency, next_billing_at,
+            cancelled_at, provider_status, payment_method_type, card_brand, card_last4,
+            last_reconciled_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET
             plan_id = excluded.plan_id,
             status = excluded.status,
@@ -18629,6 +18652,14 @@ def upsert_billing_subscription(
             current_period_end = excluded.current_period_end,
             cancel_at = excluded.cancel_at,
             raw_event_json = excluded.raw_event_json,
+            billing_frequency = excluded.billing_frequency,
+            next_billing_at = excluded.next_billing_at,
+            cancelled_at = excluded.cancelled_at,
+            provider_status = excluded.provider_status,
+            payment_method_type = excluded.payment_method_type,
+            card_brand = excluded.card_brand,
+            card_last4 = excluded.card_last4,
+            last_reconciled_at = excluded.last_reconciled_at,
             updated_at = excluded.updated_at
         """,
         (
@@ -18645,6 +18676,14 @@ def upsert_billing_subscription(
             compact_text(raw_event_json, "{}"),
             current_time,
             current_time,
+            "monthly",
+            period_end_iso,
+            "",
+            compact_text(provider_status, "active"),
+            compact_text(safe_method.get("payment_method_type")),
+            compact_text(safe_method.get("card_brand")),
+            compact_text(safe_method.get("card_last4")),
+            current_time if compact_text(provider) == "payfast" else "",
         ),
     )
     return current_time, period_end_iso
@@ -18743,7 +18782,7 @@ def build_payfast_checkout_fields(
     return fields
 
 
-async def parse_payfast_itn_payload(request: Request) -> tuple[dict[str, str], str]:
+async def parse_payfast_itn_payload(request: Request) -> tuple[dict[str, str], str, str]:
     raw_body = (await request.body()).decode("utf-8", errors="replace")
     pairs = parse_qsl(raw_body, keep_blank_values=True)
     payload: dict[str, str] = {}
@@ -18755,7 +18794,29 @@ async def parse_payfast_itn_payload(request: Request) -> tuple[dict[str, str], s
         payload[clean_key] = compact_text(value)
         if clean_key != "signature":
             ordered_for_signature[clean_key] = compact_text(value)
-    return payload, get_payfast_signature(ordered_for_signature)
+    validation_string = "&".join(
+        f"{key}={quote_plus(value)}" for key, value in ordered_for_signature.items() if value != ""
+    )
+    return payload, get_payfast_signature(ordered_for_signature), validation_string
+
+
+def validate_payfast_server_confirmation(validation_string: str) -> None:
+    if not PAYFAST_VALIDATE_SERVER_CONFIRMATION:
+        return
+    host = "sandbox.payfast.co.za" if PAYFAST_SANDBOX else "www.payfast.co.za"
+    try:
+        response = requests.post(
+            f"https://{host}/eng/query/validate",
+            data=validation_string,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=max(5, get_early_int_env("PAYFAST_VALIDATION_TIMEOUT_SECONDS", 15)),
+        )
+    except requests.Timeout as exc:
+        raise HTTPException(status_code=504, detail="PayFast validation timed out; the notification can be retried.") from exc
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="PayFast validation could not be reached; the notification can be retried.") from exc
+    if response.status_code != 200 or compact_text(response.text).upper() != "VALID":
+        raise HTTPException(status_code=400, detail="PayFast could not confirm this transaction notification.")
 
 
 def verify_payfast_source(request: Request):
@@ -18798,6 +18859,40 @@ def hash_trial_provider_value(kind: str, value: Any) -> str:
     return hmac.new(APP_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
+def extract_safe_payfast_payment_method(payload: dict[str, Any] | None, *, fallback_method: str = "") -> dict[str, str]:
+    """Return provider-approved display metadata without ever reading or storing a full PAN."""
+    source = payload or {}
+    method_code = compact_text(
+        source.get("payment_method") or source.get("funding_type") or fallback_method
+    ).lower()[:40]
+    method_type = {
+        "cc": "card",
+        "credit card": "card",
+        "debit card": "card",
+        "dc": "card",
+    }.get(method_code, method_code or "payfast")
+    raw_brand = compact_text(
+        source.get("card_brand") or source.get("card_type") or source.get("funding_type")
+    )[:32]
+    card_brand = raw_brand if re.fullmatch(r"[A-Za-z][A-Za-z .-]{0,31}", raw_brand) else ""
+    raw_last4 = compact_text(
+        source.get("card_last4") or source.get("card_last_four") or source.get("masked_card_last_four")
+    )
+    card_last4 = raw_last4 if re.fullmatch(r"\d{4}", raw_last4) else ""
+    if card_last4:
+        label = f"{card_brand or 'Card'} •••• {card_last4}"
+    elif method_type == "card":
+        label = "Card via PayFast"
+    else:
+        label = f"{method_type.replace('_', ' ').title()} via PayFast" if method_type not in {"", "payfast"} else "PayFast"
+    return {
+        "payment_method_type": method_type,
+        "card_brand": card_brand,
+        "card_last4": card_last4,
+        "payment_method_label": label,
+    }
+
+
 def record_trial_claim(
     connection,
     *,
@@ -18815,6 +18910,33 @@ def record_trial_claim(
         for key in ("payment_method_fingerprint", "card_fingerprint", "payment_fingerprint")
         if compact_text(provider_payload.get(key))
     ), "")
+    identity_hash = hash_trial_identity(email)
+    payment_fingerprint_hash = hash_trial_provider_value("payment", payment_fingerprint)
+    provider_token_hash = hash_trial_provider_value("subscription-token", provider_token)
+    matched_signals: list[str] = []
+    if payment_fingerprint_hash:
+        prior_payment_method = connection.execute(
+            "SELECT email FROM trial_claims WHERE payment_fingerprint_hash = ? AND identity_hash <> ? LIMIT 1",
+            (payment_fingerprint_hash, identity_hash),
+        ).fetchone()
+        if prior_payment_method:
+            matched_signals.append("payment_method")
+    if provider_token_hash:
+        prior_provider_token = connection.execute(
+            "SELECT email FROM trial_claims WHERE provider_token_hash = ? AND identity_hash <> ? LIMIT 1",
+            (provider_token_hash, identity_hash),
+        ).fetchone()
+        if prior_provider_token:
+            matched_signals.append("provider_token")
+    if matched_signals:
+        record_subscription_abuse_event(
+            connection,
+            email=normalize_email(email),
+            rule_id="trial_provider_identifier_reused",
+            severity=80 if len(matched_signals) > 1 else 60,
+            message="A hashed provider identifier was previously associated with another trial account.",
+            metadata={"signals": matched_signals, "checkout_session_id": compact_text(checkout_session_id)},
+        )
     connection.execute(
         """
         INSERT INTO trial_claims (
@@ -18830,9 +18952,8 @@ def record_trial_claim(
             updated_at = excluded.updated_at
         """,
         (
-            uuid4().hex, normalize_email(email), hash_trial_identity(email),
-            hash_trial_provider_value("payment", payment_fingerprint),
-            hash_trial_provider_value("subscription-token", provider_token),
+            uuid4().hex, normalize_email(email), identity_hash,
+            payment_fingerprint_hash, provider_token_hash,
             compact_text(checkout_session_id), compact_text(provider_payment_id), now_iso, now_iso,
         ),
     )
@@ -18929,6 +19050,12 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
             "plan_id": "free",
             "provider": "",
             "provider_token_present": False,
+            "provider_status": "",
+            "billing_frequency": "",
+            "next_billing_at": "",
+            "cancelled_at": "",
+            "payment_method_type": "",
+            "payment_method_label": "",
             "amount_zar": "0.00",
             "current_period_start": "",
             "current_period_end": "",
@@ -18942,27 +19069,42 @@ def serialize_subscription_row(row: sqlite3.Row | None) -> dict[str, Any]:
             "expires_at": "",
             "expired": False,
         }
+    row_keys = set(row.keys()) if hasattr(row, "keys") else set()
     normalized_status = compact_text(row["status"]).lower()
     normalized_plan_id = normalize_billing_plan_id(row["plan_id"])
     is_trialing = normalized_status == "trialing"
+    access_statuses = {"active", "trialing", "cancel_at_period_end"}
     period_state = build_subscription_period_state(
         row["current_period_end"],
-        active=normalized_status in {"active", "trialing"},
+        active=normalized_status in access_statuses,
     )
+    has_access = normalized_status in access_statuses and not period_state["expired"]
+    safe_method = extract_safe_payfast_payment_method({
+        "payment_method": row["payment_method_type"] if "payment_method_type" in row_keys else "",
+        "card_brand": row["card_brand"] if "card_brand" in row_keys else "",
+        "card_last4": row["card_last4"] if "card_last4" in row_keys else "",
+    })
+    cancel_at = compact_text(row["cancel_at"])
+    next_billing_at = compact_text(row["next_billing_at"] if "next_billing_at" in row_keys else row["current_period_end"])
     return {
         "status": normalized_status,
-        "plan_id": normalized_plan_id if normalized_status in {"active", "trialing"} else "free",
+        "plan_id": normalized_plan_id if has_access else "free",
         "paid_plan_id": normalized_plan_id,
         "provider": row["provider"],
         "provider_token_present": bool(compact_text(row["provider_token"])),
+        "provider_status": compact_text(row["provider_status"] if "provider_status" in row_keys else normalized_status),
+        "billing_frequency": compact_text(row["billing_frequency"] if "billing_frequency" in row_keys else "monthly", "monthly"),
+        "next_billing_at": "" if cancel_at else next_billing_at,
+        "cancelled_at": compact_text(row["cancelled_at"] if "cancelled_at" in row_keys else ""),
+        **safe_method,
         "amount_zar": row["amount_zar"],
         "current_period_start": row["current_period_start"],
         "current_period_end": row["current_period_end"],
-        "cancel_at": row["cancel_at"],
+        "cancel_at": cancel_at,
         "updated_at": row["updated_at"],
-        "active": normalized_status == "active",
-        "trial_active": is_trialing,
-        "renewal_status": "cancel_at_period_end" if compact_text(row["cancel_at"]) else ("trial_renews" if is_trialing else "renews" if normalized_status == "active" else normalized_status),
+        "active": has_access and not is_trialing,
+        "trial_active": has_access and is_trialing,
+        "renewal_status": "cancel_at_period_end" if cancel_at else ("trial_renews" if is_trialing else "renews" if has_access else normalized_status),
         **period_state,
         "message": (
             "Your subscription has expired and your account has been returned to the Free Plan."
@@ -19035,13 +19177,15 @@ def expire_subscription_if_needed(email: str, row: sqlite3.Row | None = None) ->
                 """
                 SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
                        amount_zar, current_period_start, current_period_end, cancel_at,
-                       raw_event_json, created_at, updated_at
+                       raw_event_json, created_at, updated_at, billing_frequency, next_billing_at,
+                       cancelled_at, provider_status, payment_method_type, card_brand, card_last4,
+                       last_reconciled_at
                 FROM billing_subscriptions
                 WHERE email = ?
                 """,
                 (normalized_email,),
             ).fetchone()
-    if not current_row or compact_text(current_row["status"]).lower() != "active":
+    if not current_row or compact_text(current_row["status"]).lower() not in {"active", "trialing", "cancel_at_period_end"}:
         return current_row
     period_end = parse_billing_datetime(current_row["current_period_end"])
     if not period_end or period_end >= utc_now():
@@ -19052,7 +19196,7 @@ def expire_subscription_if_needed(email: str, row: sqlite3.Row | None = None) ->
             """
             UPDATE billing_subscriptions
             SET status = 'expired', updated_at = ?
-            WHERE email = ? AND status = 'active'
+            WHERE email = ? AND status IN ('active', 'trialing', 'cancel_at_period_end')
             """,
             (now_iso, normalized_email),
         )
@@ -19084,7 +19228,9 @@ def expire_subscription_if_needed(email: str, row: sqlite3.Row | None = None) ->
             """
             SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
                    amount_zar, current_period_start, current_period_end, cancel_at,
-                   raw_event_json, created_at, updated_at
+                   raw_event_json, created_at, updated_at, billing_frequency, next_billing_at,
+                   cancelled_at, provider_status, payment_method_type, card_brand, card_last4,
+                   last_reconciled_at
             FROM billing_subscriptions
             WHERE email = ?
             """,
@@ -19118,7 +19264,9 @@ def get_user_subscription(email: str) -> dict[str, Any]:
             """
             SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
                    amount_zar, current_period_start, current_period_end, cancel_at,
-                   raw_event_json, created_at, updated_at
+                   raw_event_json, created_at, updated_at, billing_frequency, next_billing_at,
+                   cancelled_at, provider_status, payment_method_type, card_brand, card_last4,
+                   last_reconciled_at
             FROM billing_subscriptions
             WHERE email = ?
             """,
@@ -19135,7 +19283,9 @@ def get_active_subscription_row(email: str) -> sqlite3.Row | None:
             """
             SELECT email, plan_id, status, provider, provider_token, provider_payment_id,
                    amount_zar, current_period_start, current_period_end, cancel_at,
-                   raw_event_json, created_at, updated_at
+                   raw_event_json, created_at, updated_at, billing_frequency, next_billing_at,
+                   cancelled_at, provider_status, payment_method_type, card_brand, card_last4,
+                   last_reconciled_at
             FROM billing_subscriptions
             WHERE email = ?
             """,
@@ -19144,7 +19294,7 @@ def get_active_subscription_row(email: str) -> sqlite3.Row | None:
     row = expire_subscription_if_needed(normalized_email, row)
     if not row:
         return None
-    if compact_text(row["status"]).lower() != "active":
+    if compact_text(row["status"]).lower() not in {"active", "cancel_at_period_end"}:
         return None
     period_end = parse_billing_datetime(row["current_period_end"])
     if not period_end:
@@ -19219,14 +19369,61 @@ def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dic
             "status": "trialing",
             "plan_id": entitlement["plan_id"],
             "provider": compact_text(subscription.get("provider"), "legacy_trial"),
-            "amount_zar": "0.00",
+            # The R0 authorisation is not the recurring price. Keep the real
+            # Pro price here so the billing screen can disclose the next charge.
+            "trial_authorization_amount_zar": "0.00",
             "current_period_start": entitlement.get("trial_started_at", ""),
             "current_period_end": entitlement.get("trial_ends_at", ""),
+            "next_billing_at": "" if subscription.get("cancel_at") else entitlement.get("trial_ends_at", ""),
             "active": True,
+            "trial_active": True,
             "renewal_status": "trial",
             "expired": False,
         }
     return {**subscription, "entitlement": entitlement}, entitlement
+
+
+def reconcile_payfast_subscription(email: str) -> dict[str, Any]:
+    """Refresh a known PayFast subscription without accepting browser supplied IDs.
+
+    This is recovery for a missed/out-of-order ITN. A token that was never
+    delivered to Mabaso AI cannot be guessed or recovered from the browser.
+    """
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM billing_subscriptions WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+    if not row or compact_text(row["provider"]).lower() != "payfast":
+        raise HTTPException(status_code=409, detail="There is no PayFast subscription to refresh.")
+    token = compact_text(row["provider_token"])
+    if not token:
+        raise HTTPException(status_code=409, detail="PayFast has not returned a subscription token for this checkout yet. Refresh again after its confirmation arrives.")
+    try:
+        provider_payload = get_payfast_api_client().fetch_subscription(token)
+    except PayFastApiError as exc:
+        raise HTTPException(status_code=exc.status_code, detail="PayFast could not refresh this subscription. No local billing state was changed.") from exc
+    provider_data = provider_payload.get("data") if isinstance(provider_payload.get("data"), dict) else provider_payload
+    provider_status = compact_text(provider_data.get("status") or provider_data.get("subscription_status") or "confirmed").lower()
+    safe_method = extract_safe_payfast_payment_method(provider_data, fallback_method=compact_text(row["payment_method_type"]))
+    now_iso = utc_now().isoformat()
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE billing_subscriptions
+            SET provider_status = ?, payment_method_type = ?, card_brand = ?, card_last4 = ?,
+                last_reconciled_at = ?, updated_at = ?
+            WHERE lower(email) = lower(?)
+            """,
+            (provider_status, safe_method["payment_method_type"], safe_method["card_brand"], safe_method["card_last4"], now_iso, now_iso, normalized_email),
+        )
+        connection.execute(
+            "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, '', 'payfast', 'SUBSCRIPTION_RECONCILED', ?, ?)",
+            (uuid4().hex, normalized_email, json.dumps({"provider_status": provider_status}, ensure_ascii=False), now_iso),
+        )
+    subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
+    return {"subscription": subscription, "entitlement": entitlement, "reconciled_at": now_iso}
 
 
 def get_source_material_size_limit_bytes(email: str) -> tuple[str, int]:
@@ -19678,18 +19875,23 @@ def reconcile_payfast_trial_payment_history(email: str) -> None:
         payment_id = provider_payment_id or ("trial-" + checkout["id"])
         paid_at = compact_text(user["trial_started_at"] or checkout["updated_at"] or checkout["created_at"], now_iso)
         raw_event_json = compact_text(checkout["raw_event_json"] or subscription["raw_event_json"], "{}")
+        safe_payment_method = extract_safe_payfast_payment_method(
+            safe_json_loads(raw_event_json, {}),
+            fallback_method="cc" if provider_token else "",
+        )
         connection.execute(
             """
             INSERT INTO billing_payments (
                 id, email, checkout_session_id, plan_id, provider, provider_payment_id,
                 amount_zar, payment_status, raw_event_json, billing_country_at_purchase,
-                currency, paid_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'payfast', ?, '0.00', 'active', ?, ?, 'ZAR', ?, ?, ?)
+                currency, payment_method_type, card_brand, card_last4, paid_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'payfast', ?, '0.00', 'active', ?, ?, 'ZAR', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO NOTHING
             """,
             (
                 payment_id, normalized_email, checkout["id"], normalize_billing_plan_id(checkout["plan_id"]),
                 provider_payment_id, raw_event_json, normalize_billing_country(checkout["billing_country_at_purchase"]),
+                safe_payment_method["payment_method_type"], safe_payment_method["card_brand"], safe_payment_method["card_last4"],
                 paid_at, paid_at, now_iso,
             ),
         )
@@ -19714,7 +19916,8 @@ def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any
             SELECT id, email, checkout_session_id, plan_id, provider, provider_payment_id,
                    amount_zar, payment_status, paid_at, created_at, updated_at,
                    billing_country_at_purchase, currency, refunded_amount_zar,
-                   chargeback_status, provider_refund_status
+                   chargeback_status, provider_refund_status, payment_method_type,
+                   card_brand, card_last4
             FROM billing_payments
             WHERE lower(email) = ?
             ORDER BY paid_at DESC
@@ -19724,12 +19927,19 @@ def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any
         ).fetchall()
     history = []
     for row in rows:
+        safe_method = extract_safe_payfast_payment_method({
+            "payment_method": row["payment_method_type"],
+            "card_brand": row["card_brand"],
+            "card_last4": row["card_last4"],
+        })
         history.append({
             "id": row["id"],
             "checkout_session_id": row["checkout_session_id"],
             "plan_id": normalize_billing_plan_id(row["plan_id"]),
             "provider": row["provider"],
             "provider_payment_id": row["provider_payment_id"],
+            "reference": compact_text(row["provider_payment_id"] or row["id"])[-12:],
+            **safe_method,
             "amount_zar": row["amount_zar"],
             "is_trial": parse_zar_amount(row["amount_zar"]) <= 0,
             "currency": row["currency"],
@@ -20171,6 +20381,10 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     raw_event_json = json.dumps(payload, ensure_ascii=False)
     provider_payment_id = compact_text(payload.get("pf_payment_id"))
     provider_token = compact_text(payload.get("token"))
+    safe_payment_method = extract_safe_payfast_payment_method(
+        payload,
+        fallback_method=compact_text(checkout_fields.get("payment_method")),
+    )
     now_iso = utc_now().isoformat()
     is_initial_trial_activation = is_trial_checkout and amount_gross == "0.00"
     next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
@@ -20225,9 +20439,9 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
             INSERT INTO billing_payments (
                 id, email, checkout_session_id, plan_id, provider, provider_payment_id,
                 amount_zar, payment_status, raw_event_json, billing_country_at_purchase,
-                currency, paid_at, created_at, updated_at
+                currency, payment_method_type, card_brand, card_last4, paid_at, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 email = excluded.email,
                 checkout_session_id = excluded.checkout_session_id,
@@ -20237,6 +20451,9 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 amount_zar = excluded.amount_zar,
                 payment_status = excluded.payment_status,
                 raw_event_json = excluded.raw_event_json,
+                payment_method_type = excluded.payment_method_type,
+                card_brand = excluded.card_brand,
+                card_last4 = excluded.card_last4,
                 paid_at = excluded.paid_at,
                 updated_at = excluded.updated_at
             """,
@@ -20252,6 +20469,9 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 raw_event_json,
                 normalize_billing_country(session["billing_country_at_purchase"]),
                 "ZAR",
+                safe_payment_method["payment_method_type"],
+                safe_payment_method["card_brand"],
+                safe_payment_method["card_last4"],
                 now_iso,
                 now_iso,
                 now_iso,
@@ -20277,6 +20497,8 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 raw_event_json=raw_event_json,
                 now_iso=now_iso,
                 duration_days=FREE_TRIAL_DAYS if is_initial_trial_activation else None,
+                payment_method=safe_payment_method,
+                provider_status=payment_status.lower() or "active",
             )
             if is_initial_trial_activation:
                 # A R0 PayFast setup proves the card and creates the recurring
@@ -25156,6 +25378,12 @@ def get_owned_billing_checkout_status(
     }
 
 
+@app.post("/api/billing/reconcile")
+def reconcile_current_billing_subscription(current_user: str = Depends(require_authenticated_user)):
+    """Customer-safe recovery action for a known PayFast token; never takes IDs from the browser."""
+    return reconcile_payfast_subscription(normalize_email(current_user))
+
+
 def send_refund_status_email(email: str, refund: dict[str, Any], status_message: str) -> None:
     settings = get_transactional_email_settings()
     message = EmailMessage()
@@ -25364,16 +25592,18 @@ def cancel_customer_subscription(
     now_iso = utc_now().isoformat()
     cancel_at = compact_text(subscription["current_period_end"], now_iso)
     with get_db_connection() as connection:
+        # Preserve access through the period that has already been authorised.
         connection.execute(
-            "UPDATE billing_subscriptions SET status = 'cancel_at_period_end', cancel_at = ?, updated_at = ? WHERE lower(email) = ?",
-            (cancel_at, now_iso, email),
+            "UPDATE billing_subscriptions SET cancel_at = ?, cancelled_at = ?, provider_status = 'cancelled', updated_at = ? WHERE lower(email) = ?",
+            (cancel_at, now_iso, now_iso, email),
         )
         connection.execute(
             "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (uuid4().hex, email, "", compact_text(subscription["provider"], "system"), "SUBSCRIPTION_CANCELLED", json.dumps({"cancel_at": cancel_at, "reason": compact_text(payload.reason)[:300], "provider_status": compact_text(provider_result.get("status"))}, ensure_ascii=False), now_iso),
         )
     message = ("Your free trial renewal is cancelled. Trial access remains available until the displayed trial end." if subscription_status == "trialing" else "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.")
-    return {"message": message, "cancel_at": cancel_at, "cancelled_status": subscription_status}
+    refreshed, _ = get_effective_subscription_snapshot(email)
+    return {"message": message, "cancel_at": cancel_at, "cancelled_status": subscription_status, "subscription": refreshed}
 
 
 @app.get("/admin/refunds")
@@ -25779,7 +26009,7 @@ async def reject_admin_payment_request(
 async def payfast_itn(request: Request):
     started_at = utc_now()
     verify_payfast_source(request)
-    payload, expected_signature = await parse_payfast_itn_payload(request)
+    payload, expected_signature, validation_string = await parse_payfast_itn_payload(request)
     posted_signature = compact_text(payload.get("signature")).lower()
     if not posted_signature or not hmac.compare_digest(posted_signature, expected_signature.lower()):
         record_audit_log(
@@ -25793,6 +26023,7 @@ async def payfast_itn(request: Request):
         raise HTTPException(status_code=400, detail="Invalid PayFast signature.")
     if compact_text(payload.get("merchant_id")) != PAYFAST_MERCHANT_ID:
         raise HTTPException(status_code=400, detail="Invalid PayFast merchant.")
+    validate_payfast_server_confirmation(validation_string)
 
     checkout_id = compact_text(payload.get("m_payment_id"))
     session = get_checkout_session(checkout_id)
