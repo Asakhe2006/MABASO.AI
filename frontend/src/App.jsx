@@ -400,6 +400,7 @@ function createOpaqueResourceId(prefix = "ctx") {
   return `${normalizedPrefix}_${randomId.slice(0, 24)}`;
 }
 const SLIDE_SOURCE_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
+const STUDY_CHAT_ATTACHMENT_ACCEPT = "image/*,.pdf,.docx,.pptx,.xlsx,.csv,.tsv,.txt,.md,.text,.json,.xml,.html,.htm,.rtf,.odt,.ods,.odp";
 const PAST_PAPER_ACCEPT = "image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const BULK_LECTURE_ACCEPT = "audio/*,video/*,image/*,.txt,.md,.text,.pdf,.pptx,.docx";
 const PRESENTATION_TEMPLATE_ACCEPT = ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation";
@@ -7220,6 +7221,7 @@ export default function App() {
   const [isSubmittingStudyChatEdit, setIsSubmittingStudyChatEdit] = useState(false);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
+  const [chatUploadNotice, setChatUploadNotice] = useState(null);
   const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
   const [isAskingChat, setIsAskingChat] = useState(false);
   const [studyChatActivities, setStudyChatActivities] = useState({});
@@ -7525,6 +7527,11 @@ export default function App() {
     const timeoutId = window.setTimeout(() => setChatCompletionToast((current) => current?.generationId === chatCompletionToast.generationId ? null : current), 7000);
     return () => window.clearTimeout(timeoutId);
   }, [chatCompletionToast]);
+  useEffect(() => {
+    if (!chatUploadNotice) return undefined;
+    const timeoutId = window.setTimeout(() => setChatUploadNotice(null), 7500);
+    return () => window.clearTimeout(timeoutId);
+  }, [chatUploadNotice]);
   useEffect(() => {
     if (!authToken) { setUnseenStudyChatIds(new Set()); return undefined; }
     let cancelled = false;
@@ -12012,10 +12019,9 @@ export default function App() {
     }
     return (
       <section className="payment-page-shell overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/65 p-4 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur sm:p-5 xl:p-6">
-          <div className="payment-page-sticky-controls">
+          <div className="payment-page-sticky-controls is-user-payments">
             <button type="button" onClick={() => openProtectedAppPage("capture", { replace: true })} className="payment-page-back-button" aria-label="Back to capture page"><ArrowLeft className="h-5 w-5" aria-hidden="true" /></button>
             <span className="payment-page-sticky-title">{isAdminAccount ? "Payments" : "My Payments"}</span>
-            {renderCompactProfileMenu()}
           </div>
         <div className="payment-page-content-head flex min-w-0 flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex items-start gap-4">
@@ -12049,7 +12055,8 @@ export default function App() {
                 <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Choose Payment Method</button>
               </div>
             )}
-            <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <details className="payment-mobile-disclosure rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+              <summary>Payment verification guide <span aria-hidden="true">?</span></summary>
               <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Verification</p>
               <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                 <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
@@ -12057,7 +12064,7 @@ export default function App() {
                 <p>Rejected means the payment could not be matched or was not accepted.</p>
                 <p>If you need help, use the secure payment-query form below and include your payment reference and proof-of-payment details.</p>
               </div>
-            </div>
+            </details>
           </div>
 
           <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
@@ -12090,10 +12097,11 @@ export default function App() {
             {billingSubscription?.payment_method_label ? <p className="mt-2 text-sm text-slate-300">Payment method: {billingSubscription.payment_method_label}.</p> : null}
             {billingSubscription?.cancel_at ? <p className="mt-4 inline-flex rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">Renewal cancelled · access remains until {formatAdminDateTime(billingSubscription.cancel_at)}</p> : (billingSubscription?.active || billingSubscription?.trial_active) && billingSubscription?.provider === "payfast" && billingSubscription?.provider_token_present ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">{billingSubscription?.trial_active ? "Cancel your Pro trial?" : "Cancel your subscription?"}</p><p className="mt-2 text-xs leading-5 text-rose-100/80">{billingSubscription?.trial_active ? `Your trial remains available until ${formatAdminDateTime(billingSubscription.current_period_end)}. You will not be charged when it ends.` : "Future recurring charges will stop at PayFast. Your paid access remains until the displayed end date."}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={isCancellingSubscription} onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950 disabled:opacity-60">{isCancellingSubscription ? "Cancelling…" : billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button><button type="button" disabled={isCancellingSubscription} onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button>}</div> : null}
           </article>
-          <article className="rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <details className="payment-mobile-disclosure rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+            <summary>Study usage <span aria-hidden="true">?</span></summary>
             <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Today’s study access</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
             <div className="mt-4 grid gap-2 sm:grid-cols-2">{billingUsage?.features?.length ? billingUsage.features.map((feature) => { const usagePercent = feature.unlimited ? 0 : Math.min(100, Math.round(((Number(feature.used) || 0) / Math.max(1, Number(feature.limit) || 1)) * 100)); return <div key={feature.feature} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3"><div className="flex justify-between gap-2 text-sm"><strong className="text-white">{feature.label}</strong><span className="text-emerald-100">{feature.unlimited ? "Highest allowance" : `${usagePercent}% used`}</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-emerald-400 transition-[width] duration-300" style={{ width: `${usagePercent}%` }} /></div><p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "Available for your plan" : "Daily study access"}</p></div>; }) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading usage history..." : "No usage has been recorded for this period."}</p>}</div>
-          </article>
+          </details>
         </div>
         <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">PayFast transaction history</p>
@@ -12104,9 +12112,10 @@ export default function App() {
           </div>
           {refundPayment ? <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4"><div className="flex items-start justify-between gap-3"><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund form"><X className="h-4 w-4" /></button></div><select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"><option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option></select><textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"/><button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button></div> : null}
         </article>
-        <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+        <details className="payment-mobile-disclosure mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
+          <summary>Payment support <span aria-hidden="true">?</span></summary>
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Payment support</p><h3 className="mt-2 text-2xl font-semibold text-white">Send a payment query</h3><p className="mt-3 text-sm leading-7 text-slate-300">Include the payment reference and what you expected to happen. Your query is sent securely to Mabaso AI Support.</p><textarea value={billingSupportMessage} onChange={(event) => setBillingSupportMessage(event.target.value.slice(0, 3000))} placeholder="Describe the payment or subscription issue" className="mt-4 min-h-28 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none"/><div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void submitBillingSupportMessage()} disabled={isSendingBillingSupport || !billingSupportMessage.trim()} className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-50">{isSendingBillingSupport ? "Sending..." : "Send query"}</button>{billingSupportFeedback ? <p className="text-sm text-emerald-100">{billingSupportFeedback}</p> : null}</div>
-        </article>
+        </details>
       </section>
     );
   };
@@ -19411,8 +19420,8 @@ export default function App() {
         deliveryMode: "study_session",
         currentSection: `Active study session: ${normalizeTimetableSubjectName(session.title, "Subject")}`,
         responseLength: "concise",
-        referenceImages: selectedReferenceImages.map((image) => image.dataUrl).filter(Boolean),
-        referenceDocuments: selectedReferenceImages.filter((item) => item.text).map((item) => ({ name: item.name, text: item.text })),
+        referenceImages: selectedReferenceImages,
+        referenceDocuments: selectedReferenceImages.filter((item) => item.text),
         onDelta: (streamedAnswer) => {
           updateActiveStudySessionRecord(session.id, (item) => ({
             ...item,
@@ -23882,9 +23891,6 @@ export default function App() {
   };
 
   const uploadStudyChatReferenceFile = async (selectedFile) => {
-    if (!(await ensurePremiumFeatureAvailable("study_chat_upload", "AI chat uploads"))) {
-      throw createUsageBlockedError("You have used all AI chat uploads for today.");
-    }
     const formData = new FormData();
     formData.append("file", selectedFile);
     const response = await authFetch("/extract-slide-text/", {
@@ -23894,7 +23900,18 @@ export default function App() {
       timeoutMs: 90000,
     });
     const data = await parseJsonSafe(response);
-    if (!response.ok) throw new Error(data.detail || `Could not read ${selectedFile.name}.`);
+    if (!response.ok) {
+      const detail = data?.detail;
+      const uploadError = new Error(
+        (detail && typeof detail === "object" ? detail.message : detail)
+        || `Could not read ${selectedFile.name}.`,
+      );
+      uploadError.code = detail && typeof detail === "object" ? detail.code : "";
+      uploadError.uploadLimit = uploadError.code === "UPLOAD_LIMIT_REACHED";
+      uploadError.uploadName = selectedFile.name;
+      uploadError.upgradeAvailable = Boolean(detail?.upgrade_available);
+      throw uploadError;
+    }
     applyStudyChatUploadUsage(data.usage);
     refreshBillingStatusInBackground();
     const imageUrl = Array.isArray(data.image_urls) ? data.image_urls.find(Boolean) : "";
@@ -23905,6 +23922,7 @@ export default function App() {
       kind: imageUrl ? "image" : "document",
       dataUrl: imageUrl || "",
       text: String(data.text || "").trim(),
+      receipt: String(data.upload_receipt || ""),
     };
   };
 
@@ -23912,26 +23930,44 @@ export default function App() {
     const files = Array.from(selectedFiles || []);
     if (!files.length) return;
     setError("");
+    setChatUploadNotice(null);
     const remainingSlots = Math.max(0, MAX_CHAT_REFERENCE_ATTACHMENTS - chatReferenceImages.length);
     if (!remainingSlots) {
       setError(`You can attach up to ${MAX_CHAT_REFERENCE_ATTACHMENTS} photos or documents in one question.`);
       return;
     }
+    const selectedBatch = files.slice(0, remainingSlots);
+    const rejectedByComposerLimit = Math.max(0, files.length - selectedBatch.length);
     const attachmentRunId = studyChatAttachmentRunRef.current + 1;
     studyChatAttachmentRunRef.current = attachmentRunId;
     setIsUploadingChatReferences(true);
-    setStatus("Reading chat attachments...");
+    setStatus("Checking and reading chat attachments...");
     const results = await Promise.allSettled(
-      files.slice(0, remainingSlots).map((selectedFile) => uploadStudyChatReferenceFile(selectedFile)),
+      selectedBatch.map((selectedFile) => uploadStudyChatReferenceFile(selectedFile)),
     );
     if (studyChatAttachmentRunRef.current !== attachmentRunId) return;
     const nextAttachments = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
-    const uploadError = results.find((result) => result.status === "rejected")?.reason || null;
+    const rejectedResults = results.filter((result) => result.status === "rejected");
+    const limitErrors = rejectedResults.map((result) => result.reason).filter((reason) => reason?.uploadLimit);
+    const otherError = rejectedResults.map((result) => result.reason).find((reason) => !reason?.uploadLimit) || null;
     if (nextAttachments.length) {
       setChatReferenceImages((current) => [...current, ...nextAttachments].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
       setStatus(`${nextAttachments.length} chat attachment${nextAttachments.length === 1 ? "" : "s"} added.`);
+    } else {
+      setStatus("");
     }
-    if (uploadError) setError(uploadError.message || "Could not read the chat attachment.");
+    if (limitErrors.length) {
+      setChatUploadNotice({
+        key: Date.now(),
+        title: "Upload limit reached",
+        message: "You've reached the upload limit for your current plan. Upgrade your plan or try again when your allowance resets.",
+        rejectedCount: limitErrors.length,
+        upgradeAvailable: limitErrors.some((reason) => reason?.upgradeAvailable),
+      });
+      refreshBillingStatusInBackground();
+    }
+    if (otherError) setError(otherError.message || "Could not read the chat attachment.");
+    else if (rejectedByComposerLimit) setError(`${rejectedByComposerLimit} file${rejectedByComposerLimit === 1 ? " was" : "s were"} not added because this question already has the maximum number of attachments.`);
     setIsUploadingChatReferences(false);
   };
 
@@ -26102,8 +26138,19 @@ export default function App() {
       .map((document) => ({
         name: String(document?.name || "Attached document").slice(0, 160),
         text: String(document?.text || "").trim().slice(0, 12000),
+        receipt: String(document?.receipt || ""),
       }))
       .filter((document) => document.text)
+      .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
+    const normalizedReferenceAttachments = [...(Array.isArray(referenceImages) ? referenceImages : []), ...(Array.isArray(referenceDocuments) ? referenceDocuments : [])]
+      .filter((attachment) => attachment && typeof attachment === "object" && attachment.receipt)
+      .map((attachment) => ({
+        name: String(attachment.name || "Attached document").slice(0, 160),
+        text: String(attachment.text || "").trim().slice(0, 12000),
+        image_url: String(attachment.dataUrl || attachment.url || attachment.image_url || ""),
+        receipt: String(attachment.receipt || ""),
+      }))
+      .filter((attachment, index, items) => items.findIndex((item) => item.receipt === attachment.receipt) === index)
       .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const shouldUseLectureContext = currentPageRef.current !== "voice";
@@ -26124,6 +26171,7 @@ export default function App() {
           content: String(message.content || ""),
         })),
         reference_images: normalizedReferenceImages,
+        reference_attachments: normalizedReferenceAttachments,
         language: outputLanguage,
         voice_mode: deliveryMode === "voice" || deliveryMode === "teacher_interrupt",
         interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
@@ -26139,7 +26187,7 @@ export default function App() {
         assistant_message_id: assistantMessageId,
         lecture_notes: [
           shouldUseLectureContext ? lectureNotes : "",
-          ...normalizedReferenceDocuments.map((document) => `${document.name}:\n${document.text}`),
+          ...normalizedReferenceDocuments.filter((document) => !document.receipt).map((document) => `${document.name}:\n${document.text}`),
         ].filter(Boolean).join("\n\n"),
       }),
     });
@@ -26756,6 +26804,7 @@ export default function App() {
       name: image.name,
       dataUrl: image.dataUrl,
       text: image.text,
+      receipt: image.receipt,
       kind: image.kind,
     }));
     studyChatAttachmentRunRef.current += 1;
@@ -27036,6 +27085,7 @@ export default function App() {
       dataUrl: image.dataUrl,
       text: image.text,
       kind: image.kind,
+      receipt: image.receipt,
     }));
     const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     setError("");
@@ -27679,8 +27729,8 @@ export default function App() {
           </button>
         )}
       </div>
-      {isUploadingChatReferences ? <p className="study-chat-upload-status">Reading attachments...</p> : null}
-      <input ref={chatImageInputRef} type="file" accept="image/*,.pdf,.docx,.pptx,.txt,.md" multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
+      {isUploadingChatReferences ? <p className="study-chat-upload-status">Checking and reading attachments...</p> : null}
+      <input ref={chatImageInputRef} type="file" accept={STUDY_CHAT_ATTACHMENT_ACCEPT} multiple className="hidden" onChange={(event) => { handleChatReferenceFilesChange(event.target.files); event.target.value = ""; }} />
       {chatReferenceImages.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {chatReferenceImages.map((image) => (
@@ -32498,6 +32548,17 @@ export default function App() {
             <span><strong>{chatCompletionToast.type === "failed" ? "Response couldn't be completed" : "Response ready"}</strong><small>{chatCompletionToast.type === "failed" ? `Open “${chatCompletionToast.title}” to try again.` : `Your answer in “${chatCompletionToast.title}” is ready.`}</small></span>
             <X className="h-4 w-4" aria-hidden="true" onClick={(event) => { event.stopPropagation(); setChatCompletionToast(null); }} />
           </button>,
+          document.body,
+        ) : null}
+        {chatUploadNotice ? createPortal(
+          <section className="study-chat-upload-limit-toast" role="status" aria-live="polite" aria-label={chatUploadNotice.title}>
+            <span className="study-chat-upload-limit-icon" aria-hidden="true">!</span>
+            <span className="study-chat-upload-limit-copy"><strong>{chatUploadNotice.title}</strong><small>{chatUploadNotice.message}</small></span>
+            <span className="study-chat-upload-limit-actions">
+              {chatUploadNotice.upgradeAvailable ? <button type="button" onClick={() => { setChatUploadNotice(null); openUpgradeModal(); }}>Upgrade</button> : null}
+              <button type="button" className="is-dismiss" onClick={() => setChatUploadNotice(null)} aria-label="Dismiss upload limit notice"><X className="h-4 w-4" aria-hidden="true" /></button>
+            </span>
+          </section>,
           document.body,
         ) : null}
       </main>

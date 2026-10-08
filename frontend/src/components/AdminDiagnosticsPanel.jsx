@@ -140,8 +140,8 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   };
 
   const recoverPayFastTrial = async () => {
-    const token = recoveryToken.trim();
-    if (!selectedEmail || !token) return;
+    const identifier = recoveryToken.trim();
+    if (!selectedEmail || !identifier) return;
     const checkout = (snapshot?.checkout_sessions || []).find((item) => ["pending", "confirmation_pending"].includes(String(item?.status || "").toLowerCase()));
     setRecoveryBusy(true);
     setRecoveryMessage("");
@@ -153,7 +153,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider_token: token, checkout_id: checkout?.id || "" }),
+          body: JSON.stringify({ identifier, checkout_id: checkout?.id || "" }),
         },
       );
       setRecoveryToken("");
@@ -171,7 +171,10 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const trialUsers = overview?.trial_users || [];
   const entitlement = snapshot?.entitlement || {};
   const state = snapshot?.state_comparison || {};
-  const pendingCheckout = (snapshot?.checkout_sessions || []).find((checkout) => ["pending", "confirmation_pending"].includes(String(checkout?.status || "").toLowerCase()));
+  const recoveryCheckout = (snapshot?.checkout_sessions || []).find((checkout) => ["pending", "confirmation_pending"].includes(String(checkout?.status || "").toLowerCase()));
+  // Retain the previous JSX during this additive rollout, but render the
+  // clearer dual-identifier recovery panel below instead.
+  const pendingCheckout = null;
 
   return (
     <section className="space-y-5" aria-busy={loading}>
@@ -184,6 +187,40 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
       </div>
 
       {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">{error}</div> : null}
+
+      <details className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm">
+        <summary className="cursor-pointer text-base font-semibold text-slate-950">How Diagnostics controls work</summary>
+        <div className="mt-4 grid gap-4 text-sm leading-6 text-slate-600 md:grid-cols-2">
+          <p><strong className="block text-slate-900">Refresh diagnostics</strong>Reloads health, issue counts, and traces without changing accounts.</p>
+          <p><strong className="block text-slate-900">Select a user</strong>Loads that account&apos;s authoritative entitlement, billing, quota, authentication, and generation records.</p>
+          <p><strong className="block text-slate-900">Recalculate entitlement</strong>Runs the normal resolver again. It never forces or edits a plan.</p>
+          <p><strong className="block text-slate-900">Trace tabs</strong>Explain the stored timeline, entitlement decision, trial, quota, payments, sessions, jobs, errors, and deployment state.</p>
+          <p><strong className="block text-slate-900">Verify and recover</strong>Verifies a real PayFast token, or resolves a checkout reference to verified persisted evidence, before restoring missed state.</p>
+          <p><strong className="block text-slate-900">System issue links</strong>Open the affected account so provider and local state can be compared safely.</p>
+        </div>
+        <p className="mt-4 text-xs leading-5 text-slate-500">The complete operational guide is stored in docs/admin-diagnostics-refunds-guide.md for deployment and support use.</p>
+      </details>
+
+      {tab === "billing" && recoveryCheckout ? (
+        <article className="rounded-[18px] border border-amber-200 bg-amber-50 p-5 shadow-sm">
+          <h3 className="text-xl font-semibold text-slate-950">Recover missed PayFast confirmation</h3>
+          <p className="mt-2 max-w-4xl text-sm leading-6 text-amber-900">Use this when PayFast successfully created a subscription but Mabaso AI missed the confirmation. Enter either the real PayFast subscription token or this customer&apos;s Mabaso AI checkout reference. A checkout reference only locates persisted evidence; it never activates access by itself.</p>
+          <p className="mt-3 break-all text-xs font-semibold text-amber-800">Pending checkout: {recoveryCheckout.id}</p>
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row">
+            <label className="min-w-0 flex-1">
+              <span className="mb-2 block text-xs font-semibold text-amber-950">PayFast subscription token or checkout reference</span>
+              <input type="text" autoComplete="off" value={recoveryToken} onChange={(event) => setRecoveryToken(event.target.value)} placeholder="Paste subscription token or mabaso-... checkout reference" className="w-full rounded-2xl border border-amber-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-indigo-400" />
+            </label>
+            <button type="button" onClick={() => void recoverPayFastTrial()} disabled={recoveryBusy || recoveryToken.trim().length < 20} className="self-end rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{recoveryBusy ? "Verifying with PayFast..." : "Verify and recover"}</button>
+          </div>
+          <div className="mt-3 grid gap-1 text-xs leading-5 text-amber-800">
+            <span>Subscription token: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</span>
+            <span>Checkout reference: mabaso-xxxxxxxxxxxxxxxxxxxxxxxx</span>
+          </div>
+          {recoveryMessage ? <p className="mt-3 text-sm font-semibold text-emerald-800" role="status">{recoveryMessage}</p> : null}
+          <p className="mt-3 text-xs leading-5 text-amber-800">Tokens stay in the protected backend. Audit records contain the identifier type and checkout reference only; raw tokens and payment credentials are never logged.</p>
+        </article>
+      ) : null}
 
       {tab === "inspector" ? (
         <div className="grid gap-5 2xl:grid-cols-[360px_minmax(0,1fr)]">

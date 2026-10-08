@@ -16,7 +16,6 @@
   --study-orange: #f97316;
   --study-purple: #7c3aed;
 }
-
 /* Safe operational activity for AI responses. Kept compact so streaming text
    remains the visual focus on desktop, tablet, and mobile. */
 .chat-activity-timeline {
@@ -15940,4 +15939,280 @@ body.study-guide-focus-open > .study-guide-focus-stage .study-guide-section-slid
   .study-chat-message-action > svg { width: 16px; height: 16px; }
   .collaboration-tool-prerequisite { align-items: flex-start; flex-wrap: wrap; }
   .collaboration-tool-prerequisite > button { width: 100%; }
+}
+/* Final responsive controls: keep room actions reachable without oversized mobile gutters. */
+@media (max-width: 760px) {
+  .collaboration-room-header {
+    min-height: 101px;
+    padding: 8px 9px 41px;
+  }
+
+  .collaboration-room-heading {
+    min-width: 0;
+    gap: 7px;
+  }
+
+  .collaboration-room-heading h1 {
+    max-width: none;
+    font-size: 14px;
+  }
+
+  .collaboration-room-heading p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .collaboration-room-avatar {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .collaboration-room-utility-actions {
+    top: 59px;
+    right: 7px;
+    gap: 3px;
+  }
+
+  .collaboration-room-utility-actions > button,
+  .collaboration-room-utility-actions .collaboration-activity-button {
+    width: 31px;
+    min-width: 31px;
+    height: 31px;
+    min-height: 31px;
+    border-radius: 8px;
+  }
+
+  .collaboration-room-utility-actions svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .collaboration-room-actions {
+    position: absolute;
+    z-index: 76;
+    top: 59px;
+    right: 109px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .collaboration-room-actions > .collaboration-avatar-stack,
+  .collaboration-room-actions > .collaboration-outline-button {
+    display: none;
+  }
+
+  .collaboration-room-actions > .collaboration-primary-button,
+  .collaboration-room-actions > .collaboration-admin-control-button {
+    display: inline-flex;
+    min-width: 31px;
+    min-height: 31px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    padding: 0 8px;
+    font-size: 10px;
+    line-height: 1;
+  }
+
+  .collaboration-room-actions > .collaboration-admin-control-button span,
+  .collaboration-admin-control-actions > button span {
+    display: none;
+  }
+
+  .collaboration-admin-control-actions {
+    gap: 3px;
+  }
+
+  .collaboration-admin-control-actions .is-bring,
+  .collaboration-admin-control-actions .is-stop {
+    display: none;
+  }
+
+  .collaboration-admin-control-actions .is-menu {
+    display: inline-flex;
+    width: 31px;
+    min-width: 31px;
+    min-height: 31px;
+    padding: 0;
+  }
+
+  .collaboration-admin-control-menu {
+    right: 0;
+    left: auto;
+  }
+}
+
+/* Payment information stays compact on phones and expands normally on larger screens. */
+.payment-mobile-disclosure > summary {
+  display: none;
+}
+
+@media (min-width: 641px) {
+  .payment-mobile-disclosure:not([open]) > :not(summary) {
+    display: block !important;
+  }
+
+  .payment-page-shell > .mt-6 {
+    margin-top: 1.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .payment-page-shell {
+    padding-inline: 8px !important;
+  }
+
+  .payment-page-sticky-controls {
+    gap: 6px;
+    margin: -4px -2px 12px;
+    padding: 4px;
+    border-radius: 14px;
+  }
+
+  .payment-page-sticky-controls.is-user-payments {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .payment-page-sticky-controls.is-user-payments .payment-page-sticky-title {
+    padding-right: 36px;
+  }
+
+  .payment-page-back-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+
+  .payment-page-sticky-title {
+    font-size: 13px;
+  }
+
+  .payment-page-shell .p-5 {
+    padding: 12px !important;
+  }
+
+  .payment-page-shell .mt-6 {
+    margin-top: 14px !important;
+  }
+
+  .payment-page-shell .gap-5,
+  .payment-page-shell .space-y-5 {
+    gap: 12px !important;
+  }
+
+  .payment-page-shell h3 {
+    font-size: 19px !important;
+    line-height: 1.25 !important;
+  }
+
+  .payment-page-shell button {
+    min-height: 36px;
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+
+  .payment-mobile-disclosure > summary {
+    display: flex;
+    min-height: 38px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    color: #f8fafc;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 750;
+    list-style: none;
+  }
+
+  .payment-mobile-disclosure > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .payment-mobile-disclosure[open] > summary {
+    margin-bottom: 10px;
+  }
+
+  .payment-mobile-disclosure[open] > summary span {
+    transform: rotate(180deg);
+  }
+}
+
+/* Small global upload-limit notice; rejected files never enter the composer. */
+.study-chat-upload-limit-toast {
+  position: fixed;
+  z-index: 1800;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: grid;
+  width: min(430px, calc(100vw - 32px));
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  border: 1px solid rgba(96, 165, 250, .32);
+  border-radius: 15px;
+  background: rgba(8, 18, 32, .97);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .42);
+  padding: 12px;
+  color: #eff6ff;
+  animation: chat-completion-toast-in .18s ease-out;
+}
+
+.study-chat-upload-limit-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, .2);
+  color: #93c5fd;
+  font-weight: 900;
+}
+
+.study-chat-upload-limit-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.study-chat-upload-limit-copy strong {
+  font-size: 13px;
+}
+
+.study-chat-upload-limit-copy small {
+  color: #bfdbfe;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.study-chat-upload-limit-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.study-chat-upload-limit-actions button {
+  min-height: 30px;
+  border-radius: 8px;
+  background: #2563eb;
+  padding: 5px 9px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.study-chat-upload-limit-actions .is-dismiss {
+  width: 30px;
+  padding: 0;
+  background: rgba(255, 255, 255, .08);
+}
+
+@media (max-width: 520px) {
+  .study-chat-upload-limit-toast {
+    right: 10px;
+    bottom: max(74px, calc(env(safe-area-inset-bottom) + 12px));
+    left: 10px;
+    width: auto;
+  }
 }

@@ -695,9 +695,13 @@ ALLOWED_AUDIO_VIDEO_EXTENSIONS = {
     ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus",
     ".mp4", ".m4v", ".mov", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".3gp",
 }
-ALLOWED_TEXT_EXTENSIONS = {".txt", ".md", ".text"}
+ALLOWED_TEXT_EXTENSIONS = {
+    ".txt", ".md", ".text", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".rtf",
+}
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-ALLOWED_STUDY_SOURCE_EXTENSIONS = ALLOWED_TEXT_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS | {".pdf", ".pptx", ".docx"}
+ALLOWED_STUDY_SOURCE_EXTENSIONS = ALLOWED_TEXT_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS | {
+    ".pdf", ".pptx", ".docx", ".xlsx", ".odt", ".ods", ".odp",
+}
 BLOCKED_UPLOAD_EXTENSIONS = {
     ".exe", ".dll", ".js", ".mjs", ".cjs", ".sh", ".bat", ".cmd", ".com", ".msi",
     ".ps1", ".scr", ".jar", ".vbs", ".apk", ".ipa", ".dmg", ".iso", ".rar", ".7z",
@@ -7152,6 +7156,7 @@ class LectureAssistantRequest(BaseModel):
     past_question_papers: str = ""
     messages: list[LectureAssistantMessage] = []
     reference_images: list[str] = []
+    reference_attachments: list[dict[str, Any]] = []
     language: str = "English"
     voice_mode: bool = False
     session_id: str = ""
@@ -7256,7 +7261,9 @@ class SubscriptionCancelRequest(BaseModel):
 
 
 class PayFastSubscriptionRecoveryRequest(BaseModel):
-    provider_token: str = Field(min_length=20, max_length=128)
+    identifier: str = Field(default="", max_length=128)
+    # Backward-compatible during rolling frontend/backend deployments.
+    provider_token: str = Field(default="", max_length=128)
     checkout_id: str = Field(default="", max_length=120)
 
 
@@ -20368,6 +20375,7 @@ def consume_plan_quota(
     quantity: int = 1,
     metadata: dict[str, Any] | None = None,
     include_account_snapshot: bool = True,
+    quota_error_code: str = "",
 ) -> dict[str, Any]:
     normalized_email = normalize_email(email)
     normalized_feature = normalize_billing_plan_id(feature)
@@ -20383,6 +20391,13 @@ def consume_plan_quota(
 
     with get_db_connection() as connection:
         connection.execute("BEGIN IMMEDIATE")
+        if DATABASE_BACKEND == "postgres":
+            lock_seed = f"{normalized_email}:{normalized_feature}:{period_key}".encode("utf-8")
+            advisory_lock_key = int.from_bytes(hashlib.sha256(lock_seed).digest()[:8], "big") & 0x7FFF_FFFF_FFFF_FFFF
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(?)",
+                (advisory_lock_key,),
+            )
         row = connection.execute(
             """
             SELECT COALESCE(SUM(quantity), 0) AS total_quantity
@@ -20394,12 +20409,15 @@ def consume_plan_quota(
         used = int(row["total_quantity"] or 0)
         if limit >= 0 and used + safe_quantity > limit:
             remaining = max(0, limit - used)
-            base_limit_message = (
-                f"You have used all free attempts for today for {label}. upgrade to pro to continue."
-                if plan_id == "free"
-                else f"Today's {plan_id.replace('_', ' ').title()} limit has been reached for {label}."
+            public_message = (
+                "You've reached the upload limit for your current plan. "
+                "Upgrade your plan or try again when your allowance resets."
+                if quota_error_code == "UPLOAD_LIMIT_REACHED"
+                else f"You've reached today's allowance for {label}. Try again after the daily reset."
             )
-            upgrade_hint = "" if plan_id == "free" else " Upgrade to Premium Student for unlimited usage."
+            # Release the quota reservation lock before the audit writer opens
+            # its own database connection. No usage row has been inserted.
+            connection.execute("COMMIT")
             record_audit_log(
                 action="billing.quota.block",
                 status="blocked",
@@ -20407,17 +20425,26 @@ def consume_plan_quota(
                 request=request,
                 resource_type="billing_usage",
                 resource_name=normalized_feature,
-                metadata={"plan_id": plan_id, "used": used, "limit": limit, "remaining": remaining},
+                metadata={
+                    "plan_id": plan_id,
+                    "used": used,
+                    "limit": limit,
+                    "remaining": remaining,
+                    "reason_code": quota_error_code or "QUOTA_LIMIT_REACHED",
+                    **(metadata or {}),
+                },
             )
-            raise HTTPException(
-                status_code=402,
-                detail=(
-                    f"{base_limit_message} "
-                    f"Attempts remaining today: {remaining}/{limit}. "
-                    f"Your usage will reset in {reset_wait} at {reset_label} for {normalized_email}."
-                    f"{upgrade_hint}"
-                ),
-            )
+            detail: str | dict[str, Any] = public_message
+            if quota_error_code:
+                detail = {
+                    "code": quota_error_code,
+                    "message": public_message,
+                    "feature": normalized_feature,
+                    "plan_id": plan_id,
+                    "reset_at": reset_at,
+                    "upgrade_available": plan_id != "premium_student",
+                }
+            raise HTTPException(status_code=402, detail=detail)
         usage_event_id = uuid4().hex
         usage_metadata = {
             "request_id": usage_event_id,
@@ -20500,6 +20527,73 @@ def update_usage_event_metadata(usage_event_id: str, **updates: Any) -> bool:
             (json.dumps(current, ensure_ascii=False), normalized_event_id),
         )
     return True
+
+
+def build_chat_upload_receipt(
+    *,
+    email: str,
+    usage_event_id: str,
+    text: str,
+    image_url: str,
+    source_kind: str,
+) -> str:
+    """Sign the exact safe extraction result accepted by the upload quota gate."""
+    claims = {
+        "email": normalize_email(email),
+        "usage_event_id": compact_text(usage_event_id),
+        "source_kind": compact_text(source_kind),
+        "text_sha256": hashlib.sha256(compact_text(text)[:12000].encode("utf-8")).hexdigest(),
+        "image_sha256": hashlib.sha256((image_url or "").encode("utf-8")).hexdigest(),
+        "expires_at": int(time.time()) + (24 * 60 * 60),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(claims, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    signature = hmac.new(APP_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"v1.{encoded}.{signature}"
+
+
+def verify_chat_upload_receipt(
+    *,
+    receipt: str,
+    email: str,
+    text: str,
+    image_url: str,
+) -> dict[str, Any]:
+    parts = compact_text(receipt).split(".")
+    if len(parts) != 3 or parts[0] != "v1":
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "This attachment was not accepted by Mabaso AI."})
+    encoded, supplied_signature = parts[1], parts[2]
+    expected_signature = hmac.new(APP_SECRET.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_signature, supplied_signature):
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "This attachment could not be verified."})
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(f"{encoded}{padding}").decode("utf-8"))
+    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "This attachment could not be verified."}) from exc
+    normalized_email = normalize_email(email)
+    if normalize_email(claims.get("email")) != normalized_email or int(claims.get("expires_at") or 0) < int(time.time()):
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "This attachment authorization has expired or belongs to another account."})
+    if claims.get("text_sha256") != hashlib.sha256((text or "").encode("utf-8")).hexdigest():
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "The attachment text did not match the accepted upload."})
+    if claims.get("image_sha256") != hashlib.sha256((image_url or "").encode("utf-8")).hexdigest():
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "The attachment image did not match the accepted upload."})
+    usage_event_id = compact_text(claims.get("usage_event_id"))
+    with get_db_connection() as connection:
+        row = connection.execute(
+            "SELECT email, feature, metadata_json FROM billing_usage_events WHERE id = ?",
+            (usage_event_id,),
+        ).fetchone()
+    if not row or normalize_email(row["email"]) != normalized_email or compact_text(row["feature"]) != "study_chat_upload":
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "No accepted upload allowance record was found for this attachment."})
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except (TypeError, ValueError):
+        metadata = {}
+    if not isinstance(metadata, dict) or compact_text(metadata.get("status")).lower() != "accepted":
+        raise HTTPException(status_code=403, detail={"code": "UPLOAD_NOT_AUTHORIZED", "message": "This attachment has not completed secure processing."})
+    return claims
 
 
 def refund_usage_event(
@@ -21056,55 +21150,139 @@ def activate_payfast_trial_from_verified_subscription(
     }
 
 
+def classify_payfast_recovery_identifier(value: Any) -> tuple[str, str]:
+    identifier = compact_text(value)
+    if re.fullmatch(r"mabaso-[a-f0-9]{24}", identifier, flags=re.IGNORECASE):
+        return "checkout_reference", identifier.lower()
+    if re.fullmatch(r"[A-Za-z0-9-]{20,128}", identifier) and not identifier.lower().startswith("mabaso-"):
+        return "subscription_token", identifier
+    raise HTTPException(
+        status_code=400,
+        detail="Enter a valid PayFast subscription token or Mabaso AI checkout reference.",
+    )
+
+
+def resolve_payfast_recovery_context(
+    *, email: str, identifier: str, checkout_id: str = "",
+) -> dict[str, Any]:
+    normalized_email = validate_email_address(email)
+    identifier_type, normalized_identifier = classify_payfast_recovery_identifier(identifier)
+    normalized_checkout_id = compact_text(checkout_id)
+    if identifier_type == "checkout_reference":
+        normalized_checkout_id = normalized_identifier
+    if normalized_checkout_id and not re.fullmatch(r"mabaso-[a-f0-9]{24}", normalized_checkout_id, flags=re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="Checkout reference is invalid.")
+
+    with get_db_connection() as connection:
+        if normalized_checkout_id:
+            session = connection.execute(
+                """SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                          provider_token, status, checkout_fields_json, raw_event_json,
+                          billing_country_at_purchase, created_at, updated_at
+                   FROM billing_checkout_sessions
+                   WHERE id = ? AND lower(provider) = 'payfast' LIMIT 1""",
+                (normalized_checkout_id,),
+            ).fetchone()
+            if session and normalize_email(session["email"]) != normalized_email:
+                raise HTTPException(status_code=409, detail="The PayFast subscription does not belong to the selected Mabaso AI user.")
+        else:
+            session = connection.execute(
+                """SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                          provider_token, status, checkout_fields_json, raw_event_json,
+                          billing_country_at_purchase, created_at, updated_at
+                   FROM billing_checkout_sessions
+                   WHERE lower(email) = lower(?) AND lower(provider) = 'payfast'
+                     AND lower(status) IN ('pending', 'confirmation_pending')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (normalized_email,),
+            ).fetchone()
+        if not session:
+            message = "No Mabaso AI checkout was found for this reference." if identifier_type == "checkout_reference" else "No pending PayFast trial checkout was found for this account."
+            raise HTTPException(status_code=404, detail=message)
+
+        token = normalized_identifier if identifier_type == "subscription_token" else compact_text(session["provider_token"])
+        if identifier_type == "checkout_reference" and not token:
+            verified_event = connection.execute(
+                """SELECT payload_json FROM billing_events
+                   WHERE checkout_session_id = ? AND lower(provider) = 'payfast'
+                     AND upper(event_type) IN ('COMPLETE', 'COMPLETE_PAYMENT')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (session["id"],),
+            ).fetchone()
+            if verified_event:
+                try:
+                    token = compact_text(json.loads(compact_text(verified_event["payload_json"], "{}")).get("token"))
+                except (json.JSONDecodeError, AttributeError):
+                    token = ""
+        if identifier_type == "checkout_reference" and not token:
+            raise HTTPException(status_code=409, detail="Checkout found, but no PayFast subscription token was recorded. Additional PayFast verification is required.")
+
+        if not re.fullmatch(r"[A-Za-z0-9-]{20,128}", token):
+            raise HTTPException(status_code=409, detail="The checkout exists, but PayFast has not provided sufficient verified confirmation to recover the subscription.")
+        token_owner = connection.execute(
+            """SELECT email FROM billing_subscriptions WHERE lower(provider) = 'payfast' AND provider_token = ?
+               UNION ALL
+               SELECT email FROM billing_checkout_sessions WHERE lower(provider) = 'payfast' AND provider_token = ?
+               LIMIT 1""",
+            (token, token),
+        ).fetchone()
+        if token_owner and normalize_email(token_owner["email"]) != normalized_email:
+            raise HTTPException(status_code=409, detail="The PayFast subscription does not belong to the selected Mabaso AI user.")
+        subscription = connection.execute(
+            """SELECT provider_token, status, current_period_end FROM billing_subscriptions
+               WHERE lower(email) = lower(?) AND lower(provider) = 'payfast' LIMIT 1""",
+            (normalized_email,),
+        ).fetchone()
+        subscription_keys = set(subscription.keys()) if subscription and hasattr(subscription, "keys") else set()
+        if subscription and {"provider_token", "status", "current_period_end"}.issubset(subscription_keys) and compact_text(subscription["provider_token"]) == token and compact_text(subscription["status"]).lower() in {"active", "trialing", "cancel_at_period_end"}:
+            return {"already_recovered": True, "email": normalized_email, "identifier_type": identifier_type,
+                    "token": token, "session": session, "trial_ends_at": compact_text(subscription["current_period_end"]),
+                    "status": compact_text(subscription["status"], "trialing")}
+        user_row = connection.execute("SELECT trial_used_at FROM users WHERE lower(email) = lower(?)", (normalized_email,)).fetchone()
+        claim = None
+        if user_row and compact_text(user_row["trial_used_at"]):
+            claim = connection.execute(
+                """SELECT checkout_session_id, provider_token_hash FROM trial_claims
+                   WHERE lower(email) = lower(?) ORDER BY created_at DESC LIMIT 1""",
+                (normalized_email,),
+            ).fetchone()
+
+    if user_row and compact_text(user_row["trial_used_at"]):
+        same_trial = bool(claim and compact_text(claim["checkout_session_id"]) == compact_text(session["id"]))
+        token_hash = compact_text(claim["provider_token_hash"] if claim else "")
+        same_token = not token_hash or hmac.compare_digest(token_hash, hash_trial_provider_value("subscription-token", token))
+        if not (same_trial and same_token):
+            raise HTTPException(status_code=409, detail="This account already used its trial. Recovery cannot create a second trial.")
+
+    return {"already_recovered": False, "email": normalized_email, "identifier_type": identifier_type, "token": token, "session": session}
+
+
 def recover_pending_payfast_trial(
     *,
     email: str,
-    provider_token: str,
+    provider_token: str = "",
     checkout_id: str = "",
+    identifier: str = "",
 ) -> dict[str, Any]:
-    """Recover a missed trial ITN only after querying PayFast itself.
+    """Recover a missed trial confirmation only after querying PayFast itself.
 
-    The subscription token is supplied by an administrator, kept server-side,
-    and never returned. PayFast remains authoritative for status, amount,
-    billing date, and subscription identity.
+    A checkout reference only locates authoritative persisted evidence. It is
+    never treated as a subscription token or proof of successful payment.
     """
-    normalized_email = validate_email_address(email)
-    token = compact_text(provider_token)
-    normalized_checkout_id = compact_text(checkout_id)
-    if not re.fullmatch(r"[A-Za-z0-9-]{20,128}", token):
-        raise HTTPException(status_code=400, detail="PayFast subscription token is invalid.")
-    if normalized_checkout_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,120}", normalized_checkout_id):
-        raise HTTPException(status_code=400, detail="Checkout reference is invalid.")
+    context = resolve_payfast_recovery_context(
+        email=email, identifier=compact_text(identifier or provider_token), checkout_id=checkout_id,
+    )
+    normalized_email = context["email"]
+    token = context["token"]
+    session = context["session"]
 
-    params: list[Any] = [normalized_email]
-    checkout_filter = ""
-    if normalized_checkout_id:
-        checkout_filter = " AND id = ?"
-        params.append(normalized_checkout_id)
-    with get_db_connection() as connection:
-        session = connection.execute(
-            f"""
-            SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
-                   provider_token, status, checkout_fields_json, raw_event_json,
-                   billing_country_at_purchase, created_at, updated_at
-            FROM billing_checkout_sessions
-            WHERE lower(email) = lower(?)
-              AND lower(provider) = 'payfast'
-              AND lower(status) IN ('pending', 'confirmation_pending')
-              {checkout_filter}
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            tuple(params),
-        ).fetchone()
-        user_row = connection.execute(
-            "SELECT trial_used_at FROM users WHERE lower(email) = lower(?)",
-            (normalized_email,),
-        ).fetchone()
-    if not session:
-        raise HTTPException(status_code=404, detail="No pending PayFast trial checkout was found for this account.")
-    if user_row and compact_text(user_row["trial_used_at"]):
-        raise HTTPException(status_code=409, detail="This account already has a permanent trial-use record. No billing state was changed.")
+    if context["already_recovered"]:
+        return {
+            "status": context["status"], "result_code": "ALREADY_RECOVERED",
+            "identifier_type": context["identifier_type"], "checkout_id": session["id"],
+            "email": normalized_email, "trial_ends_at": context["trial_ends_at"],
+            "message": "This subscription is already confirmed. No changes were required.",
+        }
 
     try:
         provider_payload = get_payfast_api_client().fetch_subscription(token)
@@ -21144,10 +21322,12 @@ def recover_pending_payfast_trial(
     )
     return {
         "status": result.get("status", "trialing"),
+        "result_code": "RECOVERED",
+        "identifier_type": context["identifier_type"],
         "checkout_id": result.get("checkout_id", session["id"]),
         "email": normalized_email,
         "trial_ends_at": result.get("trial_ends_at", next_run.isoformat()),
-        "message": "PayFast verified the subscription and Mabaso AI recovered the trial record.",
+        "message": "PayFast subscription verified and recovered.",
     }
 
 
@@ -24761,7 +24941,7 @@ def is_text_upload(filename: str, content_type: str | None) -> bool:
     suffix = Path(filename or "").suffix.lower()
     return bool(
         (content_type and content_type.startswith("text/"))
-        or suffix in {".txt", ".md", ".text"}
+        or suffix in ALLOWED_TEXT_EXTENSIONS
     )
 
 
@@ -24778,6 +24958,20 @@ def is_pptx_upload(filename: str, content_type: str | None) -> bool:
 def is_docx_upload(filename: str, content_type: str | None) -> bool:
     suffix = Path(filename or "").suffix.lower()
     return suffix == ".docx" or content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def is_xlsx_upload(filename: str, content_type: str | None) -> bool:
+    suffix = Path(filename or "").suffix.lower()
+    return suffix == ".xlsx" or content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def is_open_document_upload(filename: str, content_type: str | None) -> bool:
+    suffix = Path(filename or "").suffix.lower()
+    return suffix in {".odt", ".ods", ".odp"} or content_type in {
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.presentation",
+    }
 
 
 def get_upload_extension(filename: str) -> str:
@@ -24815,11 +25009,18 @@ def ensure_allowed_study_source_upload(filename: str, content_type: str | None):
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.oasis.opendocument.text",
+            "application/vnd.oasis.opendocument.spreadsheet",
+            "application/vnd.oasis.opendocument.presentation",
+            "application/json",
+            "application/xml",
+            "application/rtf",
         }
     ):
         raise HTTPException(
             status_code=400,
-            detail="Upload a slide image, .pdf, .pptx, .docx, or a text-based slide file such as .txt or .md.",
+            detail="Upload a supported image, PDF, Word, PowerPoint, spreadsheet, OpenDocument, or text-based file.",
         )
 
 
@@ -25112,6 +25313,81 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
                 paragraphs.append(paragraph_text)
 
     return "\n\n".join(paragraphs).strip()
+
+
+def extract_text_from_xlsx(file_bytes: bytes) -> str:
+    spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    shared_strings: list[str] = []
+    sheet_parts: list[str] = []
+
+    with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+        member_names = set(archive.namelist())
+        if "xl/sharedStrings.xml" in member_names:
+            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall(f".//{{{spreadsheet_namespace}}}si"):
+                shared_strings.append("".join(item.itertext()).strip())
+
+        sheet_names = sorted(
+            name for name in member_names
+            if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
+        )
+        for sheet_index, sheet_name in enumerate(sheet_names, start=1):
+            sheet_root = ET.fromstring(archive.read(sheet_name))
+            rows: list[str] = []
+            for row in sheet_root.findall(f".//{{{spreadsheet_namespace}}}row"):
+                values: list[str] = []
+                for cell in row.findall(f"{{{spreadsheet_namespace}}}c"):
+                    cell_type = cell.attrib.get("t", "")
+                    value_node = cell.find(f"{{{spreadsheet_namespace}}}v")
+                    if cell_type == "inlineStr":
+                        value = "".join(cell.itertext()).strip()
+                    else:
+                        value = (value_node.text or "").strip() if value_node is not None else ""
+                    if cell_type == "s" and value.isdigit():
+                        shared_index = int(value)
+                        value = shared_strings[shared_index] if shared_index < len(shared_strings) else ""
+                    values.append(value)
+                if any(values):
+                    rows.append("\t".join(values))
+            if rows:
+                sheet_parts.append(f"SHEET {sheet_index}\n" + "\n".join(rows))
+
+    return "\n\n".join(sheet_parts).strip()
+
+
+def extract_text_from_open_document(file_bytes: bytes) -> str:
+    with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+        if "content.xml" not in archive.namelist():
+            return ""
+        root = ET.fromstring(archive.read("content.xml"))
+    blocks: list[str] = []
+    for node in root.iter():
+        local_name = node.tag.rsplit("}", 1)[-1]
+        if local_name not in {"p", "h", "table-row"}:
+            continue
+        text = " ".join("".join(node.itertext()).split())
+        if text and (not blocks or blocks[-1] != text):
+            blocks.append(text)
+    return "\n".join(blocks).strip()
+
+
+def normalize_text_document_content(file_bytes: bytes, filename: str) -> str:
+    text = file_bytes.decode("utf-8", errors="ignore").strip()
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".rtf":
+        text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", text)
+        text = re.sub(r"\\[a-zA-Z]+-?\d* ?", " ", text)
+        text = text.replace("{", " ").replace("}", " ")
+    elif suffix in {".html", ".htm"}:
+        text = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", text)
+        text = re.sub(r"(?s)<[^>]+>", " ", text)
+        text = html.unescape(text)
+    elif suffix == ".xml":
+        try:
+            text = " ".join(ET.fromstring(file_bytes).itertext())
+        except ET.ParseError:
+            pass
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 def extract_slide_text_from_image(image_data_url: str, file_name: str = "") -> str:
@@ -28058,13 +28334,18 @@ def recover_admin_payfast_trial(
         window_seconds=60 * 60,
         identity=current_admin,
     )
+    submitted_identifier = compact_text(payload.identifier or payload.provider_token)
+    identifier_type = "invalid"
+    checkout_reference = ""
     try:
+        identifier_type, normalized_identifier = classify_payfast_recovery_identifier(submitted_identifier)
+        checkout_reference = normalized_identifier if identifier_type == "checkout_reference" else compact_text(payload.checkout_id)
         result = recover_pending_payfast_trial(
             email=normalized_email,
-            provider_token=payload.provider_token,
+            identifier=submitted_identifier,
             checkout_id=payload.checkout_id,
         )
-    except HTTPException:
+    except HTTPException as exc:
         record_audit_log(
             action="admin.diagnostics.payfast_trial_recovery_failed",
             status="failed",
@@ -28072,7 +28353,12 @@ def recover_admin_payfast_trial(
             request=request,
             resource_type="billing_subscription",
             resource_name=normalized_email,
-            metadata={"checkout_id": compact_text(payload.checkout_id)},
+            metadata={
+                "identifier_type": identifier_type,
+                "checkout_reference": checkout_reference,
+                "payfast_verification_succeeded": False,
+                "recovery_result": f"HTTP_{exc.status_code}",
+            },
         )
         raise
     record_audit_log(
@@ -28085,6 +28371,10 @@ def recover_admin_payfast_trial(
             "checkout_id": result.get("checkout_id"),
             "trial_ends_at": result.get("trial_ends_at"),
             "provider": "payfast",
+            "identifier_type": result.get("identifier_type", identifier_type),
+            "checkout_reference": result.get("checkout_id") if identifier_type == "checkout_reference" else checkout_reference,
+            "payfast_verification_succeeded": result.get("result_code") in {"RECOVERED", "ALREADY_RECOVERED"},
+            "recovery_result": result.get("result_code", "RECOVERED"),
         },
     )
     return result
@@ -39433,19 +39723,16 @@ async def extract_slide_text(
     reference_images: list[str] = []
     is_study_chat_attachment = compact_text(request.headers.get("x-mabaso-upload-purpose")).lower() == "study-chat"
     quota_feature = "study_chat_upload" if is_study_chat_attachment else "source_upload"
-    ensure_plan_quota_available(
-        email=current_user,
-        feature=quota_feature,
-        request=request,
-        metadata={"route": "extract_slide_text", "stage": "precheck", "purpose": "study_chat" if is_study_chat_attachment else "source"},
-    )
+    usage: dict[str, Any] | None = None
 
     def finish_extracted_source(text: str, image_urls: list[str], *, source_kind: str) -> dict[str, Any]:
-        usage = consume_plan_quota(
-            email=current_user,
-            feature=quota_feature,
-            request=request,
-            metadata={"route": "extract_slide_text", "source_kind": source_kind, "purpose": "study_chat" if is_study_chat_attachment else "source"},
+        if not usage:
+            raise HTTPException(status_code=500, detail="The upload allowance reservation was not created.")
+        update_usage_event_metadata(
+            compact_text(usage.get("usage_event_id")),
+            status="accepted",
+            source_kind=source_kind,
+            accepted_at=utc_now().isoformat(),
         )
         record_audit_log(
             action="study_source.extract",
@@ -39460,9 +39747,31 @@ async def extract_slide_text(
                 "text_chars": len(text or ""),
             },
         )
-        return {"text": text, "image_urls": image_urls, "usage": usage}
+        upload_receipt = ""
+        if is_study_chat_attachment:
+            upload_receipt = build_chat_upload_receipt(
+                email=current_user,
+                usage_event_id=compact_text(usage.get("usage_event_id")),
+                text=text,
+                image_url=next((item for item in image_urls if compact_text(item)), ""),
+                source_kind=source_kind,
+            )
+        return {"text": text, "image_urls": image_urls, "usage": usage, "upload_receipt": upload_receipt}
 
     try:
+        usage = consume_plan_quota(
+            email=current_user,
+            feature=quota_feature,
+            request=request,
+            metadata={
+                "route": "extract_slide_text",
+                "stage": "reserved_before_read",
+                "purpose": "study_chat" if is_study_chat_attachment else "source",
+                "filename_extension": get_upload_extension(file.filename),
+            },
+            include_account_snapshot=False,
+            quota_error_code="UPLOAD_LIMIT_REACHED",
+        )
         logger.info("Study source extraction started for %s (%s) by %s", file.filename, content_type or "unknown", current_user)
         file_bytes = await file.read()
         if not file_bytes:
@@ -39486,7 +39795,7 @@ async def extract_slide_text(
             )
 
         if is_text_upload(file.filename, content_type):
-            text = file_bytes.decode("utf-8", errors="ignore").strip()
+            text = normalize_text_document_content(file_bytes, file.filename)
             if not text:
                 raise HTTPException(status_code=400, detail="The slide text file does not contain readable text.")
             return finish_extracted_source(text, [], source_kind="text")
@@ -39521,10 +39830,24 @@ async def extract_slide_text(
                 raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that Word document.")
             return finish_extracted_source(text, [], source_kind="docx")
 
+        if is_xlsx_upload(file.filename, content_type):
+            ensure_safe_zip_upload(file_bytes, file.filename)
+            text = await asyncio.to_thread(extract_text_from_xlsx, file_bytes)
+            if not text:
+                raise HTTPException(status_code=422, detail="MABASO could not extract readable cells from that spreadsheet.")
+            return finish_extracted_source(text, [], source_kind="xlsx")
+
+        if is_open_document_upload(file.filename, content_type):
+            ensure_safe_zip_upload(file_bytes, file.filename)
+            text = await asyncio.to_thread(extract_text_from_open_document, file_bytes)
+            if not text:
+                raise HTTPException(status_code=422, detail="MABASO could not extract readable text from that OpenDocument file.")
+            return finish_extracted_source(text, [], source_kind=get_upload_extension(file.filename).lstrip("."))
+
         if not content_type.startswith("image/"):
             raise HTTPException(
                 status_code=400,
-                detail="Upload a slide image, .pdf, .pptx, .docx, or a text-based slide file such as .txt or .md.",
+                detail="Upload a supported image, PDF, Word, PowerPoint, spreadsheet, OpenDocument, or text-based file.",
             )
 
         ensure_allowed_image_upload(file.filename, content_type)
@@ -39539,6 +39862,12 @@ async def extract_slide_text(
             raise HTTPException(status_code=422, detail="MABASO could not read text from that slide image.")
         return finish_extracted_source(text, [image_data_url], source_kind="image")
     except HTTPException as exc:
+        if usage:
+            refund_usage_event(
+                usage_event_id=compact_text(usage.get("usage_event_id")),
+                email=current_user,
+                reason=f"upload_rejected_{exc.status_code}",
+            )
         logger.warning(
             "Study source extraction failed for %s with status %s: %s",
             file.filename,
@@ -39547,6 +39876,12 @@ async def extract_slide_text(
         )
         raise
     except Exception as exc:
+        if usage:
+            refund_usage_event(
+                usage_event_id=compact_text(usage.get("usage_event_id")),
+                email=current_user,
+                reason="upload_processing_failed",
+            )
         logger.exception("Study source extraction crashed for %s", file.filename)
         raise HTTPException(
             status_code=502,
@@ -41553,6 +41888,41 @@ def persist_lecture_assistant_turn(
         return None
 
 
+def authorize_lecture_assistant_attachments(*, payload: LectureAssistantRequest, current_user: str, request: Request) -> LectureAssistantRequest:
+    verified_images: list[str] = []
+    verified_documents: list[str] = []
+    verified_image_values: set[str] = set()
+    for raw_attachment in (payload.reference_attachments or [])[:MAX_CHAT_REFERENCE_ATTACHMENTS]:
+        if not isinstance(raw_attachment, dict):
+            continue
+        text = compact_text(raw_attachment.get("text"))[:12000]
+        image_url = compact_text(raw_attachment.get("image_url"))
+        name = shorten_text(compact_text(raw_attachment.get("name"), "Attached document"), 160)
+        verify_chat_upload_receipt(receipt=compact_text(raw_attachment.get("receipt")), email=current_user, text=text, image_url=image_url)
+        if image_url:
+            verified_images.append(image_url)
+            verified_image_values.add(image_url)
+        if text:
+            verified_documents.append(f"{name}:\n{text}")
+    raw_images = sanitize_reference_images(payload.reference_images, limit=MAX_CHAT_REFERENCE_IMAGES)
+    unverified_inline_images = [image for image in raw_images if image.startswith("data:") and image not in verified_image_values]
+    if unverified_inline_images:
+        consume_plan_quota(
+            email=current_user,
+            feature="study_chat_upload",
+            request=request,
+            quantity=len(unverified_inline_images),
+            metadata={"route": "api_chat_stream", "stage": "reserved_before_model", "source": "inline_attachment"},
+            include_account_snapshot=False,
+            quota_error_code="UPLOAD_LIMIT_REACHED",
+        )
+    combined_images = sanitize_reference_images([*raw_images, *verified_images], limit=MAX_CHAT_REFERENCE_IMAGES)
+    lecture_notes = compact_text(payload.lecture_notes)
+    if verified_documents:
+        lecture_notes = "\n\n".join(part for part in [lecture_notes, *verified_documents] if compact_text(part))
+    return payload.model_copy(update={"reference_images": combined_images, "reference_attachments": [], "lecture_notes": lecture_notes})
+
+
 def create_lecture_assistant_stream(
     *,
     payload: LectureAssistantRequest,
@@ -41567,9 +41937,6 @@ def create_lecture_assistant_stream(
         window_seconds=10 * 60,
         identity=current_user,
     )
-    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
-    if reference_images:
-        payload = payload.model_copy(update={"reference_images": reference_images})
     if not compact_text(payload.question):
         raise HTTPException(status_code=400, detail="A question is required.")
     generation_id = compact_text(payload.client_request_id, uuid4().hex)
@@ -41590,6 +41957,12 @@ def create_lecture_assistant_stream(
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
+    payload = authorize_lecture_assistant_attachments(
+        payload=payload,
+        current_user=current_user,
+        request=request,
+    )
+    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     plan_id = get_effective_plan_id(current_user)
     requested_mode = normalize_ai_chat_mode(payload.requested_mode)
     resolved_mode = "study"

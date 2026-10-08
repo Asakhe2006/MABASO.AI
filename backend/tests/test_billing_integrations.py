@@ -25,6 +25,39 @@ def make_request() -> Request:
 
 
 class BillingIntegrationTests(unittest.TestCase):
+    def make_recovery_database(self, *, email="student@example.test", checkout_id="mabaso-0123456789abcdef01234567", token=""):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript("""
+            CREATE TABLE billing_checkout_sessions (
+                id TEXT PRIMARY KEY, email TEXT, plan_id TEXT, amount_zar TEXT,
+                provider TEXT, provider_payment_id TEXT, provider_token TEXT,
+                status TEXT, checkout_fields_json TEXT, raw_event_json TEXT,
+                billing_country_at_purchase TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE billing_events (
+                id TEXT PRIMARY KEY, email TEXT, checkout_session_id TEXT,
+                provider TEXT, event_type TEXT, payload_json TEXT, created_at TEXT
+            );
+            CREATE TABLE billing_subscriptions (
+                email TEXT PRIMARY KEY, provider TEXT, provider_token TEXT,
+                status TEXT, current_period_end TEXT
+            );
+            CREATE TABLE users (email TEXT PRIMARY KEY, trial_used_at TEXT);
+            CREATE TABLE trial_claims (
+                id TEXT PRIMARY KEY, email TEXT, checkout_session_id TEXT,
+                provider_token_hash TEXT, created_at TEXT
+            );
+        """)
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            "INSERT INTO billing_checkout_sessions VALUES (?, ?, 'pro_student', '0.00', 'payfast', '', ?, 'pending', ?, '{}', 'ZA', ?, ?)",
+            (checkout_id, email, token, '{"custom_str4":"trial"}', now, now),
+        )
+        connection.execute("INSERT INTO users VALUES (?, '')", (email,))
+        connection.commit()
+        return connection
+
     def test_payfast_webhook_readiness_exposes_no_configuration_or_secrets(self):
         payload = main.payfast_webhook_readiness()
         self.assertEqual(payload["status"], "ready")
@@ -86,7 +119,7 @@ class BillingIntegrationTests(unittest.TestCase):
     def test_admin_recovery_verifies_payfast_before_recovering_missed_trial(self):
         future_run = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
         session = {
-            "id": "mabaso-checkout-12345678",
+            "id": "mabaso-1234567890abcdef12345678",
             "email": "student@example.test",
             "plan_id": "pro_student",
             "amount_zar": "50.00",
@@ -200,6 +233,66 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertEqual(result, recovered)
         self.assertNotIn(token, str(result))
         self.assertNotIn(token, str(audit.call_args))
+
+    def test_checkout_reference_resolves_saved_verified_token(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        checkout_id = "mabaso-0123456789abcdef01234567"
+        connection = self.make_recovery_database(checkout_id=checkout_id, token=token)
+        with patch.object(main, "get_db_connection", return_value=connection):
+            context = main.resolve_payfast_recovery_context(
+                email="student@example.test", identifier=checkout_id,
+            )
+        self.assertEqual(context["identifier_type"], "checkout_reference")
+        self.assertEqual(context["token"], token)
+        self.assertFalse(context["already_recovered"])
+        connection.close()
+
+    def test_checkout_reference_without_verified_token_never_recovers(self):
+        checkout_id = "mabaso-0123456789abcdef01234567"
+        connection = self.make_recovery_database(checkout_id=checkout_id)
+        with patch.object(main, "get_db_connection", return_value=connection):
+            with self.assertRaises(HTTPException) as raised:
+                main.resolve_payfast_recovery_context(
+                    email="student@example.test", identifier=checkout_id,
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("no PayFast subscription token", raised.exception.detail)
+        connection.close()
+
+    def test_checkout_reference_rejects_selected_customer_mismatch(self):
+        checkout_id = "mabaso-0123456789abcdef01234567"
+        connection = self.make_recovery_database(email="owner@example.test", checkout_id=checkout_id)
+        with patch.object(main, "get_db_connection", return_value=connection):
+            with self.assertRaises(HTTPException) as raised:
+                main.resolve_payfast_recovery_context(
+                    email="different@example.test", identifier=checkout_id,
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("selected Mabaso AI user", raised.exception.detail)
+        connection.close()
+
+    def test_already_recovered_subscription_is_idempotent(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        checkout_id = "mabaso-0123456789abcdef01234567"
+        connection = self.make_recovery_database(checkout_id=checkout_id, token=token)
+        connection.execute(
+            "INSERT INTO billing_subscriptions VALUES (?, 'payfast', ?, 'trialing', '2030-01-08T00:00:00+00:00')",
+            ("student@example.test", token),
+        )
+        connection.commit()
+        with patch.object(main, "get_db_connection", return_value=connection), \
+                patch.object(main, "get_payfast_api_client") as client:
+            result = main.recover_pending_payfast_trial(
+                email="student@example.test", identifier=checkout_id,
+            )
+        self.assertEqual(result["result_code"], "ALREADY_RECOVERED")
+        client.assert_not_called()
+        connection.close()
+
+    def test_invalid_recovery_identifier_is_rejected(self):
+        with self.assertRaises(HTTPException) as raised:
+            main.classify_payfast_recovery_identifier("mabaso-not-a-checkout")
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_zero_value_trial_is_never_refundable(self):
         summary = main.get_payment_refund_summary({"amount_zar": "0.00"})
