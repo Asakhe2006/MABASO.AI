@@ -2,7 +2,7 @@ import asyncio
 import os
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from fastapi import Request
@@ -82,6 +82,124 @@ class BillingIntegrationTests(unittest.TestCase):
             provider_payload=verified,
             event_payload=event,
         )
+
+    def test_admin_recovery_verifies_payfast_before_recovering_missed_trial(self):
+        future_run = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+        session = {
+            "id": "mabaso-checkout-12345678",
+            "email": "student@example.test",
+            "plan_id": "pro_student",
+            "amount_zar": "50.00",
+            "provider": "payfast",
+            "provider_payment_id": "",
+            "provider_token": "",
+            "status": "pending",
+            "checkout_fields_json": '{"custom_str4": "trial"}',
+            "raw_event_json": "{}",
+            "billing_country_at_purchase": "ZA",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _parameters=()):
+                value = {"trial_used_at": ""} if "SELECT trial_used_at" in sql else session
+                return type("Result", (), {"fetchone": lambda _self: value})()
+
+        verified = {"data": {"response": {
+            "status": 1,
+            "status_text": "ACTIVE",
+            "amount": 5000,
+            "cycles_complete": 0,
+            "frequency": 3,
+            "run_date": future_run,
+            "token": "provider-token-1234567890",
+            "email_address": "student@example.test",
+        }}}
+        client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
+        with patch.object(main, "get_db_connection", return_value=FakeConnection()), \
+                patch.object(main, "get_payfast_api_client", return_value=client), \
+                patch.object(main, "activate_payfast_trial_from_verified_subscription", return_value={
+                    "status": "trialing",
+                    "checkout_id": session["id"],
+                    "trial_ends_at": future_run,
+                }) as activate:
+            result = main.recover_pending_payfast_trial(
+                email="student@example.test",
+                provider_token="provider-token-1234567890",
+                checkout_id=session["id"],
+            )
+
+        self.assertEqual(result["status"], "trialing")
+        self.assertNotIn("provider_token", result)
+        event_payload = activate.call_args.kwargs["event_payload"]
+        self.assertEqual(event_payload["amount"], "5000")
+        self.assertEqual(event_payload["initial_amount"], "0")
+
+    def test_admin_recovery_rejects_subscription_that_already_charged(self):
+        future_run = (datetime.now(timezone.utc) + timedelta(days=7)).date().isoformat()
+
+        class FakeConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, _parameters=()):
+                if "SELECT trial_used_at" in sql:
+                    value = {"trial_used_at": ""}
+                else:
+                    value = {"id": "mabaso-checkout-12345678", "email": "student@example.test", "plan_id": "pro_student"}
+                return type("Result", (), {"fetchone": lambda _self: value})()
+
+        verified = {"data": {"response": {
+            "status": 1,
+            "amount": 5000,
+            "cycles_complete": 1,
+            "run_date": future_run,
+        }}}
+        client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
+        with patch.object(main, "get_db_connection", return_value=FakeConnection()), \
+                patch.object(main, "get_payfast_api_client", return_value=client):
+            with self.assertRaises(HTTPException) as raised:
+                main.recover_pending_payfast_trial(
+                    email="student@example.test",
+                    provider_token="provider-token-1234567890",
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("already charged", raised.exception.detail)
+
+    def test_admin_recovery_endpoint_never_audits_or_returns_provider_token(self):
+        token = "provider-token-1234567890"
+        recovered = {
+            "status": "trialing",
+            "checkout_id": "mabaso-checkout-12345678",
+            "email": "student@example.test",
+            "trial_ends_at": "2030-01-08T00:00:00+00:00",
+            "message": "Recovered.",
+        }
+        with patch.object(main, "enforce_rate_limit"), \
+                patch.object(main, "recover_pending_payfast_trial", return_value=recovered), \
+                patch.object(main, "record_audit_log") as audit:
+            result = main.recover_admin_payfast_trial(
+                "student@example.test",
+                main.PayFastSubscriptionRecoveryRequest(
+                    provider_token=token,
+                    checkout_id="mabaso-checkout-12345678",
+                ),
+                make_request(),
+                current_admin="admin@example.test",
+            )
+        self.assertEqual(result, recovered)
+        self.assertNotIn(token, str(result))
+        self.assertNotIn(token, str(audit.call_args))
 
     def test_zero_value_trial_is_never_refundable(self):
         summary = main.get_payment_refund_summary({"amount_zar": "0.00"})

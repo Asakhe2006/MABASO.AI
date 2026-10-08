@@ -8118,7 +8118,7 @@ export default function App() {
     <details className="upgrade-modal-profile profile-menu-anchor">
       <summary className="profile-menu-button" aria-label="Profile">
         <span className="profile-menu-button-avatar" aria-hidden="true">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && !isBillingStatusLoaded ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </summary>
       <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
@@ -8331,7 +8331,7 @@ export default function App() {
                 </p>
               </div>
               <span className={`rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.16em] ${billingSubscription.active ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-800 text-slate-300"}`}>
-                {!isBillingStatusLoaded && isBillingUsageLoading ? "Loading plan..." : getSubscriptionCountdownText(billingSubscription) || "Free Plan"}
+                {isBillingUsageLoading && !billingStatusLoadError ? "Loading plan..." : getSubscriptionCountdownText(billingSubscription) || "Free Plan"}
               </span>
             </div>
             {billingSubscription.message ? <p className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-50">{billingSubscription.message}</p> : null}
@@ -11893,6 +11893,11 @@ export default function App() {
   const renderPayShapInstructions = (payment = manualPaymentRequest) => {
     const details = manualPaymentDetails || payment?.payment_details || {};
     const reference = payment?.payment_reference || "";
+    const detailsPending = Boolean(
+      authToken
+      && (isBillingUsageLoading || !isBillingStatusLoaded)
+      && !billingStatusLoadError,
+    );
     return (
       <div className="rounded-[24px] border border-emerald-300/20 bg-emerald-300/10 p-5">
         <p className="text-xs font-bold uppercase tracking-[0.24em] text-emerald-100/80">PayShap Payment Instructions</p>
@@ -11907,11 +11912,11 @@ export default function App() {
           </div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
-            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.payshap_number || "Not configured"}</p>
+            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.payshap_number || (detailsPending ? "Loading PayShap details..." : "Not configured")}</p>
           </div>
           <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
-            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.account_name || "Not configured"}</p>
+            <p className="phone-safe-copy mt-2 text-base font-semibold text-white">{details.account_name || (detailsPending ? "Loading PayShap details..." : "Not configured")}</p>
           </div>
         </div>
         <div className="mt-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-semibold leading-7 text-amber-50">
@@ -11979,6 +11984,11 @@ export default function App() {
 
   const renderPaymentsPage = () => {
     const latestPendingPayment = paymentRequests.find((payment) => normalizePaymentStatus(payment.status) === "pending") || manualPaymentRequest;
+    const billingDetailsPending = Boolean(
+      authToken
+      && (isBillingUsageLoading || !isBillingStatusLoaded)
+      && !billingStatusLoadError,
+    );
     if (isAdminAccount) {
       return (
         <section className="payment-page-shell overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/65 p-4 shadow-[0_24px_80px_rgba(2,8,23,0.35)] backdrop-blur sm:p-5 xl:p-6">
@@ -12029,11 +12039,11 @@ export default function App() {
                 <div className="mt-4 grid gap-3">
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">PayShap Number</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.payshap_number || "PayShap is not configured"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.payshap_number || (billingDetailsPending ? "Loading PayShap details..." : "PayShap is not configured")}</p>
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3">
                     <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Account Name</p>
-                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || "PayShap is not configured"}</p>
+                    <p className="phone-safe-copy mt-2 text-sm font-semibold text-white">{manualPaymentDetails?.account_name || (billingDetailsPending ? "Loading PayShap details..." : "PayShap is not configured")}</p>
                   </div>
                 </div>
                 <button type="button" onClick={openUpgradeModal} className="mt-4 rounded-full bg-white px-5 py-3 text-sm font-bold text-slate-950">Choose Payment Method</button>
@@ -12056,9 +12066,15 @@ export default function App() {
                 <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Payment History</p>
                 <h3 className="mt-2 text-2xl font-semibold text-white">Your manual payment requests</h3>
               </div>
-              <span className="rounded-full border border-white/10 bg-slate-950/70 px-4 py-2 text-xs font-semibold text-slate-200">{paymentRequests.length} request{paymentRequests.length === 1 ? "" : "s"}</span>
+              <span className="rounded-full border border-white/10 bg-slate-950/70 px-4 py-2 text-xs font-semibold text-slate-200">{billingDetailsPending ? "Loading..." : `${paymentRequests.length} request${paymentRequests.length === 1 ? "" : "s"}`}</span>
             </div>
-            <div className="mt-5">{renderPaymentRequestsTable(paymentRequests)}</div>
+            <div className="mt-5">{renderPaymentRequestsTable(paymentRequests, {
+              emptyMessage: billingDetailsPending
+                ? "Loading payment requests..."
+                : billingStatusLoadError
+                  ? "Payment requests could not be loaded. Use Refresh to try again."
+                  : "No payment requests have been recorded yet.",
+            })}</div>
           </article>
         </div>
 
@@ -16689,7 +16705,19 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || !authEmail) return;
     const normalizedEmail = normalizeHistoryOwnerEmail(authEmail);
+    setIsBillingUsageLoading(true);
+    setBillingStatusLoadError("");
     const ownerChanged = historyOwnerEmailRef.current !== normalizedEmail;
+    if (ownerChanged) {
+      setIsBillingStatusLoaded(false);
+      setBillingUsage(null);
+      setBillingSubscription(null);
+      setBillingTrialEligibility(null);
+      setPaymentRequests([]);
+      setPaymentHistory([]);
+      setManualPaymentDetails(null);
+      setManualPaymentRequest(null);
+    }
     historyHydratingRef.current = true;
     historyOwnerEmailRef.current = normalizedEmail;
     hasLoadedTimetableRef.current = false;
@@ -16709,7 +16737,6 @@ export default function App() {
       if (Array.isArray(cachedBillingStatus.payment_requests)) setPaymentRequests(cachedBillingStatus.payment_requests);
       if (Array.isArray(cachedBillingStatus.payment_history)) setPaymentHistory(cachedBillingStatus.payment_history);
       if (cachedBillingStatus.manual_payment_details) setManualPaymentDetails(cachedBillingStatus.manual_payment_details);
-      setIsBillingStatusLoaded(true);
     }
   }, [authChecked, authEmail]);
 
@@ -31538,7 +31565,7 @@ export default function App() {
         aria-expanded={isProfileMenuOpen}
       >
         <span className="profile-menu-button-avatar" aria-hidden="true">{displayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && !isBillingStatusLoaded ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </button>
       {isProfileMenuOpen ? (

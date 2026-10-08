@@ -69,6 +69,9 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState("");
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState("");
 
   useEffect(() => {
     authFetchRef.current = authFetch;
@@ -106,6 +109,10 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
 
   const inspectUser = async (email, nextTab = "inspector") => {
     if (!email) return;
+    if (email !== selectedEmail) {
+      setRecoveryToken("");
+      setRecoveryMessage("");
+    }
     setLoading(true);
     setError("");
     try {
@@ -132,10 +139,39 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
     }
   };
 
+  const recoverPayFastTrial = async () => {
+    const token = recoveryToken.trim();
+    if (!selectedEmail || !token) return;
+    const checkout = (snapshot?.checkout_sessions || []).find((item) => ["pending", "confirmation_pending"].includes(String(item?.status || "").toLowerCase()));
+    setRecoveryBusy(true);
+    setRecoveryMessage("");
+    setError("");
+    try {
+      const payload = await requestJson(
+        authFetchRef.current,
+        `/admin/diagnostics/users/${encodeURIComponent(selectedEmail)}/recover-payfast-trial`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider_token: token, checkout_id: checkout?.id || "" }),
+        },
+      );
+      setRecoveryToken("");
+      setRecoveryMessage(payload.message || "PayFast verified the subscription and the trial was recovered.");
+      await inspectUser(selectedEmail, "billing");
+      await loadOverview();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
+
   const recentErrors = useMemo(() => (overview?.recent_events || []).filter((event) => ["ERROR", "CRITICAL", "WARNING"].includes(event.severity)), [overview]);
   const trialUsers = overview?.trial_users || [];
   const entitlement = snapshot?.entitlement || {};
   const state = snapshot?.state_comparison || {};
+  const pendingCheckout = (snapshot?.checkout_sessions || []).find((checkout) => ["pending", "confirmation_pending"].includes(String(checkout?.status || "").toLowerCase()));
 
   return (
     <section className="space-y-5" aria-busy={loading}>
@@ -180,6 +216,8 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
       {tab === "trials" ? <div className="grid gap-5 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]"><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-xl font-semibold text-slate-950">Free-trial accounts</h3><p className="mt-2 text-sm text-slate-500">Provider-backed trial records and permanent trial-use state.</p></div><div className="rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">{overview?.trial_counts?.active || 0} active</div></div><div className="mt-5 max-h-[560px] space-y-2 overflow-y-auto">{trialUsers.length ? trialUsers.map((user) => <button key={user.email} type="button" onClick={() => void inspectUser(user.email, "trials")} className={`w-full rounded-2xl border p-4 text-left ${selectedEmail === user.email ? "border-indigo-300 bg-indigo-50" : "border-slate-200 bg-slate-50"}`}><div className="flex flex-wrap items-center justify-between gap-2"><strong className="break-all text-sm text-slate-900">{user.email}</strong><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${user.trial_status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>{title(user.trial_status)}</span></div><p className="mt-2 text-xs text-slate-500">Ends {formatDate(user.trial_ends_at || user.current_period_end)}</p><p className="mt-1 text-xs text-slate-500">PayFast {title(user.provider_status || user.latest_checkout_status || "not recorded")}</p></button>) : <p className="rounded-2xl bg-slate-50 p-5 text-sm text-slate-500">No eligible, active, used, converted, or expired trial accounts were returned.</p>}</div></article><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Selected trial trace</h3>{snapshot ? <><p className="mt-2 break-all text-sm text-slate-500">{snapshot.account?.email}</p><div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><Metric label="Eligible" value={snapshot.trial?.eligible ? "Yes" : "No"} tone={snapshot.trial?.eligible ? "emerald" : "slate"} /><Metric label="Eligibility reason" value={title(snapshot.trial?.eligibility_reason)} /><Metric label="Account sessions" value={`${snapshot.trial?.session_count || 0} / ${snapshot.trial?.sessions_required || 3}`} /><Metric label="Trial status" value={title(snapshot.trial?.status)} /><Metric label="Started" value={formatDate(snapshot.trial?.started_at)} /><Metric label="Ends" value={formatDate(snapshot.trial?.ends_at)} /><Metric label="Already used" value={snapshot.trial?.used ? "Yes" : "No"} /><Metric label="Permanent claim" value={snapshot.trial?.claim?.id ? "Recorded" : "Not recorded"} tone={snapshot.trial?.claim?.id ? "emerald" : "amber"} /><Metric label="Payment fingerprint" value={snapshot.trial?.claim?.payment_fingerprint_recorded ? "Hashed record" : "Provider did not supply one"} /><Metric label="Provider token" value={snapshot.trial?.claim?.provider_token_recorded ? "Hashed record" : "Not recorded"} /><Metric label="Remaining" value={`${Math.floor((snapshot.trial?.remaining_seconds || 0) / 3600)} hours`} /><Metric label="Effective access" value={title(entitlement.entitlement)} tone="sky" /></div><div className="mt-5 space-y-2">{(snapshot.checkout_sessions || []).map((checkout) => <div key={checkout.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex justify-between gap-3"><strong>{title(checkout.plan_id)}</strong><span>{title(checkout.status)}</span></div><p className="mt-2 text-xs text-slate-500">Checkout {checkout.id} · {formatDate(checkout.updated_at)}</p></div>)}</div></> : <p className="mt-5 text-sm text-slate-500">Select a trial account to view eligibility, checkout, entitlement, and permanent-use evidence.</p>}</article></div> : null}
 
       {tab === "quotas" ? <article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Quota trace</h3><p className="mt-2 text-sm text-slate-500">Server-side usage and remaining allowance from the active quota profile.</p>{snapshot ? <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(snapshot.usage?.features || []).map((feature) => <Metric key={feature.feature} label={feature.label} value={feature.unlimited ? `${feature.used} used · Unlimited` : `${feature.used} / ${feature.limit} · ${feature.remaining} remaining`} tone={feature.remaining === 0 ? "rose" : "slate"} />)}</div> : <p className="mt-5 text-sm text-slate-500">Select a user in User Inspector.</p>}</article> : null}
+
+      {tab === "billing" && pendingCheckout && !state.provider_token_recorded ? <article className="rounded-[18px] border border-amber-200 bg-amber-50 p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Recover missed PayFast confirmation</h3><p className="mt-2 max-w-4xl text-sm leading-6 text-amber-900">Use this only for the existing subscription shown for this customer in PayFast. Mabaso AI will query PayFast and verify that the subscription is active, has not charged, uses the expected recurring amount, and has a future first billing date before changing any local trial access.</p><p className="mt-3 break-all text-xs font-semibold text-amber-800">Pending checkout: {pendingCheckout.id}</p><div className="mt-4 flex flex-col gap-3 lg:flex-row"><label className="min-w-0 flex-1"><span className="sr-only">PayFast subscription token</span><input type="password" autoComplete="off" value={recoveryToken} onChange={(event) => setRecoveryToken(event.target.value)} placeholder="Paste the PayFast subscription token" className="w-full rounded-2xl border border-amber-300 bg-white px-4 py-3 text-sm text-slate-950 outline-none focus:border-indigo-400" /></label><button type="button" onClick={() => void recoverPayFastTrial()} disabled={recoveryBusy || recoveryToken.trim().length < 20} className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{recoveryBusy ? "Verifying with PayFast..." : "Verify and recover trial"}</button></div>{recoveryMessage ? <p className="mt-3 text-sm font-semibold text-emerald-800" role="status">{recoveryMessage}</p> : null}<p className="mt-3 text-xs leading-5 text-amber-800">The token is sent only to the protected backend and is never displayed in diagnostics, returned by the API, or written to audit metadata.</p></article> : null}
 
       {tab === "billing" ? <div className="grid gap-5 xl:grid-cols-2"><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Payment trace</h3><div className="mt-4 space-y-3">{(snapshot?.payments || []).length ? snapshot.payments.map((payment) => <div key={payment.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex justify-between gap-3"><strong>{title(payment.plan_id)}</strong><span>{payment.currency || "ZAR"} {payment.amount || payment.amount_zar || "--"}</span></div><p className="mt-2 text-slate-500">{title(payment.payment_status || payment.status)} · {formatDate(payment.paid_at || payment.created_at)}</p><p className="mt-1 break-all font-mono text-xs text-slate-400">{payment.pf_payment_id || payment.provider_payment_id || "No provider ID"}</p></div>) : <p className="text-sm text-slate-500">No payments for the selected user.</p>}</div></article><article className="rounded-[18px] border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-xl font-semibold text-slate-950">Refund trace</h3><div className="mt-4 space-y-3">{(snapshot?.refunds || []).length ? snapshot.refunds.map((refund) => <div key={refund.id} className="rounded-2xl bg-slate-50 p-4 text-sm"><div className="flex justify-between gap-3"><strong>{title(refund.status)}</strong><span>{refund.currency} {refund.requested_amount}</span></div><p className="mt-2 text-slate-500">{title(refund.reason_code)} · {formatDate(refund.requested_at)}</p>{refund.provider_error ? <p className="mt-2 text-rose-700">{refund.provider_error}</p> : null}</div>) : <p className="text-sm text-slate-500">No refund requests for the selected user.</p>}</div></article></div> : null}
 

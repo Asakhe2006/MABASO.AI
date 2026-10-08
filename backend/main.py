@@ -7255,6 +7255,11 @@ class SubscriptionCancelRequest(BaseModel):
     reason: str = ""
 
 
+class PayFastSubscriptionRecoveryRequest(BaseModel):
+    provider_token: str = Field(min_length=20, max_length=128)
+    checkout_id: str = Field(default="", max_length=120)
+
+
 class PaymentCreateRequest(BaseModel):
     plan_id: str
 
@@ -21051,6 +21056,101 @@ def activate_payfast_trial_from_verified_subscription(
     }
 
 
+def recover_pending_payfast_trial(
+    *,
+    email: str,
+    provider_token: str,
+    checkout_id: str = "",
+) -> dict[str, Any]:
+    """Recover a missed trial ITN only after querying PayFast itself.
+
+    The subscription token is supplied by an administrator, kept server-side,
+    and never returned. PayFast remains authoritative for status, amount,
+    billing date, and subscription identity.
+    """
+    normalized_email = validate_email_address(email)
+    token = compact_text(provider_token)
+    normalized_checkout_id = compact_text(checkout_id)
+    if not re.fullmatch(r"[A-Za-z0-9-]{20,128}", token):
+        raise HTTPException(status_code=400, detail="PayFast subscription token is invalid.")
+    if normalized_checkout_id and not re.fullmatch(r"[A-Za-z0-9_-]{8,120}", normalized_checkout_id):
+        raise HTTPException(status_code=400, detail="Checkout reference is invalid.")
+
+    params: list[Any] = [normalized_email]
+    checkout_filter = ""
+    if normalized_checkout_id:
+        checkout_filter = " AND id = ?"
+        params.append(normalized_checkout_id)
+    with get_db_connection() as connection:
+        session = connection.execute(
+            f"""
+            SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                   provider_token, status, checkout_fields_json, raw_event_json,
+                   billing_country_at_purchase, created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE lower(email) = lower(?)
+              AND lower(provider) = 'payfast'
+              AND lower(status) IN ('pending', 'confirmation_pending')
+              {checkout_filter}
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        ).fetchone()
+        user_row = connection.execute(
+            "SELECT trial_used_at FROM users WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="No pending PayFast trial checkout was found for this account.")
+    if user_row and compact_text(user_row["trial_used_at"]):
+        raise HTTPException(status_code=409, detail="This account already has a permanent trial-use record. No billing state was changed.")
+
+    try:
+        provider_payload = get_payfast_api_client().fetch_subscription(token)
+    except PayFastApiError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail="PayFast could not verify this subscription. No local billing state was changed.",
+        ) from exc
+
+    provider_state = parse_payfast_subscription_state(provider_payload)
+    provider_response = provider_state["response"]
+    if not provider_state["active"]:
+        raise HTTPException(status_code=409, detail="PayFast does not report this subscription as active.")
+    if "cycles_complete" not in provider_response:
+        raise HTTPException(status_code=502, detail="PayFast returned incomplete subscription details. No local billing state was changed.")
+    if provider_state["cycles_complete"] != 0:
+        raise HTTPException(status_code=409, detail="PayFast reports that this subscription has already charged. Use billing support for payment recovery.")
+    next_run = parse_payfast_run_date(provider_state["run_date"])
+    if not next_run or next_run <= utc_now():
+        raise HTTPException(status_code=409, detail="PayFast did not return a future first billing date for this trial.")
+
+    plan = get_billing_plan(session["plan_id"])
+    expected_amount_cents = int(refund_money(plan["amount_zar"]) * 100)
+    result = activate_payfast_trial_from_verified_subscription(
+        session=session,
+        provider_token=token,
+        provider_payload=provider_payload,
+        event_payload={
+            "type": "subscription.admin-recovery",
+            "initial_amount": "0",
+            "amount": str(expected_amount_cents),
+            "next_run": provider_state["run_date"],
+            "frequency": provider_state["frequency"],
+            "email_address": normalized_email,
+            "m_payment_id": session["id"],
+        },
+    )
+    return {
+        "status": result.get("status", "trialing"),
+        "checkout_id": result.get("checkout_id", session["id"]),
+        "email": normalized_email,
+        "trial_ends_at": result.get("trial_ends_at", next_run.isoformat()),
+        "message": "PayFast verified the subscription and Mabaso AI recovered the trial record.",
+    }
+
+
 async def process_payfast_subscription_event(payload: dict[str, Any]) -> dict[str, Any]:
     event_type = compact_text(payload.get("type")).lower()
     if event_type not in {"subscription.free-trial", "subscription.promo", "subscription.update"}:
@@ -27941,6 +28041,53 @@ def recalculate_admin_user_entitlement(target_email: str, request: Request, curr
         metadata={"resolved_entitlement": entitlement.get("entitlement"), "reason": entitlement.get("reason")},
     )
     return {"entitlement": entitlement, "message": "Entitlement recalculated using the authoritative resolver. No plan was changed."}
+
+
+@app.post("/admin/diagnostics/users/{target_email}/recover-payfast-trial")
+def recover_admin_payfast_trial(
+    target_email: str,
+    payload: PayFastSubscriptionRecoveryRequest,
+    request: Request,
+    current_admin: str = Depends(require_admin_user),
+):
+    normalized_email = validate_email_address(target_email)
+    enforce_rate_limit(
+        scope="admin_payfast_trial_recovery",
+        request=request,
+        limit=6,
+        window_seconds=60 * 60,
+        identity=current_admin,
+    )
+    try:
+        result = recover_pending_payfast_trial(
+            email=normalized_email,
+            provider_token=payload.provider_token,
+            checkout_id=payload.checkout_id,
+        )
+    except HTTPException:
+        record_audit_log(
+            action="admin.diagnostics.payfast_trial_recovery_failed",
+            status="failed",
+            email=current_admin,
+            request=request,
+            resource_type="billing_subscription",
+            resource_name=normalized_email,
+            metadata={"checkout_id": compact_text(payload.checkout_id)},
+        )
+        raise
+    record_audit_log(
+        action="admin.diagnostics.payfast_trial_recovered",
+        email=current_admin,
+        request=request,
+        resource_type="billing_subscription",
+        resource_name=normalized_email,
+        metadata={
+            "checkout_id": result.get("checkout_id"),
+            "trial_ends_at": result.get("trial_ends_at"),
+            "provider": "payfast",
+        },
+    )
+    return result
 
 
 @app.get("/admin/diagnostics/events")
