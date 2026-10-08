@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, RefreshCw, Search, X } from "lucide-react";
 
 const FILTERS = [["pending", "Pending"], ["under_review", "Under review"], ["processing", "Processing"], ["refunded", "Refunded"], ["rejected", "Rejected"], ["failed", "Failed"], ["all", "All"]];
@@ -45,6 +45,10 @@ function ConfirmDialog({ action, refund, busy, reason, setReason, note, setNote,
 }
 
 export default function AdminRefundRequestsPanel({ authFetch, initialRefundId = "", onPendingCountChange }) {
+  const authFetchRef = useRef(authFetch);
+  const onPendingCountChangeRef = useRef(onPendingCountChange);
+  const activeFilterRef = useRef("pending");
+  const listRequestSequenceRef = useRef(0);
   const [filter, setFilter] = useState("pending");
   const [query, setQuery] = useState("");
   const [refunds, setRefunds] = useState([]);
@@ -53,6 +57,7 @@ export default function AdminRefundRequestsPanel({ authFetch, initialRefundId = 
   const [audit, setAudit] = useState([]);
   const [provider, setProvider] = useState({});
   const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -61,33 +66,54 @@ export default function AdminRefundRequestsPanel({ authFetch, initialRefundId = 
   const [note, setNote] = useState("");
   const [reason, setReason] = useState("");
 
-  const load = useCallback(async (status = filter) => {
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
+
+  useEffect(() => {
+    onPendingCountChangeRef.current = onPendingCountChange;
+  }, [onPendingCountChange]);
+
+  useEffect(() => {
+    activeFilterRef.current = filter;
+  }, [filter]);
+
+  const load = useCallback(async (status) => {
+    const requestedStatus = status || activeFilterRef.current;
+    const requestSequence = listRequestSequenceRef.current + 1;
+    listRequestSequenceRef.current = requestSequence;
     setLoading(true);
     setError("");
     try {
-      const payload = await requestJson(authFetch, "/admin/refunds?status=" + encodeURIComponent(status) + "&limit=100");
+      const payload = await requestJson(authFetchRef.current, "/admin/refunds?status=" + encodeURIComponent(requestedStatus) + "&limit=100");
+      if (requestSequence !== listRequestSequenceRef.current) return;
       setRefunds(Array.isArray(payload.refunds) ? payload.refunds : []);
       setCounts(payload.counts || {});
-      onPendingCountChange?.(Number(payload.counts?.pending || 0));
-    } catch (nextError) { setError(nextError.message); } finally { setLoading(false); }
-  }, [authFetch, filter, onPendingCountChange]);
+      setHasLoaded(true);
+      onPendingCountChangeRef.current?.(Number(payload.counts?.pending || 0));
+    } catch (nextError) {
+      if (requestSequence === listRequestSequenceRef.current) setError(nextError.message);
+    } finally {
+      if (requestSequence === listRequestSequenceRef.current) setLoading(false);
+    }
+  }, []);
 
   const open = useCallback(async (id, markReviewed = true) => {
     if (!id) return;
     setDetailsLoading(true);
     setError("");
     try {
-      let payload = await requestJson(authFetch, "/admin/refunds/" + encodeURIComponent(id));
+      let payload = await requestJson(authFetchRef.current, "/admin/refunds/" + encodeURIComponent(id));
       if (markReviewed && PENDING.has(String(payload.refund_request?.status || "").toLowerCase())) {
-        await requestJson(authFetch, "/admin/refunds/" + encodeURIComponent(id) + "/review", { method: "POST" });
-        payload = await requestJson(authFetch, "/admin/refunds/" + encodeURIComponent(id));
-        void load();
+        await requestJson(authFetchRef.current, "/admin/refunds/" + encodeURIComponent(id) + "/review", { method: "POST" });
+        payload = await requestJson(authFetchRef.current, "/admin/refunds/" + encodeURIComponent(id));
+        void load(activeFilterRef.current);
       }
       setSelected(payload.refund_request || null);
       setAudit(Array.isArray(payload.audit_history) ? payload.audit_history : []);
       setProvider(payload.provider_response || {});
     } catch (nextError) { setError(nextError.message); } finally { setDetailsLoading(false); }
-  }, [authFetch, load]);
+  }, [load]);
 
   useEffect(() => { void load(filter); }, [filter, load]);
   useEffect(() => { if (initialRefundId) void open(initialRefundId); }, [initialRefundId, open]);
@@ -103,31 +129,31 @@ export default function AdminRefundRequestsPanel({ authFetch, initialRefundId = 
     setBusy(true); setError(""); setMessage("");
     try {
       const endpoint = action === "approve" ? "approve" : action === "reject" ? "reject" : "retry";
-      const payload = await requestJson(authFetch, "/admin/refunds/" + encodeURIComponent(selected.id) + "/" + endpoint, { method: "POST", body: JSON.stringify({ admin_note: note.trim(), decision_reason: reason }) });
+      const payload = await requestJson(authFetchRef.current, "/admin/refunds/" + encodeURIComponent(selected.id) + "/" + endpoint, { method: "POST", body: JSON.stringify({ admin_note: note.trim(), decision_reason: reason }) });
       setMessage(payload.message || "Refund request updated.");
       setAction(""); setNote(""); setReason("");
-      await load(); await open(selected.id, false);
+      await load(activeFilterRef.current); await open(selected.id, false);
     } catch (nextError) { setError(nextError.message); } finally { setBusy(false); }
   };
   const simpleAction = async (endpoint) => {
     if (!selected) return;
     setBusy(true); setError("");
     try {
-      const payload = await requestJson(authFetch, "/admin/refunds/" + encodeURIComponent(selected.id) + "/" + endpoint, { method: "POST" });
+      const payload = await requestJson(authFetchRef.current, "/admin/refunds/" + encodeURIComponent(selected.id) + "/" + endpoint, { method: "POST" });
       setMessage(payload.message || "Refund request updated.");
-      await load(); await open(selected.id, false);
+      await load(activeFilterRef.current); await open(selected.id, false);
     } catch (nextError) { setError(nextError.message); } finally { setBusy(false); }
   };
 
   return <section className="space-y-5">
     <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_10px_28px_rgba(15,23,42,0.07)]">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.24em] text-indigo-600">Billing control</p><h2 className="mt-2 text-2xl font-bold text-slate-950">Refund Requests</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Review the original charge, policy result, usage snapshot, provider state, and audit history before sending money. Automatic refunds remain disabled.</p></div><button type="button" disabled={loading} onClick={() => load()} className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-bold text-white"><RefreshCw className={"h-4 w-4 " + (loading ? "animate-spin" : "")} /> Refresh requests</button></div>
-      <div className="mt-5 flex flex-wrap gap-2" role="tablist">{FILTERS.map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)} key={value} className={"rounded-full px-4 py-2 text-sm font-semibold " + (filter === value ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700")}>{label} <span className="ml-1 opacity-75">{counts[value] ?? 0}</span></button>)}</div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.24em] text-indigo-600">Billing control</p><h2 className="mt-2 text-2xl font-bold text-slate-950">Refund Requests</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Review the original charge, policy result, usage snapshot, provider state, and audit history before sending money. Automatic refunds remain disabled.</p></div><button type="button" disabled={loading} onClick={() => load(filter)} className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3 text-sm font-bold text-white"><RefreshCw className={"h-4 w-4 " + (loading ? "animate-spin" : "")} /> Refresh requests</button></div>
+      <div className="mt-5 flex flex-wrap gap-2" role="tablist">{FILTERS.map(([value, label]) => <button type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)} key={value} className={"rounded-full px-4 py-2 text-sm font-semibold " + (filter === value ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700")}>{label} <span className="ml-1 opacity-75">{hasLoaded ? (counts[value] ?? 0) : "..."}</span></button>)}</div>
       <label className="mt-5 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"><Search className="h-4 w-4 text-slate-400" /><span className="sr-only">Search refunds</span><input value={query} onChange={(event) => setQuery(event.target.value)} className="w-full bg-transparent text-sm text-slate-900 outline-none" placeholder="Search customer, payment, plan, reason, or status" /></label>
     </div>
     {error ? <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-800">{error}</div> : null}
     {message ? <div role="status" className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800">{message}</div> : null}
-    <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.07)]"><div className="overflow-x-auto"><table className="w-full min-w-[1100px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-[0.14em] text-slate-500"><tr>{["Customer", "Plan", "Original / requested", "Payment / request", "Provider", "Reason", "Policy & usage", "Status", "Action"].map((label) => <th className="px-4 py-3" key={label}>{label}</th>)}</tr></thead><tbody>{visible.map((item) => <tr className="border-t border-slate-100 align-top text-slate-700" key={item.id}><td className="px-4 py-4"><p className="font-semibold text-slate-950">{item.customer_name}</p><p className="mt-1 break-all text-xs text-slate-500">{item.email}</p></td><td className="px-4 py-4">{item.plan_name || title(item.plan_id)}</td><td className="px-4 py-4">{money(item.original_amount, item.currency)}<p className="mt-1 text-xs text-slate-500">Requested {money(item.requested_amount, item.currency)}</p></td><td className="px-4 py-4">{date(item.payment_date)}<p className="mt-1 text-xs text-slate-500">Requested {date(item.requested_at)}</p></td><td className="px-4 py-4">{title(item.payment_provider || "PayFast")}<p className="mt-1 text-xs text-slate-500">{item.payment_method || "PayFast"}</p></td><td className="max-w-[220px] px-4 py-4"><p className="font-medium text-slate-900">{title(item.reason_code)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.reason_text || "No explanation supplied"}</p></td><td className="px-4 py-4">{item.eligibility_window_days} day window<p className="mt-1 text-xs text-slate-500">{title(item.eligibility_reason)} · {item.usage_snapshot?.total_paid_feature_events || 0} paid events</p></td><td className="px-4 py-4"><StatusBadge status={item.status} /></td><td className="px-4 py-4"><button type="button" onClick={() => open(item.id)} className="rounded-full border border-slate-300 px-4 py-2 text-xs font-bold text-slate-800">View details</button></td></tr>)}</tbody></table></div>{loading ? <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-8 text-sm text-slate-600"><RefreshCw className="h-5 w-5 animate-spin text-emerald-600" /> Loading refund requests...</div> : null}{!loading && !visible.length ? <div className="border-t border-slate-100 p-8 text-center text-sm text-slate-500">No refund requests match this view.</div> : null}</div>
+    <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.07)]"><div className="overflow-x-auto"><table className="w-full min-w-[1100px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-[0.14em] text-slate-500"><tr>{["Customer", "Plan", "Original / requested", "Payment / request", "Provider", "Reason", "Policy & usage", "Status", "Action"].map((label) => <th className="px-4 py-3" key={label}>{label}</th>)}</tr></thead><tbody>{visible.map((item) => <tr className="border-t border-slate-100 align-top text-slate-700" key={item.id}><td className="px-4 py-4"><p className="font-semibold text-slate-950">{item.customer_name}</p><p className="mt-1 break-all text-xs text-slate-500">{item.email}</p></td><td className="px-4 py-4">{item.plan_name || title(item.plan_id)}</td><td className="px-4 py-4">{money(item.original_amount, item.currency)}<p className="mt-1 text-xs text-slate-500">Requested {money(item.requested_amount, item.currency)}</p></td><td className="px-4 py-4">{date(item.payment_date)}<p className="mt-1 text-xs text-slate-500">Requested {date(item.requested_at)}</p></td><td className="px-4 py-4">{title(item.payment_provider || "PayFast")}<p className="mt-1 text-xs text-slate-500">{item.payment_method || "PayFast"}</p></td><td className="max-w-[220px] px-4 py-4"><p className="font-medium text-slate-900">{title(item.reason_code)}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.reason_text || "No explanation supplied"}</p></td><td className="px-4 py-4">{item.eligibility_window_days} day window<p className="mt-1 text-xs text-slate-500">{title(item.eligibility_reason)} · {item.usage_snapshot?.total_paid_feature_events || 0} paid events</p></td><td className="px-4 py-4"><StatusBadge status={item.status} /></td><td className="px-4 py-4"><button type="button" onClick={() => open(item.id)} className="rounded-full border border-slate-300 px-4 py-2 text-xs font-bold text-slate-800">View details</button></td></tr>)}</tbody></table></div>{loading ? <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-8 text-sm text-slate-600"><RefreshCw className="h-5 w-5 animate-spin text-emerald-600" /> Loading refund requests...</div> : null}{hasLoaded && !loading && !error && !visible.length ? <div className="border-t border-slate-100 p-8 text-center text-sm leading-6 text-slate-500"><strong className="block text-slate-800">No customer refund requests match this view.</strong><span>Payments and trials appear here only after a customer submits a refund request for an eligible completed charge.</span></div> : null}</div>
     {selected ? <div className="fixed inset-0 z-[120] overflow-y-auto bg-slate-950/55 p-3 backdrop-blur-sm sm:p-6" role="dialog" aria-modal="true"><div className="mx-auto w-full max-w-5xl rounded-[30px] bg-white p-5 shadow-2xl sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-indigo-600">Refund review</p><h3 className="mt-2 text-2xl font-bold text-slate-950">{selected.customer_name} · {selected.plan_name}</h3><div className="mt-3"><StatusBadge status={selected.status} /></div></div><button type="button" onClick={() => setSelected(null)} className="rounded-full border border-slate-200 p-2 text-slate-600" aria-label="Close refund details"><X className="h-5 w-5" /></button></div>
       {detailsLoading ? <div className="mt-6 flex items-center gap-3 text-sm text-slate-600"><RefreshCw className="h-5 w-5 animate-spin text-emerald-600" /> Loading details...</div> : <><div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Detail label="Customer" value={selected.customer_name + " · " + selected.email} wide /><Detail label="Plan" value={selected.plan_name || title(selected.plan_id)} /><Detail label="Original charge" value={money(selected.original_amount, selected.currency)} /><Detail label="Refund requested" value={money(selected.requested_amount, selected.currency)} /><Detail label="Payment date" value={date(selected.payment_date)} /><Detail label="Request date" value={date(selected.requested_at)} /><Detail label="Payment status" value={title(selected.payment_status)} /><Detail label="Payment method" value={selected.payment_method || "PayFast"} /><Detail label="Safe provider reference" value={selected.pf_payment_id} /><Detail label="Country at purchase" value={selected.billing_country_at_purchase || "Unknown"} /><Detail label="Policy window" value={selected.eligibility_window_days + " calendar days · " + title(selected.policy_type)} wide /><Detail label="Eligibility" value={title(selected.eligibility_reason) + " · " + title(selected.automatic_or_manual)} wide /><Detail label="Customer reason" value={title(selected.reason_code) + (selected.reason_text ? " — " + selected.reason_text : "")} wide /><Detail label="Admin notes" value={selected.admin_note || "No admin notes yet"} wide /></div>
       <div className="mt-5 grid gap-5 xl:grid-cols-2"><div className="rounded-2xl border border-slate-200 p-4"><h4 className="font-bold text-slate-950">Usage since payment</h4><div className="mt-3 grid grid-cols-2 gap-2 text-sm">{Object.entries(selected.usage_snapshot || {}).filter(([, value]) => typeof value !== "object").map(([key, value]) => <div className="rounded-xl bg-slate-50 p-3" key={key}><span className="text-xs text-slate-500">{title(key)}</span><p className="mt-1 font-semibold text-slate-900">{String(value)}</p></div>)}</div></div><div className="rounded-2xl border border-slate-200 p-4"><h4 className="font-bold text-slate-950">Provider and notification state</h4><div className="mt-3 space-y-2 text-sm text-slate-700"><p><strong>PayFast:</strong> {title(selected.provider_status || "not submitted")}</p><p><strong>Admin email:</strong> {title(selected.admin_notification_status || "pending")}</p><p><strong>Customer email:</strong> {title(selected.customer_notification_status || "pending")}</p>{selected.provider_error ? <p className="rounded-xl bg-rose-50 p-3 text-rose-800">{selected.provider_error}</p> : null}{Object.keys(provider).length ? <pre className="max-h-40 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(provider, null, 2)}</pre> : null}</div></div></div>

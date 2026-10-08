@@ -25,6 +25,14 @@ def make_request() -> Request:
 
 
 class BillingIntegrationTests(unittest.TestCase):
+    def test_payfast_webhook_readiness_exposes_no_configuration_or_secrets(self):
+        payload = main.payfast_webhook_readiness()
+        self.assertEqual(payload["status"], "ready")
+        self.assertIn("POST", payload["message"])
+        serialized = str(payload).lower()
+        self.assertNotIn("merchant", serialized)
+        self.assertNotIn("passphrase", serialized)
+
     def test_render_hostname_wins_over_stale_api_public_url_for_payfast_callbacks(self):
         with patch.object(main, "API_PUBLIC_URL", "https://retired-service.onrender.com"), \
                 patch.dict(os.environ, {"RENDER_EXTERNAL_HOSTNAME": "mabaso-ai-api.onrender.com"}):

@@ -27060,6 +27060,15 @@ async def reject_admin_payment_request(
     return {"message": "Payment rejected.", **result}
 
 
+@app.get("/api/billing/payfast/webhook", include_in_schema=False)
+def payfast_webhook_readiness():
+    """Public, secret-free reachability check for the configured PayFast URL."""
+    return {
+        "status": "ready",
+        "message": "Mabaso AI PayFast notifications are accepted by POST at this URL.",
+    }
+
+
 @app.post("/api/payfast/webhook")
 @app.post("/api/billing/payfast/itn")
 @app.post("/api/billing/payfast/webhook")
