@@ -18732,6 +18732,12 @@ def require_payfast_configured(*, require_subscription: bool = False):
 
 
 def get_request_public_base_url(request: Request) -> str:
+    render_hostname = compact_text(os.getenv("RENDER_EXTERNAL_HOSTNAME")).lower()
+    if render_hostname and re.fullmatch(r"[a-z0-9.-]+\.onrender\.com", render_hostname):
+        # Render provides the hostname of the service handling this request.
+        # Prefer it over a stale manually configured API_PUBLIC_URL so PayFast
+        # never receives a notify URL for another or retired Render service.
+        return f"https://{render_hostname}"
     if API_PUBLIC_URL:
         return API_PUBLIC_URL
     forwarded_proto = compact_text(request.headers.get("x-forwarded-proto"), request.url.scheme)
@@ -18763,7 +18769,7 @@ def build_payfast_checkout_fields(
         "amount": format_payfast_trial_initial_amount() if trial else plan["amount_zar"],
         "item_name": (f"MABASO.AI 7-day free trial - {plan['name']}" if trial else f"MABASO.AI {plan['name']}")[:100],
         "item_description": (
-            f"Seven-day free trial. Automatically bills {plan['amount_zar']} monthly after the trial unless cancelled."
+            f"Seven-day free trial. Automatically bills {plan['amount_zar']} monthly after the trial unless cancelled. Reference {checkout_id}."
             if trial
             else plan["description"]
         )[:255],
@@ -19394,7 +19400,84 @@ def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dic
             "renewal_status": "trial",
             "expired": False,
         }
+    elif entitlement.get("entitlement") == "free":
+        pending_checkout = get_latest_pending_payfast_checkout(email)
+        if pending_checkout:
+            subscription = {
+                **subscription,
+                "status": "confirmation_pending",
+                "paid_plan_id": normalize_billing_plan_id(pending_checkout["plan_id"]),
+                "provider": "payfast",
+                "confirmation_pending": True,
+                "pending_checkout_id": pending_checkout["id"],
+                "pending_checkout_created_at": pending_checkout["created_at"],
+                "pending_checkout_updated_at": pending_checkout["updated_at"],
+                "message": "PayFast created the checkout, but Mabaso AI has not received its verified confirmation yet.",
+            }
     return {**subscription, "entitlement": entitlement}, entitlement
+
+
+def extract_payfast_api_response(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        response = data.get("response")
+        return response if isinstance(response, dict) else data
+    response = payload.get("response")
+    return response if isinstance(response, dict) else payload
+
+
+def parse_payfast_subscription_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+    response = extract_payfast_api_response(payload)
+    raw_status = response.get("status")
+    status_text = compact_text(response.get("status_text") or response.get("subscription_status")).upper()
+    active = status_text == "ACTIVE" or raw_status == 1 or compact_text(raw_status).lower() in {"1", "active"}
+    return {
+        "active": active,
+        "status": "active" if active else compact_text(status_text or raw_status, "unknown").lower(),
+        "status_text": status_text or compact_text(raw_status, "UNKNOWN").upper(),
+        "amount_cents": parse_int_amount(response.get("amount")),
+        "cycles_complete": parse_int_amount(response.get("cycles_complete")),
+        "frequency": parse_int_amount(response.get("frequency")),
+        "run_date": compact_text(response.get("run_date") or response.get("next_run")),
+        "token": compact_text(response.get("token")),
+        "email": normalize_email(compact_text(response.get("email_address") or response.get("email"))),
+        "response": response,
+    }
+
+
+def parse_payfast_run_date(value: Any) -> datetime | None:
+    text = compact_text(value)
+    if not text:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            return datetime.strptime(text, "%Y-%m-%d").replace(
+                tzinfo=timezone(timedelta(hours=2))
+            ).astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return parse_billing_datetime(text)
+
+
+def get_latest_pending_payfast_checkout(email: str) -> Any | None:
+    normalized_email = normalize_email(email)
+    with get_db_connection() as connection:
+        return connection.execute(
+            """
+            SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                   provider_token, status, checkout_fields_json, raw_event_json,
+                   billing_country_at_purchase, created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE lower(email) = lower(?)
+              AND lower(provider) = 'payfast'
+              AND lower(status) IN ('pending', 'confirmation_pending')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (normalized_email,),
+        ).fetchone()
 
 
 def reconcile_payfast_subscription(email: str) -> dict[str, Any]:
@@ -19418,24 +19501,80 @@ def reconcile_payfast_subscription(email: str) -> dict[str, Any]:
         provider_payload = get_payfast_api_client().fetch_subscription(token)
     except PayFastApiError as exc:
         raise HTTPException(status_code=exc.status_code, detail="PayFast could not refresh this subscription. No local billing state was changed.") from exc
-    provider_data = provider_payload.get("data") if isinstance(provider_payload.get("data"), dict) else provider_payload
-    provider_status = compact_text(provider_data.get("status") or provider_data.get("subscription_status") or "confirmed").lower()
+    provider_state = parse_payfast_subscription_state(provider_payload)
+    provider_data = provider_state["response"]
+    provider_status = provider_state["status"]
+    expected_amount_cents = int(refund_money(row["amount_zar"]) * 100)
+    if provider_state["amount_cents"] and provider_state["amount_cents"] != expected_amount_cents:
+        raise HTTPException(
+            status_code=409,
+            detail="PayFast returned a different recurring amount. No local billing state was changed.",
+        )
     safe_method = extract_safe_payfast_payment_method(provider_data, fallback_method=compact_text(row["payment_method_type"]))
-    now_iso = utc_now().isoformat()
+    now = utc_now()
+    now_iso = now.isoformat()
+    next_run = parse_payfast_run_date(provider_state["run_date"])
+    with get_db_connection() as connection:
+        user_trial = connection.execute(
+            "SELECT trial_status, trial_used_at FROM users WHERE lower(email) = lower(?)",
+            (normalized_email,),
+        ).fetchone()
+    should_be_trialing = bool(
+        provider_state["active"]
+        and next_run
+        and next_run > now
+        and provider_state["cycles_complete"] == 0
+        and user_trial
+        and compact_text(user_trial["trial_used_at"])
+    )
+    local_status = compact_text(row["status"], "free").lower()
+    next_local_status = local_status
+    if provider_state["active"]:
+        next_local_status = "trialing" if should_be_trialing else "active"
+    period_end = next_run.isoformat() if next_run and next_run > now else compact_text(row["current_period_end"])
     with get_db_connection() as connection:
         connection.execute(
             """
             UPDATE billing_subscriptions
-            SET provider_status = ?, payment_method_type = ?, card_brand = ?, card_last4 = ?,
+            SET status = ?, provider_status = ?, payment_method_type = ?, card_brand = ?, card_last4 = ?,
+                current_period_end = ?, next_billing_at = ?,
                 last_reconciled_at = ?, updated_at = ?
             WHERE lower(email) = lower(?)
             """,
-            (provider_status, safe_method["payment_method_type"], safe_method["card_brand"], safe_method["card_last4"], now_iso, now_iso, normalized_email),
+            (
+                next_local_status,
+                provider_status,
+                safe_method["payment_method_type"],
+                safe_method["card_brand"],
+                safe_method["card_last4"],
+                period_end,
+                period_end if provider_state["active"] else compact_text(row["next_billing_at"]),
+                now_iso,
+                now_iso,
+                normalized_email,
+            ),
         )
         connection.execute(
             "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, '', 'payfast', 'SUBSCRIPTION_RECONCILED', ?, ?)",
-            (uuid4().hex, normalized_email, json.dumps({"provider_status": provider_status}, ensure_ascii=False), now_iso),
+            (
+                uuid4().hex,
+                normalized_email,
+                json.dumps(
+                    {
+                        "provider_status": provider_status,
+                        "local_status": next_local_status,
+                        "next_billing_at": period_end,
+                    },
+                    ensure_ascii=False,
+                ),
+                now_iso,
+            ),
         )
+        if should_be_trialing:
+            connection.execute(
+                "UPDATE users SET trial_status = 'active', trial_ends_at = ?, updated_at = ? WHERE lower(email) = lower(?)",
+                (period_end, now_iso, normalized_email),
+            )
     subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
     return {"subscription": subscription, "entitlement": entitlement, "reconciled_at": now_iso}
 
@@ -20668,6 +20807,286 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
                 )
     sync_user_account_snapshot(email)
     return next_status
+
+
+def find_checkout_for_payfast_subscription_event(payload: dict[str, Any]) -> Any | None:
+    event_email = normalize_email(compact_text(payload.get("email_address")))
+    checkout_id = compact_text(payload.get("m_payment_id") or payload.get("custom_str3"))
+    if not checkout_id:
+        reference_source = " ".join(
+            compact_text(payload.get(key)) for key in ("item_name", "item_description")
+        )
+        reference_match = re.search(r"\bmabaso-[a-f0-9]{24}\b", reference_source, flags=re.IGNORECASE)
+        checkout_id = reference_match.group(0) if reference_match else ""
+    with get_db_connection() as connection:
+        if checkout_id:
+            row = connection.execute(
+                """
+                SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                       provider_token, status, checkout_fields_json, raw_event_json,
+                       billing_country_at_purchase, created_at, updated_at
+                FROM billing_checkout_sessions
+                WHERE id = ? AND lower(provider) = 'payfast'
+                """,
+                (checkout_id,),
+            ).fetchone()
+            if row and event_email and normalize_email(row["email"]) != event_email:
+                raise HTTPException(status_code=409, detail="PayFast subscription customer does not match the checkout.")
+            return row
+        if not event_email:
+            return None
+        return connection.execute(
+            """
+            SELECT id, email, plan_id, amount_zar, provider, provider_payment_id,
+                   provider_token, status, checkout_fields_json, raw_event_json,
+                   billing_country_at_purchase, created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE lower(email) = lower(?)
+              AND lower(provider) = 'payfast'
+              AND lower(status) IN ('pending', 'confirmation_pending')
+              AND checkout_fields_json LIKE ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (event_email, '%"custom_str4": "trial"%'),
+        ).fetchone()
+
+
+def activate_payfast_trial_from_verified_subscription(
+    *,
+    session: Any,
+    provider_token: str,
+    provider_payload: dict[str, Any],
+    event_payload: dict[str, Any],
+) -> dict[str, Any]:
+    token = compact_text(provider_token)
+    if not re.fullmatch(r"[A-Za-z0-9-]{20,128}", token):
+        raise HTTPException(status_code=400, detail="PayFast subscription token is invalid.")
+    try:
+        checkout_fields = json.loads(compact_text(session["checkout_fields_json"], "{}"))
+    except json.JSONDecodeError:
+        checkout_fields = {}
+    if compact_text(checkout_fields.get("custom_str4")).lower() != "trial":
+        raise HTTPException(status_code=409, detail="This PayFast subscription event is not linked to a trial checkout.")
+
+    email = validate_email_address(session["email"])
+    plan = get_billing_plan(session["plan_id"])
+    provider_state = parse_payfast_subscription_state(provider_payload)
+    if not provider_state["active"]:
+        raise HTTPException(status_code=409, detail="PayFast does not report this subscription as active.")
+    returned_token = compact_text(provider_state["token"])
+    if returned_token and not hmac.compare_digest(returned_token, token):
+        raise HTTPException(status_code=409, detail="PayFast returned a different subscription token.")
+    if provider_state["email"] and provider_state["email"] != email:
+        raise HTTPException(status_code=409, detail="PayFast returned a different subscription customer.")
+    expected_amount_cents = int(refund_money(plan["amount_zar"]) * 100)
+    if parse_int_amount(event_payload.get("initial_amount")) != 0:
+        raise HTTPException(status_code=409, detail="This PayFast event is not a zero-value free-trial authorization.")
+    event_amount_cents = parse_int_amount(event_payload.get("amount"))
+    if event_amount_cents and event_amount_cents != expected_amount_cents:
+        raise HTTPException(status_code=409, detail="PayFast event amount does not match this Mabaso AI plan.")
+    if provider_state["amount_cents"] != expected_amount_cents:
+        raise HTTPException(status_code=409, detail="PayFast recurring amount does not match this Mabaso AI plan.")
+
+    now = utc_now()
+    now_iso = now.isoformat()
+    trial_started = parse_billing_datetime(session["created_at"]) or now
+    provider_run_date = parse_payfast_run_date(provider_state["run_date"])
+    trial_ends = provider_run_date if provider_run_date and provider_run_date > now else trial_started + timedelta(days=FREE_TRIAL_DAYS)
+    trial_started_iso = trial_started.isoformat()
+    trial_ends_iso = trial_ends.isoformat()
+    safe_event = {
+        key: event_payload.get(key)
+        for key in (
+            "type", "initial_amount", "amount", "next_run", "frequency",
+            "item_name", "item_description", "email_address",
+        )
+        if event_payload.get(key) not in (None, "")
+    }
+    safe_provider = {
+        "status_text": provider_state["status_text"],
+        "amount": provider_state["amount_cents"],
+        "cycles_complete": provider_state["cycles_complete"],
+        "frequency": provider_state["frequency"],
+        "run_date": provider_state["run_date"],
+    }
+    raw_event_json = json.dumps(
+        {"event": safe_event, "verified_subscription": safe_provider},
+        ensure_ascii=False,
+    )
+    safe_payment_method = extract_safe_payfast_payment_method(event_payload, fallback_method="cc")
+    payment_id = "trial-" + compact_text(session["id"])
+
+    with get_db_connection() as connection:
+        current_subscription = connection.execute(
+            "SELECT provider_token, status, current_period_end FROM billing_subscriptions WHERE lower(email) = lower(?)",
+            (email,),
+        ).fetchone()
+        if current_subscription:
+            current_status = compact_text(current_subscription["status"]).lower()
+            current_end = parse_billing_datetime(current_subscription["current_period_end"])
+            current_token = compact_text(current_subscription["provider_token"])
+            if (
+                current_status in {"active", "cancel_at_period_end"}
+                and current_end
+                and current_end > now
+                and current_token
+                and not hmac.compare_digest(current_token, token)
+            ):
+                raise HTTPException(status_code=409, detail="A different paid subscription is already active for this account.")
+
+        upsert_billing_subscription(
+            connection,
+            email=email,
+            plan_id=plan["id"],
+            provider="payfast",
+            provider_token=token,
+            provider_payment_id="",
+            amount_zar=plan["amount_zar"],
+            raw_event_json=raw_event_json,
+            now_iso=trial_started_iso,
+            duration_days=FREE_TRIAL_DAYS,
+            payment_method=safe_payment_method,
+            provider_status="active",
+        )
+        connection.execute(
+            """
+            UPDATE billing_subscriptions
+            SET status = 'trialing', current_period_start = ?, current_period_end = ?,
+                next_billing_at = ?, provider_status = 'active', last_reconciled_at = ?,
+                updated_at = ?
+            WHERE lower(email) = lower(?)
+            """,
+            (trial_started_iso, trial_ends_iso, trial_ends_iso, now_iso, now_iso, email),
+        )
+        connection.execute(
+            """
+            UPDATE billing_checkout_sessions
+            SET status = 'trialing', provider_token = ?, raw_event_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (token, raw_event_json, now_iso, session["id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_payments (
+                id, email, checkout_session_id, plan_id, provider, provider_payment_id,
+                amount_zar, payment_status, raw_event_json, billing_country_at_purchase,
+                currency, payment_method_type, card_brand, card_last4, paid_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'payfast', '', '0.00', 'active', ?, ?, 'ZAR', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                payment_status = excluded.payment_status,
+                raw_event_json = excluded.raw_event_json,
+                payment_method_type = excluded.payment_method_type,
+                card_brand = excluded.card_brand,
+                card_last4 = excluded.card_last4,
+                updated_at = excluded.updated_at
+            """,
+            (
+                payment_id,
+                email,
+                session["id"],
+                plan["id"],
+                raw_event_json,
+                normalize_billing_country(session["billing_country_at_purchase"]),
+                safe_payment_method["payment_method_type"],
+                safe_payment_method["card_brand"],
+                safe_payment_method["card_last4"],
+                trial_started_iso,
+                trial_started_iso,
+                now_iso,
+            ),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO users (email, created_at, user_id, updated_at) VALUES (?, ?, ?, ?)",
+            (email, now_iso, uuid4().hex, now_iso),
+        )
+        connection.execute(
+            """
+            UPDATE users
+            SET trial_status = 'active', trial_started_at = ?, trial_ends_at = ?,
+                trial_used_at = COALESCE(NULLIF(trial_used_at, ''), ?), updated_at = ?
+            WHERE lower(email) = lower(?)
+            """,
+            (trial_started_iso, trial_ends_iso, trial_started_iso, now_iso, email),
+        )
+        record_trial_claim(
+            connection,
+            email=email,
+            checkout_session_id=session["id"],
+            provider_payment_id="",
+            provider_token=token,
+            provider_payload=event_payload,
+            now_iso=now_iso,
+        )
+        connection.execute(
+            """
+            INSERT INTO billing_events (
+                id, email, checkout_session_id, provider, event_type, payload_json, created_at
+            ) VALUES (?, ?, ?, 'payfast', 'SUBSCRIPTION_FREE_TRIAL_VERIFIED', ?, ?)
+            """,
+            (
+                uuid4().hex,
+                email,
+                session["id"],
+                json.dumps(
+                    {
+                        "provider_status": "active",
+                        "plan_id": plan["id"],
+                        "trial_ends_at": trial_ends_iso,
+                    },
+                    ensure_ascii=False,
+                ),
+                now_iso,
+            ),
+        )
+    account = sync_user_account_snapshot(email)
+    return {
+        "status": "trialing",
+        "checkout_id": session["id"],
+        "email": email,
+        "trial_ends_at": trial_ends_iso,
+        "account": account,
+    }
+
+
+async def process_payfast_subscription_event(payload: dict[str, Any]) -> dict[str, Any]:
+    event_type = compact_text(payload.get("type")).lower()
+    if event_type not in {"subscription.free-trial", "subscription.promo", "subscription.update"}:
+        raise HTTPException(status_code=400, detail="Unsupported PayFast subscription event.")
+    token = compact_text(payload.get("token"))
+    if not token:
+        raise HTTPException(status_code=400, detail="PayFast subscription token is missing.")
+    with get_db_connection() as connection:
+        existing = connection.execute(
+            "SELECT email FROM billing_subscriptions WHERE provider = 'payfast' AND provider_token = ?",
+            (token,),
+        ).fetchone()
+    if event_type == "subscription.update":
+        if not existing:
+            raise HTTPException(status_code=404, detail="Matching Mabaso AI subscription not found.")
+        reconciled = await asyncio.to_thread(reconcile_payfast_subscription, existing["email"])
+        return {"status": "reconciled", "email": existing["email"], **reconciled}
+    session = find_checkout_for_payfast_subscription_event(payload)
+    if not session:
+        if existing:
+            subscription, entitlement = get_effective_subscription_snapshot(existing["email"])
+            return {"status": "duplicate", "subscription": subscription, "entitlement": entitlement}
+        raise HTTPException(status_code=404, detail="Matching Mabaso AI checkout session not found.")
+    try:
+        provider_payload = await asyncio.to_thread(get_payfast_api_client().fetch_subscription, token)
+    except PayFastApiError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail="PayFast could not verify this subscription event. No local access was changed.",
+        ) from exc
+    return activate_payfast_trial_from_verified_subscription(
+        session=session,
+        provider_token=token,
+        provider_payload=provider_payload,
+        event_payload=payload,
+    )
 
 
 def verify_manual_payment_request(payment_id: str, admin_email: str) -> dict[str, Any]:
@@ -25495,6 +25914,11 @@ def get_owned_billing_checkout_status(
         raise HTTPException(status_code=404, detail="Checkout session not found.")
     reconcile_payfast_trial_payment_history(normalized_email)
     subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
+    # Re-read because reconciliation or a concurrently received PayFast event
+    # may have changed this checkout after the first ownership check.
+    session = get_checkout_session(checkout_id)
+    if not session or normalize_email(session["email"]) != normalized_email:
+        raise HTTPException(status_code=404, detail="Checkout session not found.")
     status = compact_text(session["status"], "pending").lower()
     complete = status in {"active", "complete", "complete_payment", "trialing"}
     return {
@@ -26641,6 +27065,30 @@ async def reject_admin_payment_request(
 @app.post("/api/billing/payfast/webhook")
 async def payfast_itn(request: Request):
     started_at = utc_now()
+    content_type = compact_text(request.headers.get("content-type")).lower()
+    if "application/json" in content_type:
+        try:
+            raw_payload = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid PayFast subscription notification.") from exc
+        if not isinstance(raw_payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid PayFast subscription notification.")
+        result = await process_payfast_subscription_event(raw_payload)
+        safe_email = normalize_email(compact_text(result.get("email")))
+        record_audit_log(
+            action="billing.payfast.subscription_webhook",
+            email=safe_email,
+            request=request,
+            resource_type="billing",
+            resource_name=compact_text(result.get("checkout_id"), "subscription"),
+            duration_ms=int((utc_now() - started_at).total_seconds() * 1000),
+            metadata={
+                "event_type": compact_text(raw_payload.get("type")),
+                "status": compact_text(result.get("status")),
+                "checkout_id": compact_text(result.get("checkout_id")),
+            },
+        )
+        return Response(content="OK", media_type="text/plain")
     verify_payfast_source(request)
     payload, expected_signature, validation_string = await parse_payfast_itn_payload(request)
     posted_signature = compact_text(payload.get("signature")).lower()
@@ -27188,7 +27636,8 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
         checkout_rows = connection.execute(
             """
             SELECT id, plan_id, provider, status, provider_payment_id,
-                   billing_country_at_purchase, created_at, updated_at
+                   billing_country_at_purchase, created_at, updated_at,
+                   CASE WHEN provider_token <> '' THEN 1 ELSE 0 END AS provider_token_present
             FROM billing_checkout_sessions WHERE lower(email) = lower(?)
             ORDER BY created_at DESC LIMIT 20
             """,
@@ -27211,6 +27660,7 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
     permissions = build_feature_permissions(usage)
     payments = list_user_payment_history(normalized_email, limit=30)
     latest_payment = payments[0] if payments else None
+    latest_checkout = _diagnostic_row_dict(checkout_rows[0]) if checkout_rows else {}
     trial_end = parse_billing_datetime(user.get("trial_ends_at"))
     now = utc_now()
     trial_remaining_seconds = max(0, int((trial_end - now).total_seconds())) if trial_end else 0
@@ -27218,6 +27668,14 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
     database_plan = compact_text(user.get("current_plan_id"), "free")
     database_subscription = compact_text(user.get("subscription_status"), "free")
     mismatch_reasons: list[str] = []
+    if (
+        compact_text(latest_checkout.get("status")).lower() in {"pending", "confirmation_pending"}
+        and not bool(latest_checkout.get("provider_token_present"))
+        and entitlement.get("entitlement") == "free"
+    ):
+        mismatch_reasons.append(
+            "PayFast checkout exists, but its verified subscription token/confirmation has not been recorded."
+        )
     if entitlement.get("trial_active") and entitlement.get("entitlement") != "trial":
         mismatch_reasons.append("Active trial did not resolve to the Trial entitlement.")
     if entitlement.get("subscription_active") and entitlement.get("entitlement") == "free":
@@ -27300,6 +27758,8 @@ def build_admin_user_diagnostic_snapshot(target_email: str) -> dict[str, Any]:
             "resolved_entitlement": entitlement.get("entitlement"),
             "quota_profile": usage.get("plan_id"),
             "provider_status": subscription.get("status"),
+            "latest_checkout_status": latest_checkout.get("status") or "not_recorded",
+            "provider_token_recorded": bool(latest_checkout.get("provider_token_present")),
             "mismatch_detected": bool(mismatch_reasons),
             "mismatch_reasons": mismatch_reasons,
         },
@@ -27340,6 +27800,18 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
         active_paid = connection.execute(
             "SELECT COUNT(*) AS total FROM billing_subscriptions WHERE status = 'active'"
         ).fetchone()
+        pending_payfast_rows = connection.execute(
+            """
+            SELECT id, email, plan_id, status, created_at, updated_at
+            FROM billing_checkout_sessions
+            WHERE lower(provider) = 'payfast'
+              AND lower(status) IN ('pending', 'confirmation_pending')
+              AND created_at <= ?
+            ORDER BY created_at ASC
+            LIMIT 100
+            """,
+            ((now - timedelta(minutes=2)).isoformat(),),
+        ).fetchall()
         trial_user_rows = connection.execute(
             """
             SELECT u.email, u.user_id, u.trial_status, u.trial_started_at, u.trial_ends_at,
@@ -27354,7 +27826,9 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
                 WHERE lower(c2.email) = lower(u.email) AND c2.checkout_fields_json LIKE ?
                 ORDER BY c2.created_at DESC LIMIT 1
             )
-            WHERE u.trial_status IN ('active', 'eligible', 'expired', 'converted') OR u.trial_used_at <> ''
+            WHERE u.trial_status IN ('active', 'eligible', 'expired', 'converted')
+               OR u.trial_used_at <> ''
+               OR lower(COALESCE(c.status, '')) IN ('pending', 'confirmation_pending')
             ORDER BY CASE WHEN u.trial_status = 'active' THEN 0 ELSE 1 END,
                      COALESCE(NULLIF(u.trial_started_at, ''), u.created_at) DESC
             LIMIT 150
@@ -27375,6 +27849,8 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
         "refund_counts": {row["status"]: int(row["total"] or 0) for row in refund_rows},
         "generation_counts": {row["status"]: int(row["total"] or 0) for row in generation_rows},
         "active_paid_subscriptions": int(active_paid["total"] or 0) if active_paid else 0,
+        "billing_sync_issue_count": len(pending_payfast_rows),
+        "billing_sync_issues": [_diagnostic_row_dict(row) for row in pending_payfast_rows],
         "trial_users": [_diagnostic_row_dict(row) for row in trial_user_rows],
         "recent_events": events,
         "system_health": {
@@ -27386,11 +27862,23 @@ def build_admin_diagnostics_overview() -> dict[str, Any]:
             "frontend_commit": compact_text(os.getenv("VITE_GIT_COMMIT"), "reported by frontend build")[:80],
             "service_id": compact_text(os.getenv("RENDER_SERVICE_ID"), "")[:120],
             "app_public_url": compact_text(APP_PUBLIC_URL)[:240],
+            "api_public_url": compact_text(API_PUBLIC_URL)[:240],
+            "render_external_hostname": compact_text(os.getenv("RENDER_EXTERNAL_HOSTNAME"))[:160],
+            "payfast_notify_url": (
+                f"https://{compact_text(os.getenv('RENDER_EXTERNAL_HOSTNAME')).lower()}/api/billing/payfast/webhook"
+                if re.fullmatch(r"[a-z0-9.-]+\.onrender\.com", compact_text(os.getenv("RENDER_EXTERNAL_HOSTNAME")).lower())
+                else f"{compact_text(API_PUBLIC_URL).rstrip('/')}/api/billing/payfast/webhook"
+            ),
         },
         "environment_checks": {
             "DATABASE_URL": bool(DATABASE_URL), "APP_SECRET": bool(os.getenv("APP_SECRET")),
             "PAYFAST_MERCHANT_ID": bool(PAYFAST_MERCHANT_ID), "PAYFAST_MERCHANT_KEY": bool(PAYFAST_MERCHANT_KEY),
             "PAYFAST_PASSPHRASE": bool(PAYFAST_PASSPHRASE), "APP_PUBLIC_URL": bool(APP_PUBLIC_URL),
+            "API_PUBLIC_URL": bool(API_PUBLIC_URL),
+            "API_PUBLIC_URL_MATCHES_RENDER_HOST": (
+                not compact_text(os.getenv("RENDER_EXTERNAL_HOSTNAME"))
+                or urlparse(compact_text(API_PUBLIC_URL)).hostname == compact_text(os.getenv("RENDER_EXTERNAL_HOSTNAME")).lower()
+            ),
             "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
             "EMAIL_PROVIDER": bool(os.getenv("BREVO_API_KEY") or os.getenv("SMTP_HOST")),
             "MATPLOTLIB": importlib.util.find_spec("matplotlib") is not None,

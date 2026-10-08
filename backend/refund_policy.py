@@ -285,4 +285,8 @@ class PayFastApiClient:
 
     def fetch_subscription(self, token: str) -> dict[str, Any]:
         """Fetch an existing PayFast subscription using its server-side token only."""
-        return self._request("GET", f"/subscriptions/{quote_plus(str(token).strip())}")
+        return self._request("GET", f"/subscriptions/{quote_plus(str(token).strip())}/fetch")
+
+    def query_transaction(self, transaction_id: str) -> dict[str, Any]:
+        """Query a known PayFast payment or subscription identifier."""
+        return self._request("GET", f"/process/query/{quote_plus(str(transaction_id).strip())}")

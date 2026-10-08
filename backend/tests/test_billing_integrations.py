@@ -1,3 +1,5 @@
+import asyncio
+import os
 import sqlite3
 import unittest
 from datetime import datetime, timezone
@@ -23,6 +25,61 @@ def make_request() -> Request:
 
 
 class BillingIntegrationTests(unittest.TestCase):
+    def test_render_hostname_wins_over_stale_api_public_url_for_payfast_callbacks(self):
+        with patch.object(main, "API_PUBLIC_URL", "https://retired-service.onrender.com"), \
+                patch.dict(os.environ, {"RENDER_EXTERNAL_HOSTNAME": "mabaso-ai-api.onrender.com"}):
+            self.assertEqual(
+                main.get_request_public_base_url(make_request()),
+                "https://mabaso-ai-api.onrender.com",
+            )
+
+    def test_payfast_subscription_fetch_uses_documented_fetch_operation(self):
+        client = main.PayFastApiClient(merchant_id="merchant", passphrase="passphrase")
+        with patch.object(client, "_request", return_value={"status": {"code": 200}}) as request:
+            client.fetch_subscription("token-123")
+        request.assert_called_once_with("GET", "/subscriptions/token-123/fetch")
+
+    def test_payfast_subscription_parser_reads_nested_response(self):
+        state = main.parse_payfast_subscription_state({
+            "data": {
+                "response": {
+                    "status": 1,
+                    "status_text": "ACTIVE",
+                    "amount": 5000,
+                    "cycles_complete": 0,
+                    "run_date": "2026-10-12",
+                    "token": "provider-token-1234567890",
+                    "email_address": "Student@Example.Test",
+                }
+            }
+        })
+        self.assertTrue(state["active"])
+        self.assertEqual(state["amount_cents"], 5000)
+        self.assertEqual(state["run_date"], "2026-10-12")
+        self.assertEqual(state["email"], "student@example.test")
+
+    def test_subscription_webhook_is_verified_with_payfast_before_activation(self):
+        event = {"type": "subscription.free-trial", "token": "provider-token-1234567890"}
+        verified = {"data": {"response": {"status": 1, "amount": 5000}}}
+        session = {"id": "mabaso-checkout", "email": "student@example.test"}
+        client = type("Client", (), {"fetch_subscription": lambda _self, token: verified})()
+        with patch.object(main, "find_checkout_for_payfast_subscription_event", return_value=session), \
+                patch.object(main, "get_payfast_api_client", return_value=client), \
+                patch.object(main, "activate_payfast_trial_from_verified_subscription", return_value={"status": "trialing"}) as activate:
+            result = asyncio.run(main.process_payfast_subscription_event(event))
+        self.assertEqual(result["status"], "trialing")
+        activate.assert_called_once_with(
+            session=session,
+            provider_token="provider-token-1234567890",
+            provider_payload=verified,
+            event_payload=event,
+        )
+
+    def test_zero_value_trial_is_never_refundable(self):
+        summary = main.get_payment_refund_summary({"amount_zar": "0.00"})
+        self.assertFalse(summary["eligible"])
+        self.assertEqual(summary["reason"], "no_charge_to_refund")
+
     def test_trial_eligibility_uses_parameterized_pattern_and_three_sessions(self):
         statements = []
 
