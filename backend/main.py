@@ -21337,7 +21337,71 @@ def recover_pending_payfast_trial(
     trial_started = parse_billing_datetime(session["created_at"])
     original_trial_end = trial_started + timedelta(days=FREE_TRIAL_DAYS) if trial_started else None
     if not original_trial_end or original_trial_end <= utc_now():
-        raise HTTPException(status_code=409, detail="The original free-trial period has ended. Recovery cannot restart or extend it. Paid access will activate only after PayFast confirms a successful renewal payment.")
+        returned_token = compact_text(provider_state["token"])
+        if returned_token and not hmac.compare_digest(returned_token, token):
+            raise HTTPException(status_code=409, detail="PayFast returned a different subscription token.")
+        if provider_state["email"] and provider_state["email"] != normalized_email:
+            raise HTTPException(status_code=409, detail="The PayFast subscription does not belong to the selected Mabaso AI user.")
+        if provider_state["amount_cents"] != expected_amount_cents:
+            raise HTTPException(status_code=409, detail="PayFast recurring amount does not match this Mabaso AI plan.")
+        now_iso = utc_now().isoformat()
+        trial_started_iso = (trial_started or utc_now()).isoformat()
+        trial_ends_iso = (original_trial_end or utc_now()).isoformat()
+        safe_method = extract_safe_payfast_payment_method(provider_response, fallback_method="cc")
+        safe_provider_json = json.dumps({
+            "status_text": provider_state["status_text"],
+            "amount": provider_state["amount_cents"],
+            "cycles_complete": provider_state["cycles_complete"],
+            "frequency": provider_state["frequency"],
+            "run_date": provider_state["run_date"],
+            "recovery": "expired_trial_subscription_link",
+        }, ensure_ascii=False)
+        with get_db_connection() as connection:
+            upsert_billing_subscription(
+                connection,
+                email=normalized_email,
+                plan_id=plan["id"],
+                provider="payfast",
+                provider_token=token,
+                provider_payment_id=compact_text(session["provider_payment_id"]),
+                amount_zar=plan["amount_zar"],
+                raw_event_json=safe_provider_json,
+                now_iso=now_iso,
+                duration_days=1,
+                payment_method=safe_method,
+                provider_status=provider_state["status"],
+            )
+            connection.execute(
+                """UPDATE billing_subscriptions
+                   SET status = 'renewal_pending', current_period_start = ?, current_period_end = ?,
+                       next_billing_at = ?, provider_status = ?, last_reconciled_at = ?, updated_at = ?
+                   WHERE lower(email) = lower(?)""",
+                (trial_started_iso, trial_ends_iso, next_run.isoformat(), provider_state["status"], now_iso, now_iso, normalized_email),
+            )
+            connection.execute(
+                """UPDATE billing_checkout_sessions
+                   SET provider_token = ?, status = 'renewal_pending', updated_at = ? WHERE id = ?""",
+                (token, now_iso, session["id"]),
+            )
+            connection.execute(
+                """UPDATE users SET trial_status = 'expired', trial_started_at = COALESCE(NULLIF(trial_started_at, ''), ?),
+                       trial_ends_at = COALESCE(NULLIF(trial_ends_at, ''), ?),
+                       trial_used_at = COALESCE(NULLIF(trial_used_at, ''), ?), updated_at = ?
+                   WHERE lower(email) = lower(?)""",
+                (trial_started_iso, trial_ends_iso, trial_started_iso, now_iso, normalized_email),
+            )
+            connection.execute(
+                """INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at)
+                   VALUES (?, ?, ?, 'payfast', 'EXPIRED_TRIAL_SUBSCRIPTION_LINKED', ?, ?)""",
+                (uuid4().hex, normalized_email, session["id"], safe_provider_json, now_iso),
+            )
+        account = sync_user_account_snapshot(normalized_email)
+        return {
+            "status": "renewal_pending", "result_code": "RENEWAL_LINKED",
+            "identifier_type": context["identifier_type"], "checkout_id": session["id"],
+            "email": normalized_email, "trial_ends_at": trial_ends_iso, "account": account,
+            "message": "PayFast subscription verified and linked. The trial has ended and was not extended. Paid access remains inactive until payment succeeds; cancellation is now available.",
+        }
 
     result = activate_payfast_trial_from_verified_subscription(
         session=session,
@@ -26742,8 +26806,8 @@ def cancel_customer_subscription(
     with get_db_connection() as connection:
         subscription = connection.execute("SELECT * FROM billing_subscriptions WHERE lower(email) = ?", (email,)).fetchone()
     subscription_status = compact_text(subscription["status"]).lower() if subscription else ""
-    if not subscription or subscription_status not in {"active", "trialing"}:
-        raise HTTPException(status_code=409, detail="There is no active subscription or trial to cancel.")
+    if not subscription or subscription_status not in {"active", "trialing", "renewal_pending", "payment_failed"}:
+        raise HTTPException(status_code=409, detail="There is no recurring subscription or trial to cancel.")
     token = compact_text(subscription["provider_token"])
     if compact_text(subscription["provider"]).lower() == "payfast":
         if not token:
@@ -26756,18 +26820,20 @@ def cancel_customer_subscription(
     else:
         provider_result = {"status": "not_recurring", "data": {"response": True}}
     now_iso = utc_now().isoformat()
-    cancel_at = compact_text(subscription["current_period_end"], now_iso)
+    inactive_retry = subscription_status in {"renewal_pending", "payment_failed"}
+    cancel_at = now_iso if inactive_retry else compact_text(subscription["current_period_end"], now_iso)
+    updated_status = "cancelled" if inactive_retry else subscription_status
     with get_db_connection() as connection:
         # Preserve access through the period that has already been authorised.
         connection.execute(
-            "UPDATE billing_subscriptions SET cancel_at = ?, cancelled_at = ?, provider_status = 'cancelled', updated_at = ? WHERE lower(email) = ?",
-            (cancel_at, now_iso, now_iso, email),
+            "UPDATE billing_subscriptions SET status = ?, cancel_at = ?, cancelled_at = ?, provider_status = 'cancelled', updated_at = ? WHERE lower(email) = ?",
+            (updated_status, cancel_at, now_iso, now_iso, email),
         )
         connection.execute(
             "INSERT INTO billing_events (id, email, checkout_session_id, provider, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (uuid4().hex, email, "", compact_text(subscription["provider"], "system"), "SUBSCRIPTION_CANCELLED", json.dumps({"cancel_at": cancel_at, "reason": compact_text(payload.reason)[:300], "provider_status": compact_text(provider_result.get("status"))}, ensure_ascii=False), now_iso),
         )
-    message = ("Your free trial renewal is cancelled. Trial access remains available until the displayed trial end." if subscription_status == "trialing" else "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.")
+    message = ("The PayFast renewal is cancelled. No paid access was activated." if inactive_retry else "Your free trial renewal is cancelled. Trial access remains available until the displayed trial end." if subscription_status == "trialing" else "Future recurring charges are cancelled. Paid access remains available until the end of the paid period.")
     refreshed, _ = get_effective_subscription_snapshot(email)
     return {"message": message, "cancel_at": cancel_at, "cancelled_status": subscription_status, "subscription": refreshed}
 

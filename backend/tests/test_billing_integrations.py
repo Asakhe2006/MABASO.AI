@@ -40,10 +40,18 @@ class BillingIntegrationTests(unittest.TestCase):
                 provider TEXT, event_type TEXT, payload_json TEXT, created_at TEXT
             );
             CREATE TABLE billing_subscriptions (
-                email TEXT PRIMARY KEY, provider TEXT, provider_token TEXT,
-                status TEXT, current_period_end TEXT
+                email TEXT PRIMARY KEY, plan_id TEXT, status TEXT, provider TEXT,
+                provider_token TEXT, provider_payment_id TEXT, amount_zar TEXT,
+                current_period_start TEXT, current_period_end TEXT, cancel_at TEXT,
+                raw_event_json TEXT, created_at TEXT, updated_at TEXT,
+                billing_frequency TEXT, next_billing_at TEXT, cancelled_at TEXT,
+                provider_status TEXT, payment_method_type TEXT, card_brand TEXT,
+                card_last4 TEXT, last_reconciled_at TEXT
             );
-            CREATE TABLE users (email TEXT PRIMARY KEY, trial_used_at TEXT);
+            CREATE TABLE users (
+                email TEXT PRIMARY KEY, trial_status TEXT, trial_started_at TEXT,
+                trial_ends_at TEXT, trial_used_at TEXT, updated_at TEXT
+            );
             CREATE TABLE trial_claims (
                 id TEXT PRIMARY KEY, email TEXT, checkout_session_id TEXT,
                 provider_token_hash TEXT, created_at TEXT
@@ -54,7 +62,7 @@ class BillingIntegrationTests(unittest.TestCase):
             "INSERT INTO billing_checkout_sessions VALUES (?, ?, 'pro_student', '0.00', 'payfast', '', ?, ?, ?, '{}', 'ZA', ?, ?)",
             (checkout_id, email, token, status, '{"custom_str4":"trial"}', now, now),
         )
-        connection.execute("INSERT INTO users VALUES (?, '')", (email,))
+        connection.execute("INSERT INTO users (email, trial_used_at) VALUES (?, '')", (email,))
         connection.commit()
         return connection
 
@@ -273,13 +281,16 @@ class BillingIntegrationTests(unittest.TestCase):
         }}}
         client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
         with patch.object(main, "get_db_connection", return_value=connection), \
-                patch.object(main, "get_payfast_api_client", return_value=client):
-            with self.assertRaises(HTTPException) as raised:
-                main.recover_pending_payfast_trial(
-                    email="student@example.test", identifier=token,
-                )
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertIn("cannot restart or extend", raised.exception.detail)
+                patch.object(main, "get_payfast_api_client", return_value=client), \
+                patch.object(main, "sync_user_account_snapshot", return_value={"entitlement": {"entitlement": "free"}}):
+            result = main.recover_pending_payfast_trial(
+                email="student@example.test", identifier=token,
+            )
+        self.assertEqual(result["result_code"], "RENEWAL_LINKED")
+        self.assertIn("trial has ended", result["message"])
+        linked = connection.execute("SELECT status, provider_token FROM billing_subscriptions").fetchone()
+        self.assertEqual(linked["status"], "renewal_pending")
+        self.assertEqual(linked["provider_token"], token)
         connection.close()
 
     def test_checkout_reference_without_verified_token_never_recovers(self):
@@ -311,7 +322,7 @@ class BillingIntegrationTests(unittest.TestCase):
         checkout_id = "mabaso-0123456789abcdef01234567"
         connection = self.make_recovery_database(checkout_id=checkout_id, token=token)
         connection.execute(
-            "INSERT INTO billing_subscriptions VALUES (?, 'payfast', ?, 'trialing', '2030-01-08T00:00:00+00:00')",
+            "INSERT INTO billing_subscriptions (email, provider, provider_token, status, current_period_end) VALUES (?, 'payfast', ?, 'trialing', '2030-01-08T00:00:00+00:00')",
             ("student@example.test", token),
         )
         connection.commit()
