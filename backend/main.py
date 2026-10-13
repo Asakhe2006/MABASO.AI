@@ -19471,10 +19471,18 @@ def parse_payfast_subscription_state(payload: dict[str, Any] | None) -> dict[str
     raw_status = response.get("status")
     status_text = compact_text(response.get("status_text") or response.get("subscription_status")).upper()
     active = status_text == "ACTIVE" or raw_status == 1 or compact_text(raw_status).lower() in {"1", "active"}
+    status_reason = compact_text(response.get("status_reason") or response.get("reason"))
+    normalized_status = compact_text(status_text or raw_status, "unknown").lower()
+    terminal = any(
+        marker in normalized_status
+        for marker in ("cancelled", "canceled", "complete", "deleted", "locked")
+    )
     return {
         "active": active,
-        "status": "active" if active else compact_text(status_text or raw_status, "unknown").lower(),
+        "status": "active" if active else normalized_status,
         "status_text": status_text or compact_text(raw_status, "UNKNOWN").upper(),
+        "status_reason": status_reason,
+        "terminal": terminal,
         "amount_cents": parse_int_amount(response.get("amount")),
         "cycles_complete": parse_int_amount(response.get("cycles_complete")),
         "frequency": parse_int_amount(response.get("frequency")),
@@ -21262,7 +21270,7 @@ def resolve_payfast_recovery_context(
             (normalized_email,),
         ).fetchone()
         subscription_keys = set(subscription.keys()) if subscription and hasattr(subscription, "keys") else set()
-        if subscription and {"provider_token", "status", "current_period_end"}.issubset(subscription_keys) and compact_text(subscription["provider_token"]) == token and compact_text(subscription["status"]).lower() in {"active", "trialing", "cancel_at_period_end"}:
+        if subscription and {"provider_token", "status", "current_period_end"}.issubset(subscription_keys) and compact_text(subscription["provider_token"]) == token and compact_text(subscription["status"]).lower() in {"active", "trialing", "cancel_at_period_end", "renewal_pending", "payment_failed", "cancelled"}:
             return {"already_recovered": True, "email": normalized_email, "identifier_type": identifier_type,
                     "token": token, "session": session, "trial_ends_at": compact_text(subscription["current_period_end"]),
                     "status": compact_text(subscription["status"], "trialing")}
@@ -21322,8 +21330,6 @@ def recover_pending_payfast_trial(
 
     provider_state = parse_payfast_subscription_state(provider_payload)
     provider_response = provider_state["response"]
-    if not provider_state["active"]:
-        raise HTTPException(status_code=409, detail="PayFast does not report this subscription as active.")
     if "cycles_complete" not in provider_response:
         raise HTTPException(status_code=502, detail="PayFast returned incomplete subscription details. No local billing state was changed.")
     if provider_state["cycles_complete"] != 0:
@@ -21336,14 +21342,26 @@ def recover_pending_payfast_trial(
     expected_amount_cents = int(refund_money(plan["amount_zar"]) * 100)
     trial_started = parse_billing_datetime(session["created_at"])
     original_trial_end = trial_started + timedelta(days=FREE_TRIAL_DAYS) if trial_started else None
-    if not original_trial_end or original_trial_end <= utc_now():
-        returned_token = compact_text(provider_state["token"])
-        if returned_token and not hmac.compare_digest(returned_token, token):
-            raise HTTPException(status_code=409, detail="PayFast returned a different subscription token.")
-        if provider_state["email"] and provider_state["email"] != normalized_email:
-            raise HTTPException(status_code=409, detail="The PayFast subscription does not belong to the selected Mabaso AI user.")
-        if provider_state["amount_cents"] != expected_amount_cents:
-            raise HTTPException(status_code=409, detail="PayFast recurring amount does not match this Mabaso AI plan.")
+    returned_token = compact_text(provider_state["token"])
+    if returned_token and not hmac.compare_digest(returned_token, token):
+        raise HTTPException(status_code=409, detail="PayFast returned a different subscription token.")
+    if provider_state["email"] and provider_state["email"] != normalized_email:
+        raise HTTPException(status_code=409, detail="The PayFast subscription does not belong to the selected Mabaso AI user.")
+    if provider_state["amount_cents"] != expected_amount_cents:
+        raise HTTPException(status_code=409, detail="PayFast recurring amount does not match this Mabaso AI plan.")
+
+    trial_has_expired = not original_trial_end or original_trial_end <= utc_now()
+    if not provider_state["active"] and not trial_has_expired:
+        raise HTTPException(
+            status_code=409,
+            detail=f"PayFast reports this subscription as {provider_state['status_text']}. Trial access was not activated.",
+        )
+    if not provider_state["active"] and provider_state["terminal"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"PayFast reports this subscription as {provider_state['status_text']}. There is no retrying subscription to recover.",
+        )
+    if trial_has_expired:
         now_iso = utc_now().isoformat()
         trial_started_iso = (trial_started or utc_now()).isoformat()
         trial_ends_iso = (original_trial_end or utc_now()).isoformat()
@@ -21354,8 +21372,11 @@ def recover_pending_payfast_trial(
             "cycles_complete": provider_state["cycles_complete"],
             "frequency": provider_state["frequency"],
             "run_date": provider_state["run_date"],
+            "active": provider_state["active"],
+            "status_reason": provider_state["status_reason"],
             "recovery": "expired_trial_subscription_link",
         }, ensure_ascii=False)
+        local_subscription_status = "renewal_pending" if provider_state["active"] else "payment_failed"
         with get_db_connection() as connection:
             upsert_billing_subscription(
                 connection,
@@ -21373,15 +21394,15 @@ def recover_pending_payfast_trial(
             )
             connection.execute(
                 """UPDATE billing_subscriptions
-                   SET status = 'renewal_pending', current_period_start = ?, current_period_end = ?,
+                   SET status = ?, current_period_start = ?, current_period_end = ?,
                        next_billing_at = ?, provider_status = ?, last_reconciled_at = ?, updated_at = ?
                    WHERE lower(email) = lower(?)""",
-                (trial_started_iso, trial_ends_iso, next_run.isoformat(), provider_state["status"], now_iso, now_iso, normalized_email),
+                (local_subscription_status, trial_started_iso, trial_ends_iso, next_run.isoformat(), provider_state["status"], now_iso, now_iso, normalized_email),
             )
             connection.execute(
                 """UPDATE billing_checkout_sessions
-                   SET provider_token = ?, status = 'renewal_pending', updated_at = ? WHERE id = ?""",
-                (token, now_iso, session["id"]),
+                   SET provider_token = ?, status = ?, updated_at = ? WHERE id = ?""",
+                (token, local_subscription_status, now_iso, session["id"]),
             )
             connection.execute(
                 """UPDATE users SET trial_status = 'expired', trial_started_at = COALESCE(NULLIF(trial_started_at, ''), ?),
@@ -21397,11 +21418,14 @@ def recover_pending_payfast_trial(
             )
         account = sync_user_account_snapshot(normalized_email)
         return {
-            "status": "renewal_pending", "result_code": "RENEWAL_LINKED",
+            "status": local_subscription_status, "result_code": "RENEWAL_LINKED",
             "identifier_type": context["identifier_type"], "checkout_id": session["id"],
             "email": normalized_email, "trial_ends_at": trial_ends_iso, "account": account,
-            "message": "PayFast subscription verified and linked. The trial has ended and was not extended. Paid access remains inactive until payment succeeds; cancellation is now available.",
+            "message": "PayFast subscription verified and linked. The trial has ended and was not extended. Paid access remains inactive; cancellation is now available before any future retry.",
         }
+
+    if not provider_state["active"]:
+        raise HTTPException(status_code=409, detail="PayFast does not report this subscription as active. Trial access was not activated.")
 
     result = activate_payfast_trial_from_verified_subscription(
         session=session,
@@ -23099,6 +23123,11 @@ _currency_rate_cache_lock = threading.Lock()
 _currency_rate_cache: dict[str, Any] = {"expires_at": 0.0, "value": None}
 
 
+def build_openai_admin_cache_key(range_start: datetime, range_end: datetime) -> str:
+    """Return a stable cache key for an admin calendar range."""
+    return f"{range_start.date().isoformat()}:{range_end.date().isoformat()}:{OPENAI_PROJECT_ID or 'organization'}"
+
+
 def fetch_usd_zar_exchange_rate() -> dict[str, Any]:
     """Return a real published USD/ZAR rate; never fabricate a fallback rate."""
     now_monotonic = time.monotonic()
@@ -23282,7 +23311,7 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
         return {"available": False, "status": "unconfigured", "message": "OPENAI_ADMIN_KEY is not configured.", "totals": {}, "by_model": [], "daily": []}
     start_time = int(range_start.timestamp())
     end_time = max(start_time + 1, int(range_end.timestamp()))
-    cache_key = f"{start_time}:{end_time}:{OPENAI_PROJECT_ID or 'organization'}"
+    cache_key = build_openai_admin_cache_key(range_start, range_end)
     now_monotonic = time.monotonic()
     with _openai_usage_cache_lock:
         if _openai_usage_cache.get("cache_key") == cache_key and float(_openai_usage_cache.get("expires_at") or 0) > now_monotonic:
@@ -23343,7 +23372,14 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
                 "stale": True,
                 "message": f"{failure_message} Showing the last successful sync.",
             }
-        return {"available": False, "status": "unavailable", "message": failure_message, "http_status": failure_status, "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
+        unavailable = {"available": False, "status": "unavailable", "message": failure_message, "http_status": failure_status, "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
+        with _openai_usage_cache_lock:
+            _openai_usage_cache.update({
+                "cache_key": cache_key,
+                "expires_at": now_monotonic + min(60, OPENAI_COST_CACHE_SECONDS),
+                "value": dict(unavailable),
+            })
+        return unavailable
 
 
 def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) -> dict[str, Any]:
@@ -23362,7 +23398,7 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
         }
     start_time = int(range_start.timestamp())
     end_time = max(start_time + 1, int(range_end.timestamp()))
-    cache_key = f"{start_time}:{end_time}:{OPENAI_PROJECT_ID or 'organization'}"
+    cache_key = build_openai_admin_cache_key(range_start, range_end)
     now_monotonic = time.monotonic()
     with _openai_cost_cache_lock:
         if _openai_cost_cache.get("cache_key") == cache_key and float(_openai_cost_cache.get("expires_at") or 0) > now_monotonic:
@@ -23429,7 +23465,7 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
                 "stale": True,
                 "message": f"{failure_message} Showing the last successful sync.",
             }
-        return {
+        unavailable = {
             "available": False,
             "currency": "",
             "total_cost": None,
@@ -23442,6 +23478,13 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
             "project_id": OPENAI_PROJECT_ID,
             "scope": "project" if OPENAI_PROJECT_ID else "organization",
         }
+        with _openai_cost_cache_lock:
+            _openai_cost_cache.update({
+                "cache_key": cache_key,
+                "expires_at": now_monotonic + min(60, OPENAI_COST_CACHE_SECONDS),
+                "value": dict(unavailable),
+            })
+        return unavailable
 
 
 def is_paid_payment_status(status: str) -> bool:

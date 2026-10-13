@@ -293,6 +293,65 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertEqual(linked["provider_token"], token)
         connection.close()
 
+    def test_admin_recovery_links_failed_retry_without_granting_access(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        connection = self.make_recovery_database(token=token, status="failed")
+        expired_start = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        connection.execute("UPDATE billing_checkout_sessions SET created_at = ?", (expired_start,))
+        connection.commit()
+        future_retry = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        verified = {"data": {"response": {
+            "status": 0, "status_text": "FAILED", "status_reason": "payment retry scheduled",
+            "amount": 5000, "cycles_complete": 0, "frequency": 3,
+            "run_date": future_retry, "token": token,
+            "email_address": "student@example.test",
+        }}}
+        client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
+        with patch.object(main, "get_db_connection", return_value=connection), \
+                patch.object(main, "get_payfast_api_client", return_value=client), \
+                patch.object(main, "sync_user_account_snapshot", return_value={"entitlement": {"entitlement": "free"}}):
+            result = main.recover_pending_payfast_trial(
+                email="student@example.test", identifier=token,
+            )
+
+        self.assertEqual(result["result_code"], "RENEWAL_LINKED")
+        self.assertEqual(result["status"], "payment_failed")
+        linked = connection.execute(
+            "SELECT status, provider_token FROM billing_subscriptions"
+        ).fetchone()
+        self.assertEqual(linked["status"], "payment_failed")
+        self.assertEqual(linked["provider_token"], token)
+        user = connection.execute("SELECT trial_status FROM users").fetchone()
+        self.assertEqual(user["trial_status"], "expired")
+        connection.close()
+
+    def test_admin_recovery_rejects_terminal_cancelled_subscription(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        connection = self.make_recovery_database(token=token, status="failed")
+        connection.execute(
+            "UPDATE billing_checkout_sessions SET created_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),),
+        )
+        connection.commit()
+        verified = {"data": {"response": {
+            "status": 0, "status_text": "CANCELLED", "amount": 5000,
+            "cycles_complete": 0, "frequency": 3,
+            "run_date": (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat(),
+            "token": token, "email_address": "student@example.test",
+        }}}
+        client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
+        with patch.object(main, "get_db_connection", return_value=connection), \
+                patch.object(main, "get_payfast_api_client", return_value=client):
+            with self.assertRaises(HTTPException) as raised:
+                main.recover_pending_payfast_trial(
+                    email="student@example.test", identifier=token,
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("no retrying subscription", raised.exception.detail)
+        self.assertIsNone(connection.execute("SELECT status FROM billing_subscriptions").fetchone())
+        connection.close()
+
     def test_checkout_reference_without_verified_token_never_recovers(self):
         checkout_id = "mabaso-0123456789abcdef01234567"
         connection = self.make_recovery_database(checkout_id=checkout_id)
@@ -639,6 +698,23 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("not permitted", message)
         self.assertNotIn("sensitive text", message)
+
+    def test_openai_admin_rate_limit_failure_is_temporarily_cached(self):
+        response = type("Response", (), {"status_code": 429})()
+        error = main.requests.HTTPError("rate limited", response=response)
+        start = datetime(2026, 8, 1, 10, 0, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 8, 2, 10, 0, 0, tzinfo=timezone.utc)
+        with patch.multiple(main, OPENAI_ADMIN_KEY="admin-key", OPENAI_PROJECT_ID="proj_mabaso"), \
+                patch.object(main.requests, "get", side_effect=error) as request_get:
+            main._openai_cost_cache.update({"cache_key": "", "expires_at": 0.0, "value": None})
+            first = main.fetch_openai_organization_costs(start, end)
+            second = main.fetch_openai_organization_costs(
+                start + timedelta(seconds=10), end + timedelta(seconds=10),
+            )
+
+        self.assertEqual(first["http_status"], 429)
+        self.assertEqual(second["http_status"], 429)
+        self.assertEqual(request_get.call_count, 1)
 
 
 if __name__ == "__main__":
