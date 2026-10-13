@@ -25,7 +25,7 @@ def make_request() -> Request:
 
 
 class BillingIntegrationTests(unittest.TestCase):
-    def make_recovery_database(self, *, email="student@example.test", checkout_id="mabaso-0123456789abcdef01234567", token=""):
+    def make_recovery_database(self, *, email="student@example.test", checkout_id="mabaso-0123456789abcdef01234567", token="", status="pending"):
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
         connection.executescript("""
@@ -51,8 +51,8 @@ class BillingIntegrationTests(unittest.TestCase):
         """)
         now = datetime.now(timezone.utc).isoformat()
         connection.execute(
-            "INSERT INTO billing_checkout_sessions VALUES (?, ?, 'pro_student', '0.00', 'payfast', '', ?, 'pending', ?, '{}', 'ZA', ?, ?)",
-            (checkout_id, email, token, '{"custom_str4":"trial"}', now, now),
+            "INSERT INTO billing_checkout_sessions VALUES (?, ?, 'pro_student', '0.00', 'payfast', '', ?, ?, ?, '{}', 'ZA', ?, ?)",
+            (checkout_id, email, token, status, '{"custom_str4":"trial"}', now, now),
         )
         connection.execute("INSERT INTO users VALUES (?, '')", (email,))
         connection.commit()
@@ -245,6 +245,41 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertEqual(context["identifier_type"], "checkout_reference")
         self.assertEqual(context["token"], token)
         self.assertFalse(context["already_recovered"])
+        connection.close()
+
+    def test_subscription_token_can_recover_a_checkout_after_failed_renewal_status(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        connection = self.make_recovery_database(token="", status="failed")
+        with patch.object(main, "get_db_connection", return_value=connection):
+            context = main.resolve_payfast_recovery_context(
+                email="student@example.test", identifier=token,
+            )
+        self.assertEqual(context["identifier_type"], "subscription_token")
+        self.assertEqual(context["token"], token)
+        self.assertEqual(context["session"]["status"], "failed")
+        connection.close()
+
+    def test_admin_recovery_never_restarts_an_expired_trial(self):
+        token = "dc0521d3-55fe-269b-fa00-b647310d760f"
+        connection = self.make_recovery_database(token=token, status="failed")
+        expired_start = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        connection.execute("UPDATE billing_checkout_sessions SET created_at = ?", (expired_start,))
+        connection.commit()
+        future_run = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        verified = {"data": {"response": {
+            "status": 1, "status_text": "ACTIVE", "amount": 5000,
+            "cycles_complete": 0, "frequency": 3, "run_date": future_run,
+            "token": token, "email_address": "student@example.test",
+        }}}
+        client = type("Client", (), {"fetch_subscription": lambda _self, _token: verified})()
+        with patch.object(main, "get_db_connection", return_value=connection), \
+                patch.object(main, "get_payfast_api_client", return_value=client):
+            with self.assertRaises(HTTPException) as raised:
+                main.recover_pending_payfast_trial(
+                    email="student@example.test", identifier=token,
+                )
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("cannot restart or extend", raised.exception.detail)
         connection.close()
 
     def test_checkout_reference_without_verified_token_never_recovers(self):
@@ -585,6 +620,14 @@ class BillingIntegrationTests(unittest.TestCase):
         self.assertIn(("project_ids", "proj_mabaso"), params)
         self.assertIn(("group_by", "project_id"), params)
         self.assertIn(("group_by", "line_item"), params)
+
+    def test_openai_admin_failure_explains_key_permission_problem_without_response_body(self):
+        response = type("Response", (), {"status_code": 403})()
+        error = main.requests.HTTPError("provider response with sensitive text", response=response)
+        message, status = main.describe_openai_admin_api_failure(error, "cost")
+        self.assertEqual(status, 403)
+        self.assertIn("not permitted", message)
+        self.assertNotIn("sensitive text", message)
 
 
 if __name__ == "__main__":

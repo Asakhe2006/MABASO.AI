@@ -24,7 +24,11 @@ const title = (value) => String(value || "unknown").replaceAll("_", " ").replace
 const requestJson = async (authFetch, path, options = {}) => {
   const response = await authFetch(path, options);
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || payload.message || "Diagnostics request failed.");
+  if (!response.ok) {
+    const detail = payload.detail;
+    const message = typeof detail === "string" ? detail : detail?.message || payload.message || "Diagnostics request failed.";
+    throw new Error(message);
+  }
   return payload;
 };
 
@@ -142,7 +146,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const recoverPayFastTrial = async () => {
     const identifier = recoveryToken.trim();
     if (!selectedEmail || !identifier) return;
-    const checkout = (snapshot?.checkout_sessions || []).find((item) => ["pending", "confirmation_pending"].includes(String(item?.status || "").toLowerCase()));
+    const checkout = (snapshot?.checkout_sessions || []).find((item) => ["pending", "confirmation_pending", "failed"].includes(String(item?.status || "").toLowerCase()));
     setRecoveryBusy(true);
     setRecoveryMessage("");
     setError("");
@@ -171,7 +175,7 @@ export default function AdminDiagnosticsPanel({ authFetch }) {
   const trialUsers = overview?.trial_users || [];
   const entitlement = snapshot?.entitlement || {};
   const state = snapshot?.state_comparison || {};
-  const recoveryCheckout = (snapshot?.checkout_sessions || []).find((checkout) => ["pending", "confirmation_pending"].includes(String(checkout?.status || "").toLowerCase()));
+  const recoveryCheckout = (snapshot?.checkout_sessions || []).find((checkout) => ["pending", "confirmation_pending", "failed"].includes(String(checkout?.status || "").toLowerCase()));
   // Retain the previous JSX during this additive rollout, but render the
   // clearer dual-identifier recovery panel below instead.
   const pendingCheckout = null;

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
@@ -285,6 +286,7 @@ MAX_SUPPORT_CONTEXT_CHARS = int(os.getenv("MAX_SUPPORT_CONTEXT_CHARS", "180"))
 MAX_REFERENCE_IMAGE_INPUT_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_INPUT_CHARS", "1400000"))
 MAX_REFERENCE_IMAGE_URL_CHARS = int(os.getenv("MAX_REFERENCE_IMAGE_URL_CHARS", "2400"))
 MAX_CHAT_REFERENCE_IMAGES = int(os.getenv("MAX_CHAT_REFERENCE_IMAGES", "4"))
+MAX_CHAT_REFERENCE_ATTACHMENTS = int(os.getenv("MAX_CHAT_REFERENCE_ATTACHMENTS", "5"))
 MAX_GENERATION_REFERENCE_IMAGES = int(os.getenv("MAX_GENERATION_REFERENCE_IMAGES", "6"))
 MAX_QUIZ_ANSWER_IMAGES = int(os.getenv("MAX_QUIZ_ANSWER_IMAGES", "6"))
 MAX_ZIP_UPLOAD_ENTRIES = int(os.getenv("MAX_ZIP_UPLOAD_ENTRIES", "5000"))
@@ -19426,6 +19428,30 @@ def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dic
                 "pending_checkout_updated_at": pending_checkout["updated_at"],
                 "message": "PayFast created the checkout, but Mabaso AI has not received its verified confirmation yet.",
             }
+        else:
+            with get_db_connection() as connection:
+                failed_payment = connection.execute(
+                    """
+                    SELECT plan_id, payment_status, amount_zar, provider, created_at, updated_at
+                    FROM billing_payments
+                    WHERE lower(email) = lower(?) AND lower(provider) = 'payfast'
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (normalize_email(email),),
+                ).fetchone()
+            if failed_payment and compact_text(failed_payment["payment_status"]).lower() in {"failed", "failed_payment"}:
+                subscription = {
+                    **subscription,
+                    "status": "payment_failed",
+                    "paid_plan_id": normalize_billing_plan_id(failed_payment["plan_id"]),
+                    "provider": "payfast",
+                    "payment_failed": True,
+                    "failed_payment_status": compact_text(failed_payment["payment_status"], "failed"),
+                    "failed_payment_at": compact_text(failed_payment["updated_at"] or failed_payment["created_at"]),
+                    "amount_zar": compact_text(failed_payment["amount_zar"]),
+                    "message": "PayFast could not collect the scheduled payment. PayFast may retry it; paid access remains inactive until a payment is confirmed.",
+                }
     return {**subscription, "entitlement": entitlement}, entitlement
 
 
@@ -19750,10 +19776,10 @@ def serialize_usage_feature(email: str, plan_id: str, feature: str, period_key: 
     }
 
 
-def get_billing_usage_summary(email: str) -> dict[str, Any]:
+def get_billing_usage_summary(email: str, *, plan_id: str = "") -> dict[str, Any]:
     normalized_email = normalize_email(email)
     period_key = get_usage_period_key()
-    plan_id = get_effective_plan_id(normalized_email)
+    plan_id = normalize_billing_plan_id(plan_id) if compact_text(plan_id) else get_effective_plan_id(normalized_email)
     usage_counts = get_usage_counts_for_period(normalized_email, period_key)
     features = [
         serialize_usage_feature(normalized_email, plan_id, feature, period_key, usage_counts)
@@ -20186,9 +20212,10 @@ def reconcile_payfast_trial_payment_history(email: str) -> None:
         )
 
 
-def list_user_payment_history(email: str, limit: int = 12) -> list[dict[str, Any]]:
+def list_user_payment_history(email: str, limit: int = 12, *, reconcile: bool = True) -> list[dict[str, Any]]:
     normalized_email = normalize_email(email)
-    reconcile_payfast_trial_payment_history(normalized_email)
+    if reconcile:
+        reconcile_payfast_trial_payment_history(normalized_email)
     safe_limit = max(1, min(int(limit or 12), 50))
     with get_db_connection() as connection:
         rows = connection.execute(
@@ -20258,9 +20285,9 @@ def sync_user_account_snapshot(email: str, *, mark_login: bool = False) -> dict[
     normalized_email = normalize_email(email)
     now_iso = utc_now().isoformat()
     subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
-    usage = get_billing_usage_summary(normalized_email)
+    usage = get_billing_usage_summary(normalized_email, plan_id=entitlement.get("plan_id", ""))
     monthly_usage = get_monthly_usage_summary(normalized_email)
-    payment_history = list_user_payment_history(normalized_email)
+    payment_history = list_user_payment_history(normalized_email, reconcile=False)
     payment_requests = list_payment_requests_for_user(normalized_email)
     feature_permissions = build_feature_permissions(usage)
     user_id = ""
@@ -20770,7 +20797,9 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
         connection.execute(
             """
             UPDATE billing_checkout_sessions
-            SET status = ?, provider_payment_id = ?, provider_token = ?,
+            SET status = ?,
+                provider_payment_id = COALESCE(NULLIF(?, ''), provider_payment_id),
+                provider_token = COALESCE(NULLIF(?, ''), provider_token),
                 raw_event_json = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -21192,7 +21221,6 @@ def resolve_payfast_recovery_context(
                           billing_country_at_purchase, created_at, updated_at
                    FROM billing_checkout_sessions
                    WHERE lower(email) = lower(?) AND lower(provider) = 'payfast'
-                     AND lower(status) IN ('pending', 'confirmation_pending')
                    ORDER BY created_at DESC LIMIT 1""",
                 (normalized_email,),
             ).fetchone()
@@ -21306,6 +21334,11 @@ def recover_pending_payfast_trial(
 
     plan = get_billing_plan(session["plan_id"])
     expected_amount_cents = int(refund_money(plan["amount_zar"]) * 100)
+    trial_started = parse_billing_datetime(session["created_at"])
+    original_trial_end = trial_started + timedelta(days=FREE_TRIAL_DAYS) if trial_started else None
+    if not original_trial_end or original_trial_end <= utc_now():
+        raise HTTPException(status_code=409, detail="The original free-trial period has ended. Recovery cannot restart or extend it. Paid access will activate only after PayFast confirms a successful renewal payment.")
+
     result = activate_payfast_trial_from_verified_subscription(
         session=session,
         provider_token=token,
@@ -23161,6 +23194,25 @@ def summarize_openai_completion_usage(pages: list[dict[str, Any]]) -> dict[str, 
     }
 
 
+def describe_openai_admin_api_failure(exc: Exception, report_name: str) -> tuple[str, int | None]:
+    """Return an actionable, secret-safe reason for an OpenAI admin report failure."""
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code == 401:
+        message = f"OpenAI rejected the configured admin key while loading {report_name}. Update OPENAI_ADMIN_KEY with a valid organization Admin API key."
+    elif status_code == 403:
+        message = f"The configured OpenAI key is not permitted to read organization {report_name}. Use an organization Admin API key with usage and cost visibility."
+    elif status_code == 429:
+        message = f"OpenAI temporarily rate-limited the {report_name} report. Refresh diagnostics shortly."
+    elif status_code and status_code >= 500:
+        message = f"OpenAI's {report_name} service is temporarily unavailable."
+    elif isinstance(exc, requests.Timeout):
+        message = f"The OpenAI {report_name} report timed out. Refresh diagnostics to retry."
+    else:
+        message = f"OpenAI {report_name} data is temporarily unavailable. Verify the Admin API key and project scope."
+    return message, status_code if isinstance(status_code, int) else None
+
+
 def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) -> dict[str, Any]:
     if not OPENAI_ADMIN_KEY:
         return {"available": False, "status": "unconfigured", "message": "OPENAI_ADMIN_KEY is not configured.", "totals": {}, "by_model": [], "daily": []}
@@ -23217,6 +23269,7 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
         return value
     except (requests.RequestException, ValueError, TypeError) as exc:
         logger.warning("OpenAI Usage API request failed: %s", exc)
+        failure_message, failure_status = describe_openai_admin_api_failure(exc, "usage")
         with _openai_usage_cache_lock:
             cached_value = _openai_usage_cache.get("value") if _openai_usage_cache.get("cache_key") == cache_key else None
         if isinstance(cached_value, dict):
@@ -23224,9 +23277,9 @@ def fetch_openai_completion_usage(range_start: datetime, range_end: datetime) ->
                 **cached_value,
                 "status": "stale",
                 "stale": True,
-                "message": "OpenAI usage refresh failed. Showing the last successful sync.",
+                "message": f"{failure_message} Showing the last successful sync.",
             }
-        return {"available": False, "status": "unavailable", "message": "OpenAI usage is temporarily unavailable.", "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
+        return {"available": False, "status": "unavailable", "message": failure_message, "http_status": failure_status, "project_id": OPENAI_PROJECT_ID, "totals": {}, "by_model": [], "daily": []}
 
 
 def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) -> dict[str, Any]:
@@ -23302,6 +23355,7 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
         return value
     except (requests.RequestException, ValueError, TypeError) as exc:
         logger.warning("OpenAI Costs API request failed: %s", exc)
+        failure_message, failure_status = describe_openai_admin_api_failure(exc, "cost")
         with _openai_cost_cache_lock:
             cached_value = _openai_cost_cache.get("value") if _openai_cost_cache.get("cache_key") == cache_key else None
         if isinstance(cached_value, dict):
@@ -23309,7 +23363,7 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
                 **cached_value,
                 "status": "stale",
                 "stale": True,
-                "message": "OpenAI cost refresh failed. Showing the last successful sync.",
+                "message": f"{failure_message} Showing the last successful sync.",
             }
         return {
             "available": False,
@@ -23319,7 +23373,8 @@ def fetch_openai_organization_costs(range_start: datetime, range_end: datetime) 
             "by_project": [],
             "daily": [],
             "status": "unavailable",
-            "message": "OpenAI cost is temporarily unavailable.",
+            "message": failure_message,
+            "http_status": failure_status,
             "project_id": OPENAI_PROJECT_ID,
             "scope": "project" if OPENAI_PROJECT_ID else "organization",
         }
@@ -23559,8 +23614,12 @@ def build_admin_billing_snapshot(range_start: datetime, now: datetime) -> dict[s
             }
         )
 
-    openai_organization_costs = fetch_openai_organization_costs(range_start, now)
-    openai_completion_usage = fetch_openai_completion_usage(range_start, now)
+    # Both OpenAI admin reports are independent network requests. Running them
+    # together prevents one unavailable report from doubling dashboard latency.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="openai-admin") as executor:
+        cost_future = executor.submit(fetch_openai_organization_costs, range_start, now)
+        usage_future = executor.submit(fetch_openai_completion_usage, range_start, now)
+        openai_organization_costs, openai_completion_usage = cost_future.result(), usage_future.result()
     usd_zar_exchange_rate = fetch_usd_zar_exchange_rate()
     organization_cost_available = bool(openai_organization_costs.get("available"))
     organization_cost_currency = compact_text(openai_organization_costs.get("currency")).lower()
@@ -26245,9 +26304,9 @@ async def update_ai_chat_mode_preference(
 async def get_billing_subscription(current_user: str = Depends(require_authenticated_user)):
     normalized_email = normalize_email(current_user)
     subscription, entitlement = get_effective_subscription_snapshot(normalized_email)
-    usage = get_billing_usage_summary(normalized_email)
+    usage = get_billing_usage_summary(normalized_email, plan_id=entitlement.get("plan_id", ""))
     monthly_usage = get_monthly_usage_summary(normalized_email)
-    payment_history = list_user_payment_history(normalized_email)
+    payment_history = list_user_payment_history(normalized_email, reconcile=False)
     payment_requests = list_payment_requests_for_user(normalized_email)
     feature_permissions = build_feature_permissions(usage)
     return {
