@@ -1,0 +1,95 @@
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -39379,6 +39379,21 @@ async def run_report_job(
+             job_id,
+             output_language,
+         )
++        job = jobs.get(job_id, {})
++        report_title = compact_text(report_package.get("report_title"), "Academic Report")
++        report_body = compact_text(report_package.get("report_body"))
++        report_bytes = await asyncio.to_thread(build_docx_document, report_title, report_body)
++        library_file, library_save_status = await asyncio.to_thread(
++            save_generated_artifact_to_library,
++            email=job.get("owner_email", ""),
++            filename=f"{sanitize_download_filename(report_title)}.docx",
++            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
++            content=report_bytes,
++            source_type="generated_report",
++            extracted_text=report_body,
++        )
++        report_package["library_file"] = library_file
++        report_package["library_save_status"] = library_save_status
+         update_job(
+             job_id,
+             status="completed",
+@@ -39388,7 +39403,6 @@ async def run_report_job(
+             progress=100,
+             **report_package,
+         )
+-        job = jobs.get(job_id, {})
+         started_at = parse_history_datetime(job.get("created_at"), utc_now())
+         record_audit_log(
+@@ -39933,6 +39947,20 @@ async def run_mind_map_job(
+     try:
+         update_job(job_id, status="processing", stage="Starting mind map analysis", progress=8)
+         mind_map_package = await generate_mind_map_package(payload, job_id, output_language)
++        job = jobs.get(job_id, {})
++        mind_map_bytes = json.dumps({"root": mind_map_package.get("mind_map_root")}, ensure_ascii=False, indent=2).encode("utf-8")
++        mind_map_title = compact_text(mind_map_package.get("mind_map_title"), "Mind Map")
++        library_file, library_save_status = await asyncio.to_thread(
++            save_generated_artifact_to_library,
++            email=job.get("owner_email", ""),
++            filename=f"{sanitize_download_filename(mind_map_title)}.json",
++            content_type="application/json",
++            content=mind_map_bytes,
++            source_type="generated_mind_map",
++            extracted_text=mind_map_title,
++        )
++        mind_map_package["library_file"] = library_file
++        mind_map_package["library_save_status"] = library_save_status
+         update_job(
+             job_id,
+             status="completed",
+@@ -39942,7 +39970,6 @@ async def run_mind_map_job(
+             progress=100,
+             **mind_map_package,
+         )
+-        job = jobs.get(job_id, {})
+         started_at = parse_history_datetime(job.get("created_at"), utc_now())
+         record_audit_log(
+@@ -39999,6 +40026,25 @@ async def run_presentation_job(
+             template_file_bytes,
+             template_file_name,
+         )
++        job = jobs.get(job_id, {})
++        library_file = None
++        library_save_status = "download_unavailable"
++        presentation_path = Path(compact_text(presentation_package.get("_presentation_download_file")))
++        if presentation_path.is_file():
++            presentation_bytes = await asyncio.to_thread(presentation_path.read_bytes)
++            presentation_title = compact_text(presentation_package.get("presentation_title"), "Lecture Presentation")
++            library_file, library_save_status = await asyncio.to_thread(
++                save_generated_artifact_to_library,
++                email=job.get("owner_email", ""),
++                filename=f"{sanitize_download_filename(presentation_title)}.pptx",
++                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
++                content=presentation_bytes,
++                source_type="generated_presentation",
++                extracted_text="\n\n".join(
++                    compact_text(slide.get("title")) + "\n" + "\n".join(slide.get("bullets") or [])
++                    for slide in presentation_package.get("presentation_slides") or [] if isinstance(slide, dict)
++                ),
++            )
++        presentation_package["library_file"] = library_file
++        presentation_package["library_save_status"] = library_save_status
+         update_job(
+             job_id,
+             status="completed",
+@@ -40008,7 +40054,6 @@ async def run_presentation_job(
+             progress=100,
+             **presentation_package,
+         )
+-        job = jobs.get(job_id, {})
+         started_at = parse_history_datetime(job.get("created_at"), utc_now())
+         record_audit_log(

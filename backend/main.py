@@ -39386,6 +39386,21 @@ async def run_report_job(
             job_id,
             output_language,
         )
+        job = jobs.get(job_id, {})
+        report_title = compact_text(report_package.get("report_title"), "Academic Report")
+        report_body = compact_text(report_package.get("report_body"))
+        report_bytes = await asyncio.to_thread(build_docx_document, report_title, report_body)
+        library_file, library_save_status = await asyncio.to_thread(
+            save_generated_artifact_to_library,
+            email=job.get("owner_email", ""),
+            filename=f"{sanitize_download_filename(report_title)}.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            content=report_bytes,
+            source_type="generated_report",
+            extracted_text=report_body,
+        )
+        report_package["library_file"] = library_file
+        report_package["library_save_status"] = library_save_status
         update_job(
             job_id,
             status="completed",
@@ -39930,6 +39945,20 @@ async def run_mind_map_job(
     try:
         update_job(job_id, status="processing", stage="Starting mind map analysis", progress=8)
         mind_map_package = await generate_mind_map_package(payload, job_id, output_language)
+        job = jobs.get(job_id, {})
+        mind_map_bytes = json.dumps({"root": mind_map_package.get("mind_map_root")}, ensure_ascii=False, indent=2).encode("utf-8")
+        mind_map_title = compact_text(mind_map_package.get("mind_map_title"), "Mind Map")
+        library_file, library_save_status = await asyncio.to_thread(
+            save_generated_artifact_to_library,
+            email=job.get("owner_email", ""),
+            filename=f"{sanitize_download_filename(mind_map_title)}.json",
+            content_type="application/json",
+            content=mind_map_bytes,
+            source_type="generated_mind_map",
+            extracted_text=mind_map_title,
+        )
+        mind_map_package["library_file"] = library_file
+        mind_map_package["library_save_status"] = library_save_status
         update_job(
             job_id,
             status="completed",
@@ -39998,6 +40027,27 @@ async def run_presentation_job(
             template_file_bytes,
             template_file_name,
         )
+        job = jobs.get(job_id, {})
+        library_file = None
+        library_save_status = "download_unavailable"
+        presentation_path = Path(compact_text(presentation_package.get("_presentation_download_file")))
+        if presentation_path.is_file():
+            presentation_bytes = await asyncio.to_thread(presentation_path.read_bytes)
+            presentation_title = compact_text(presentation_package.get("presentation_title"), "Lecture Presentation")
+            library_file, library_save_status = await asyncio.to_thread(
+                save_generated_artifact_to_library,
+                email=job.get("owner_email", ""),
+                filename=f"{sanitize_download_filename(presentation_title)}.pptx",
+                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                content=presentation_bytes,
+                source_type="generated_presentation",
+                extracted_text="\n\n".join(
+                    compact_text(slide.get("title")) + "\n" + "\n".join(slide.get("bullets") or [])
+                    for slide in presentation_package.get("presentation_slides") or [] if isinstance(slide, dict)
+                ),
+            )
+        presentation_package["library_file"] = library_file
+        presentation_package["library_save_status"] = library_save_status
         update_job(
             job_id,
             status="completed",
@@ -40268,6 +40318,58 @@ def commit_library_file(
             message = "Private Library storage could not accept the file. Please try again shortly."
         raise HTTPException(status_code=503, detail={"code": "LIBRARY_STORAGE_UNAVAILABLE", "message": message}) from awaitable_error
     raise HTTPException(status_code=502, detail="The file could not be saved to the private Library.") from awaitable_error
+
+
+def save_generated_artifact_to_library(
+    *,
+    email: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+    source_type: str,
+    extracted_text: str = "",
+) -> tuple[dict[str, Any] | None, str]:
+    """Persist one canonical generated download without failing generation.
+
+    Generated outputs are storage artifacts, not new user upload attempts.
+    The checksum reservation path deduplicates repeated exports for the same
+    account and keeps storage accounting transactional.
+    """
+    normalized_email = normalize_email(email)
+    if not normalized_email or not content:
+        return None, "empty"
+    if not library_object_storage.configured:
+        return None, "storage_not_configured"
+    if len(content) > MAX_LIBRARY_FILE_BYTES:
+        return None, "file_too_large"
+    checksum = hashlib.sha256(content).hexdigest()
+    try:
+        reservation = reserve_library_storage(normalized_email, len(content), checksum)
+        if reservation.get("existing"):
+            return reservation["existing"], "already_saved"
+        library_file = commit_library_file(
+            email=normalized_email,
+            reservation_id=reservation["reservation_id"],
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            checksum=checksum,
+            source_type=source_type,
+            extracted_text=extracted_text,
+        )
+        record_audit_log(
+            action="library.file.auto_saved",
+            email=normalized_email,
+            resource_type="library_file",
+            resource_name=library_file["id"],
+            metadata={"source_kind": source_type, "size_bytes": len(content)},
+        )
+        return library_file, "saved"
+    except HTTPException as exc:
+        return None, "storage_full" if exc.status_code == 409 else "storage_unavailable"
+    except Exception:
+        logger.warning("Generated artifact could not be saved to Library source=%s", source_type, exc_info=True)
+        return None, "storage_unavailable"
 
 
 @app.get("/api/library/files")
@@ -45286,6 +45388,111 @@ async def upload_collaboration_media(
     }
 
 
+@app.post("/collaboration/rooms/{room_id}/material-items/{item_id}/save-to-library")
+async def save_collaboration_material_to_library(
+    room_id: str,
+    item_id: str,
+    current_user: str = Depends(require_authenticated_user),
+):
+    """Copy an explicitly selected Room resource into the member's private Library.
+
+    Room membership grants read permission only for this operation. The new
+    private Library record is owned by the requesting member, consumes their
+    real retained-byte allowance once, and is deduplicated by checksum.
+    """
+    room = get_accessible_collaboration_room_access(room_id, current_user)
+    with get_db_connection() as connection:
+        material = connection.execute(
+            """SELECT id, owner_email, title, material_type, source_json
+               FROM collaboration_materials WHERE id = ? AND room_id = ? LIMIT 1""",
+            (compact_text(item_id), room["id"]),
+        ).fetchone()
+    if not material:
+        raise HTTPException(status_code=404, detail="Room material not found.")
+
+    source = load_collaboration_json_object(material["source_json"])
+    snapshot = source.get("snapshot") if isinstance(source.get("snapshot"), dict) else {}
+    material_type = compact_text(material["material_type"], "document").lower()
+    title = compact_text(material["title"], "Room material")
+    content = b""
+    content_type = "application/octet-stream"
+    filename = title
+    extracted_text = ""
+
+    if source.get("kind") == "uploaded_media" and compact_text(source.get("media_id")):
+        if material_type == "video":
+            raise HTTPException(status_code=409, detail="Room videos stay in the Room. Save an authorised transcript to Library instead.")
+        with get_db_connection() as connection:
+            media = connection.execute(
+                """SELECT filename, content_type, data_blob FROM collaboration_media
+                   WHERE id = ? AND room_id = ? LIMIT 1""",
+                (compact_text(source.get("media_id")), room["id"]),
+            ).fetchone()
+        if not media:
+            raise HTTPException(status_code=404, detail="The Room file is no longer available.")
+        content = bytes(media["data_blob"] or b"")
+        content_type = compact_text(media["content_type"], "application/octet-stream")
+        filename = compact_text(media["filename"], title)
+    else:
+        referenced_file = snapshot.get("library_file") if isinstance(snapshot.get("library_file"), dict) else {}
+        referenced_file_id = compact_text(referenced_file.get("id"))
+        if referenced_file_id:
+            owner_file = get_owned_library_file(material["owner_email"], referenced_file_id)
+            if owner_file:
+                try:
+                    content = await asyncio.to_thread(library_object_storage.get, compact_text(owner_file["object_key"]))
+                except LibraryStorageError as exc:
+                    raise HTTPException(status_code=503, detail="The Room download is temporarily unavailable.") from exc
+                filename = compact_text(owner_file["original_name"], title)
+                content_type = compact_text(owner_file["content_type"], "application/octet-stream")
+                extracted_text = compact_text(owner_file["extracted_text"])
+        if not content:
+            if material_type in {"presentation", "mind_map", "flashcards", "quiz", "practice_test", "timetable"}:
+                payload_value = snapshot.get({"presentation": "presentation", "mind_map": "mind_map", "flashcards": "flashcards", "quiz": "quiz_questions", "practice_test": "quiz_questions", "timetable": "timetable"}.get(material_type, material_type))
+                content = json.dumps(payload_value or snapshot, ensure_ascii=False, indent=2).encode("utf-8")
+                content_type = "application/json"
+                filename = f"{sanitize_download_filename(title)}.json"
+                extracted_text = title
+            else:
+                text_value = compact_text(
+                    (snapshot.get("report") or {}).get("body") if isinstance(snapshot.get("report"), dict) else "",
+                    snapshot.get("summary"), snapshot.get("transcript"), snapshot.get("formula"),
+                    snapshot.get("example"), material["title"],
+                )
+                content = text_value.encode("utf-8")
+                content_type = "text/markdown; charset=utf-8"
+                filename = f"{sanitize_download_filename(title)}.md"
+                extracted_text = text_value
+
+    if not content:
+        raise HTTPException(status_code=409, detail="This Room material has no downloadable content to save.")
+    library_file, save_status = await asyncio.to_thread(
+        save_generated_artifact_to_library,
+        email=current_user,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        source_type="collaboration_room_save",
+        extracted_text=extracted_text,
+    )
+    if not library_file:
+        if save_status == "storage_full":
+            raise HTTPException(status_code=409, detail={"code": "LIBRARY_STORAGE_FULL", "message": "Your Library storage is full. Delete files or manage storage before saving this Room material."})
+        raise HTTPException(status_code=503, detail="This Room material could not be saved to Library right now.")
+    record_audit_log(
+        action="collaboration.material.saved_to_library",
+        email=current_user,
+        resource_type="collaboration_material",
+        resource_name=material["id"],
+        metadata={"room_id": room["id"], "library_file_id": library_file["id"], "deduplicated": save_status == "already_saved"},
+    )
+    return {
+        "file": library_file,
+        "deduplicated": save_status == "already_saved",
+        "message": "This Room material is already in your Library." if save_status == "already_saved" else "Saved to My Library.",
+    }
+
+
 @app.get("/collaboration/rooms/{room_id}/media/{media_id}")
 async def stream_collaboration_media(
     room_id: str,
@@ -46121,10 +46328,19 @@ async def export_study_pack_pdf(
     title = payload.title.strip() or "MABASO Study Pack"
     pdf_bytes = await asyncio.to_thread(build_pdf_document, title, payload.sections)
     safe_name = sanitize_download_filename(title)
+    library_file, library_status = await asyncio.to_thread(
+        save_generated_artifact_to_library,
+        email=current_user,
+        filename=f"{safe_name}.pdf",
+        content_type="application/pdf",
+        content=pdf_bytes,
+        source_type="generated_study_pack_pdf",
+        extracted_text="\n\n".join(compact_text(section.content) for section in payload.sections),
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
     )
 
 
@@ -46136,10 +46352,19 @@ async def export_study_pack_docx(
     title = payload.title.strip() or "MABASO Study Pack"
     docx_bytes = await asyncio.to_thread(build_docx_study_pack_document, title, payload.sections)
     safe_name = sanitize_download_filename(title)
+    library_file, library_status = await asyncio.to_thread(
+        save_generated_artifact_to_library,
+        email=current_user,
+        filename=f"{safe_name}.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content=docx_bytes,
+        source_type="generated_study_pack_docx",
+        extracted_text="\n\n".join(compact_text(section.content) for section in payload.sections),
+    )
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
     )
 
 
@@ -46151,10 +46376,19 @@ async def export_report_docx(
     title = payload.title.strip() or "Academic Report"
     docx_bytes = await asyncio.to_thread(build_docx_document, title, payload.content)
     safe_name = sanitize_download_filename(title)
+    library_file, library_status = await asyncio.to_thread(
+        save_generated_artifact_to_library,
+        email=current_user,
+        filename=f"{safe_name}.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content=docx_bytes,
+        source_type="generated_report",
+        extracted_text=payload.content,
+    )
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
     )
 
 

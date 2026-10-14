@@ -1,0 +1,19 @@
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -39388,0 +39389,15 @@
++        job = jobs.get(job_id, {})
++        report_title = compact_text(report_package.get("report_title"), "Academic Report")
++        report_body = compact_text(report_package.get("report_body"))
++        report_bytes = await asyncio.to_thread(build_docx_document, report_title, report_body)
++        library_file, library_save_status = await asyncio.to_thread(
++            save_generated_artifact_to_library,
++            email=job.get("owner_email", ""),
++            filename=f"{sanitize_download_filename(report_title)}.docx",
++            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
++            content=report_bytes,
++            source_type="generated_report",
++            extracted_text=report_body,
++        )
++        report_package["library_file"] = library_file
++        report_package["library_save_status"] = library_save_status

@@ -7321,6 +7321,7 @@ export default function App() {
   const [profileEditorAnchor, setProfileEditorAnchor] = useState(null);
   const [isShareMaterialPickerOpen, setIsShareMaterialPickerOpen] = useState(false);
   const [isSharingHistoryMaterialId, setIsSharingHistoryMaterialId] = useState("");
+  const [savingCollaborationMaterialId, setSavingCollaborationMaterialId] = useState("");
   const [selectedCollaborationMaterial, setSelectedCollaborationMaterial] = useState(null);
   const [selectedCollaborationMediaItem, setSelectedCollaborationMediaItem] = useState(null);
   const [selectedCollaborationMediaUrl, setSelectedCollaborationMediaUrl] = useState("");
@@ -8135,7 +8136,7 @@ export default function App() {
     <details className="upgrade-modal-profile profile-menu-anchor">
       <summary className="profile-menu-button" aria-label="Profile">
         <span className="profile-menu-button-avatar" aria-hidden="true">{profileDisplayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && !isBillingStatusLoaded && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </summary>
       <div className="profile-menu-panel" role="menu" aria-label="Profile menu">
@@ -12278,7 +12279,6 @@ export default function App() {
 
         <input ref={roomBoardImageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(event) => { void uploadRoomBoardImages(event.target.files); event.target.value = ""; }} />
 
-        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}
         {isAdminControlConfirmOpen ? <div className="collaboration-sheet-backdrop" role="presentation" onMouseDown={() => !isUpdatingAdminControl && setIsAdminControlConfirmOpen(false)}><section className="collaboration-admin-control-confirm" role="dialog" aria-modal="true" aria-label="Start Admin Control Mode" onMouseDown={(event) => event.stopPropagation()}><span>▣</span><h3>Start Admin Control Mode?</h3><p>Connected members who choose Follow Admin will move with your supported Room view. This never controls their device or browser outside Mabaso AI.</p><div className="mabaso-setting-row"><span>Allow members to Explore independently</span><ToggleSwitch checked={collaborationAdminControl?.allow_explore ?? true} onChange={(checked) => setCollaborationAdminControl((current) => ({ ...(current || {}), allow_explore: checked }))} aria-label="Allow members to Explore independently" /></div><div><button type="button" onClick={() => setIsAdminControlConfirmOpen(false)} disabled={isUpdatingAdminControl}>Cancel</button><button type="button" className="is-primary" onClick={() => void startCollaborationAdminControl()} disabled={isUpdatingAdminControl}>{isUpdatingAdminControl ? "Starting..." : "Start Control"}</button></div></section></div> : null}
         <div className="collaboration-room-header">
           <div className="collaboration-room-heading"><span className="collaboration-room-avatar">♟</span><div><h1>{activeRoom?.title || "Collaboration Rooms"}</h1><p><span className="collaboration-online-dot" />{activeRoom ? `${activeRoom.member_count || activeRoom.members?.length || 1} members • ${activeRoom.is_owner ? "Room owner" : "Member"}` : "Create a room or join a study group"}</p><small>{activeRoom ? "Discuss, share notes, ask questions and work together." : "Find a focused place for your group’s study work."}</small></div></div>
@@ -29669,6 +29669,30 @@ export default function App() {
     }
     else setError("This material no longer has an available preview.");
   };
+  const saveCollaborationMaterialToLibrary = async (item) => {
+    if (!activeRoomId || !item?.id || savingCollaborationMaterialId) return;
+    setSavingCollaborationMaterialId(item.id);
+    setError("");
+    setStatus("Checking Room permission and saving to your Library...");
+    try {
+      const response = await authFetch(`/collaboration/rooms/${encodeURIComponent(activeRoomId)}/material-items/${encodeURIComponent(item.id)}/save-to-library`, {
+        method: "POST",
+        timeoutMs: AI_EXPORT_REQUEST_TIMEOUT_MS,
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) {
+        const detail = typeof data.detail === "object" ? data.detail?.message : data.detail;
+        throw new Error(detail || "This Room material could not be saved to Library.");
+      }
+      setStatus(data.message || "Saved to My Library.");
+      window.dispatchEvent(new CustomEvent("mabaso-library-refresh"));
+    } catch (err) {
+      setError(err.message || "This Room material could not be saved to Library.");
+      setStatus("");
+    } finally {
+      setSavingCollaborationMaterialId("");
+    }
+  };
   const removeCollaborationMaterial = async (item) => {
     if (!activeRoomId || !item?.id) return;
     if (!window.confirm(`Remove “${item.title}” from this room? The original Mabaso material is not deleted.`)) return;
@@ -30164,7 +30188,7 @@ export default function App() {
         setPresentationData(generated);
         setSelectedPresentationSlideIndex(0);
         setPresentationView("viewer");
-        itemConfig = { title: generated.title || `${activeRoom.title} presentation`, description: `${generated.slides.length} generated Room slides`, snapshot: { summary: roomContext.summary, transcript: roomContext.transcript, presentation: sanitizePresentationForHistory(generated) } };
+        itemConfig = { title: generated.title || `${activeRoom.title} presentation`, description: `${generated.slides.length} generated Room slides`, snapshot: { summary: roomContext.summary, transcript: roomContext.transcript, presentation: sanitizePresentationForHistory(generated), library_file: job.library_file || null } };
       } else if (toolId === "podcast") {
         setIsGeneratingPodcast(true);
         const speakerCount = Math.min(podcastSpeakerCount, getAllowedPodcastSpeakerCount());
@@ -30185,7 +30209,7 @@ export default function App() {
         const job = await pollJob(data.job_id, "report");
         const generated = { jobId: data.job_id, title: job.report_title || reportConfig.reportTitle || `${activeRoom.title} report`, body: job.report_body || "", sections: job.report_sections || [], configuration: job.report_configuration || {} };
         setReportData(generated);
-        itemConfig = { title: generated.title, description: "Generated academic Room report", snapshot: { summary: generated.body, report: sanitizeReportForHistory(generated) } };
+        itemConfig = { title: generated.title, description: "Generated academic Room report", snapshot: { summary: generated.body, report: sanitizeReportForHistory(generated), library_file: job.library_file || null } };
       } else if (toolId === "mind_map") {
         setIsGeneratingMindMap(true);
         const response = await authFetch("/generate-mind-map/", { method: "POST", headers: { "Content-Type": "application/json" }, timeoutMs: AI_GENERATION_REQUEST_TIMEOUT_MS, body: JSON.stringify({ transcript: roomContext.transcript, summary: roomContext.summary, lecture_notes: roomContext.lectureNotes, lecture_slides: roomContext.lectureSlides, past_question_papers: "", report_body: "", chat_context: "", topic: mindMapTopic, depth_level: mindMapDepth, language: outputLanguage }) });
@@ -30195,7 +30219,7 @@ export default function App() {
         const generated = { jobId: data.job_id, title: job.mind_map_title || job.mind_map_root?.title || "Mind Map", root: job.mind_map_root || null, depth: job.mind_map_depth || mindMapDepth, nodeCount: Number(job.mind_map_node_count || 0) };
         setMindMapData(generated);
         setSelectedMindMapNode(generated.root);
-        itemConfig = { title: generated.title, description: `${generated.nodeCount || "Generated"} Room mind-map nodes`, snapshot: { summary: roomContext.summary, mind_map: sanitizeMindMapForHistory(generated) } };
+        itemConfig = { title: generated.title, description: `${generated.nodeCount || "Generated"} Room mind-map nodes`, snapshot: { summary: roomContext.summary, mind_map: sanitizeMindMapForHistory(generated), library_file: job.library_file || null } };
       }
       if (!itemConfig) throw new Error("That Room generator is not available.");
       if (toolId === "podcast" && itemConfig.snapshot?.podcast?.jobId) {
@@ -31815,7 +31839,7 @@ export default function App() {
         aria-expanded={isProfileMenuOpen}
       >
         <span className="profile-menu-button-avatar" aria-hidden="true">{displayName.slice(0, 2).toUpperCase()}</span>
-        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && !isBillingStatusLoaded && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
         <ChevronDown className="profile-menu-button-chevron h-4 w-4" aria-hidden="true" />
       </button>
       {isProfileMenuOpen ? (
@@ -32768,3 +32792,4 @@ export default function App() {
     </div>
   );
 }
+        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}

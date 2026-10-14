@@ -104,7 +104,7 @@ function MediaViewer({ item, url }) {
   return <div className={`collab-inline-media ${expanded ? "is-expanded" : ""}`}><div className="collab-media-status">{loading ? <><LoaderCircle className="animate-spin" aria-hidden="true" /> Loading {item.material_type}…</> : failed ? `The ${item.material_type} could not be loaded.` : null}</div>{item.material_type === "video" ? <video src={url} controls playsInline preload="metadata" crossOrigin="use-credentials" onLoadedMetadata={() => setLoading(false)} onCanPlay={() => setLoading(false)} onError={() => { setLoading(false); setFailed(true); }} /> : <img src={url} alt={item.title || "Shared room image"} onLoad={() => setLoading(false)} onError={() => { setLoading(false); setFailed(true); }} />}<button type="button" className="collab-media-expand" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Restore media" : "Enlarge media"}>{expanded ? <X aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}</button></div>;
 }
 
-export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderMarkdown, renderPresentationVisual, renderMindMap, noteQualityPanel, page, onPageChange }) {
+export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderMarkdown, renderPresentationVisual, renderMindMap, noteQualityPanel, page, onPageChange, onSaveToLibrary, savingToLibrary = false }) {
   const snapshot = useMemo(() => item?.source?.snapshot || {}, [item?.source?.snapshot]);
   const body = useMemo(() => snapshot.summary || snapshot.transcript || "", [snapshot]);
   // Older room shares were labelled by the last generated tool (often quiz),
@@ -113,7 +113,7 @@ export default function CollaborationMaterialWorkspace({ item, mediaUrl, renderM
   const type = body ? "study_guide" : (item?.material_type || "study_guide");
   useEffect(() => { window.requestAnimationFrame(() => document.querySelector(".collab-material-document")?.scrollTo?.({ top: 0 })); }, [item?.id]);
   if (!item) return null;
-  return <section className="collab-material-workspace" aria-label={`${item.title} workspace`}><header><div><small>{titleForType(type)}</small><h2>{item.title}</h2><p>Shared by {item.owner_email || "a room member"}</p></div></header><div className="collab-material-document">
+  return <section className="collab-material-workspace" aria-label={`${item.title} workspace`}><header><div><small>{titleForType(type)}</small><h2>{item.title}</h2><p>Shared by {item.owner_email || "a room member"}</p></div>{onSaveToLibrary && type !== "video" ? <button type="button" onClick={() => onSaveToLibrary(item)} disabled={savingToLibrary}>{savingToLibrary ? <><LoaderCircle className="animate-spin" aria-hidden="true" /> Saving...</> : "Save to My Library"}</button> : null}</header><div className="collab-material-document">
     {type === "video" || type === "image" ? <MediaViewer item={item} url={mediaUrl} /> : null}
     {type === "presentation" ? <PresentationViewer presentation={snapshot.presentation} renderVisual={renderPresentationVisual} page={page} onPageChange={onPageChange} /> : null}
     {type === "note" ? noteQualityPanel : null}

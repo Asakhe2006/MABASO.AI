@@ -1,0 +1,18 @@
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -39947,0 +39948,14 @@
++        job = jobs.get(job_id, {})
++        mind_map_bytes = json.dumps({"root": mind_map_package.get("mind_map_root")}, ensure_ascii=False, indent=2).encode("utf-8")
++        mind_map_title = compact_text(mind_map_package.get("mind_map_title"), "Mind Map")
++        library_file, library_save_status = await asyncio.to_thread(
++            save_generated_artifact_to_library,
++            email=job.get("owner_email", ""),
++            filename=f"{sanitize_download_filename(mind_map_title)}.json",
++            content_type="application/json",
++            content=mind_map_bytes,
++            source_type="generated_mind_map",
++            extracted_text=mind_map_title,
++        )
++        mind_map_package["library_file"] = library_file
++        mind_map_package["library_save_status"] = library_save_status

@@ -1,0 +1,13 @@
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -8138,1 +8138,1 @@
+-        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
++        <span className="profile-menu-button-copy"><strong>{profileDisplayName}</strong><small>{authToken && !isBillingStatusLoaded && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+@@ -12281,1 +12281,0 @@
+-        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}
+@@ -31818,1 +31817,1 @@
+-        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && (isBillingUsageLoading || !isBillingStatusLoaded) && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
++        <span className="profile-menu-button-copy"><strong>{displayName}</strong><small>{authToken && !isBillingStatusLoaded && !billingStatusLoadError ? "Loading plan..." : getCurrentPlanTier() === "free" ? "Free Plan" : getCurrentPlanTier() === "premium" ? "Premium Plan" : "Pro Plan"}</small></span>
+@@ -32921,0 +32921,1 @@
++        {isProfileEditorOpen ? <CollaborationProfileContactPortal draft={collaborationProfileDraft} setDraft={setCollaborationProfileDraft} disabled={isSavingCollaborationProfile} onSave={saveCollaborationProfile} onClose={() => setIsProfileEditorOpen(false)} saveState={collaborationProfileSaveState} /> : null}

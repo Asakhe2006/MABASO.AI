@@ -1,0 +1,63 @@
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -46222,11 +46222,21 @@ async def export_study_pack_pdf(
+ ):
+     title = payload.title.strip() or "MABASO Study Pack"
+     pdf_bytes = await asyncio.to_thread(build_pdf_document, title, payload.sections)
+     safe_name = sanitize_download_filename(title)
++    library_file, library_status = await asyncio.to_thread(
++        save_generated_artifact_to_library,
++        email=current_user,
++        filename=f"{safe_name}.pdf",
++        content_type="application/pdf",
++        content=pdf_bytes,
++        source_type="generated_study_pack_pdf",
++        extracted_text="\n\n".join(compact_text(section.content) for section in payload.sections),
++    )
+     return Response(
+         content=pdf_bytes,
+         media_type="application/pdf",
+-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"'},
++        headers={"Content-Disposition": f'attachment; filename="{safe_name}.pdf"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
+     )
+@@ -46237,11 +46247,21 @@ async def export_study_pack_docx(
+ ):
+     title = payload.title.strip() or "MABASO Study Pack"
+     docx_bytes = await asyncio.to_thread(build_docx_study_pack_document, title, payload.sections)
+     safe_name = sanitize_download_filename(title)
++    library_file, library_status = await asyncio.to_thread(
++        save_generated_artifact_to_library,
++        email=current_user,
++        filename=f"{safe_name}.docx",
++        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
++        content=docx_bytes,
++        source_type="generated_study_pack_docx",
++        extracted_text="\n\n".join(compact_text(section.content) for section in payload.sections),
++    )
+     return Response(
+         content=docx_bytes,
+         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
++        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
+     )
+@@ -46252,11 +46272,21 @@ async def export_report_docx(
+ ):
+     title = payload.title.strip() or "Academic Report"
+     docx_bytes = await asyncio.to_thread(build_docx_document, title, payload.content)
+     safe_name = sanitize_download_filename(title)
++    library_file, library_status = await asyncio.to_thread(
++        save_generated_artifact_to_library,
++        email=current_user,
++        filename=f"{safe_name}.docx",
++        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
++        content=docx_bytes,
++        source_type="generated_report",
++        extracted_text=payload.content,
++    )
+     return Response(
+         content=docx_bytes,
+         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+-        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
++        headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"', "X-Mabaso-Library-Status": library_status, "X-Mabaso-Library-File": compact_text((library_file or {}).get("id"))},
+     )

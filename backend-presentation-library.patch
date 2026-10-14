@@ -1,0 +1,25 @@
+diff --git a/backend/main.py b/backend/main.py
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -40029,0 +40030,21 @@
++        job = jobs.get(job_id, {})
++        library_file = None
++        library_save_status = "download_unavailable"
++        presentation_path = Path(compact_text(presentation_package.get("_presentation_download_file")))
++        if presentation_path.is_file():
++            presentation_bytes = await asyncio.to_thread(presentation_path.read_bytes)
++            presentation_title = compact_text(presentation_package.get("presentation_title"), "Lecture Presentation")
++            library_file, library_save_status = await asyncio.to_thread(
++                save_generated_artifact_to_library,
++                email=job.get("owner_email", ""),
++                filename=f"{sanitize_download_filename(presentation_title)}.pptx",
++                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
++                content=presentation_bytes,
++                source_type="generated_presentation",
++                extracted_text="\n\n".join(
++                    compact_text(slide.get("title")) + "\n" + "\n".join(slide.get("bullets") or [])
++                    for slide in presentation_package.get("presentation_slides") or [] if isinstance(slide, dict)
++                ),
++            )
++        presentation_package["library_file"] = library_file
++        presentation_package["library_save_status"] = library_save_status
