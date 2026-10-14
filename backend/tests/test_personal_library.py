@@ -8,6 +8,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from backend import main
+from backend.library_catalog import normalize_saved_link
 
 
 class PersonalLibraryTests(unittest.TestCase):
@@ -21,6 +22,55 @@ class PersonalLibraryTests(unittest.TestCase):
         main.ensure_allowed_library_upload("notes.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         with self.assertRaises(HTTPException):
             main.ensure_allowed_library_upload("lecture.mp4", "video/mp4")
+
+    def test_saved_links_strip_fragments_and_reject_private_or_secret_urls(self):
+        normalized, domain = normalize_saved_link("https://www.dut.ac.za/study/?faculty=engineering#fees")
+        self.assertEqual(domain, "www.dut.ac.za")
+        self.assertEqual(normalized, "https://www.dut.ac.za/study/?faculty=engineering")
+        for unsafe in (
+            "http://127.0.0.1/admin",
+            "http://localhost/secrets",
+            "https://example.test/callback?access_token=secret",
+            "https://user:password@example.test/private",
+        ):
+            with self.assertRaises(ValueError):
+                normalize_saved_link(unsafe)
+
+    def test_existing_library_reference_is_not_charged_as_a_new_upload(self):
+        payload = main.LectureAssistantRequest(
+            question="Summarise my saved notes",
+            reference_attachments=[{"library_file_id": "owned-file"}],
+        )
+        owned_file = {
+            "id": "owned-file",
+            "owner_email": "student@example.test",
+            "object_key": "student/owned-file.txt",
+            "original_name": "notes.txt",
+            "content_type": "text/plain",
+            "size_bytes": 15,
+            "checksum_sha256": "checksum",
+            "category": "document",
+            "source_type": "study_chat_upload",
+            "extracted_text": "Trusted cached notes",
+            "status": "ready",
+            "created_at": "2026-10-14T00:00:00Z",
+            "updated_at": "2026-10-14T00:00:00Z",
+            "deleted_at": "",
+        }
+        with (
+            patch.object(main, "get_owned_library_file", return_value=owned_file),
+            patch.object(main.library_object_storage, "get", return_value=b"Trusted cached notes") as storage_get,
+            patch.object(main, "consume_plan_quota") as consume_quota,
+        ):
+            resolved = main.authorize_lecture_assistant_attachments(
+                payload=payload,
+                current_user="student@example.test",
+                request=None,
+            )
+        consume_quota.assert_not_called()
+        storage_get.assert_not_called()
+        self.assertIn("Trusted cached notes", resolved.lecture_notes)
+        self.assertEqual(resolved.reference_attachments, [])
 
     def test_profile_personalization_is_opt_in_and_user_scoped(self):
         with tempfile.TemporaryDirectory() as temp_dir:

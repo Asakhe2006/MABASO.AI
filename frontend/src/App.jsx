@@ -30,6 +30,7 @@ import ChatActivityTimeline from "./components/ChatActivityTimeline";
 import AdminDiagnosticsPanel from "./components/AdminDiagnosticsPanel";
 import AdminRefundRequestsPanel from "./components/AdminRefundRequestsPanel";
 import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivityPanel";
+import LibrarySidebarSection from "./components/LibrarySidebarSection";
 import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
@@ -7226,6 +7227,9 @@ export default function App() {
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
   const [isChatAttachmentMenuOpen, setIsChatAttachmentMenuOpen] = useState(false);
   const [isLibraryPickerOpen, setIsLibraryPickerOpen] = useState(false);
+  const [libraryLaunch, setLibraryLaunch] = useState({ section: "all", itemId: "" });
+  const [libraryAutoSaveLinks, setLibraryAutoSaveLinks] = useState(false);
+  const [libraryPreferenceOwner, setLibraryPreferenceOwner] = useState("");
   const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
   const [chatUploadNotice, setChatUploadNotice] = useState(null);
   const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
@@ -8595,6 +8599,28 @@ export default function App() {
     navigateToPath(resolveAppRouteForPage("voice", authSessionMode, globalConversationId), { replace });
   };
 
+  const openLibraryPage = (section = "all", itemId = "", externalUrl = "") => {
+    if (section === "links" && /^https?:\/\//i.test(externalUrl)) {
+      window.open(externalUrl, "_blank", "noopener,noreferrer");
+      if (typeof window !== "undefined" && window.innerWidth < 1024) setIsStudyChatSidebarOpen(false);
+      return;
+    }
+    setLibraryLaunch({ section: section || "all", itemId: itemId || "" });
+    if (typeof window !== "undefined" && window.innerWidth < 1024) setIsStudyChatSidebarOpen(false);
+    openProtectedAppPage("library");
+  };
+
+  const attachLibraryReferenceToChat = (attachment, { returnToChat = false } = {}) => {
+    if (!attachment?.id) return;
+    setChatReferenceImages((current) => {
+      const stableKey = attachment.libraryFileId || attachment.libraryLinkId || attachment.id;
+      if (current.some((item) => (item.libraryFileId || item.libraryLinkId || item.id) === stableKey)) return current;
+      return [...current, attachment].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
+    });
+    if (attachment.libraryLinkId) setIsWebSearchEnabled(true);
+    setStatus(`${attachment.name || "Library item"} added to the chat composer.`);
+    if (returnToChat) openStudyChatPage();
+  };
   const closeStudyChatSidebarAfterNavigation = () => {
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       setIsStudyChatSidebarOpen(false);
@@ -18048,6 +18074,78 @@ export default function App() {
     return response;
   };
 
+  const saveLibraryLink = async (url, title = "", { silent = false, sourceType = "ai_chat_source" } = {}) => {
+    if (!authToken || !/^https?:\/\//i.test(String(url || ""))) return false;
+    try {
+      const response = await authFetch("/api/library/links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: String(url).slice(0, 2048),
+          title: typeof title === "string" ? title.replace(/\s+/g, " ").trim().slice(0, 240) : "",
+          description: "",
+          source_type: sourceType,
+          folder_id: "",
+        }),
+      });
+      const data = await parseJsonSafe(response);
+      if (!response.ok) throw new Error(data.detail || "This link could not be saved.");
+      if (!silent) setStatus(data.deduplicated ? "This link is already in your Library." : "Saved to Library.");
+      return true;
+    } catch (linkError) {
+      if (!silent) setError(getReadableRequestError(linkError) || "This link could not be saved.");
+      return false;
+    }
+  };
+
+  const autoSaveAssistantLinks = async (answer = "") => {
+    if (!libraryAutoSaveLinks || !authToken || normalizeHistoryOwnerEmail(libraryPreferenceOwner) !== normalizeHistoryOwnerEmail(authEmail)) return;
+    const candidates = Array.from(new Set(
+      String(answer || "").match(/https?:\/\/[^\s<>{}[\]"']+/gi) || [],
+    )).map((url) => url.replace(/[),.;!?]+$/, "")).filter(Boolean).slice(0, 12);
+    if (!candidates.length) return;
+    try {
+      await authFetch("/api/library/links/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ links: candidates.map((url) => ({ url, source_type: "ai_chat_source" })) }),
+        timeoutMs: 12000,
+      });
+    } catch {
+      // The AI answer remains complete even when optional bookmark storage fails.
+    }
+  };
+
+  useEffect(() => {
+    if (!authToken || !authEmail) return undefined;
+    let cancelled = false;
+    authFetch("/api/library/preferences", { timeoutMs: 10000 })
+      .then(async (response) => {
+        const data = await parseJsonSafe(response);
+        if (!response.ok) throw new Error(data.detail || "Could not load Library preferences.");
+        if (!cancelled) {
+          const enabled = Boolean(data.auto_save_links);
+          setLibraryAutoSaveLinks(enabled);
+          setLibraryPreferenceOwner(authEmail);
+        }
+      })
+      .catch(() => undefined);
+    const syncPreference = (event) => {
+      if (!cancelled) {
+        setLibraryAutoSaveLinks(Boolean(event.detail));
+        setLibraryPreferenceOwner(authEmail);
+      }
+    };
+    window.addEventListener("mabaso-library-auto-save-links", syncPreference);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("mabaso-library-auto-save-links", syncPreference);
+    };
+    // authFetch intentionally follows the current authenticated render; re-running
+    // this preference fetch for every function identity would create a request loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authEmail, authToken]);
+
   const authJsonWithTransientRetries = async (path, options = {}, { timeoutMs = 30000, retries = 0, tokenOverride = "" } = {}) => {
     let attempt = 0;
     while (true) {
@@ -26225,14 +26323,19 @@ export default function App() {
       .filter((document) => document.text)
       .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const normalizedReferenceAttachments = [...(Array.isArray(referenceImages) ? referenceImages : []), ...(Array.isArray(referenceDocuments) ? referenceDocuments : [])]
-      .filter((attachment) => attachment && typeof attachment === "object" && attachment.receipt)
+      .filter((attachment) => attachment && typeof attachment === "object" && (attachment.receipt || attachment.libraryFileId || attachment.libraryLinkId))
       .map((attachment) => ({
         name: String(attachment.name || "Attached document").slice(0, 160),
         text: String(attachment.text || "").trim().slice(0, 12000),
         image_url: String(attachment.dataUrl || attachment.url || attachment.image_url || ""),
         receipt: String(attachment.receipt || ""),
+        library_file_id: String(attachment.libraryFileId || ""),
+        library_link_id: String(attachment.libraryLinkId || ""),
       }))
-      .filter((attachment, index, items) => items.findIndex((item) => item.receipt === attachment.receipt) === index)
+      .filter((attachment, index, items) => {
+        const stableKey = attachment.receipt || attachment.library_file_id || attachment.library_link_id;
+        return items.findIndex((item) => (item.receipt || item.library_file_id || item.library_link_id) === stableKey) === index;
+      })
       .slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS);
     const requestStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     const shouldUseLectureContext = currentPageRef.current !== "voice";
@@ -26889,6 +26992,9 @@ export default function App() {
       text: image.text,
       receipt: image.receipt,
       kind: image.kind,
+      libraryFileId: image.libraryFileId,
+      libraryLinkId: image.libraryLinkId,
+      url: image.url,
     }));
     studyChatAttachmentRunRef.current += 1;
     setIsUploadingChatReferences(false);
@@ -26977,6 +27083,7 @@ export default function App() {
         },
       });
       if (studyChatRequestRunRef.current !== requestRunId) return;
+      void autoSaveAssistantLinks(answer);
       if (!isEditedSubmission) setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
@@ -27169,6 +27276,9 @@ export default function App() {
       text: image.text,
       kind: image.kind,
       receipt: image.receipt,
+      libraryFileId: image.libraryFileId,
+      libraryLinkId: image.libraryLinkId,
+      url: image.url,
     }));
     const referenceDocumentsForQuestion = referenceImagesForQuestion.filter((item) => item.kind === "document" || (!item.dataUrl && item.text));
     setError("");
@@ -27221,6 +27331,7 @@ export default function App() {
         },
       });
       if (studyChatVoiceAnswerRunRef.current !== requestRunId) return;
+      void autoSaveAssistantLinks(answer);
       setChatReferenceImages([]);
       setChatMessages((current) => {
         const next = [...current];
@@ -27625,7 +27736,7 @@ export default function App() {
               {message.role === "assistant" && (message.pending || (studyChatActivities[message.id] || []).length) ? (
                 <ChatActivityTimeline activities={studyChatActivities[message.id] || []} compact={!fullPage} />
               ) : null}
-              {message.content ? <AssistantMarkdown content={message.content} theme="dark" /> : null}
+              {message.content ? <AssistantMarkdown content={message.content} theme="dark" onSaveLink={(href, title) => saveLibraryLink(href, title)} /> : null}
             </div>
           )}
           {message.role === "assistant" && !message.pending && message.content ? <StudyChatResponseActions messageId={message.id || `assistant-${index}`} content={message.content} language={outputLanguage} preferredVoice={selectedTeacherVoiceName} onError={setError} /> : null}
@@ -27823,11 +27934,7 @@ export default function App() {
             apiBaseUrl={API_BASE_URL}
             authFetch={authFetch}
             onClose={() => setIsLibraryPickerOpen(false)}
-            onAttach={(attachment) => {
-              setChatReferenceImages((current) => current.some((item) => item.libraryFileId === attachment.libraryFileId) ? current : [...current, attachment].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
-              setStatus(`${attachment.name} attached from Library.`);
-              refreshBillingStatusInBackground();
-            }}
+            onAttach={(attachment) => attachLibraryReferenceToChat(attachment)}
           />
           </Suspense>
         </div>
@@ -27940,6 +28047,7 @@ export default function App() {
               </div> : null}
             </div>
           </div>
+          <LibrarySidebarSection authFetch={authFetch} onOpenLibrary={openLibraryPage} />
           <div className="study-chat-history-list">
             {chatHistoryRows.map((row) => <div key={row.id} className={`study-chat-history-row ${row.id === activeStudyChatId ? "is-active" : ""}`}>
               <button type="button" onClick={() => openSavedStudyChat(row.id)} className="study-chat-history-item">
@@ -32615,7 +32723,7 @@ export default function App() {
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "timetable" ? <BodyPortal active={isTimetableFocusMode}>{renderStudyTimetablePage()}</BodyPortal> : null}
-        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} /></Suspense> : null}
+        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} initialSection={libraryLaunch.section} initialItemId={libraryLaunch.itemId} onAttach={(attachment) => attachLibraryReferenceToChat(attachment, { returnToChat: true })} /></Suspense> : null}
         {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}

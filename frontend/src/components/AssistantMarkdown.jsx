@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, WrapText } from "lucide-react";
+import { Bookmark, Check, Copy, WrapText } from "lucide-react";
 import MathMarkdown from "./MathMarkdown";
 import { getAcademicReadingCssVariables } from "../academicReadingTheme";
+import "./AssistantMarkdown.css";
 
 function themed(theme, darkValue, lightValue) {
   return theme === "light" ? lightValue : darkValue;
@@ -69,7 +70,43 @@ function CopyableCodeBlock({ children, className = "", theme = "dark", ...props 
   );
 }
 
-export default function AssistantMarkdown({ content = "", theme = "dark" }) {
+function SaveableLink({ href = "", children, theme = "dark", onSaveLink, ...props }) {
+  const [saved, setSaved] = useState(false);
+  const isPublicWebLink = /^https?:\/\//i.test(href);
+  const linkLabel = Array.isArray(children)
+    ? children.filter((item) => typeof item === "string" || typeof item === "number").join(" ")
+    : (typeof children === "string" || typeof children === "number" ? String(children) : href);
+
+  const save = async () => {
+    if (!isPublicWebLink || !onSaveLink) return;
+    const ok = await onSaveLink(href, linkLabel || href);
+    if (ok !== false) {
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    }
+  };
+
+  return (
+    <span className="assistant-saveable-link">
+      <a
+        href={href}
+        className={`underline underline-offset-4 ${themed(theme, "text-cyan-200 hover:text-white", "text-cyan-700 hover:text-cyan-900")}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        {...props}
+      >
+        {children}
+      </a>
+      {onSaveLink && isPublicWebLink ? (
+        <button type="button" onClick={save} aria-label={saved ? "Saved to Library" : "Save link to Library"} title={saved ? "Saved to Library" : "Save to Library"}>
+          {saved ? <Check aria-hidden="true" /> : <Bookmark aria-hidden="true" />}
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+export default function AssistantMarkdown({ content = "", theme = "dark", onSaveLink = null }) {
   return (
     <div
       className={`assistant-markdown academic-reading-theme ${themed(theme, "text-slate-100", "text-slate-800")}`}
@@ -91,14 +128,7 @@ export default function AssistantMarkdown({ content = "", theme = "dark" }) {
               {...cleanMarkdownProps(props)}
             />
           ),
-          a: (props) => (
-            <a
-              className={`underline underline-offset-4 ${themed(theme, "text-cyan-200 hover:text-white", "text-cyan-700 hover:text-cyan-900")}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              {...cleanMarkdownProps(props)}
-            />
-          ),
+          a: (props) => <SaveableLink theme={theme} onSaveLink={onSaveLink} {...cleanMarkdownProps(props)} />,
           code: (componentProps) => {
             const { inline, className, children, ...props } = cleanMarkdownProps(componentProps);
             if (inline) {

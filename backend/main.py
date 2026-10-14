@@ -56,6 +56,8 @@ from chat_assistant import (
     resolve_provider_attempts,
 )
 from library_storage import LibraryStorageError, SupabaseLibraryStorage
+from library_catalog import row_value
+from library_routes import register_library_routes
 from chat_activity import build_activity_event, infer_request_activity_types
 from product_knowledge import build_product_context, is_mabaso_product_query, search_product_knowledge
 from web_search import build_grounding_context, extract_user_url, read_public_page, search_web, should_use_web_search
@@ -7747,6 +7749,7 @@ def init_db():
             "feature_permissions_json": "TEXT NOT NULL DEFAULT '{}'",
             "preferred_ai_chat_mode": "TEXT NOT NULL DEFAULT 'think_deeper'",
             "ai_chat_mode_preference_set_at": "TEXT NOT NULL DEFAULT ''",
+            "library_auto_save_links": "INTEGER NOT NULL DEFAULT 0",
             "last_login_at": "TEXT NOT NULL DEFAULT ''",
             "updated_at": "TEXT NOT NULL DEFAULT ''",
         }
@@ -8049,6 +8052,45 @@ def init_db():
             )
             """
         )
+        library_file_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(library_files)").fetchall()
+        }
+        if "folder_id" not in library_file_columns:
+            connection.execute("ALTER TABLE library_files ADD COLUMN folder_id TEXT NOT NULL DEFAULT ''")
+        if "is_favorite" not in library_file_columns:
+            connection.execute("ALTER TABLE library_files ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_folders (
+                id TEXT PRIMARY KEY,
+                owner_email TEXT NOT NULL,
+                name TEXT NOT NULL,
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_links (
+                id TEXT PRIMARY KEY,
+                owner_email TEXT NOT NULL,
+                url TEXT NOT NULL,
+                normalized_url TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                domain TEXT NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'manual',
+                folder_id TEXT NOT NULL DEFAULT '',
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS library_storage_reservations (
@@ -8077,6 +8119,24 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_library_storage_reservations_owner_expiry
             ON library_storage_reservations (owner_email, expires_at)
             """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_files_owner_folder ON library_files (owner_email, folder_id, created_at DESC)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_files_owner_favorite ON library_files (owner_email, is_favorite, created_at DESC)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_owner_name ON library_folders (owner_email, name, deleted_at)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_library_folders_owner_name_ci ON library_folders (lower(owner_email), lower(name), deleted_at)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_library_links_owner_url ON library_links (owner_email, normalized_url, deleted_at)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_links_owner_created ON library_links (owner_email, created_at DESC)"
         )
         # Existing deployments may have Library rows created before the
         # accounting table was introduced. Reconcile once at startup without
@@ -39938,6 +39998,9 @@ def serialize_library_file(row: Any) -> dict[str, Any]:
         "category": compact_text(row["category"], "document"),
         "source_type": compact_text(row["source_type"], "upload"),
         "status": compact_text(row["status"], "ready"),
+        "folder_id": compact_text(row_value(row, "folder_id")),
+        "is_favorite": bool(int(row_value(row, "is_favorite", 0) or 0)),
+        "item_type": "file",
         "created_at": compact_text(row["created_at"]),
         "updated_at": compact_text(row["updated_at"]),
         "preview_url": f"/api/library/files/{quote(compact_text(row['id']))}/content",
@@ -40245,92 +40308,25 @@ async def delete_library_file(
 @app.post("/api/library/files/{file_id}/attach")
 async def attach_library_file_to_chat(
     file_id: str,
-    request: Request,
     current_user: str = Depends(require_authenticated_user),
 ):
-    """Reuse one owned Library object without duplicating it or bypassing daily upload limits."""
+    """Select an owned Library reference without charging or processing it.
+
+    The chat request resolves the reference after its normal message entitlement
+    check. Merely choosing an existing file never consumes a new-upload attempt.
+    """
     row = await asyncio.to_thread(get_owned_library_file, current_user, file_id)
     if not row:
         raise HTTPException(status_code=404, detail="Library file not found or no longer available.")
-    usage: dict[str, Any] | None = None
-    try:
-        usage = consume_plan_quota(
-            email=current_user,
-            feature="study_chat_upload",
-            request=request,
-            metadata={"route": "library_attach", "stage": "reserved_before_read", "library_file_id": file_id},
-            include_account_snapshot=False,
-            quota_error_code="UPLOAD_LIMIT_REACHED",
-        )
-        content = await asyncio.to_thread(library_object_storage.get, compact_text(row["object_key"]))
-        filename = compact_text(row["original_name"], "Study file")
-        content_type = compact_text(row["content_type"], mimetypes.guess_type(filename)[0] or "application/octet-stream")
-        cached_text = compact_text(row["extracted_text"])
-        text = cached_text
-        image_urls: list[str] = []
-        source_kind = get_upload_extension(filename).lstrip(".") or "document"
-        if content_type.startswith("image/"):
-            ensure_allowed_image_upload(filename, content_type)
-            image_data_url = build_data_url(content, content_type, filename)
-            image_urls = [image_data_url]
-            if not text:
-                ensure_openai_key()
-                text = await asyncio.to_thread(extract_slide_text_from_image, image_data_url, filename)
-            source_kind = "image"
-        elif is_text_upload(filename, content_type):
-            text = text or normalize_text_document_content(content, filename)
-            source_kind = "text"
-        elif is_pdf_upload(filename, content_type):
-            text = text or await asyncio.to_thread(extract_slide_text_from_pdf, content)
-            source_kind = "pdf"
-        elif is_pptx_upload(filename, content_type):
-            ensure_safe_zip_upload(content, filename)
-            text = text or await asyncio.to_thread(extract_slide_text_from_pptx, content)
-            source_kind = "pptx"
-        elif is_docx_upload(filename, content_type):
-            ensure_safe_zip_upload(content, filename)
-            text = text or await asyncio.to_thread(extract_text_from_docx, content)
-            source_kind = "docx"
-        elif is_xlsx_upload(filename, content_type):
-            ensure_safe_zip_upload(content, filename)
-            text = text or await asyncio.to_thread(extract_text_from_xlsx, content)
-            source_kind = "xlsx"
-        elif is_open_document_upload(filename, content_type):
-            ensure_safe_zip_upload(content, filename)
-            text = text or await asyncio.to_thread(extract_text_from_open_document, content)
-        else:
-            raise HTTPException(status_code=422, detail="This Library file can be stored and downloaded, but it is not supported as a Study Chat attachment yet.")
-        if not text and not image_urls:
-            raise HTTPException(status_code=422, detail="Mabaso AI could not read useful content from this Library file.")
-        if text and not cached_text:
-            with get_db_connection() as connection:
-                connection.execute(
-                    "UPDATE library_files SET extracted_text = ?, updated_at = ? WHERE id = ? AND lower(owner_email) = ?",
-                    (text[:MAX_STORAGE_TRANSCRIPT_CHARS], utc_now().isoformat(), file_id, normalize_email(current_user)),
-                )
-        update_usage_event_metadata(compact_text(usage.get("usage_event_id")), status="accepted", source_kind=source_kind, library_file_id=file_id, accepted_at=utc_now().isoformat())
-        image_url = next((item for item in image_urls if compact_text(item)), "")
-        receipt = build_chat_upload_receipt(
-            email=current_user,
-            usage_event_id=compact_text(usage.get("usage_event_id")),
-            text=text,
-            image_url=image_url,
-            source_kind=source_kind,
-        )
-        return {"file": serialize_library_file(row), "text": text, "image_urls": image_urls, "upload_receipt": receipt, "usage": usage}
-    except HTTPException:
-        if usage:
-            refund_usage_event(usage_event_id=compact_text(usage.get("usage_event_id")), email=current_user, reason="library_attachment_rejected")
-        raise
-    except LibraryStorageError as exc:
-        if usage:
-            refund_usage_event(usage_event_id=compact_text(usage.get("usage_event_id")), email=current_user, reason="library_attachment_storage_unavailable")
-        raise HTTPException(status_code=502, detail="The selected Library file is temporarily unavailable.") from exc
-    except Exception as exc:
-        if usage:
-            refund_usage_event(usage_event_id=compact_text(usage.get("usage_event_id")), email=current_user, reason="library_attachment_processing_failed")
-        logger.exception("Library attachment processing failed file_id=%s", file_id)
-        raise HTTPException(status_code=502, detail="The selected Library file could not be prepared for Study Chat.") from exc
+    return {
+        "file": serialize_library_file(row),
+        "library_file_id": compact_text(file_id),
+        "selected": True,
+        "text": "",
+        "image_urls": [],
+        "upload_receipt": "",
+        "usage": None,
+    }
 
 @app.post("/upload-audio/")
 async def upload_audio(
@@ -42639,11 +42635,91 @@ def persist_lecture_assistant_turn(
 
 
 def authorize_lecture_assistant_attachments(*, payload: LectureAssistantRequest, current_user: str, request: Request) -> LectureAssistantRequest:
+    """Resolve upload receipts and owned Library references at send time.
+
+    New device uploads still require an accepted upload receipt. Existing
+    Library references are ownership checked but never charged as new uploads.
+    Their cached extraction is reused where possible.
+    """
     verified_images: list[str] = []
     verified_documents: list[str] = []
     verified_image_values: set[str] = set()
+    normalized_email = normalize_email(current_user)
     for raw_attachment in (payload.reference_attachments or [])[:MAX_CHAT_REFERENCE_ATTACHMENTS]:
         if not isinstance(raw_attachment, dict):
+            continue
+        library_file_id = compact_text(raw_attachment.get("library_file_id"))
+        library_link_id = compact_text(raw_attachment.get("library_link_id"))
+        if library_file_id:
+            row = get_owned_library_file(normalized_email, library_file_id)
+            if not row:
+                raise HTTPException(status_code=404, detail="A selected Library file is no longer available.")
+            filename = compact_text(row["original_name"], "Study file")
+            content_type = compact_text(row["content_type"], mimetypes.guess_type(filename)[0] or "application/octet-stream")
+            text = compact_text(row["extracted_text"])
+            content = b""
+            if content_type.startswith("image/") or not text:
+                try:
+                    content = library_object_storage.get(compact_text(row["object_key"]))
+                except LibraryStorageError as exc:
+                    raise HTTPException(status_code=502, detail="A selected Library file is temporarily unavailable.") from exc
+            image_url = ""
+            if content_type.startswith("image/"):
+                ensure_allowed_image_upload(filename, content_type)
+                image_url = build_data_url(content, content_type, filename)
+                verified_images.append(image_url)
+                verified_image_values.add(image_url)
+                if not text:
+                    ensure_openai_key()
+                    text = extract_slide_text_from_image(image_url, filename)
+            elif is_text_upload(filename, content_type):
+                text = text or normalize_text_document_content(content, filename)
+            elif is_pdf_upload(filename, content_type):
+                text = text or extract_slide_text_from_pdf(content)
+            elif is_pptx_upload(filename, content_type):
+                ensure_safe_zip_upload(content, filename)
+                text = text or extract_slide_text_from_pptx(content)
+            elif is_docx_upload(filename, content_type):
+                ensure_safe_zip_upload(content, filename)
+                text = text or extract_text_from_docx(content)
+            elif is_xlsx_upload(filename, content_type):
+                ensure_safe_zip_upload(content, filename)
+                text = text or extract_text_from_xlsx(content)
+            elif is_open_document_upload(filename, content_type):
+                ensure_safe_zip_upload(content, filename)
+                text = text or extract_text_from_open_document(content)
+            else:
+                raise HTTPException(status_code=422, detail=f"{filename} cannot be used in Study Chat yet.")
+            if text:
+                verified_documents.append(f"{shorten_text(filename, 160)}:\n{text[:12000]}")
+                if not compact_text(row["extracted_text"]):
+                    with get_db_connection() as connection:
+                        connection.execute(
+                            "UPDATE library_files SET extracted_text = ?, updated_at = ? WHERE id = ? AND lower(owner_email) = ?",
+                            (text[:MAX_STORAGE_TRANSCRIPT_CHARS], utc_now().isoformat(), library_file_id, normalized_email),
+                        )
+            if not text and not image_url:
+                raise HTTPException(status_code=422, detail=f"Mabaso AI could not read useful content from {filename}.")
+            continue
+        if library_link_id:
+            if not payload.web_search_enabled:
+                raise HTTPException(status_code=422, detail="Enable Web Search to read a saved Library link.")
+            with get_db_connection() as connection:
+                link_row = connection.execute(
+                    "SELECT * FROM library_links WHERE id = ? AND lower(owner_email) = ? AND deleted_at = '' LIMIT 1",
+                    (library_link_id, normalized_email),
+                ).fetchone()
+            if not link_row:
+                raise HTTPException(status_code=404, detail="A selected Library link is no longer available.")
+            try:
+                page = read_public_page(compact_text(link_row["url"]))
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail="Mabaso AI could not retrieve the selected saved website safely.") from exc
+            verified_documents.append(
+                f"Retrieved saved website source: {compact_text(page.get('title'), link_row['title'])}\n"
+                f"URL: {compact_text(page.get('url'), link_row['url'])}\n"
+                f"Untrusted webpage content:\n{compact_text(page.get('content'))[:12000]}"
+            )
             continue
         text = compact_text(raw_attachment.get("text"))[:12000]
         image_url = compact_text(raw_attachment.get("image_url"))
@@ -42671,7 +42747,6 @@ def authorize_lecture_assistant_attachments(*, payload: LectureAssistantRequest,
     if verified_documents:
         lecture_notes = "\n\n".join(part for part in [lecture_notes, *verified_documents] if compact_text(part))
     return payload.model_copy(update={"reference_images": combined_images, "reference_attachments": [], "lecture_notes": lecture_notes})
-
 
 def create_lecture_assistant_stream(
     *,
@@ -42707,12 +42782,6 @@ def create_lecture_assistant_stream(
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
         )
     attempts = resolve_lecture_assistant_attempts(payload, forced_provider)
-    payload = authorize_lecture_assistant_attachments(
-        payload=payload,
-        current_user=current_user,
-        request=request,
-    )
-    reference_images = sanitize_reference_images(getattr(payload, "reference_images", []) or [], limit=MAX_CHAT_REFERENCE_IMAGES)
     plan_id = get_effective_plan_id(current_user)
     requested_mode = normalize_ai_chat_mode(payload.requested_mode)
     resolved_mode = "study"
@@ -42799,6 +42868,28 @@ def create_lecture_assistant_stream(
                     media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
                 )
+    try:
+        # Resolve potentially expensive Library/document content only after the
+        # real chat entitlement and per-conversation allowance have succeeded.
+        payload = authorize_lecture_assistant_attachments(
+            payload=payload,
+            current_user=current_user,
+            request=request,
+        )
+    except Exception:
+        if conversation_reservation_id:
+            finalize_ai_chat_conversation_turn(conversation_reservation_id, completed=False)
+        if daily_usage:
+            refund_usage_event(
+                usage_event_id=compact_text(daily_usage.get("usage_event_id")),
+                email=current_user,
+                reason="attachment_authorization_failed",
+            )
+        raise
+    reference_images = sanitize_reference_images(
+        getattr(payload, "reference_images", []) or [],
+        limit=MAX_CHAT_REFERENCE_IMAGES,
+    )
     started_at = utc_now()
     system_prompt = build_lecture_assistant_system_prompt(payload)
     personalization_context = get_chat_personalization_context(current_user)
@@ -46029,6 +46120,21 @@ async def update_collaboration_presence(current_user: str = Depends(require_auth
     return _update_collaboration_presence_sync(current_user)
 
 
+register_library_routes(
+    app,
+    require_authenticated_user=require_authenticated_user,
+    get_db_connection=get_db_connection,
+    normalize_email=normalize_email,
+    compact_text=compact_text,
+    utc_now=utc_now,
+    get_library_storage_summary=get_library_storage_summary,
+    serialize_library_file=serialize_library_file,
+    get_owned_library_file=get_owned_library_file,
+    record_audit_log=record_audit_log,
+    library_object_storage=library_object_storage,
+    library_storage_error=LibraryStorageError,
+    enforce_rate_limit=enforce_rate_limit,
+)
 if __name__ == "__main__":
     import uvicorn
 

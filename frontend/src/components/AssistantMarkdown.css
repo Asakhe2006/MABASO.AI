@@ -1,0 +1,32 @@
+.assistant-saveable-link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  max-width: 100%;
+}
+
+.assistant-saveable-link > button {
+  display: inline-grid;
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  border-radius: 999px;
+  color: #6ee7b7;
+  vertical-align: middle;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.assistant-saveable-link > button:hover,
+.assistant-saveable-link > button:focus-visible {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(16, 185, 129, 0.12);
+  color: #d1fae5;
+  outline: none;
+}
+
+.assistant-saveable-link > button svg {
+  width: 0.82rem;
+  height: 0.82rem;
+}
