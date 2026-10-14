@@ -28,9 +28,12 @@ class ChatScopeModelTests(unittest.TestCase):
 
     def test_student_facing_mode_matrix_respects_plan_access(self):
         self.assertTrue(main.can_use_ai_chat_mode("free", "quick"))
-        self.assertFalse(main.can_use_ai_chat_mode("free", "study"))
+        self.assertTrue(main.can_use_ai_chat_mode("free", "study"))
+        self.assertTrue(main.can_use_ai_chat_mode("free", "maximum"))
         self.assertTrue(main.can_use_ai_chat_mode("pro_student", "think_deeper"))
-        self.assertFalse(main.can_use_ai_chat_mode("pro_student", "maximum"))
+        self.assertTrue(main.can_use_ai_chat_mode("pro_student", "maximum"))
+        self.assertFalse(main.can_use_ai_chat_mode("free", "astra"))
+        self.assertFalse(main.can_use_ai_chat_mode("pro_student", "astra"))
         self.assertTrue(main.can_use_ai_chat_mode("premium_student", "maximum"))
         self.assertTrue(main.can_use_ai_chat_mode("premium_student", "astra"))
 
@@ -63,15 +66,24 @@ class ChatScopeModelTests(unittest.TestCase):
         self.assertTrue(all(len(slide["bullets"]) <= main.PRESENTATION_MAX_BULLETS_PER_SLIDE for slide in slides))
         self.assertTrue(all(sum(len(bullet) for bullet in slide["bullets"]) <= main.PRESENTATION_MAX_BODY_CHARS for slide in slides))
 
-    def test_ai_chat_mode_is_account_default_then_persists_last_selection(self):
+    def test_ai_chat_mode_is_account_default_then_persists_allowed_selection(self):
         email = f"mode-preference-{uuid4().hex}@example.com"
         self.assertEqual(main.sync_user_account_snapshot(email)["preferred_ai_chat_mode"], "think_deeper")
         result = asyncio.run(main.update_ai_chat_mode_preference(
-            main.AiChatModePreferenceRequest(mode="maximum"),
+            main.AiChatModePreferenceRequest(mode="expert"),
             current_user=email,
         ))
-        self.assertEqual(result["preferred_ai_chat_mode"], "maximum")
-        self.assertEqual(main.sync_user_account_snapshot(email)["preferred_ai_chat_mode"], "maximum")
+        self.assertEqual(result["preferred_ai_chat_mode"], "expert")
+        self.assertEqual(main.sync_user_account_snapshot(email)["preferred_ai_chat_mode"], "expert")
+
+    def test_free_account_cannot_save_astra_preference(self):
+        email = f"mode-astra-block-{uuid4().hex}@example.com"
+        with self.assertRaises(main.HTTPException) as raised:
+            asyncio.run(main.update_ai_chat_mode_preference(
+                main.AiChatModePreferenceRequest(mode="astra"),
+                current_user=email,
+            ))
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 if __name__ == "__main__":

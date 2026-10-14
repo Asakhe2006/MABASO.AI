@@ -1,4 +1,4 @@
-import { Fragment, lazy, startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, startTransition, Suspense, useDeferredValue, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import { Activity, ArrowLeft, BarChart3, Bell, Bot, Bug, CalendarDays, Check, ChevronDown, CircleDollarSign, Copy, CreditCard, Download, Ellipsis, FileText, FolderOpen, Gauge, GraduationCap, Headphones, Highlighter, History, Image, Info, LayoutDashboard, Link, LoaderCircle, LockKeyhole, LogOut, Maximize2, Menu, MessageCircle, Mic, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Pin, Play, Plus, RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Square, TriangleAlert, Trash2, UploadCloud, UserRound, UsersRound, Video, X } from "lucide-react";
@@ -33,6 +33,7 @@ import CollaborationRoomActivityPanel from "./components/CollaborationRoomActivi
 import { getCollaborationRoomSourceContext } from "./collaborationRoomUtils";
 
 const LectureAssistantPanel = lazy(() => import("./components/LectureAssistantPanel"));
+const PersonalLibrary = lazy(() => import("./components/PersonalLibrary"));
 
 function BodyPortal({ active, children }) {
   if (!active || typeof document === "undefined") return children;
@@ -47,8 +48,9 @@ function CollaborationProfileContactPortal({ draft, setDraft, disabled, onSave, 
     ["show_email", "Show my account email in Discover"],
     ["show_phone", "Show my personal number in Discover"],
     ["allow_requests", "Allow collaboration requests"],
+    ["ai_personalization_enabled", "Use my academic profile to personalize AI Chat"],
   ];
-  return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><button type="button" className="collaboration-profile-close" onClick={onClose} disabled={disabled} aria-label="Close profile editor"><X className="h-4 w-4" aria-hidden="true" /></button><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose exactly what students can see. Your contact details stay private unless you allow them below.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Display name" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy">{privacySettings.map(([field, label]) => <div className="mabaso-setting-row" key={field}><span>{label}</span><ToggleSwitch checked={Boolean(draft[field])} onChange={setFlag(field)} disabled={disabled} aria-label={label} size="sm" /></div>)}</div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
+  return <section className="collaboration-profile-popover" role="dialog" aria-label="Create or edit collaboration profile"><button type="button" className="collaboration-profile-close" onClick={onClose} disabled={disabled} aria-label="Close profile editor"><X className="h-4 w-4" aria-hidden="true" /></button><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200/75">Academic profile</p><h3 className="mt-1 text-lg font-semibold text-white">Create profile</h3><p className="mt-2 text-xs leading-5 text-slate-300">Choose what other students can see and whether Mabaso AI may use your academic details for relevant explanations.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input value={draft.display_name} onChange={setText("display_name")} disabled={disabled} className="collaboration-popover-field" placeholder="Preferred name" /><input value={draft.institution} onChange={setText("institution")} disabled={disabled} className="collaboration-popover-field" placeholder="Institution" /><input value={draft.course} onChange={setText("course")} disabled={disabled} className="collaboration-popover-field" placeholder="Course / programme" /><input value={draft.study_year} onChange={setText("study_year")} disabled={disabled} className="collaboration-popover-field" placeholder="Study level / year" /><input value={draft.subjects} onChange={setText("subjects")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Subjects or modules" /><input value={draft.phone} onChange={setText("phone")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" placeholder="Personal number (optional)" /><textarea value={draft.bio} onChange={setText("bio")} disabled={disabled} className="collaboration-popover-field sm:col-span-2" rows={2} placeholder="Short academic bio" /></div><div className="collaboration-profile-privacy">{privacySettings.map(([field, label]) => <div className="mabaso-setting-row" key={field}><span>{label}</span><ToggleSwitch checked={Boolean(draft[field])} onChange={setFlag(field)} disabled={disabled} aria-label={label} size="sm" /></div>)}</div>{saveState === "saved" ? <p className="collaboration-profile-saved" role="status">Profile saved and active</p> : saveState === "error" ? <p className="collaboration-profile-save-error" role="alert">Profile was not saved. Try again.</p> : null}<button type="button" onClick={onSave} disabled={disabled} className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{disabled ? "Saving..." : saveState === "saved" ? "Saved" : "Save profile"}</button></section>;
 }
 const MindMapFlow = lazy(() => import("./components/MindMapFlow"));
 const EnterpriseFooter = lazy(() => import("./EnterpriseSiteShell").then((module) => ({ default: module.EnterpriseFooter })));
@@ -204,32 +206,32 @@ const AI_CHAT_MODE_OPTIONS = [
     shortLabel: "Study",
     label: "Study",
     description: "Detailed explanations and academic help",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "think_deeper",
     shortLabel: "Think",
     label: "Think Deeper",
     description: "More reasoning for difficult maths, engineering and multi-step problems",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "expert",
     shortLabel: "Expert",
     label: "Expert",
     description: "Advanced reasoning for challenging work",
-    minimumPlan: "pro",
-    planLabel: "Pro",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "maximum",
     shortLabel: "Max",
     label: "Maximum",
     description: "Highest available reasoning capability",
-    minimumPlan: "premium",
-    planLabel: "Premium",
+    minimumPlan: "free",
+    planLabel: "",
   },
   {
     id: "astra",
@@ -846,7 +848,7 @@ const collaborationMaterialTabs = [
   { id: "flashcards", label: "Flashcards" },
   { id: "quiz", label: "Test" },
 ];
-const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"];
+const APP_PAGE_IDS = ["capture", "workspace", "materials", "payments", "library", "timetable", "collaboration", "voice", "study-session"];
 const MOBILE_APP_NAV_ITEMS = [
   { id: "capture", label: "Home", icon: UploadCloud },
   { id: "workspace", label: "Study", icon: GraduationCap, requiresResults: true },
@@ -858,6 +860,7 @@ const MOBILE_MORE_NAV_ITEMS = [
   { id: "capture", label: "Capture", icon: UploadCloud },
   { id: "materials", label: "My Materials", icon: FolderOpen },
   { id: "payments", label: "Payments", icon: CreditCard },
+  { id: "library", label: "Library", icon: FolderOpen },
   { id: "collaboration", label: "Rooms", icon: UsersRound },
   { id: "upgrade", label: "Pro", icon: CreditCard },
 ];
@@ -7221,6 +7224,9 @@ export default function App() {
   const [isSubmittingStudyChatEdit, setIsSubmittingStudyChatEdit] = useState(false);
   const [chatQuestion, setChatQuestion] = useState("");
   const [chatReferenceImages, setChatReferenceImages] = useState([]);
+  const [isChatAttachmentMenuOpen, setIsChatAttachmentMenuOpen] = useState(false);
+  const [isLibraryPickerOpen, setIsLibraryPickerOpen] = useState(false);
+  const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
   const [chatUploadNotice, setChatUploadNotice] = useState(null);
   const [isUploadingChatReferences, setIsUploadingChatReferences] = useState(false);
   const [isAskingChat, setIsAskingChat] = useState(false);
@@ -7322,7 +7328,7 @@ export default function App() {
   const [isCollaborationMembersOpen, setIsCollaborationMembersOpen] = useState(false);
   const [isCollaborationSettingsOpen, setIsCollaborationSettingsOpen] = useState(false);
   const [removingRoomMemberEmail, setRemovingRoomMemberEmail] = useState("");
-  const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", phone: "", discoverable: true, show_institution: true, show_email: false, show_phone: false, allow_requests: true });
+  const [collaborationProfileDraft, setCollaborationProfileDraft] = useState({ display_name: "", bio: "", institution: "", course: "", study_year: "", subjects: "", can_help: "", needs_help: "", phone: "", discoverable: true, show_institution: true, show_email: false, show_phone: false, allow_requests: true, ai_personalization_enabled: false });
   const [collaborationProfileSaveState, setCollaborationProfileSaveState] = useState("");
   const [invitingCollaborationProfileId, setInvitingCollaborationProfileId] = useState("");
   const [isRecordingRoomVoice, setIsRecordingRoomVoice] = useState(false);
@@ -12056,7 +12062,7 @@ export default function App() {
               </div>
             )}
             <details className="payment-mobile-disclosure rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-              <summary>Payment verification guide <span aria-hidden="true">?</span></summary>
+              <summary>Payment verification guide <ChevronDown className="payment-disclosure-chevron" aria-hidden="true" /></summary>
               <p className="text-xs uppercase tracking-[0.24em] text-slate-400">Verification</p>
               <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                 <p>Pending means a manual PayShap payment record exists, but your plan is not active yet.</p>
@@ -12099,7 +12105,7 @@ export default function App() {
             {billingSubscription?.cancel_at ? <p className="mt-4 inline-flex rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-xs font-bold text-emerald-100">{billingSubscription?.payment_failed ? "Renewal cancelled · no future PayFast retries" : <>Renewal cancelled · access remains until {formatAdminDateTime(billingSubscription.cancel_at)}</>}</p> : (billingSubscription?.active || billingSubscription?.trial_active || billingSubscription?.payment_failed || billingSubscription?.status === "renewal_pending") && billingSubscription?.provider === "payfast" && billingSubscription?.provider_token_present ? <div className="mt-4">{showCancelSubscriptionConfirm ? <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4"><p className="text-sm font-semibold text-rose-50">{billingSubscription?.payment_failed || billingSubscription?.status === "renewal_pending" ? "Cancel the PayFast renewal?" : billingSubscription?.trial_active ? "Cancel your Pro trial?" : "Cancel your subscription?"}</p><p className="mt-2 text-xs leading-5 text-rose-100/80">{billingSubscription?.payment_failed || billingSubscription?.status === "renewal_pending" ? "This stops PayFast from retrying the failed scheduled payment. No paid access is currently active." : billingSubscription?.trial_active ? `Your trial remains available until ${formatAdminDateTime(billingSubscription.current_period_end)}. You will not be charged when it ends.` : "Future recurring charges will stop at PayFast. Your paid access remains until the displayed end date."}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" disabled={isCancellingSubscription} onClick={() => void cancelActiveSubscription()} className="rounded-full bg-rose-300 px-4 py-2 text-xs font-bold text-rose-950 disabled:opacity-60">{isCancellingSubscription ? "Cancelling…" : billingSubscription?.payment_failed || billingSubscription?.status === "renewal_pending" ? "Cancel renewal" : billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button><button type="button" disabled={isCancellingSubscription} onClick={() => setShowCancelSubscriptionConfirm(false)} className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold text-white">Keep active</button></div></div> : <button type="button" onClick={() => setShowCancelSubscriptionConfirm(true)} className="rounded-full border border-rose-300/25 px-4 py-2 text-xs font-bold text-rose-100">{billingSubscription?.payment_failed || billingSubscription?.status === "renewal_pending" ? "Cancel renewal" : billingSubscription?.trial_active ? "Cancel trial" : "Cancel subscription"}</button>}</div> : null}
           </article>
           <details className="payment-mobile-disclosure rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-            <summary>Study usage <span aria-hidden="true">?</span></summary>
+            <summary>Study usage <ChevronDown className="payment-disclosure-chevron" aria-hidden="true" /></summary>
             <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Usage</p><h3 className="mt-2 text-2xl font-semibold text-white">Today’s study access</h3></div><button type="button" onClick={() => void refreshBillingStatus()} disabled={isBillingUsageLoading} className="rounded-full border border-white/10 px-3 py-2 text-xs font-bold text-white">{isBillingUsageLoading ? "Loading..." : "Refresh"}</button></div>
             <div className="mt-4 grid gap-2 sm:grid-cols-2">{billingUsage?.features?.length ? billingUsage.features.map((feature) => { const usagePercent = feature.unlimited ? 0 : Math.min(100, Math.round(((Number(feature.used) || 0) / Math.max(1, Number(feature.limit) || 1)) * 100)); return <div key={feature.feature} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3"><div className="flex justify-between gap-2 text-sm"><strong className="text-white">{feature.label}</strong><span className="text-emerald-100">{feature.unlimited ? "Highest allowance" : `${usagePercent}% used`}</span></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-emerald-400 transition-[width] duration-300" style={{ width: `${usagePercent}%` }} /></div><p className="mt-2 text-xs text-slate-400">{feature.unlimited ? "Available for your plan" : "Daily study access"}</p></div>; }) : <p className="text-sm text-slate-300">{isBillingUsageLoading ? "Loading usage history..." : "No usage has been recorded for this period."}</p>}</div>
           </details>
@@ -12114,7 +12120,7 @@ export default function App() {
           {refundPayment ? <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-4"><div className="flex items-start justify-between gap-3"><p className="font-semibold text-white">Request refund · R{refundPayment.amount_zar}</p><button type="button" onClick={() => setRefundPayment(null)} aria-label="Close refund form"><X className="h-4 w-4" /></button></div><select value={refundReason} onChange={(event) => setRefundReason(event.target.value)} className="mt-3 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"><option value="accidental_purchase">Accidental purchase</option><option value="accidental_renewal">Accidental renewal</option><option value="duplicate_charge">Duplicate charge</option><option value="incorrect_amount">Charged incorrect amount</option><option value="technical_problem">Technical/service problem</option><option value="subscription_not_working">Subscription did not work</option><option value="other">Other</option></select><textarea value={refundExplanation} onChange={(event) => setRefundExplanation(event.target.value.slice(0, 1000))} placeholder="Optional explanation" className="mt-3 min-h-24 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"/><button type="button" onClick={() => void submitRefundRequest()} disabled={isSubmittingRefund} className="mt-3 rounded-full bg-emerald-400 px-4 py-2 text-sm font-bold text-emerald-950">{isSubmittingRefund ? "Submitting..." : "Submit refund request"}</button></div> : null}
         </article>
         <details className="payment-mobile-disclosure mt-6 rounded-[24px] border border-white/10 bg-white/[0.04] p-5">
-          <summary>Payment support <span aria-hidden="true">?</span></summary>
+          <summary>Payment support <ChevronDown className="payment-disclosure-chevron" aria-hidden="true" /></summary>
           <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">Payment support</p><h3 className="mt-2 text-2xl font-semibold text-white">Send a payment query</h3><p className="mt-3 text-sm leading-7 text-slate-300">Include the payment reference and what you expected to happen. Your query is sent securely to Mabaso AI Support.</p><textarea value={billingSupportMessage} onChange={(event) => setBillingSupportMessage(event.target.value.slice(0, 3000))} placeholder="Describe the payment or subscription issue" className="mt-4 min-h-28 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none"/><div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void submitBillingSupportMessage()} disabled={isSendingBillingSupport || !billingSupportMessage.trim()} className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-slate-950 disabled:opacity-50">{isSendingBillingSupport ? "Sending..." : "Send query"}</button>{billingSupportFeedback ? <p className="text-sm text-emerald-100">{billingSupportFeedback}</p> : null}</div>
         </details>
       </section>
@@ -14279,6 +14285,42 @@ export default function App() {
       } : null,
     ].filter(Boolean);
     const urgentAdminAlerts = rawAdminAlerts.filter((alert) => !resolvedAdminAlertIds.includes(alert.id));
+    const latestConfirmedBillingPayment = [...billingPayments]
+      .filter((payment) => ["paid", "complete", "completed", "verified", "success"].includes(normalizePaymentStatus(payment.status)))
+      .sort((left, right) => new Date(right.created_at || right.paid_at || 0).getTime() - new Date(left.created_at || left.paid_at || 0).getTime())[0];
+    const latestStoredAdminUpdate = [...activityLogs]
+      .sort((left, right) => new Date(right.timestamp || right.created_at || 0).getTime() - new Date(left.timestamp || left.created_at || 0).getTime())[0];
+    const adminNotificationItems = [
+      ...urgentAdminAlerts.map((alert) => ({
+        id: `risk:${alert.id}`,
+        kind: "risk",
+        title: alert.title,
+        detail: `${alert.severity} / ${alert.status}`,
+        target: alert.target,
+      })),
+      adminRefundPendingCount > 0 ? {
+        id: "pending-refunds",
+        kind: "refund",
+        title: `${adminRefundPendingCount} refund request${adminRefundPendingCount === 1 ? "" : "s"} awaiting review`,
+        detail: "Stored customer requests",
+        target: "refunds",
+      } : null,
+      latestConfirmedBillingPayment ? {
+        id: `payment:${latestConfirmedBillingPayment.id || latestConfirmedBillingPayment.transaction_id || latestConfirmedBillingPayment.created_at}`,
+        kind: "payment",
+        title: `Confirmed payment / ${latestConfirmedBillingPayment.plan || latestConfirmedBillingPayment.plan_id || "Mabaso AI"}`,
+        detail: `${latestConfirmedBillingPayment.user || latestConfirmedBillingPayment.email || "Customer"} / ${formatPaymentAmount(latestConfirmedBillingPayment)}`,
+        target: "payments",
+      } : null,
+      latestStoredAdminUpdate ? {
+        id: `update:${latestStoredAdminUpdate.id || latestStoredAdminUpdate.timestamp || latestStoredAdminUpdate.created_at}`,
+        kind: "update",
+        title: titleCaseWords(latestStoredAdminUpdate.action || "Dashboard activity recorded"),
+        detail: `${latestStoredAdminUpdate.user || latestStoredAdminUpdate.email || "System"} / ${latestStoredAdminUpdate.timestamp || latestStoredAdminUpdate.created_at ? formatAdminDateTime(latestStoredAdminUpdate.timestamp || latestStoredAdminUpdate.created_at) : "Recently"}`,
+        target: "activity",
+      } : null,
+    ].filter(Boolean).filter((item, index, rows) => rows.findIndex((candidate) => candidate.id === item.id) === index).slice(0, 6);
+
     const activeSidebarItem = sidebarItems.find((item) => item.id === adminSidebarTab) || sidebarItems[0];
     const groupedSidebarItems = sidebarItems.reduce((groups, item) => {
       if (!groups[item.group]) groups[item.group] = [];
@@ -15974,11 +16016,29 @@ export default function App() {
                 </div>
               </header>
 
+              <section className="admin-notification-bar" aria-label="Important admin notifications" aria-live="polite">
+                <div className="admin-notification-bar-title">
+                  <Bell aria-hidden="true" />
+                  <span><strong>Important notifications</strong><small>Live records from billing, refunds, security, and the audit log</small></span>
+                  <em>{adminNotificationItems.length}</em>
+                </div>
+                <div className="admin-notification-bar-items">
+                  {adminNotificationItems.length ? adminNotificationItems.map((item) => (
+                    <button key={item.id} type="button" className={`is-${item.kind}`} onClick={() => { setAdminSidebarTab(item.target); if (typeof window !== "undefined" && window.innerWidth < 1280) setIsAdminSidebarOpen(false); }}>
+                      <span aria-hidden="true" />
+                      <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+                    </button>
+                  )) : (
+                    <p><ShieldCheck aria-hidden="true" /> No important billing, refund, security, or system notifications are currently recorded.</p>
+                  )}
+                </div>
+              </section>
               {adminSidebarTab === "overview" ? (
                 <div className="admin-control-metric-grid">
                   {overviewCards.map((card) => {
                     const CardIcon = card.icon;
                     const trendValues = (card.trendValues || []).slice(-12);
+
                     const trendMax = Math.max(1, ...trendValues.map((value) => Number(value) || 0));
                     const targetTab = getAdminOverviewCardTarget(card.label);
                     const openMetricDetail = () => setAdminSidebarTab(targetTab);
@@ -16367,7 +16427,7 @@ export default function App() {
     if (!authEmail) return;
     try {
       const savedMode = window.localStorage.getItem(`mabaso-ai-chat-mode:${String(authEmail).trim().toLowerCase()}`);
-      if (AI_CHAT_MODE_OPTIONS.some((option) => option.id === savedMode)) {
+      if (savedMode !== "astra" && AI_CHAT_MODE_OPTIONS.some((option) => option.id === savedMode)) {
         setSelectedAiChatMode(savedMode);
       }
     } catch {
@@ -16393,6 +16453,22 @@ export default function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [isAiChatModeMenuOpen]);
+  useEffect(() => {
+    if (!isChatAttachmentMenuOpen || typeof document === "undefined") return undefined;
+    const closeAttachmentMenu = (event) => {
+      if (event?.target?.closest?.(".study-chat-attachment-menu-anchor")) return;
+      setIsChatAttachmentMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setIsChatAttachmentMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeAttachmentMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeAttachmentMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isChatAttachmentMenuOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !pendingStudyChatAnchorIdRef.current || isOpeningStudyChat || !chatMessages.length) return undefined;
@@ -16747,6 +16823,7 @@ export default function App() {
       if (Array.isArray(cachedBillingStatus.payment_requests)) setPaymentRequests(cachedBillingStatus.payment_requests);
       if (Array.isArray(cachedBillingStatus.payment_history)) setPaymentHistory(cachedBillingStatus.payment_history);
       if (cachedBillingStatus.manual_payment_details) setManualPaymentDetails(cachedBillingStatus.manual_payment_details);
+      setIsBillingStatusLoaded(true);
     }
   }, [authChecked, authEmail]);
 
@@ -17073,9 +17150,13 @@ export default function App() {
   const applyServerAccountState = (data = {}, { includeBilling = true } = {}) => {
     const account = data?.account && typeof data.account === "object" ? data.account : {};
     const preferredAiChatMode = data?.preferred_ai_chat_mode || data?.preferredAiChatMode || account.preferred_ai_chat_mode || account.preferredAiChatMode || "";
-    if (AI_CHAT_MODE_OPTIONS.some((option) => option.id === preferredAiChatMode)) {
+    const accountPlanId = String(
+      data?.usage?.plan_id || account?.usage?.plan_id || data?.subscription?.plan_id || account?.subscription?.plan_id || "free",
+    ).toLowerCase();
+    const preferredModeAllowed = preferredAiChatMode !== "astra" || accountPlanId.includes("premium");
+    if (preferredModeAllowed && AI_CHAT_MODE_OPTIONS.some((option) => option.id === preferredAiChatMode)) {
       setSelectedAiChatMode(preferredAiChatMode);
-    }
+    } else if (preferredAiChatMode === "astra") setSelectedAiChatMode("auto");
     if (!includeBilling) return;
     const hasBillingPayload = Boolean(
       Object.prototype.hasOwnProperty.call(data || {}, "usage")
@@ -17642,7 +17723,7 @@ export default function App() {
     if (authToken) {
       if (normalizedTarget === "admin" && authSessionMode === "admin") {
         setCurrentPage("admin");
-      } else if (["capture", "workspace", "materials", "payments", "timetable", "collaboration", "voice", "study-session"].includes(normalizedTarget)) {
+      } else if (["capture", "workspace", "materials", "payments", "library", "timetable", "collaboration", "voice", "study-session"].includes(normalizedTarget)) {
         openProtectedAppPage(normalizedTarget);
         return;
       }
@@ -26178,6 +26259,7 @@ export default function App() {
         interaction_mode: deliveryMode === "teacher_interrupt" ? "voice" : deliveryMode,
         preferred_provider: "openai",
         requested_mode: selectedAiChatMode,
+        web_search_enabled: isWebSearchEnabled,
         conversation_id: conversationId,
         session_id: conversationId,
         context_key: shouldUseLectureContext ? (activeHistoryId || studyChatMaterialKey) : studyChatMaterialKey,
@@ -27586,8 +27668,6 @@ export default function App() {
     const planTier = normalizeAiChatPlanTier(getResolvedCurrentPlanId());
     const activateMode = (option) => {
       if (!canPlanUseAiChatMode(planTier, option.id)) {
-        setLockedAiChatModeInfo(option);
-        setIsAiChatModeMenuOpen(false);
         return;
       }
       setSelectedAiChatMode(option.id);
@@ -27651,6 +27731,8 @@ export default function App() {
                   role="menuitemradio"
                   aria-checked={isSelected}
                   className={`ai-chat-mode-row ${isSelected ? "is-selected" : ""} ${isLocked ? "is-locked" : ""}`}
+                  aria-disabled={isLocked}
+                  disabled={isLocked}
                   onClick={() => activateMode(option)}
                 >
                   <span className="ai-chat-mode-check">{isSelected ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : null}</span>
@@ -27665,30 +27747,20 @@ export default function App() {
 
           </div>
         ) : null}
-        {lockedAiChatModeInfo ? (
-          <BodyPortal active>
-            <div className="ai-chat-mode-blocker" role="presentation" onPointerDown={() => setLockedAiChatModeInfo(null)}>
-              <section className="ai-chat-mode-blocker-panel" role="dialog" aria-modal="true" aria-labelledby="ai-chat-mode-blocker-title" onPointerDown={(event) => event.stopPropagation()}>
-                <button type="button" className="ai-chat-mode-blocker-close" onClick={() => setLockedAiChatModeInfo(null)} aria-label="Close mode notice"><X className="h-4 w-4" aria-hidden="true" /></button>
-                <p className="ai-chat-mode-menu-kicker">Plan access</p>
-                <h2 id="ai-chat-mode-blocker-title">{lockedAiChatModeInfo.label}</h2>
-                <p>{lockedAiChatModeInfo.description}</p>
-                <small>Available with {lockedAiChatModeInfo.planLabel || "a higher plan"}.</small>
-                <div className="ai-chat-mode-blocker-actions">
-                  <button type="button" onClick={() => { setLockedAiChatModeInfo(null); setIsAiChatModeMenuOpen(true); }}>Change mode</button>
-                  <button type="button" className="is-primary" onClick={() => { setLockedAiChatModeInfo(null); openUpgradeModal(); }}>Upgrade to {lockedAiChatModeInfo.planLabel || "Pro"}</button>
-                </div>
-              </section>
-            </div>
-          </BodyPortal>
-        ) : null}
       </div>
     );
   };
   const renderUnlockedStudyChatComposer = ({ compact = false, fullPage = false } = {}) => (
     <div className={`study-chat-composer ${fullPage ? "study-chat-page-composer" : "study-chat-embedded-composer"}`}>
       <div className="study-chat-composer-row">
-        <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setLockedAiChatModeInfo(null); chatImageInputRef.current?.click(); }} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add question photo or document">+</button>
+        <div className="study-chat-attachment-menu-anchor">
+          <button type="button" onClick={() => { setIsAiChatModeMenuOpen(false); setIsChatAttachmentMenuOpen((current) => !current); }} disabled={isAskingChat || isUploadingChatReferences || chatReferenceImages.length >= MAX_CHAT_REFERENCE_ATTACHMENTS} className="study-chat-composer-icon" aria-label="Add photos, files, Library materials, or web search" aria-expanded={isChatAttachmentMenuOpen}>+</button>
+          {isChatAttachmentMenuOpen ? <div className="study-chat-attachment-menu" role="menu">
+            <button type="button" role="menuitem" onClick={() => { setIsChatAttachmentMenuOpen(false); chatImageInputRef.current?.click(); }}><UploadCloud aria-hidden="true" /><span><strong>Add photos &amp; files</strong><small>Upload from this device</small></span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsChatAttachmentMenuOpen(false); setIsLibraryPickerOpen(true); }}><FolderOpen aria-hidden="true" /><span><strong>Add from Library</strong><small>Reuse a private saved file</small></span></button>
+            <button type="button" role="menuitem" aria-pressed={isWebSearchEnabled} onClick={() => { setIsWebSearchEnabled((current) => !current); setIsChatAttachmentMenuOpen(false); }}><Search aria-hidden="true" /><span><strong>Search the web</strong><small>{isWebSearchEnabled ? "Enabled for this request" : "Use current online sources"}</small></span></button>
+          </div> : null}
+        </div>
         {fullPage ? renderAiChatModePicker({ compact }) : null}
         <textarea
           ref={studyChatComposerInputRef}
@@ -27742,6 +27814,24 @@ export default function App() {
           ))}
         </div>
       ) : null}
+      {isWebSearchEnabled ? <button type="button" className="study-chat-web-search-chip" onClick={() => setIsWebSearchEnabled(false)}><Search aria-hidden="true" />Web Search<X aria-hidden="true" /></button> : null}
+      {isLibraryPickerOpen ? <BodyPortal active>
+        <div className="personal-library-picker-shell">
+          <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}>
+          <PersonalLibrary
+            picker
+            apiBaseUrl={API_BASE_URL}
+            authFetch={authFetch}
+            onClose={() => setIsLibraryPickerOpen(false)}
+            onAttach={(attachment) => {
+              setChatReferenceImages((current) => current.some((item) => item.libraryFileId === attachment.libraryFileId) ? current : [...current, attachment].slice(0, MAX_CHAT_REFERENCE_ATTACHMENTS));
+              setStatus(`${attachment.name} attached from Library.`);
+              refreshBillingStatusInBackground();
+            }}
+          />
+          </Suspense>
+        </div>
+      </BodyPortal> : null}
     </div>
   );
 
@@ -27883,7 +27973,7 @@ export default function App() {
             </span>
           </header>
           <main ref={studyChatScrollRef} onScroll={handleStudyChatScroll} className={`study-chat-page-scroll ${chatMessages.length ? "" : "is-empty"}`}>
-            {chatMessages.length ? null : <h1>Ready when you are.</h1>}
+            {chatMessages.length ? null : <h1 className="study-chat-welcome-heading">{collaborationProfile?.ai_personalization_enabled && collaborationProfile?.display_name ? `Where should we begin today, ${collaborationProfile.display_name}?` : "Where should we begin?"}</h1>}
             {renderStudyChatMessages({ limit: 80, fullPage: true })}
           </main>
           {showStudyChatJumpToLatest ? <button type="button" onClick={jumpStudyChatToLatest} className="study-chat-jump-latest" aria-label="Jump to latest message">↓</button> : null}
@@ -31556,7 +31646,7 @@ export default function App() {
       const disabled = Boolean(item.requiresResults && !hasResults);
       const morePageActive = item.id === "more" && (
         isMobileMoreMenuOpen
-        || ["materials", "payments", "collaboration"].includes(currentPage)
+        || ["materials", "payments", "library", "collaboration"].includes(currentPage)
       );
       const active = morePageActive || currentPage === item.id || (item.id === "ai" && currentPage === "voice") || (item.id === "timetable" && Boolean(activeTimetableNavItem));
       return (
@@ -31683,7 +31773,7 @@ export default function App() {
       {renderPublicShareDialog()}
       {siteRatingModal}
       <main className={`mobile-app-main page-${currentPage} relative mx-auto overflow-x-clip px-3 py-6 sm:px-6 lg:px-8 ${currentPage === "timetable" ? "max-w-[1700px]" : "max-w-7xl"}`}>
-        {currentPage !== "capture" && currentPage !== "workspace" && currentPage !== "collaboration" ? (
+        {currentPage !== "capture" && currentPage !== "workspace" && currentPage !== "collaboration" && currentPage !== "payments" ? (
           <div className="compact-profile-strip">
             {renderCompactProfileMenu()}
           </div>
@@ -31706,6 +31796,7 @@ export default function App() {
               <button type="button" onClick={() => openProtectedAppPage("workspace")} disabled={!hasResults} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "workspace" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"} disabled:opacity-50`}>Study Workspace</button>
               <button type="button" onClick={() => openProtectedAppPage("materials")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "materials" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>My Materials</button>
               <button type="button" onClick={openPaymentsNavigationTarget} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "payments" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>{isAdminAccount ? "Payments" : "My Payments"}</button>
+              <button type="button" onClick={() => openProtectedAppPage("library")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "library" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Library</button>
               <button type="button" onClick={() => openProtectedAppPage("timetable")} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${activeTimetableNavItem ? "border-emerald-300/45 bg-emerald-500/25 text-emerald-50 shadow-[0_0_24px_rgba(16,185,129,0.16)] hover:bg-emerald-500/30" : currentPage === "timetable" ? "border-white bg-white text-slate-950" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-50 hover:bg-emerald-300/15"}`}><span className="block">Study Timetable</span>{timetableNavStatusLabel ? <span className="mt-1 block text-[11px] font-semibold leading-4 text-emerald-100/90">{timetableNavStatusLabel}</span> : null}</button>
               <button type="button" onClick={() => openCollaborationPage()} className={`rounded-[14px] border px-4 py-2.5 text-sm font-medium ${currentPage === "collaboration" ? "border-white bg-white text-slate-950" : "border-white/10 bg-white/5 text-white hover:bg-white/10"}`}>Collaboration</button>
               <button type="button" onClick={openUpgradeModal} className="rounded-[14px] bg-white px-4 py-2.5 text-sm font-bold text-slate-950 shadow-[0_12px_28px_rgba(255,255,255,0.12)] transition hover:bg-emerald-50">Upgrade to Pro</button>
@@ -32524,6 +32615,7 @@ export default function App() {
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "timetable" ? <BodyPortal active={isTimetableFocusMode}>{renderStudyTimetablePage()}</BodyPortal> : null}
+        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} /></Suspense> : null}
         {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}

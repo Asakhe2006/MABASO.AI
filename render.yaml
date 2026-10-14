@@ -57,6 +57,22 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_LIBRARY_BUCKET
+        value: "mabaso-library"
+      - key: SUPABASE_REQUEST_TIMEOUT_SECONDS
+        value: "12"
+      - key: FREE_LIBRARY_STORAGE_BYTES
+        value: "209715200"
+      - key: PRO_LIBRARY_STORAGE_BYTES
+        value: "524288000"
+      - key: PREMIUM_LIBRARY_STORAGE_BYTES
+        value: "2147483648"
+      - key: MAX_LIBRARY_FILE_BYTES
+        value: "52428800"
       - key: APP_PUBLIC_URL
         value: "https://mabaso-ai-web.onrender.com"
       - key: API_PUBLIC_URL

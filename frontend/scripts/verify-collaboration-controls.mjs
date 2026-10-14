@@ -12,7 +12,7 @@ const materialWorkspaceSource = await readFile(new URL("../src/components/Collab
 assert.doesNotMatch(appSource, /\/>\\n\\n\s*\{isProfileEditorOpen/, "Collaboration must not render literal newline text.");
 assert.doesNotMatch(appSource, /collaboration-upload-card/, "Collaboration must not display an upload allowance card.");
 assert.match(appSource, /currentPage === "collaboration" \|\| isUpgradeModalOpen/, "The global mobile nav must not overlap Collaboration navigation.");
-assert.match(appSource, /currentPage !== "collaboration" \? \(/, "The outer profile strip must not duplicate the Collaboration account menu.");
+assert.match(appSource, /currentPage !== "collaboration" && currentPage !== "payments" \? \(/, "The outer profile strip must not duplicate the Collaboration account menu or the Payments page.");
 assert.match(appSource, /renderCompactProfileMenu\(\{ displayName: collaborationDisplayName \}\)/, "Collaboration must use the real account menu with logout.");
 assert.doesNotMatch(appSource, /className="collaboration-mobile-room-tabs"/, "Mobile must not duplicate room controls above the room.");
 assert.match(appSource, /if \(view === "more"\) \{\s*setIsCollaborationActionSheetOpen\(true\);\s*return;/, "Closing More must retain the previous mobile room panel.");

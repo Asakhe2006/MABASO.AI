@@ -51,5 +51,13 @@ assert.match(
   /shouldTranscribeSelectedLecture[\s\S]*transcribeLectureFile\(file/,
   "Generate Study Guide must process a queued lecture media file on demand.",
 );
+assert.equal(
+  (appSource.match(/<ChevronDown className="payment-disclosure-chevron"/g) || []).length,
+  3,
+  "Payments disclosures must use real responsive chevron icons instead of question-mark placeholders.",
+);
+assert.match(cssSource, /\.payment-disclosure-chevron\s*\{[\s\S]*width:\s*clamp\(16px,[\s\S]*height:\s*clamp\(16px,/, "Payments chevrons must scale safely on mobile devices.");
+assert.match(appSource, /admin-notification-bar[\s\S]*\{adminSidebarTab === "overview"/, "The real admin notification bar must render above dashboard tab content.");
+assert.match(appSource, /const PersonalLibrary = lazy\(/, "The standalone Library must load on demand instead of delaying the main application shell.");
 
 console.log("Chat scroll, streaming, and composer safeguards passed.");

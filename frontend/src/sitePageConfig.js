@@ -2575,6 +2575,12 @@ export const protectedWorkspaceRoutes = [
     access: "login",
   },
   {
+    route: "/app/library",
+    title: "Library",
+    description: "Browse and securely reuse personal source files without mixing them with generated My Materials workspaces.",
+    access: "login",
+  },
+  {
     route: "/app/timetable",
     title: "Study Timetable",
     description: "Build, edit, save, and track a paid-plan weekly study timetable with subjects, availability, and revision sessions.",

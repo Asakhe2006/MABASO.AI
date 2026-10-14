@@ -1,0 +1,104 @@
+"""Private object storage used by the Mabaso AI personal Library.
+
+The browser never receives the Supabase service-role key. Files are proxied
+through authenticated backend routes so object ownership is always checked
+against the signed-in Mabaso AI account.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from urllib.parse import quote
+
+import requests
+
+
+class LibraryStorageError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class LibraryStorageConfig:
+    base_url: str
+    service_key: str
+    bucket: str
+    timeout_seconds: float
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url and self.service_key and self.bucket)
+
+
+def get_library_storage_config() -> LibraryStorageConfig:
+    return LibraryStorageConfig(
+        base_url=(os.getenv("SUPABASE_URL") or "").strip().rstrip("/"),
+        service_key=(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "").strip(),
+        bucket=(os.getenv("SUPABASE_LIBRARY_BUCKET") or "mabaso-library").strip(),
+        timeout_seconds=max(5.0, float(os.getenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "12"))),
+    )
+
+
+class SupabaseLibraryStorage:
+    def __init__(self, config: LibraryStorageConfig | None = None):
+        self.config = config or get_library_storage_config()
+
+    @property
+    def configured(self) -> bool:
+        return self.config.configured
+
+    def _object_url(self, object_key: str) -> str:
+        safe_bucket = quote(self.config.bucket, safe="")
+        safe_key = quote(object_key.strip("/"), safe="/")
+        return f"{self.config.base_url}/storage/v1/object/{safe_bucket}/{safe_key}"
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.config.service_key}",
+            "apikey": self.config.service_key,
+        }
+
+    def put(self, object_key: str, content: bytes, content_type: str) -> None:
+        if not self.configured:
+            raise LibraryStorageError("Private Library storage is not configured.")
+        headers = {
+            **self._headers(),
+            "Content-Type": content_type or "application/octet-stream",
+            "x-upsert": "false",
+        }
+        response = requests.post(
+            self._object_url(object_key),
+            headers=headers,
+            data=content,
+            timeout=self.config.timeout_seconds,
+        )
+        if response.status_code not in {200, 201}:
+            raise LibraryStorageError(f"Private object upload failed with status {response.status_code}.")
+
+    def get(self, object_key: str) -> bytes:
+        if not self.configured:
+            raise LibraryStorageError("Private Library storage is not configured.")
+        response = requests.get(
+            self._object_url(object_key),
+            headers=self._headers(),
+            timeout=self.config.timeout_seconds,
+        )
+        if response.status_code != 200:
+            raise LibraryStorageError(f"Private object download failed with status {response.status_code}.")
+        return response.content
+
+    def delete(self, object_keys: list[str]) -> None:
+        clean_keys = [key.strip("/") for key in object_keys if key and key.strip("/")]
+        if not clean_keys:
+            return
+        if not self.configured:
+            raise LibraryStorageError("Private Library storage is not configured.")
+        bucket_url = f"{self.config.base_url}/storage/v1/object/{quote(self.config.bucket, safe='')}"
+        response = requests.delete(
+            bucket_url,
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json={"prefixes": clean_keys},
+            timeout=self.config.timeout_seconds,
+        )
+        if response.status_code not in {200, 204}:
+            raise LibraryStorageError(f"Private object deletion failed with status {response.status_code}.")
