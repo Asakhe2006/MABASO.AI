@@ -63,6 +63,10 @@ services:
         sync: false
       - key: SUPABASE_LIBRARY_BUCKET
         value: "mabaso-library"
+      - key: SUPABASE_LIBRARY_AUTO_CREATE_BUCKET
+        value: "true"
+      - key: SUPABASE_LIBRARY_BUCKET_FILE_SIZE_LIMIT
+        value: "52428800"
       - key: SUPABASE_REQUEST_TIMEOUT_SECONDS
         value: "12"
       - key: FREE_LIBRARY_STORAGE_BYTES

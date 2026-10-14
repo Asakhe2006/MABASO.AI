@@ -41,6 +41,7 @@ export default function PersonalLibrary({
   onAttach,
   onClose,
   onBack,
+  onUpgrade,
   initialSection = "all",
   initialItemId = "",
 }) {
@@ -70,6 +71,7 @@ export default function PersonalLibrary({
   const [linkDraft, setLinkDraft] = useState({ url: "", title: "", description: "" });
   const [bulkFolderId, setBulkFolderId] = useState("");
   const [menuKey, setMenuKey] = useState("");
+  const [storageDialogOpen, setStorageDialogOpen] = useState(false);
   const inputRef = useRef(null);
   const viewerPointerStart = useRef(null);
   const authFetchRef = useRef(authFetch);
@@ -343,6 +345,7 @@ export default function PersonalLibrary({
     ...links,
   ] : section === "links" ? links : files, [files, folders, links, section]);
   const usagePercent = useMemo(() => storage?.limit_bytes ? Math.min(100, Math.round((Number(storage.used_bytes || 0) / Number(storage.limit_bytes)) * 100)) : 0, [storage]);
+  const storagePackages = Array.isArray(storage?.addon_catalog) ? storage.addon_catalog : [];
   const contentUrl = (file, download = false) => `${apiBaseUrl}/api/library/files/${encodeURIComponent(file.id)}/content${download ? "?download=true" : ""}`;
   const previewable = (file) => file.content_type === "application/pdf" || file.content_type?.startsWith("image/") || file.content_type?.startsWith("audio/") || file.content_type?.startsWith("text/");
 
@@ -452,7 +455,14 @@ export default function PersonalLibrary({
       {isLoadingMore ? <div className="personal-library-progress" role="status"><LoaderCircle className="animate-spin" aria-hidden="true" />Loading more Library items...</div> : null}
       {hasMore && !isLoadingMore && section !== "folders" && section !== "links" ? <button type="button" className="personal-library-load-more" onClick={() => void loadCatalog({ append: true, before: nextBefore })}>Load more now</button> : null}
 
-      {storage ? <button type="button" className="personal-library-storage" onClick={() => setNotice("Storage deals remain unavailable until a verified payment-provider product is configured.")}><span><strong>Storage</strong><small>{formatBytes(storage.used_bytes)} of {formatBytes(storage.limit_bytes)} used</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><em>{formatBytes(storage.remaining_bytes)} remaining</em></button> : null}
+      {storage ? <button type="button" className="personal-library-storage" onClick={() => setStorageDialogOpen(true)}><span><strong>Storage</strong><small>{formatBytes(storage.used_bytes)} of {formatBytes(storage.limit_bytes)} used</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><em>{formatBytes(storage.remaining_bytes)} remaining · Manage storage</em></button> : null}
+
+      {storageDialogOpen && storage ? <div className="library-dialog-backdrop" onPointerDown={() => setStorageDialogOpen(false)}><div className="library-dialog library-storage-dialog" role="dialog" aria-modal="true" aria-label="Manage storage" onPointerDown={(event) => event.stopPropagation()}>
+        <header><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Back to Library"><ArrowLeft /></button><div><h2>Manage Storage</h2><p>{String(storage.plan_id || "free").replaceAll("_", " ")} plan · Personal Library</p></div><button type="button" onClick={() => setStorageDialogOpen(false)} aria-label="Close storage manager"><X /></button></header>
+        <section className="library-storage-summary"><span><strong>Your storage</strong><small>{formatBytes(storage.used_bytes)} / {formatBytes(storage.limit_bytes)}</small></span><span className="personal-library-storage-track"><i style={{ width: `${usagePercent}%` }} /></span><p>{formatBytes(storage.remaining_bytes)} remaining</p></section>
+        <section><div className="library-storage-section-heading"><div><h3>Buy extra storage</h3><p>Keep your current AI plan and add Library space.</p></div></div><div className="library-storage-package-grid">{storagePackages.map((storagePackage) => <article key={storagePackage.id} className={storagePackage.recommended ? "is-recommended" : ""}><span>{storagePackage.recommended ? "Popular" : "Storage"}</span><h4>{storagePackage.name}</h4><strong>+{formatBytes(storagePackage.capacity_bytes)}</strong><p><b>R{storagePackage.amount_zar}</b> / month</p><small>New total: {formatBytes(Number(storage.limit_bytes || 0) + Number(storagePackage.capacity_bytes || 0))}</small><button type="button" disabled={!storage.addon_checkout?.enabled}> {storage.addon_checkout?.enabled ? "Select package" : "Payment setup required"}</button></article>)}</div><p className="library-storage-provider-note">{storage.addon_checkout?.message || "Storage-only checkout is not enabled yet."}</p></section>
+        <section className="library-storage-upgrade"><div><h3>Upgrade your AI plan</h3><p>Increase included storage and unlock the plan's AI features.</p></div><button type="button" onClick={() => { setStorageDialogOpen(false); if (picker) onClose?.(); onUpgrade?.(); }} disabled={!onUpgrade}>Review plans</button></section>
+      </div></div> : null}
 
       {folderDialog ? <div className="library-dialog-backdrop" onPointerDown={() => setFolderDialog(null)}><div className="library-dialog" role="dialog" aria-modal="true" aria-label={folderDialog.folder ? "Rename folder" : "New folder"} onPointerDown={(event) => event.stopPropagation()}><h2>{folderDialog.folder ? "Rename folder" : "New folder"}</h2><input autoFocus value={folderDialog.name} onChange={(event) => setFolderDialog((current) => ({ ...current, name: event.target.value }))} placeholder="Folder name" maxLength={80} /><footer><button type="button" onClick={() => setFolderDialog(null)}>Cancel</button><button type="button" className="is-primary" onClick={() => void saveFolder()}>{folderDialog.folder ? "Save" : "Create"}</button></footer></div></div> : null}
       {folderDeleteTarget ? <div className="library-dialog-backdrop" onPointerDown={() => setFolderDeleteTarget(null)}><div className="library-dialog" role="dialog" aria-modal="true" aria-label="Delete folder" onPointerDown={(event) => event.stopPropagation()}><h2>Delete {folderDeleteTarget.name}?</h2><p>Choose whether its files and links return to All Files or are permanently removed from your Library.</p><footer className="is-stacked"><button type="button" onClick={() => setFolderDeleteTarget(null)}>Cancel</button><button type="button" onClick={() => void deleteFolder(false)}>Delete folder only</button><button type="button" className="is-danger" onClick={() => void deleteFolder(true)}>Delete folder and contents</button></footer></div></div> : null}

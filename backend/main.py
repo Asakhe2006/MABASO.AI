@@ -261,6 +261,12 @@ LIBRARY_STORAGE_LIMIT_BYTES = {
     "pro_student": max(1, int(os.getenv("PRO_LIBRARY_STORAGE_BYTES", str(500 * 1024 * 1024)))),
     "premium_student": max(1, int(os.getenv("PREMIUM_LIBRARY_STORAGE_BYTES", str(2 * 1024 * 1024 * 1024)))),
 }
+LIBRARY_STORAGE_ADDON_CATALOG = (
+    {"id": "storage_mini", "name": "Storage Mini", "capacity_bytes": 250 * 1024 * 1024, "amount_zar": 23},
+    {"id": "storage_plus", "name": "Storage Plus", "capacity_bytes": 500 * 1024 * 1024, "amount_zar": 39, "recommended": True},
+    {"id": "storage_max", "name": "Storage Max", "capacity_bytes": 1024 * 1024 * 1024, "amount_zar": 69},
+    {"id": "storage_ultra", "name": "Storage Ultra", "capacity_bytes": 2 * 1024 * 1024 * 1024, "amount_zar": 119},
+)
 MAX_LIBRARY_FILE_BYTES = max(1024 * 1024, int(os.getenv("MAX_LIBRARY_FILE_BYTES", str(50 * 1024 * 1024))))
 library_object_storage = SupabaseLibraryStorage()
 APPLE_PRIVATE_KEY = os.getenv("APPLE_PRIVATE_KEY", "").strip()
@@ -19561,7 +19567,17 @@ def get_effective_subscription_snapshot(email: str) -> tuple[dict[str, Any], dic
         }
     elif entitlement.get("entitlement") == "free":
         pending_checkout = get_latest_pending_payfast_checkout(email)
-        if pending_checkout:
+        pending_status = compact_text(pending_checkout["status"]).lower() if pending_checkout else ""
+        provider_event_json = compact_text(pending_checkout["raw_event_json"]) if pending_checkout else ""
+        has_verified_provider_evidence = bool(
+            pending_checkout
+            and (
+                compact_text(pending_checkout["provider_payment_id"])
+                or compact_text(pending_checkout["provider_token"])
+                or provider_event_json not in {"", "{}"}
+            )
+        )
+        if pending_checkout and pending_status == "confirmation_pending" and has_verified_provider_evidence:
             subscription = {
                 **subscription,
                 "status": "confirmation_pending",
@@ -20934,7 +20950,14 @@ def upsert_paid_subscription_from_payfast(payload: dict[str, str], session: sqli
     )
     now_iso = utc_now().isoformat()
     is_initial_trial_activation = is_trial_checkout and amount_gross == "0.00"
-    next_status = "active" if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"} else payment_status.lower() or "pending"
+    if payment_status in {"COMPLETE", "COMPLETE_PAYMENT"}:
+        next_status = "active"
+    elif payment_status in {"PENDING", "PROCESSING"} and (provider_payment_id or provider_token):
+        # Only a signed, server-validated PayFast notification reaches this
+        # function. Creating a local checkout never means PayFast accepted it.
+        next_status = "confirmation_pending"
+    else:
+        next_status = payment_status.lower() or "failed"
     payment_id = provider_payment_id or checkout_id
 
     with get_db_connection() as connection:
@@ -40082,6 +40105,19 @@ def get_library_storage_summary(email: str) -> dict[str, Any]:
         "remaining_bytes": max(0, limit_bytes - used_bytes - reserved_bytes),
         "over_capacity": used_bytes > limit_bytes,
         "storage_configured": library_object_storage.configured,
+        # Keep these offers visible while refusing to fake a purchase. Storage
+        # add-ons need their own provider product and entitlement lifecycle;
+        # an AI-plan checkout must never be reused to grant extra storage.
+        "addon_catalog": [dict(package) for package in LIBRARY_STORAGE_ADDON_CATALOG],
+        "addon_checkout": {
+            "enabled": False,
+            "payfast_enabled": False,
+            "payshap_enabled": False,
+            "message": (
+                "Storage-only checkout is not enabled yet. No payment will be requested until "
+                "provider verification and storage entitlement activation are connected."
+            ),
+        },
     }
 
 

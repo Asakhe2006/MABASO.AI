@@ -9,6 +9,78 @@ from fastapi import HTTPException
 
 from backend import main
 from backend.library_catalog import normalize_saved_link
+from backend.library_storage import LibraryStorageConfig, LibraryStorageError, SupabaseLibraryStorage
+
+
+class LibraryStorageProviderTests(unittest.TestCase):
+    def test_missing_bucket_is_created_private_then_upload_is_retried(self):
+        config = LibraryStorageConfig(
+            base_url="https://project.supabase.co",
+            service_key="service-role-test-value",
+            bucket="mabaso-library",
+            timeout_seconds=5,
+            auto_create_bucket=True,
+            bucket_file_size_limit=50 * 1024 * 1024,
+        )
+        storage = SupabaseLibraryStorage(config)
+        missing_upload = MagicMock(status_code=404)
+        successful_upload = MagicMock(status_code=200)
+        missing_bucket = MagicMock(status_code=404)
+        created_bucket = MagicMock(status_code=200)
+
+        with (
+            patch("backend.library_storage.requests.get", return_value=missing_bucket) as get_request,
+            patch(
+                "backend.library_storage.requests.post",
+                side_effect=[missing_upload, created_bucket, successful_upload],
+            ) as post_request,
+        ):
+            storage.put("student/file.pdf", b"pdf", "application/pdf")
+
+        get_request.assert_called_once()
+        self.assertEqual(post_request.call_count, 3)
+        create_call = post_request.call_args_list[1]
+        self.assertEqual(create_call.kwargs["json"]["id"], "mabaso-library")
+        self.assertFalse(create_call.kwargs["json"]["public"])
+        self.assertEqual(create_call.kwargs["json"]["file_size_limit"], 50 * 1024 * 1024)
+
+    def test_missing_bucket_is_not_created_without_explicit_opt_in(self):
+        config = LibraryStorageConfig(
+            base_url="https://project.supabase.co",
+            service_key="service-role-test-value",
+            bucket="mabaso-library",
+            timeout_seconds=5,
+            auto_create_bucket=False,
+            bucket_file_size_limit=50 * 1024 * 1024,
+        )
+        storage = SupabaseLibraryStorage(config)
+        missing_upload = MagicMock(status_code=404)
+        missing_upload.json.return_value = {"message": "Bucket not found"}
+        with patch("backend.library_storage.requests.post", return_value=missing_upload) as post_request:
+            with self.assertRaises(LibraryStorageError):
+                storage.put("student/file.pdf", b"pdf", "application/pdf")
+        post_request.assert_called_once()
+
+    def test_concurrent_bucket_creation_is_idempotent(self):
+        config = LibraryStorageConfig(
+            base_url="https://project.supabase.co",
+            service_key="service-role-test-value",
+            bucket="mabaso-library",
+            timeout_seconds=5,
+            auto_create_bucket=True,
+            bucket_file_size_limit=50 * 1024 * 1024,
+        )
+        storage = SupabaseLibraryStorage(config)
+        missing_bucket = MagicMock(status_code=404)
+        existing_bucket = MagicMock(status_code=200)
+        already_created = MagicMock(status_code=409)
+        already_created.json.return_value = {"message": "Bucket already exists"}
+        with (
+            patch("backend.library_storage.requests.get", side_effect=[missing_bucket, existing_bucket]) as get_request,
+            patch("backend.library_storage.requests.post", return_value=already_created),
+        ):
+            storage.ensure_private_bucket()
+        self.assertEqual(get_request.call_count, 2)
 
 
 class PersonalLibraryTests(unittest.TestCase):
@@ -16,6 +88,11 @@ class PersonalLibraryTests(unittest.TestCase):
         self.assertEqual(main.get_library_storage_limit("free"), 200 * 1024 * 1024)
         self.assertEqual(main.get_library_storage_limit("pro_student_monthly"), 500 * 1024 * 1024)
         self.assertEqual(main.get_library_storage_limit("premium_student_annual"), 2 * 1024 * 1024 * 1024)
+
+    def test_storage_addon_catalog_is_visible_but_cannot_fake_checkout(self):
+        package_ids = [package["id"] for package in main.LIBRARY_STORAGE_ADDON_CATALOG]
+        self.assertEqual(package_ids, ["storage_mini", "storage_plus", "storage_max", "storage_ultra"])
+        self.assertEqual([package["amount_zar"] for package in main.LIBRARY_STORAGE_ADDON_CATALOG], [23, 39, 69, 119])
 
     def test_library_accepts_audio_but_rejects_video_binaries(self):
         main.ensure_allowed_library_upload("lecture.wav", "audio/wav")

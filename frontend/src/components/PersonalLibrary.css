@@ -281,6 +281,69 @@
 .library-dialog footer button.is-primary { background: var(--library-green); color: #022c22; }
 .library-dialog footer button.is-danger { background: rgba(244, 63, 94, .13); color: #fda4af; }
 
+.library-storage-dialog {
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100dvh - 28px));
+  overflow: auto;
+}
+
+.library-storage-dialog > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.library-storage-dialog > header button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .06);
+  color: #d1fae5;
+}
+
+.library-storage-dialog > header button:hover,
+.library-storage-dialog > header button:focus-visible { background: var(--library-green-soft); outline: 1px solid rgba(53, 229, 138, .35); }
+.library-storage-dialog > header svg { width: 17px; height: 17px; }
+.library-storage-dialog > section { display: grid; gap: 10px; border-top: 1px solid rgba(255, 255, 255, .08); padding-top: 14px; }
+.library-storage-summary > span:first-child { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.library-storage-summary small,
+.library-storage-summary p { color: var(--library-muted); font-size: 11px; }
+.library-storage-section-heading h3,
+.library-storage-upgrade h3 { color: #f8fafc; font-size: 14px; font-weight: 800; }
+.library-storage-section-heading p,
+.library-storage-upgrade p { margin-top: 3px; color: var(--library-muted); font-size: 11px; }
+
+.library-storage-package-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.library-storage-package-grid article {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 14px;
+  background: rgba(0, 8, 6, .58);
+  padding: 13px;
+}
+
+.library-storage-package-grid article.is-recommended { border-color: rgba(53, 229, 138, .45); }
+.library-storage-package-grid article > span { justify-self: start; border-radius: 999px; background: rgba(53, 229, 138, .1); padding: 3px 7px; color: #a7f3d0; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.library-storage-package-grid h4 { color: #f8fafc; font-size: 13px; font-weight: 800; }
+.library-storage-package-grid article > strong { color: #fff; font-size: 20px; }
+.library-storage-package-grid p { color: #cbd5e1; font-size: 11px; }
+.library-storage-package-grid p b { color: #fff; font-size: 15px; }
+.library-storage-package-grid small { color: var(--library-muted); font-size: 10px; }
+.library-storage-package-grid button { min-height: 36px; margin-top: 5px; border-radius: 10px; background: var(--library-green); color: #022c22; font-size: 10px; font-weight: 850; }
+.library-storage-package-grid button:disabled { background: rgba(255, 255, 255, .07); color: #94a3b8; cursor: not-allowed; }
+.library-storage-provider-note { border-radius: 11px; background: rgba(245, 158, 11, .08); padding: 9px 10px; color: #fde68a !important; font-size: 10px !important; line-height: 1.5 !important; }
+.library-storage-upgrade { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.library-storage-upgrade > button { min-height: 38px; border-radius: 10px; background: rgba(53, 229, 138, .12); padding: 0 13px; color: #a7f3d0; font-size: 11px; font-weight: 800; }
+
 .library-viewer-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 4px; }
 .personal-library-viewer > header .library-viewer-actions button { padding: 0 9px; }
 .library-viewer-actions .library-star { min-width: 38px; }
@@ -363,6 +426,11 @@
   .personal-library-row-actions > a,
   .library-star { min-width: 34px; min-height: 34px; }
   .personal-library-storage { margin-inline: 15px; }
+  .library-dialog-backdrop:has(.library-storage-dialog) { align-items: end; padding: 9px 0 0; }
+  .library-storage-dialog { width: 100%; max-height: calc(100dvh - 9px); border-radius: 20px 20px 0 0; padding: 15px; }
+  .library-storage-package-grid { grid-template-columns: 1fr; }
+  .library-storage-upgrade { grid-template-columns: 1fr; }
+  .library-storage-upgrade > button { width: 100%; }
   .personal-library-viewer > header { grid-template-columns: auto minmax(0, 1fr) auto; min-height: 52px; gap: 6px; padding: 6px 8px; }
   .personal-library-viewer > header > button:first-child { width: 38px; overflow: hidden; padding: 0 10px; white-space: nowrap; }
   .personal-library-viewer > header > strong { font-size: 11px; }

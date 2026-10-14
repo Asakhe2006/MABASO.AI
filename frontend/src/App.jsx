@@ -27935,6 +27935,7 @@ export default function App() {
             authFetch={authFetch}
             onClose={() => setIsLibraryPickerOpen(false)}
             onAttach={(attachment) => attachLibraryReferenceToChat(attachment)}
+            onUpgrade={openUpgradeModal}
           />
           </Suspense>
         </div>
@@ -32723,7 +32724,7 @@ export default function App() {
         {currentPage === "support" ? renderSupportPage() : null}
         {currentPage === "payments" ? renderPaymentsPage() : null}
         {currentPage === "timetable" ? <BodyPortal active={isTimetableFocusMode}>{renderStudyTimetablePage()}</BodyPortal> : null}
-        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} initialSection={libraryLaunch.section} initialItemId={libraryLaunch.itemId} onBack={() => openProtectedAppPage("capture")} onAttach={(attachment) => attachLibraryReferenceToChat(attachment, { returnToChat: true })} /></Suspense> : null}
+        {currentPage === "library" ? <Suspense fallback={<section className="personal-library-loading" aria-live="polite"><LoaderCircle className="animate-spin" aria-hidden="true" />Opening your Library...</section>}><PersonalLibrary apiBaseUrl={API_BASE_URL} authFetch={authFetch} initialSection={libraryLaunch.section} initialItemId={libraryLaunch.itemId} onBack={() => openProtectedAppPage("capture")} onUpgrade={openUpgradeModal} onAttach={(attachment) => attachLibraryReferenceToChat(attachment, { returnToChat: true })} /></Suspense> : null}
         {currentPage === "voice" ? renderStudyChatPanel() : null}
         {currentPage === "collaboration" ? renderCollaborationPage() : null}
         {collaborationMessagePromptCard}
